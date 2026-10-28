@@ -117,7 +117,7 @@ impl Battle {
         } else {
             let hp_before_drain = attacker.current_hp();
             attacker.heal_hp(drain.amount);
-            let hp_gained = attacker.current_hp() - hp_before_drain;
+            let hp_gained = attacker.current_hp().saturating_sub(hp_before_drain);
             events.push(BattleEvent::Drained {
                 by_player: attacker_is_player,
                 move_id,

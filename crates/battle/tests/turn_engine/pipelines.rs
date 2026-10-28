@@ -824,3 +824,30 @@ fn defense_curl_still_sets_its_volatile_when_defense_is_already_capped() {
     assert_eq!(battle.player().stages().defense, StatStage::MAX);
     assert_eq!(rng.draws(), script.len());
 }
+
+/// A loaded record's HP above its cached maximum is adopted verbatim; the
+/// heal path clamps to the maximum like upstream's HP-gain branch
+/// (`battle_script_commands.c:1896-1900`), and the reported gain saturates at
+/// zero instead of underflowing against the pre-heal value.
+#[test]
+fn above_max_saved_hp_absorb_does_not_underflow() {
+    let dex = Dex::new();
+    let probe = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
+    let stats = probe.stats();
+    let player = probe.with_cached_stats(stats, stats.max_hp + 1);
+    assert_eq!(player.current_hp(), stats.max_hp + 1, "admitted verbatim");
+    let mut enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+    let enemy_max_hp = enemy.stats().max_hp;
+    enemy.apply_damage(enemy_max_hp - 5);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, BattleEvent::Drained { healed: 0, .. })));
+    assert!(battle.player().current_hp() <= stats.max_hp);
+}

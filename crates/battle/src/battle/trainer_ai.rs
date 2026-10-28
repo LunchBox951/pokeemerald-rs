@@ -468,8 +468,11 @@ fn select_highest_scoring_move(
     highest_scoring_slots[selected]
 }
 
+/// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
+/// so a malformed save can carry a zero maximum; it reads as full-scale rather
+/// than dividing by zero.
 fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp
+    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp.max(1)
 }
 
 fn random_roll_is_at_least(rng: &mut impl BattleRng, threshold: u16) -> bool {
@@ -2061,6 +2064,31 @@ mod tests {
         let control =
             estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &plusle, PERCENT_SCALE).unwrap();
         assert!(boosted > control, "{boosted} vs {control}");
+    }
+
+    #[test]
+    fn a_zero_cached_maximum_does_not_divide_by_zero() {
+        let malformed = BattlePokemon::new(
+            &Dex::new(),
+            TREECKO,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![MoveId::POUND],
+        )
+        .unwrap()
+        .with_cached_stats(
+            crate::pokemon::Stats {
+                max_hp: 0,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            1,
+        );
+        assert_eq!(super::current_hp_percent(&malformed), PERCENT_SCALE);
     }
 }
 
