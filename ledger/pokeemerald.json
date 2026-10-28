@@ -85,31 +85,31 @@
     "data/battle_anim_scripts.s": {
       "artifacts": {
         "gBattleAnims_General": {
-          "reason": "gBattleAnims_General: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_General: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Moves": {
-          "reason": "gBattleAnims_Moves: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_Moves: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Special": {
-          "reason": "gBattleAnims_Special: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_Special: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_StatusConditions": {
-          "reason": "gBattleAnims_StatusConditions: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_StatusConditions: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "reachable-normalized-programs": {
-          "reason": "reachable-normalized-programs: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "reachable-normalized-programs: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
@@ -20521,6 +20521,14 @@
       "status": "pending"
     },
     "graphics_file_rules.mk": {
+      "artifacts": {
+        "battle-anim-concatenated-sprite-sheets": {
+          "reason": "The ice_cube, ice_crystals, mud_sand, flower, and spark .4bpp rules (graphics_file_rules.mk:64-68,114-131) cat per-part .4bpp files. Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: the five concatenated sheets are rebuilt from their rule-listed PNG parts in rule order, each part's tiles row-major with the left pixel low, as one 8-pixel-wide column of tiles; the total is checked against the registered size. NOT modelled: every other rule of the file, and ROM import of these five sheets, which must reproduce the same column from the decompressed tile stream.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "meta.build",
       "kind": "file",
       "status": "pending"
@@ -20799,6 +20807,14 @@
       "status": "pending"
     },
     "include/constants/battle_anim.h": {
+      "artifacts": {
+        "ANIM_TAG_sprite-indices": {
+          "reason": "ANIM_TAG_* constants (include/constants/battle_anim.h:5-298). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: ANIM_SPRITES_START and every ANIM_TAG_* of the form (ANIM_SPRITES_START + <index>) are read, and the index (GET_TRUE_SPRITE_INDEX, :5) joins both registration tables to a tag; any other ANIM_TAG_* definition is refused. NOT modelled: the other constants of the header (animation, background, and argument constants), which the catalog extractor reads separately or no extractor reads yet.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -27848,7 +27864,7 @@
     "src/battle_ai_switch_items.c": {
       "artifacts": {
         "GetMostSuitableMonToSwitchInto": {
-          "reason": "battle_ai_switch_items.c:629. Reimplemented as TrainerContext::most_suitable_by_type (typing + super-effective-move pass, :690-:745) and most_suitable_by_damage (most-damage fallback, :748-:789) in the trainer module's suitability submodule, tried in that order before the party-order scan (issue #1040). The typing pass matches upstream's ModulateByTypeEffectiveness arithmetic exactly (:605-:627): raw truncating multiplication with no floor, applied through both of player's type slots unconditionally (squaring the effect for a single-typed player, :709-:710) -- apply_raw_type_multiplier deliberately does not reuse damage.rs's apply_dual_type_effectiveness, which floors a nonzero result to one for real damage and would silently keep a quadruple-resisted candidate viable that upstream's truncation actually zeroes. The damage fallback now matches upstream in full: stale_base_damage computes one shared base-damage figure from resolving_move (the move whose resolution fainted the active battler -- Battle::last_move_used, threaded in from the turn engine, stands in for gCurrentMove's staleness, pokeemerald/include/battle.h) with the fainted battler as attacker, matching AI_CalcDmg(gActiveBattler, opposingBattler) (:772-:779; battle_script_commands.c:1306-:1311); candidate_move_damage then applies each candidate's own move's STAB (against the fainted battler's types, matching TypeCalc's attacker-side STAB check, battle_script_commands.c:1547-:1552) and type effectiveness on top, per-candidate, matching TypeCalc using the candidate's own move for those two steps only (:1536-:1552) -- through most_suitable_type_effectiveness's own per-row fold rather than damage.rs's apply_dual_type_effectiveness, since TypeCalc's rows here (:1504-:1506, :1570-:1580) carry no cross-row terminal-immunity override: a later effective row still floors a running damage already zeroed by an earlier immune row back up to one. most_suitable_by_damage narrows its running winner to a u8 before every comparison, reproducing the stock (non-BUGFIX) u8 bestDmg that silently wraps a winning score over 255 (include/config.h:48; battle_ai_switch_items.c:632-:636,:781-:784). Matches upstream's own power-1 OHKO exclusion (OHKO_POWER_SENTINEL, :776) rather than excluding power-0 status moves, which upstream's shared damage formula still scores via its unconditional +2 floor. Screens, weather, burn, and the random damage roll are not modelled for this pass (a fresh switch-in carries none of the first three, and the selector draws no RNG upstream either). TypeCalc's one ability short-circuit is honoured by both TypeCalc-derived steps (levitate_refuses): a Ground move against a Levitate-holding player takes no type-chart row at all (battle_script_commands.c:1554-:1556), so the super-effective check at :733 never accepts it and the most-damage pass keeps its STAB-multiplied base rather than Poison's doubling row or Flying's immunity -- the branch sits after the STAB multiply (:1547-:1551) and never touches gBattleMoveDamage. The typing score itself stays ability-blind, matching ModulateByTypeEffectiveness, which reads no ability (:709-:710). TypeCalc's Wonder Guard clause (:1595-:1601) only raises MOVE_RESULT_MISSED, which neither selector pass reads and which leaves gBattleMoveDamage untouched, so it has no effect here; real damage resolution models it separately (src/battle_script_commands.c#Cmd_typecalc, issue #1158). NOT modelled: TypeCalc's Foresight row. NOT modelled: the doubles-only opposingBattler coin flip (:660, unreachable since this port has no double battles) and the BATTLE_TYPE_TWO_OPPONENTS/TOWER_LINK_MULTI party-half split (:671-:677).",
+          "reason": "battle_ai_switch_items.c:629. Reimplemented as TrainerContext::most_suitable_by_type (typing + super-effective-move pass, :690-:745) and most_suitable_by_damage (most-damage fallback, :748-:789) in the trainer module's suitability submodule, tried in that order before the party-order scan. Both read the trainer party's durable original slots (TrainerContext::candidates yields each non-active member with its original slot), exclude the active member by original slot rather than by position in a shrinking list (:664-:704), skip fainted members, and return the chosen original slot, which Battle::switch_enemy_to turns into the live battler. The typing pass matches upstream's ModulateByTypeEffectiveness arithmetic exactly (:605-:627): raw truncating multiplication with no floor, applied through both of player's type slots unconditionally (squaring the effect for a single-typed player, :709-:710) -- apply_raw_type_multiplier deliberately does not reuse damage.rs's apply_dual_type_effectiveness, which floors a nonzero result to one for real damage and would silently keep a quadruple-resisted candidate viable that upstream's truncation actually zeroes. The damage fallback now matches upstream in full: stale_base_damage computes one shared base-damage figure from resolving_move (the move whose resolution fainted the active battler -- Battle::last_move_used, threaded in from the turn engine, stands in for gCurrentMove's staleness, pokeemerald/include/battle.h) with the fainted battler as attacker, matching AI_CalcDmg(gActiveBattler, opposingBattler) (:772-:779; battle_script_commands.c:1306-:1311); candidate_move_damage then applies each candidate's own move's STAB (against the fainted battler's types, matching TypeCalc's attacker-side STAB check, battle_script_commands.c:1547-:1552) and type effectiveness on top, per-candidate, matching TypeCalc using the candidate's own move for those two steps only (:1536-:1552) -- through most_suitable_type_effectiveness's own per-row fold rather than damage.rs's apply_dual_type_effectiveness, since TypeCalc's rows here (:1504-:1506, :1570-:1580) carry no cross-row terminal-immunity override: a later effective row still floors a running damage already zeroed by an earlier immune row back up to one. most_suitable_by_damage narrows its running winner to a u8 before every comparison, reproducing the stock (non-BUGFIX) u8 bestDmg that silently wraps a winning score over 255 (include/config.h:48; battle_ai_switch_items.c:632-:636,:781-:784). Matches upstream's own power-1 OHKO exclusion (OHKO_POWER_SENTINEL, :776) rather than excluding power-0 status moves, which upstream's shared damage formula still scores via its unconditional +2 floor. Screens, weather, burn, and the random damage roll are not modelled for this pass (a fresh switch-in carries none of the first three, and the selector draws no RNG upstream either). TypeCalc's one ability short-circuit is honoured by both TypeCalc-derived steps (levitate_refuses): a Ground move against a Levitate-holding player takes no type-chart row at all (battle_script_commands.c:1554-:1556), so the super-effective check at :733 never accepts it and the most-damage pass keeps its STAB-multiplied base rather than Poison's doubling row or Flying's immunity -- the branch sits after the STAB multiply (:1547-:1551) and never touches gBattleMoveDamage. The typing score itself stays ability-blind, matching ModulateByTypeEffectiveness, which reads no ability (:709-:710). TypeCalc's Wonder Guard clause (:1595-:1601) only raises MOVE_RESULT_MISSED, which neither selector pass reads and which leaves gBattleMoveDamage untouched, so it has no effect here; real damage resolution models it separately (src/battle_script_commands.c#Cmd_typecalc, issue #1158). NOT modelled: TypeCalc's Foresight row. NOT modelled: the doubles-only opposingBattler coin flip (:660, unreachable since this port has no double battles) and the BATTLE_TYPE_TWO_OPPONENTS/TOWER_LINK_MULTI party-half split (:671-:677).",
           "rust_target": "crates/battle/src/battle/trainer/suitability.rs",
           "spec": "S-6",
           "status": "rewritten"
@@ -28017,7 +28033,7 @@
           "status": "stubbed"
         },
         "OpponentHandleChoosePokemon": {
-          "reason": "battle_controller_opponent.c:1621. The forced post-faint send-out, TrainerContext::send_out_next (issue #1040): now runs the type/super-effective and most-damage suitability passes (see src/battle_ai_switch_items.c#GetMostSuitableMonToSwitchInto) before falling back to the party-order scan at :1655-:1662, matching upstream's own order (a forced replacement always clears monToSwitchIntoId ahead of ChoosePokemon, so the selector always runs first). Turning that choice into a live battler is still the caller's (Battle::settle_fainted_enemy in crates/battle/src/battle.rs). NOT modelled: the AI_monToSwitchIntoId pre-chosen path (:1625 and :1668-:1669, only set by the voluntary-switch AI this slice does not run), the BATTLE_TYPE_TWO_OPPONENTS/TOWER_LINK_MULTI party-half split (:1643-:1650), and the doubles two-battler exclusion.",
+          "reason": "battle_controller_opponent.c:1621. The forced post-faint send-out, TrainerContext::select_replacement: runs the type/super-effective and most-damage suitability passes (see src/battle_ai_switch_items.c#GetMostSuitableMonToSwitchInto) before falling back to the first healthy non-active original slot in party order at :1655-:1662, matching upstream's own order (a forced replacement always clears monToSwitchIntoId ahead of ChoosePokemon, so the selector always runs first). The trainer party keeps its original slots for the whole battle and TrainerContext::switch_active swaps the active member with the chosen slot, as gBattlerPartyIndexes repoints at a gEnemyParty record. A prechosen voluntary switch is EnemyAction::Switch(original_slot): Battle::switch_enemy_to executes exactly that healthy non-active slot without rerunning the selector (:1625, :1668-:1669, the monToSwitchIntoId handoff) and refuses an active, fainted, or out-of-range slot with BattleError::InvalidTrainerSwitch; no modelled AI decision produces it yet. Turning the choice into a live battler resets switch-in state (see src/battle_main.c#SwitchInClearSetData). NOT modelled: the BATTLE_TYPE_TWO_OPPONENTS/TOWER_LINK_MULTI party-half split (:1643-:1650) and the doubles two-battler exclusion.",
           "rust_target": "crates/battle/src/battle/trainer.rs",
           "spec": "S-6",
           "status": "rewritten"
@@ -28028,6 +28044,20 @@
       "status": "pending"
     },
     "src/battle_controller_player.c": {
+      "artifacts": {
+        "CopyPlayerMonData.status1": {
+          "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. Modelled: party::from_save_pokemon decodes the save record status word into battle::Status1 -- healthy, ordinary poison (0x08), paralysis (0x40), and sleep with 1-7 turns left -- and any other word fails closed with PartyError::UnsupportedStatus, leaving the record bytes untouched, so it is never read as healthy and erased on the next save. Deferred: burn, freeze, bad poison (0x80 and its counter bits), and combined status words, which battle does not model and which therefore cannot be loaded into a battler.",
+          "rust_target": "crates/pokeemerald-rs/src/party.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "SetPlayerMonData.status1": {
+          "reason": "battle_controller_player.c:1983-1987 and constants/battle.h:114-125. Modelled: both party::to_save_pokemon and party::merge_into_save_pokemon write the battler Status1 into the record status word (0 for healthy or a cleared status, 0x08 poison, 0x40 paralysis, 1-7 sleep turns), so an inflicted or cured condition reaches the save; a sleep count above 7 would corrupt the neighbouring bits and panics instead. Deferred: burn, freeze, bad poison, and combined words, which battle cannot hold and so never writes.",
+          "rust_target": "crates/pokeemerald-rs/src/party.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -28115,7 +28145,7 @@
           "status": "stubbed"
         },
         "FaintClearSetData": {
-          "reason": "battle_main.c:3264-:3270 only (issue #322): the stat-stage reset, FaintClearSetData's first action -- 'for (i = 0; i < NUM_BATTLE_STATS; i++) gBattleMons[gActiveBattler].statStages[i] = DEFAULT_STAT_STAGE;'. Battle::execute_hit_move resets the fainted battler's StatStages to its Default (StatStage::NEUTRAL for all seven) the moment BattleEvent::Fainted is pushed, on both sides (player and enemy alike) -- matching upstream's gActiveBattler generality even though this crate's own architecture (a trainer's replacement fully reconstructs the next BattlePokemon, and a player faint ends the battle immediately) makes the reset unobservable through BattleEvent today; it is pinned directly against BattlePokemon::stages() instead. NOT modelled: :3272 (status2 = 0), :3273 (gStatuses3 = 0), the escape-prevention/infatuation/wrap cross-battler status2 clears at :3275-:3282 (no status2 tracked anywhere), the per-battler action/move-selection cursor resets at :3284-:3285 (no such cursors modelled), the DisableStruct zeroing at :3287-:3289, and the ProtectStruct field resets from :3291 on (no Disable/Protect state tracked).",
+          "reason": "battle_main.c:3264. Battle::clear_fainted_battler_state, run on either side when a battler faints, resets all seven stat stages to neutral (:3269-:3270), the modelled volatiles standing in for status2/status3 (:3272-:3273), and the battler's BattlerState: last landed move, last hitter and Perish Song countdown (:3288-:3289, :3314-:3319). Primary status is cleared beside it, from Cmd_cleareffectsonfaint. NOT modelled: the escape-prevention/infatuation/wrap cross-battler status2 clears at :3275-:3282, the per-battler action/move-selection cursor resets at :3284-:3285, the DisableStruct zeroing at :3287, and the ProtectStruct field resets from :3291 on (no Disable/Protect state tracked).",
           "rust_target": "crates/battle/src/battle/execute.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -28139,7 +28169,13 @@
           "status": "stubbed"
         },
         "SetActionsAndBattlersTurnOrder": {
-          "reason": "battle_main.c:4756. Only the plain two-battler pairwise GetWhoStrikesFirst-based ordering is modelled (issue #159 deliberately mirrors the upstream battle loop's observable order, not its task/array structure, per the pokeemerald-rs behavioral-fidelity principle), plus the run-goes-first rule this function owns: the non-link branch's gChosenActionByBattler[0] == B_ACTION_RUN test (:4784-:4794) sets turnOrderId = 5, and the block guarded by it (:4797) reseats the running battler at gBattlerByTurnOrder[0] ahead of every move. That fast path tests only gChosenActionByBattler[0] and [2] -- the two *player*-side positions (B_POSITION_PLAYER_LEFT/RIGHT) -- so it never fires for an opponent battler: a wild mon's own B_ACTION_RUN (the first_battle flee, src/battle_util.c#HandleAction_Run) gets no such reseat and is ordered by ordinary priority/Speed through GetWhoStrikesFirst, which is why EnemyAction::Flee is given priority 0 (MOVE_NONE's) rather than jumping the queue. The link-battle variant of that test (:4776), item/switch-action prioritization, and the Safari Zone branch are not modelled.",
+          "reason": "battle_main.c:4756. Only the plain two-battler pairwise GetWhoStrikesFirst-based ordering is modelled (issue #159 deliberately mirrors the upstream battle loop's observable order, not its task/array structure, per the pokeemerald-rs behavioral-fidelity principle), plus the run-goes-first rule this function owns: the non-link branch's gChosenActionByBattler[0] == B_ACTION_RUN test (:4784-:4794) sets turnOrderId = 5, and the block guarded by it (:4797) reseats the running battler at gBattlerByTurnOrder[0] ahead of every move. That fast path tests only gChosenActionByBattler[0] and [2] -- the two *player*-side positions (B_POSITION_PLAYER_LEFT/RIGHT) -- so it never fires for an opponent battler: a wild mon's own B_ACTION_RUN (the first_battle flee, src/battle_util.c#HandleAction_Run) gets no such reseat and is ordered by ordinary priority/Speed through GetWhoStrikesFirst, which is why EnemyAction::Flee is given priority 0 (MOVE_NONE's) rather than jumping the queue. An enemy switch action (EnemyAction::Switch) executes ahead of every move action with no order comparison or tie draw, as the switch actions are queued before move actions (:4817-:4847); only the trainer-side switch is modelled, and the end-of-turn order is rebuilt from the current battlers. The link-battle variant of that test (:4776), item-action prioritization, and the Safari Zone branch are not modelled.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "SwitchInClearSetData": {
+          "reason": "battle_main.c:3152-:3261 for ordinary singles switch-ins. Battle::switch_enemy_to (voluntary and forced trainer replacement) and Battle::send_out_next_player_reserve reset the entering battler: BattlePokemon::clear_battle_scratch clears all seven stat stages and the modelled volatiles (Focus Energy, Charge, Defense Curl, confusion, Flash Fire), the battler's BattlerState (last landed move, last hitter, Perish Song countdown) returns to its default, and gCurrentMove (Battle::last_move_used) returns to MOVE_NONE (:3257): a trainer replacement reads it first, while a player send-out that precedes it in a double faint zeroes it before the trainer's most-damage pass. HP, PP, held item, identity and primary status persist across a switch. NOT modelled: Baton Pass (:3173-:3217), the cross-battler trap/sure-hit/infatuation/wrap link releases, Disable and Protect structures, selection cursors, the other history arrays, and doubles.",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -28324,6 +28360,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_moveend": {
+          "reason": "battle_script_commands.c:4210; the MOVEEND_UPDATE_LAST_MOVES write at :4389-:4433 only. After each admitted move, Battle::execute_move records on the target battler (BattlerState, crates/battle/src/battle/battler_state.rs) the attacker as last hitter while the target survives (:4416-:4417, even for a failed move) and the landed move: the move itself unless it missed, was ineffective (type immunity, Levitate, Wonder Guard, a Volt or Water Absorb heal; Flash Fire's block sets no no-effect flag and still records the move, battle_scripts_1.s:4103-:4108), failed outright, or hit a capped primary stat stage, in which case MOVE_UNAVAILABLE (:4419-:4433; the no-effect set comes from the BattleEvents the move produced, last_landed_from). A canceller that stops the action before HITMARKER_OBEYS (sleep, full paralysis, no PP, Soundproof) records MOVE_UNAVAILABLE on the target, and a confusion self-hit on the attacker itself. A self-targeting move is its own target. Battle::last_move_used stays the attempted gCurrentMove used by the forced post-faint replacement. Multi-hit moves write once after their final hit. NOT modelled: the other MOVEEND phases here, gLastMoves/gLastResultingMoves/gLastPrintedMoves, gLastHitByType, Baton Pass exclusion, the absent-battler guard, and doubles. Battle::act then closes the action as HandleAction_ActionFinished does (battle_util.c:671): the acting battler's own landed-move entry returns to none while its last hitter stays.",
+          "rust_target": "crates/battle/src/battle/execute.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_negativedamage": {
           "reason": "battle_script_commands.c:6925-:6932, whole body: gBattleMoveDamage = -(gHpDealt / 2) with the -1 floor applied AFTER the halving, rewritten as drain::drain_amount. The command has no other branch and makes no Random() call. The load-bearing half is which value is halved: gHpDealt is the HP the target ACTUALLY lost (Cmd_datahpupdate's clamp at :1928-:1932), not the formula's raw output, so an overkill drain heals a little; Battle::execute_drain_move feeds it Battle::apply_damage_to_target's return value and crates/battle/tests/turn_engine/pipelines.rs pins that wiring at turn level.",
           "rust_target": "crates/battle/src/drain.rs",
@@ -28375,6 +28417,12 @@
         "Cmd_statbuffchange": {
           "reason": "battle_script_commands.c:7100-:7104. resolve_stat_change_move folds this command's whole observable effect into one call rather than modelling its jumpPtr/gBattlescriptCurrInstr redirect literally: this crate has no battle-script bytecode VM to jump within. ChangeStatBuffs's STAT_CHANGE_WORKED/DIDNT_WORK return redirects gBattlescriptCurrInstr for the Mist branch (unmodelled) and, since issue #322, for the modelled Clear Body branch too -- StatChangeOutcome::AbilityProtected is this crate's analogue of that redirect (crate::battle::BattleEvent::StatLossPrevented is the caller-visible surface). The plain WORKED case this crate reaches always continues past this command, matching StatChangeOutcome::Applied's fall-through.",
           "rust_target": "crates/battle/src/stat_change.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_switchoutabilities": {
+          "reason": "battle_script_commands.c:9590-:9603. Battle::switch_enemy_to clears the primary status of a leaving Natural Cure member before it returns to its party slot, for the trainer side's switch actions. Other abilities have no switch-out effect here, as upstream. NOT modelled: the player-side switch action, Pursuit/forced-out (Roar, Whirlwind) callers and doubles.",
+          "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -28832,6 +28880,20 @@
       "status": "pending"
     },
     "src/data/battle_anim.h": {
+      "artifacts": {
+        "gBattleAnimPaletteTable": {
+          "reason": "gBattleAnimPaletteTable (src/data/battle_anim.h:1303-1594). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpritePal_*, ANIM_TAG_*} and joined by tag; the table-selected palette is kept even where it is not the sheet's own (GrayOrb, BlueOrb, and RedOrb2 share one sheet and select three palettes), and a selected tag registered twice is refused. NOT modelled: the 96 rows no catalog program loads emit nothing (the stock table registers ANIM_TAG_SAP_DRIP twice and never ANIM_TAG_SAP_DRIP_2, both outside the inventory); ROM import of the table is pending.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "gBattleAnimPicTable": {
+          "reason": "gBattleAnimPicTable (src/data/battle_anim.h:1010-1301). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpriteGfx_*, size, ANIM_TAG_*} and joined by tag, never by row position; the row of each inventory tag selects its sheet declaration, and the registered size is checked against the five concatenated sheets' tile streams (the registered sizes of bent_spoon, eye_sparkle, and sparkle_6 differ from their PNGs, so a single PNG keeps its whole raster). NOT modelled: the 96 rows no catalog program loads emit nothing, and their declarations and sources are never read; ROM import of the table is pending.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -30149,6 +30211,12 @@
           "spec": "I-4",
           "status": "rewritten"
         },
+        "ClearPoisonStepCounter": {
+          "reason": "field_control_avatar.c:632-635. OverworldPhase::clear_poison_step_counter zeroes VAR_POISON_STEP_COUNTER (0x402B, constants/vars.h:61) and runs as each modelled battle (wild, first, Route 103 rival, sight trainer) starts, at the common active-battle dispatch boundary, matching battle_setup.c:365-372,930-943. The upstream trainer-battle call sites outside those modelled battles are not part of this entry.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "FieldGetPlayerInput": {
           "reason": "Partially modeled by phase-owned field-input gates. Completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
@@ -30219,6 +30287,12 @@
           "reason": "OverworldPhase::step's A-press handling routes the target engine::overworld::select_interaction_target selects (object, then background event, then script-backed metatile; GetInteractionScript's order). An object script crate::overworld::npc_scripts::script_text recognizes opens a NpcDialog from that module's own small hardcoded msgbox-style table, and the Route 103 rival object starts its battle. Every other selected target (an unrecognized object script, a sign, hidden item or secret-base entrance, a script-backed metatile) consumes the frame as InteractionOutcome::Unmodelled, matching TryStartInteractionScript returning TRUE for any non-NULL script (field_control_avatar.c:172), but starts no script. A secret-base entrance is selected only when the list of saved secret bases passed to the selector lacks its base, as TrySetCurSecretBase requires (field_control_avatar.c:354-361); the save block holds no secret bases, so this application passes an empty list and every north-facing entrance is selected. Reading the saved bases from the save is not modelled. Only a press that selects nothing lets the frame's direction input reach PlayerState unconsumed. Not modelled: GetInteractedWaterScript, GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). The lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). It sits below the completed step's own events, as upstream does: a landing whose walk animation drained is processed at the start of the next step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/interaction.rs",
           "spec": "I-3",
+          "status": "stubbed"
+        },
+        "UpdatePoisonStepCounter": {
+          "reason": "field_control_avatar.c:637-659. OverworldPhase::update_poison_step_counter advances VAR_POISON_STEP_COUNTER (a saved event var, so Save and Continue keep the cycle) modulo four with u16 wraparound on each completed step outside a Secret Base and the Union Room, runs DoPoisonFieldEffect on the wrap, and claims the frame only for a faint (FLDPSN_FNT), so an ordinary poison tick leaves the wild-encounter roll, arrow warp, and interaction to the same frame. It sits after the coord event and door warp and before the encounter roll, and is skipped on forced-movement tiles (field_control_avatar.c:155-163,543-553). Not modelled: EventScript_FieldPoison itself (data/scripts/field_poison.inc:1-17) -- the port routes the faint through a typed phase call because the TryFieldPoisonWhiteOut special has no script callback -- and the other TryStartStepCountScript step counters (rematch, friendship, Faraway Island, egg hatch, abnormal weather).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
+          "spec": "I-4",
           "status": "stubbed"
         }
       },
@@ -30412,6 +30486,20 @@
       "status": "pending"
     },
     "src/field_poison.c": {
+      "artifacts": {
+        "DoPoisonFieldEffect": {
+          "reason": "field_poison.c:120-154 and party_menu.c:1909-1913. OverworldPhase::do_poison_field_effect visits all six party slots regardless of the stored count; a slot with hasSpecies and either poison flag (STATUS1_PSN_ANY, 0x88) loses one saved HP, saturating at zero, and a slot that reaches or already sits at zero counts as fainted, giving the None/Poisoned/Fainted result with no RNG draw. The live lead is filed into the save before the drain and reloaded from it after, so its saved HP stays exact. Not modelled: the FldEffPoison_Start screen flash.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "TryFieldPoisonWhiteOut": {
+          "reason": "field_poison.c:20-117. OverworldPhase::try_field_poison_white_out clears the status of every valid-species slot at zero HP that is poisoned (FaintFromFieldPoison), then, when no valid non-egg slot has HP left (AllMonsFainted), runs the standard OverworldPhase::white_out (money halved, party healed, field state reset, warp to the last heal location). Not modelled: the per-mon fainted message and wait, AdjustFriendship FRIENDSHIP_EVENT_FAINT_FIELD_PSN, the battle-facility FLDPSN_FRONTIER_WHITEOUT result, and dispatch as the registered script special (it has no callback).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -30651,6 +30739,12 @@
     },
     "src/graphics.c": {
       "artifacts": {
+        "gBattleAnimSpriteGfx_and_Pal-declarations": {
+          "reason": "gBattleAnimSpriteGfx_* and gBattleAnimSpritePal_* INCGFX_U32 declarations (src/graphics.c, first at :25 and :32). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: only the declarations the selected rows name are parsed, each exactly once, as a .png with .4bpp.lz, a .4bpp with .lz for the five concatenated sheets, or a .png or .pal with .gbapal.lz, and the sources must sit under graphics/battle_anims; the sheet is kept at its PNG's dimensions and pixels, the palette is a PNG PLTE or a JASC file of whole 16-colour banks (MusicNotes2 keeps its five). NOT modelled: every declaration no inventory tag selects, and ROM import of the sheets and palettes.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
@@ -30746,6 +30840,12 @@
           "rust_target": "crates/assets/src/items.rs",
           "spec": "C-2",
           "status": "rewritten"
+        },
+        "bag_move_item_slot": {
+          "reason": "MoveItemSlotInList (item.c:635-657): the item at one list row is taken out and put back before another row, so a place is a boundary between rows and may follow the last. The pocket is first packed in list order, as upstream packs it on opening the bag (CompactItemsInBagPocket, item.c:601-612; item_menu.c:1101-1122), because the engine lists rows without compacting the caller's bag. Battle Pyramid and PC lists are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/swap.rs",
+          "spec": "C-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -30768,7 +30868,7 @@
     "src/item_menu.c": {
       "artifacts": {
         "bag_menu_screen": {
-          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows, pocket-switch arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
+          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), the context-choice windows (item_menu.c:452-489), and the TM/HM move-data windows that replace the description while a machine's context menu is open (item_menu.c:1642-1648, 2538-2595): the TYPE, POWER, ACCURACY and PP label icons and the move's type icon from gMenuInfoElements_Gfx (menu.c:2098-2101), and its power, accuracy and PP right-aligned in three positions, with three dashes for a power under 2 or an accuracy of 0. It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows (item_menu.c:1027-1038; list_menu.c:1126-1139) show while the pocket has rows past the window, counting the close row, and are hidden during a pocket switch and a context menu, recreated when either ends. SELECT picks up an item in the Items, Poke Balls and Key Items pockets of the field and battle screens, the cursor chooses a place, and A or SELECT puts it down while B cancels; the screen keeps its own copy of the bag, reorders it, and returns the new bag to the host (item_menu.c:1228-1239, 1416-1525). Pocket-switch arrows, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
           "rust_target": "crates/pokeemerald-rs/src/bag_menu.rs",
           "spec": "C-5",
           "status": "rewritten"
@@ -30776,6 +30876,12 @@
         "bag_menu_state": {
           "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
           "rust_target": "crates/engine/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "bag_select_swap": {
+          "reason": "The bag SELECT swap in the field and battle screens: SELECT on an Items, Poke Balls or Key Items row (not the close row, not TMs, HMs or berries) picks it up and consumes the frame otherwise; while swapping SELECT, then A, put it down, B cancels, Up and Down choose the place, and the pocket buttons do nothing (item_menu.c:1228-1239, 1416-1525; list_menu.c:398-415). Putting it down at its own row or the boundary below it changes nothing; the cursor row steps back whenever the place is below the item, whether it is put down or cancelled, keeping the scroll (item_menu.c:1485-1525). While swapping the icon and the \"Move the {item} where?\" prompt stay on the item and its row keeps a gray cursor if it is in the window (item_menu.c:933-960, 1434-1442). The screen reorders its own copy of the bag and returns it; saving it is the host's.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/swap.rs",
           "spec": "C-5",
           "status": "rewritten"
         },
@@ -30864,6 +30970,14 @@
       "status": "pending"
     },
     "src/list_menu.c": {
+      "artifacts": {
+        "bag_vertical_scroll_arrows": {
+          "reason": "The bag list's vertical scroll-arrow pair: 16x16 sprites at (172, 12) and (172, 148) from the scroll_indicator sheet's second frame (tile offset 4), flipped vertically for the down arrow, in the red-interface palette (list_menu.c:96-148, 289-290; item_menu.c:1027-1038). The up arrow shows once the list has scrolled and the down arrow until it is fully scrolled (list_menu.c:1126-1139). Each bobs by sine * 2 / 256 truncated toward zero, the phase moving +8 (up) or -8 (down) a sample after a first callback that only starts the animation (list_menu.c:997-1020). Only the bag's vertical pair is modelled; the generic list menu and its other arrow users, including the horizontal pocket-switch pair, are not.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/scroll.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31271,6 +31385,14 @@
       "status": "pending"
     },
     "src/menu_helpers.c": {
+      "artifacts": {
+        "bag_swap_line": {
+          "reason": "The bag swap line: eight 16x16 sprites from the swap_line sheet and its own palette, the first the end cap (frame at tile 0) and the rest the body (tile offset 4), 16 apart from x 112 with the last pulled 8 pixels left of the list margin, centred at y 1 + (row + 1) * 16 for the cursor row (menu_helpers.c:30-90, 399-451; item_menu_icons.c:575-587). It is made hidden, shown by the first swap frame that is not a SELECT press, and hidden again when the swap ends (item_menu.c:1461-1464, 1506, 1524). The sheet's flipped end cap is not used by the bag.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/draw.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31806,7 +31928,7 @@
           "status": "stubbed"
         },
         "CB2_WhiteOut": {
-          "reason": "overworld.c:1550-1570. The 120-frame fade-to-black counter, DoMapLoadLoop's map-load state machine, and FieldCB_WarpExitFadeFromBlack's fade-in are not modelled -- this port has no frame-counted fade transition for any warp, matching every other warp/connection crossing's own instant rebind (OverworldPhase::warp_to/warp_to_position/warp_to_saved_location/cross_connection, none of which animate a transition either). Nor is anything else this callback does around the fade: FieldClearVBlankHBlankCallbacks (:1556), StopMapMusic (:1557), and ResetSafariZoneFlag_ (:1558) have no counterparts -- no vblank/hblank callback table is modelled, no map music is playing to stop (crate::music drives the title screen only), and no Safari Zone state exists (though its own persistent flag, FLAG_SYS_SAFARI_MODE, is cleared by DoWhiteOut's own reset -- see src/overworld.c#DoWhiteOut). Of the seven calls upstream makes at the end of the 120 frames, exactly one has a port counterpart that runs: DoWhiteOut (:1559) is OverworldPhase::white_out (see src/overworld.c#DoWhiteOut), called synchronously and immediately, the instant the losing battle's driver reports BattleOutcome::PlayerLost, with no fade in between. The three after it -- ResetInitialPlayerAvatarState (:1560), ScriptContext_Init (:1561), UnlockPlayerFieldControls (:1562) -- run nothing here: this port stores no pre-warp avatar state to reset (see src/overworld.c#GetAdjustedInitialDirection on the missing StoreInitialPlayerAvatarState), has no script engine to re-init, and never locks field controls in the first place (LockPlayerFieldControls is already recorded as unmodelled on src/battle_setup.c#BattleSetup_StartWildBattle), so the map-load-into-overworld handoff white_out performs is just OverworldPhase::warp_to_saved_location's ordinary one (issue #951: the saved-location warp, not the explicit-coordinate warp_to_position).",
+          "reason": "overworld.c:1550-1570. The 120-frame fade-to-black counter, DoMapLoadLoop's map-load state machine, and FieldCB_WarpExitFadeFromBlack's fade-in are not modelled -- this port has no frame-counted fade transition for any warp, matching every other warp/connection crossing's own instant rebind (OverworldPhase::warp_to/warp_to_position/warp_to_saved_location/cross_connection, none of which animate a transition either). Nor is anything else this callback does around the fade: FieldClearVBlankHBlankCallbacks (:1556), StopMapMusic (:1557), and ResetSafariZoneFlag_ (:1558) have no counterparts -- no vblank/hblank callback table is modelled, no map music is playing to stop (crate::music drives the title screen only), and no Safari Zone state exists (though its own persistent flag, FLAG_SYS_SAFARI_MODE, is cleared by DoWhiteOut's own reset -- see src/overworld.c#DoWhiteOut). Of the seven calls upstream makes at the end of the 120 frames, exactly one has a port counterpart that runs: DoWhiteOut (:1559) is OverworldPhase::white_out (see src/overworld.c#DoWhiteOut), called synchronously and immediately, the instant the losing battle's driver reports BattleOutcome::PlayerLost, with no fade in between. The three after it -- ResetInitialPlayerAvatarState (:1560), ScriptContext_Init (:1561), UnlockPlayerFieldControls (:1562) -- run nothing here: this port stores no pre-warp avatar state to reset (see src/overworld.c#GetAdjustedInitialDirection on the missing StoreInitialPlayerAvatarState), has no script engine to re-init, and never locks field controls in the first place (LockPlayerFieldControls is already recorded as unmodelled on src/battle_setup.c#BattleSetup_StartWildBattle), so the map-load-into-overworld handoff white_out performs is just OverworldPhase::warp_to_saved_location's ordinary one (issue #951: the saved-location warp, not the explicit-coordinate warp_to_position). Field poison is a second caller of OverworldPhase::white_out: a four-step drain that faints the last member with HP left reaches it synchronously from the step that drained it (see src/field_poison.c#TryFieldPoisonWhiteOut), with the same absent fade.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs",
           "spec": "I-4",
           "status": "stubbed"

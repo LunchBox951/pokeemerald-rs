@@ -47,7 +47,9 @@
 //! - the battle-message token table (`gBattleStringsTable` plus the special
 //!   templates `BufferStringBattle` selects); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
-//!   tiles), seven palettes, and four decoded tilemaps.
+//!   tiles), seven palettes, and four decoded tilemaps;
+//! - the battle-animation catalog (`data/battle_anim_scripts.s`); and
+//! - the sheet and palette of every battle-effect sprite a catalog program loads.
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -77,6 +79,8 @@
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
+//! - `battle-anim/catalog`
+//! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -84,6 +88,7 @@
 mod audio_samples;
 mod bag;
 mod battle_anim;
+mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
@@ -195,7 +200,8 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
-    battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
 
