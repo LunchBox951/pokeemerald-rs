@@ -1677,3 +1677,31 @@ fn publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable() {
         b"pub const GENERATED: u32 = 0;\n"
     );
 }
+
+/// Locates `sprite/x` built from a payload-shaped raster, and returns the error.
+fn locate_malformed_raster(name: &str, width: u32, height: u32) -> GenRomProfileError {
+    let pixels = vec![1u8; width as usize * height as usize];
+    let entry = image_entry("sprite/x".into(), width, height, 4, pixels).expect("entry");
+    let rom = RomFixture::new().emerald_header().finish();
+    let mut error = None;
+    with_context(name, &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        error = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report).err();
+    });
+    error.expect("a raster without whole 8x8 tiles is malformed, not located")
+}
+
+/// A payload-shaped raster that is empty or not a whole number of 8x8 tiles
+/// is a malformed pack: it must surface as `EntryShape` naming the dimensions,
+/// not as `NotFound` blaming art missing from the ROM.
+#[test]
+fn a_raster_that_is_not_whole_eight_pixel_tiles_is_an_entry_shape_error() {
+    for (width, height) in [(4, 8), (7, 8), (8, 7), (12, 8), (0, 8), (8, 0), (0, 0)] {
+        let err = locate_malformed_raster("malformed-raster", width, height);
+        assert!(
+            matches!(&err, GenRomProfileError::EntryShape { id, reason }
+                if id == "sprite/x" && reason.contains(&format!("{width}x{height}"))),
+            "{width}x{height}: {err:?}"
+        );
+    }
+}
