@@ -2091,3 +2091,8 @@ mod tests {
         assert_eq!(super::current_hp_percent(&malformed), PERCENT_SCALE);
     }
 }
+
+#[cfg(test)]
+mod prologue_tests;
+#[cfg(test)]
+mod stat_stage_tests;

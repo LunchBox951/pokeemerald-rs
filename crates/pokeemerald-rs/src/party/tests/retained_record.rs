@@ -435,3 +435,31 @@ fn merge_into_save_pokemon_heals_a_stale_clear_has_species_bit() {
          checksum-valid but empty to Emerald-compatible readers"
     );
 }
+
+/// `LoadPlayerParty`/`SavePlayerParty` copy the record (`load_save.c:160-178`),
+/// so an experience word above the level-100 threshold survives an untouched
+/// Continue then SAVE; only `Cmd_getexp` caps it.
+#[test]
+fn an_experience_word_above_the_level_100_threshold_round_trips_untouched() {
+    let dex = Dex::new();
+    let mut stored = stored_record_with_retained_fields();
+    let growth_rate = dex.species(TREECKO).unwrap().growth_rate;
+    let level_100 = assets::experience_for_level(growth_rate, 100).unwrap();
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.growth[EXPECTED_GROWTH_EXPERIENCE]
+        .copy_from_slice(&(level_100 + 1).to_le_bytes());
+    stored.box_data.set_substructures(&substructures);
+    stored.level = 100;
+    let mut loaded =
+        LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("the fixture must decode");
+    assert_eq!(loaded.battler().experience(), level_100 + 1);
+
+    let merged = loaded.merge_and_save(&dex);
+
+    let word = merged.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_EXPERIENCE]
+        .try_into()
+        .map(u32::from_le_bytes)
+        .unwrap();
+    assert_eq!(word, level_100 + 1, "the raw experience word is preserved");
+    assert_eq!(merged.to_bytes(), stored.to_bytes());
+}

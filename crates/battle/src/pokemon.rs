@@ -869,18 +869,18 @@ impl BattlePokemon {
         Ok(self.pending_move_learn)
     }
 
-    /// Adopts a loaded experience total verbatim, clamped to the level-100
-    /// threshold, without moving the level or any stat.
+    /// Adopts a loaded experience total verbatim, without moving the level or
+    /// any stat, and without capping it.
     ///
     /// A party record stores level, experience and the stat cache
     /// independently and load copies all three
-    /// (`src/load_save.c:160-178`); the next award reconciles them through
-    /// [`BattlePokemon::apply_experience`].
+    /// (`src/load_save.c:160-178`), so a total above the level-100 threshold
+    /// survives a re-save unchanged. The cap upstream applies lives in
+    /// `Cmd_getexp`, which [`BattlePokemon::apply_experience`] reproduces, and
+    /// the next award reconciles the level through it.
     #[must_use]
-    pub fn with_saved_experience(mut self, total: u32) -> Self {
-        let max_experience =
-            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
-        self.experience = total.min(max_experience);
+    pub const fn with_saved_experience(mut self, total: u32) -> Self {
+        self.experience = total;
         self
     }
 
