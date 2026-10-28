@@ -123,6 +123,7 @@
 
 pub mod app;
 mod authored_message;
+mod bag_menu;
 mod flow;
 pub mod frame;
 mod game_save;

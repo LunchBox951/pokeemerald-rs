@@ -1,11 +1,13 @@
 //! Route 103 rival battle-outcome driver seam: win/loss decisions, starter and gender selection, and the Route 101 handoff.
 
+use assets::items::ItemId;
 use assets::{MapId, MoveId, SpeciesId};
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::overworld::{Direction, PlayerState};
 use engine::save::PlayerGender;
 use platform::{ButtonState, Buttons};
 
+use crate::flow::lead_screen::loaded_holding;
 use crate::flow::tests::{held, pressed};
 
 use super::route103_rival_test_support::{
@@ -568,6 +570,32 @@ fn a_refused_rival_start_returns_the_lent_lead() {
     );
     phase.assert_lead_at_slot_for_test(0);
     let lent = phase.take_lead_battler().expect("still restorable");
+    phase.restore_lead_battler(lent);
+}
+
+/// A loaded lead holding a battle item is refused by the shared constructor: no battle, no
+/// draw, no rival flag, and the lent lead comes back with its item.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
+    let mut phase = route_103_phase_facing_the_rival();
+    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::ORAN_BERRY);
+    phase.set_fresh_lead_for_test(lead.clone());
+    phase.rng = engine::rng::Rng::new(1);
+
+    phase.step(pressed(Buttons::A));
+
+    assert!(!phase.is_rival_battle_active(), "no battle may start");
+    assert_eq!(phase.rng.state(), engine::rng::Rng::new(1).state());
+    assert_eq!(
+        phase.save1().event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
+        Ok(false)
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("still restorable");
+    assert_eq!(
+        lent, lead,
+        "the lead returns with the item it was saved with"
+    );
     phase.restore_lead_battler(lent);
 }
 
