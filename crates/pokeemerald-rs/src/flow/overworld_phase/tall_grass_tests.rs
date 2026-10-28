@@ -297,7 +297,8 @@ fn a_continued_save_on_tall_grass_shows_it_settled() {
     let mut block1 = source.save1.clone();
     block1.pos = engine::save::Coords16 { x: 5, y: 4 };
     let mut phase = OverworldPhase::from_saved(
-        synthetic_scene_with_tall_grass_sprites(20, 20, &[((5, 4), MB_TALL_GRASS, GROUND)]),
+        synthetic_scene_with_tall_grass_sprites(20, 20, &[((5, 4), MB_TALL_GRASS, GROUND)])
+            .in_room_for_test(LITTLEROOT),
         LITTLEROOT,
         block1,
         source.save2.clone(),
