@@ -27,34 +27,59 @@ pub struct OneLine<'a>(pub &'a str);
 
 impl fmt::Display for OneLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for c in self.0.chars() {
-            match c {
-                '\n' => f.write_str(r"\n")?,
-                '\r' => f.write_str(r"\r")?,
-                '\t' => f.write_str(r"\t")?,
-                // `is_control` is the Unicode `Cc` category: C0, DEL, and C1.
-                // `U+2028`/`U+2029` are line breaks outside it, and the bidi
-                // embedding, override, isolate, and mark controls
-                // (`Bidi_Control`) can reorder whatever follows on a
-                // bidi-aware terminal.
-                c if c.is_control()
-                    || matches!(
-                        c,
-                        '\u{2028}'
-                            | '\u{2029}'
-                            | '\u{061c}'
-                            | '\u{200e}'
-                            | '\u{200f}'
-                            | '\u{202a}'..='\u{202e}'
-                            | '\u{2066}'..='\u{2069}'
-                    ) =>
-                {
-                    write!(f, "\\u{{{:x}}}", c as u32)?;
-                }
-                c => f.write_str(c.encode_utf8(&mut [0u8; 4]))?,
+        self.0.chars().try_for_each(|c| write_escaped(f, c))
+    }
+}
+
+/// Write one character, escaped if it would break the row or steer the terminal.
+fn write_escaped(out: &mut impl fmt::Write, c: char) -> fmt::Result {
+    match c {
+        '\n' => out.write_str(r"\n"),
+        '\r' => out.write_str(r"\r"),
+        '\t' => out.write_str(r"\t"),
+        // `is_control` is the Unicode `Cc` category: C0, DEL, and C1.
+        // `U+2028`/`U+2029` are line breaks outside it, and the bidi
+        // embedding, override, isolate, and mark controls
+        // (`Bidi_Control`) can reorder whatever follows on a
+        // bidi-aware terminal.
+        c if c.is_control()
+            || matches!(
+                c,
+                '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            ) =>
+        {
+            write!(out, "\\u{{{:x}}}", c as u32)
+        }
+        c => out.write_str(c.encode_utf8(&mut [0u8; 4])),
+    }
+}
+
+/// Any [`Display`](fmt::Display) value rendered for a one-line diagnostic,
+/// through the same rule as [`OneLine`].
+///
+/// For a fragment whose text the program does not control: an
+/// [`io::Error`](std::io::Error) built from a caller's message, or a profile
+/// name. The value's own rendering is escaped as it is written, so nothing is
+/// buffered and the value stays whole for [`Error::source`](std::error::Error::source).
+pub struct OneLineText<T>(pub T);
+
+impl<T: fmt::Display> fmt::Display for OneLineText<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Escaping<'a, 'b>(&'a mut fmt::Formatter<'b>);
+
+        impl fmt::Write for Escaping<'_, '_> {
+            fn write_str(&mut self, text: &str) -> fmt::Result {
+                text.chars().try_for_each(|c| write_escaped(self.0, c))
             }
         }
-        Ok(())
+
+        fmt::Write::write_fmt(&mut Escaping(f), format_args!("{}", self.0))
     }
 }
 

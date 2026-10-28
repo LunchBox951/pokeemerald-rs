@@ -10,8 +10,8 @@
 # `policy` owns the Ubuntu-only repository checks and the exact default format
 # command. `native` gives each supported OS one checkout and one shared Cargo
 # target directory for the exact default-feature Clippy/build/test commands
-# plus smoke validation. Ubuntu also runs the all-feature Clippy gate, restores
-# the pinned upstream references, extracts the real asset pack, runs the ignored
+# plus all-feature Clippy/tests and smoke validation. Each OS restores the
+# pinned upstream references, extracts its own real asset pack, runs the ignored
 # real-pack and real-checkout assertions, and repeats smoke with the pack
 # present. No Cargo target cache is used: reuse is deliberately limited to
 # commands within one native runner.
@@ -131,7 +131,6 @@ jobs:
       - name: cargo clippy --workspace --all-targets --locked -- -D warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        if: runner.os == 'Linux'
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
@@ -141,6 +140,8 @@ jobs:
       # this separate invocation so the optional smoke feature is also tested.
       - name: cargo test -p xtask --features smoke
         run: cargo test -p xtask --features smoke
+      - name: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked
       - name: Verify channel data isolation
         shell: bash
         run: |
@@ -150,37 +151,29 @@ jobs:
       - name: Smoke E2E (packless)
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
-      # The clone/extraction pipeline is platform-independent. One Ubuntu leg
-      # supplies real-asset coverage without tripling upstream clone work.
       - name: Restore pinned upstream references
-        if: runner.os == 'Linux'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             pokeemerald
             mgba
-          key: real-pack-upstream-${{ hashFiles('init.sh') }}
+          key: real-pack-upstream-${{ runner.os }}-${{ hashFiles('init.sh') }}
       - name: Fetch pinned upstream references
-        if: runner.os == 'Linux'
+        shell: bash
         run: ./init.sh
       - name: Extract real asset pack
-        if: runner.os == 'Linux'
         run: cargo run -p xtask -- extract
       - name: Run ignored real-pack assertions
-        if: runner.os == 'Linux'
         run: cargo test -p pokeemerald-rs -- --ignored
       - name: Run ignored real-pack assertions (assets)
-        if: runner.os == 'Linux'
         run: cargo test -p assets -- --ignored
       # `extract_dispatch_succeeds_with_local_checkout` rewrites the shared
       # assets-pack/ output (deterministically — extraction is byte-identical
       # across runs), so this step must stay between "Extract real asset pack"
       # and the smoke step that reads the pack.
       - name: Run ignored real-checkout assertions (xtask)
-        if: runner.os == 'Linux'
         run: cargo test -p xtask --features record-snapshot,scenario -- --ignored
       - name: Smoke E2E (pack present)
-        if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
   merge-gate:

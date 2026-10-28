@@ -451,7 +451,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 
 /// Littleroot Town's real north connection to Route 101 (`offset: 0`), crossed both ways.
 ///
-/// `(10, 19)` is also the Route 101 rescue trigger tile. With no `party_lead` the trigger
+/// `(10, 19)` is also the Route 101 rescue trigger tile. With no lead the trigger
 /// consumes itself without building a battle, so the walk is unaffected; see
 /// `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`.
 #[test]

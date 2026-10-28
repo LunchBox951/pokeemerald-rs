@@ -28,6 +28,19 @@ impl Direction {
         }
     }
 
+    /// Returns the direction facing the other way, as upstream's `GetOppositeDirection`
+    /// (`event_object_movement.c:4991-4999`) does for every cardinal. The bike diagonals
+    /// it also reverses are not modelled by [`Direction`].
+    #[must_use]
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::South => Self::North,
+            Self::North => Self::South,
+            Self::West => Self::East,
+            Self::East => Self::West,
+        }
+    }
+
     /// Returns the map-connection direction with the same cardinal meaning.
     #[must_use]
     pub const fn to_connection_direction(self) -> ConnectionDirection {
@@ -75,6 +88,17 @@ mod tests {
         assert_eq!(Direction::North.delta(), (0, -1));
         assert_eq!(Direction::West.delta(), (-1, 0));
         assert_eq!(Direction::East.delta(), (1, 0));
+    }
+
+    #[test]
+    fn opposite_reverses_each_cardinal_and_is_an_involution() {
+        for (direction, opposite) in [
+            (Direction::South, Direction::North),
+            (Direction::West, Direction::East),
+        ] {
+            assert_eq!(direction.opposite(), opposite);
+            assert_eq!(opposite.opposite(), direction);
+        }
     }
 
     #[test]

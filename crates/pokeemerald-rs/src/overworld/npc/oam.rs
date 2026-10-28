@@ -9,11 +9,9 @@
 
 use std::collections::HashMap;
 
-use assets::ObjectEvent;
 use engine::event_data::EventData;
-use engine::overworld::{
-    initial_facing_direction, object_event_is_in_view, object_event_is_visible, PlayerState,
-};
+use engine::overworld::object_event::{tile_is_in_view, ObjectEventCollection};
+use engine::overworld::{object_event_is_visible, PlayerState};
 use rendering::{BitDepth, OamEntry};
 
 use super::super::avatar;
@@ -158,13 +156,16 @@ pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
 #[cfg(test)]
 #[must_use]
 pub(super) fn oam_entries(
-    object_events: &'static [ObjectEvent],
+    objects: &ObjectEventCollection,
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
 ) -> Vec<OamEntry> {
-    let elevations: Vec<u8> = object_events.iter().map(|event| event.elevation).collect();
-    elevated_oam_entries(object_events, &elevations, bindings, player, event_data)
+    let elevations: Vec<u8> = objects
+        .iter()
+        .map(|live| live.state().elevation())
+        .collect();
+    elevated_oam_entries(objects, &elevations, bindings, player, event_data)
         .into_iter()
         .flat_map(|sprite| sprite.entries)
         .collect()
@@ -212,11 +213,16 @@ const fn single_obj_shape(width: u16, height: u16) -> (rendering::ObjShape, u8) 
 }
 
 /// [`oam_entries`] with each object's parent depth keys. `elevations` holds
-/// each event's effective elevation, aligned with `object_events`: it selects
-/// the OBJ priority and the subpriority base.
+/// each object's effective elevation, aligned with `objects`' iteration order:
+/// it selects the OBJ priority and the subpriority base.
+///
+/// Position and facing come from each entry's live state; the template keeps
+/// the graphics id and hide flag. The standing frame follows the live facing
+/// (`GetFaceDirectionAnimNum`, `event_object_movement.c`), and the spawn window
+/// is evaluated at the live tile.
 #[must_use]
 pub(in crate::overworld) fn elevated_oam_entries(
-    object_events: &'static [ObjectEvent],
+    objects: &ObjectEventCollection,
     elevations: &[u8],
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
@@ -224,20 +230,21 @@ pub(in crate::overworld) fn elevated_oam_entries(
 ) -> Vec<DepthSprite> {
     let player_pos = player.position();
     let camera_lag = super::super::viewport::camera_lag_px(player);
-    object_events
+    objects
         .iter()
         .enumerate()
-        .filter(|(_, event)| {
-            object_event_is_visible(event, event_data) && object_event_is_in_view(event, player_pos)
+        .filter(|(_, live)| {
+            object_event_is_visible(live.template(), event_data)
+                && tile_is_in_view(live.state().position(), player_pos)
         })
-        .filter_map(|(index, event)| {
-            let binding = *bindings.get(binding_key(event))?;
-            let elevation = elevations.get(index).copied().unwrap_or(event.elevation);
-            let facing = initial_facing_direction(event.movement_type);
-            let (cell, h_flip) = binding.facing.cell_for(facing);
+        .filter_map(|(index, live)| {
+            let state = live.state();
+            let binding = *bindings.get(binding_key(live.template()))?;
+            let elevation = elevations.get(index).copied().unwrap_or(state.elevation());
+            let (cell, h_flip) = binding.facing.cell_for(state.facing());
             let tile_index = binding.frame_tile(cell);
             let origin = object_origin(
-                (i32::from(event.x), i32::from(event.y)),
+                state.position(),
                 player_pos,
                 camera_lag,
                 (binding.width, binding.height),

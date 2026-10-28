@@ -4,6 +4,7 @@ use super::sheets::{object_sheet, Facing};
 use super::test_support::*;
 use super::*;
 use assets::MovementType;
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::Direction;
 
 fn colocated_origin(size: (u16, u16)) -> (i32, i32) {
@@ -92,7 +93,13 @@ fn a_truck_sorts_as_one_parent_and_never_flips_for_its_facing() {
     bindings.insert("OBJ_EVENT_GFX_TRUCK", truck_binding());
     let player = PlayerState::new((5, 5), 3, Direction::South);
     let data = EventData::new();
-    let drawn = elevated_oam_entries(events, &[4], &bindings, &player, &data);
+    let drawn = elevated_oam_entries(
+        &ObjectEventCollection::from_templates(events),
+        &[4],
+        &bindings,
+        &player,
+        &data,
+    );
     assert_eq!(drawn.len(), 1, "one parent");
     assert_eq!(drawn[0].entries.len(), 12);
     assert_eq!(drawn[0].parent_priority, 1, "elevation 4's OBJ priority");
@@ -150,7 +157,13 @@ fn a_sixteen_by_sixteen_object_uses_its_effective_elevation() {
     let player = PlayerState::new((5, 5), 3, Direction::South);
     let data = EventData::new();
     for (elevation, priority) in [(4, 1), (3, 2)] {
-        let drawn = elevated_oam_entries(events, &[elevation], &bindings, &player, &data);
+        let drawn = elevated_oam_entries(
+            &ObjectEventCollection::from_templates(events),
+            &[elevation],
+            &bindings,
+            &player,
+            &data,
+        );
         let entry = drawn[0].entries[0];
         assert_eq!(entry.priority(), priority, "elevation {elevation}");
         assert_eq!((entry.x(), entry.y()), (112, 72));

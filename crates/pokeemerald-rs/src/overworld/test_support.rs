@@ -42,6 +42,10 @@ impl super::OverworldScene {
     /// controls. Test-only: a loaded scene gets its identity from
     /// [`super::OverworldScene::from_pack`]'s validated inputs.
     ///
+    /// Relabel only to the map the scene's phase names: the overworld phase
+    /// constructors refuse a scene whose [`super::OverworldScene::map_id`]
+    /// differs from the phase's own.
+    ///
     /// # Panics
     ///
     /// Panics if `map` has no header or events.

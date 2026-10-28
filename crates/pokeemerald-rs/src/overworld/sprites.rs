@@ -8,8 +8,9 @@
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
-use assets::{LayoutGrid, ObjectEvent};
+use assets::LayoutGrid;
 use engine::event_data::EventData;
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, OamEntry, Palette, Tileset};
 
@@ -24,9 +25,11 @@ pub(super) struct SceneSprites {
     /// First tile of the player's running sheet, packed after every NPC sheet
     /// so NPC blocks keep their offsets from the walking block.
     run_base_tile: u16,
-    object_events: &'static [ObjectEvent],
-    /// Each object's effective elevation, aligned with `object_events`.
-    elevations: Vec<u8>,
+    /// Template-seeded state for callers that own no live collection.
+    seed_objects: ObjectEventCollection,
+    /// The layout's cell elevations, which settle each object's elevation at
+    /// its live tile.
+    cell_elevations: CellElevations,
     bindings: HashMap<&'static str, SpriteBinding>,
 }
 
@@ -37,20 +40,51 @@ const ELEVATION_TRANSITION: u8 = 0;
 /// `ELEVATION_MULTI_LEVEL`: a cell that leaves an object's elevation alone.
 const ELEVATION_MULTI_LEVEL: u8 = 15;
 
-/// The elevation a spawned object settles at: its template's, replaced by its
-/// own cell's elevation unless that cell is a transition or multi-level one
-/// (`ObjectEventUpdateElevation`, `event_object_movement.c:7759-7771`, which
-/// the spawn-time ground-effect update reaches).
-fn effective_elevation(event: &ObjectEvent, grid: &LayoutGrid<'_>) -> u8 {
-    let cell = u16::try_from(event.x)
-        .ok()
-        .zip(u16::try_from(event.y).ok())
-        .and_then(|(x, y)| grid.cell_at(x, y));
-    match cell {
-        Some(cell) if !matches!(cell.elevation, ELEVATION_TRANSITION | ELEVATION_MULTI_LEVEL) => {
-            cell.elevation
+/// Each cell's elevation, row-major, copied from the layout grid so the
+/// sprites need not borrow it.
+#[derive(Debug)]
+struct CellElevations {
+    width: u16,
+    height: u16,
+    elevations: Vec<u8>,
+}
+
+impl CellElevations {
+    fn from_grid(grid: &LayoutGrid<'_>) -> Self {
+        let (width, height) = (grid.width(), grid.height());
+        let elevations = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                grid.cell_at(x, y)
+                    .map_or(ELEVATION_TRANSITION, |c| c.elevation)
+            })
+            .collect();
+        Self {
+            width,
+            height,
+            elevations,
         }
-        _ => event.elevation,
+    }
+
+    /// The elevation an object on `tile` settles at: its own, replaced by the
+    /// cell's unless that cell is a transition or multi-level one, or off the
+    /// grid (`ObjectEventUpdateElevation`,
+    /// `event_object_movement.c:7759-7771`, which the spawn-time ground-effect
+    /// update reaches).
+    fn settled(&self, tile: (i32, i32), elevation: u8) -> u8 {
+        let cell = u16::try_from(tile.0)
+            .ok()
+            .zip(u16::try_from(tile.1).ok())
+            .filter(|&(x, y)| x < self.width && y < self.height)
+            .and_then(|(x, y)| {
+                self.elevations
+                    .get(usize::from(y) * usize::from(self.width) + usize::from(x))
+            })
+            .copied();
+        match cell {
+            Some(cell) if !matches!(cell, ELEVATION_TRANSITION | ELEVATION_MULTI_LEVEL) => cell,
+            _ => elevation,
+        }
     }
 }
 
@@ -84,28 +118,46 @@ impl SceneSprites {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
             run_base_tile,
             palette: npc::build_combined_palette(pack, player, palette_ref, &bindings)?,
-            object_events: events.object_events,
-            elevations: events
-                .object_events
-                .iter()
-                .map(|event| effective_elevation(event, grid))
-                .collect(),
+            seed_objects: ObjectEventCollection::from_templates(events.object_events),
+            cell_elevations: CellElevations::from_grid(grid),
             bindings,
         })
     }
 
-    /// Lists the player first, then NPCs in template order, then orders by OBJ
-    /// priority and y-derived subpriority
-    /// ([`npc::order_sprites`]); the player leads a tie in every sort key.
+    /// [`Self::live_entries`] over the template-seeded state.
     #[must_use]
     pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
+        self.live_entries(&self.seed_objects, player, event_data)
+    }
+
+    /// Lists the player first, then NPCs in `objects` order, then orders by OBJ
+    /// priority and y-derived subpriority
+    /// ([`npc::order_sprites`]); the player leads a tie in every sort key.
+    /// `objects` supplies tile, facing, and elevation, the last settled by the
+    /// layout cell it stands on; the scene's templates keep the graphics
+    /// bindings.
+    #[must_use]
+    pub(super) fn live_entries(
+        &self,
+        objects: &ObjectEventCollection,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> Vec<OamEntry> {
+        let elevations: Vec<u8> = objects
+            .iter()
+            .map(|live| {
+                let state = live.state();
+                self.cell_elevations
+                    .settled(state.position(), state.elevation())
+            })
+            .collect();
         let mut sprites = vec![npc::DepthSprite::single(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
         )];
         sprites.extend(npc::elevated_oam_entries(
-            self.object_events,
-            &self.elevations,
+            objects,
+            &elevations,
             &self.bindings,
             player,
             event_data,
@@ -130,7 +182,7 @@ impl SceneSprites {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assets::{MapLayout, MetatileCell, MovementType};
+    use assets::{MapLayout, MetatileCell};
 
     fn grid_with_elevation_row(elevations: [u8; 3]) -> (MapLayout, Vec<u8>) {
         let layout = MapLayout {
@@ -156,38 +208,18 @@ mod tests {
         (layout, bytes)
     }
 
-    fn event_at(x: i16, elevation: u8) -> ObjectEvent {
-        ObjectEvent {
-            local_id: 1,
-            graphics_id: "OBJ_EVENT_GFX_PICHU_DOLL",
-            x,
-            y: 0,
-            elevation,
-            movement_type: MovementType::FaceDown,
-            movement_range_x: 0,
-            movement_range_y: 0,
-            trainer_type: assets::TrainerType::None,
-            trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
-            flag: "0",
-        }
-    }
-
     /// `ObjectEventUpdateElevation`: a cell's elevation replaces the
     /// template's, except the transition (0) and multi-level (15) cells.
     #[test]
     fn a_spawned_object_takes_its_cells_elevation_unless_transition_or_multi_level() {
         let (layout, bytes) =
             grid_with_elevation_row([3, ELEVATION_TRANSITION, ELEVATION_MULTI_LEVEL]);
-        let grid = layout.grid(&bytes).unwrap();
-        assert_eq!(effective_elevation(&event_at(0, 4), &grid), 3);
-        assert_eq!(effective_elevation(&event_at(1, 3), &grid), 3);
-        assert_eq!(effective_elevation(&event_at(1, 4), &grid), 4);
-        assert_eq!(effective_elevation(&event_at(2, 4), &grid), 4);
-        assert_eq!(
-            effective_elevation(&event_at(9, 4), &grid),
-            4,
-            "off the grid"
-        );
+        let cells = CellElevations::from_grid(&layout.grid(&bytes).unwrap());
+        assert_eq!(cells.settled((0, 0), 4), 3);
+        assert_eq!(cells.settled((1, 0), 3), 3);
+        assert_eq!(cells.settled((1, 0), 4), 4);
+        assert_eq!(cells.settled((2, 0), 4), 4);
+        assert_eq!(cells.settled((9, 0), 4), 4, "off the grid");
+        assert_eq!(cells.settled((-1, 0), 4), 4, "left of the grid");
     }
 }

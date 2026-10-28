@@ -1,4 +1,4 @@
-//! Renders stationary object events backed by supported object graphics.
+//! Renders live object events backed by supported object graphics.
 //!
 //! [`resolve_sprite_source`] is the complete graphics-id binding table: the
 //! protagonist sheets, the 16x32 people sheets, and the [`sheets`] rows for
@@ -13,10 +13,10 @@
 //! `OBJ_EVENT_GFX_BERRY_TREE` binds per event, by its berry tree id, to the
 //! fresh-save stage ([`sheets::initial_berry_sheet`]).
 //!
-//! Object events retain their initial movement-facing frame. Their positions
-//! share [`super::viewport::camera_lag_px`] with the background during a step,
-//! and each sprite's bottom edge sits on its tile's bottom edge, centred on the
-//! tile (`event_object_movement.c:1459-1464`).
+//! Each object draws its live tile and the standing frame of its live facing.
+//! Positions share [`super::viewport::camera_lag_px`] with the background during a
+//! step, and each sprite's bottom edge sits on its tile's bottom edge, centred on
+//! the tile (`event_object_movement.c:1459-1464`).
 //!
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
 //! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`)
@@ -448,6 +448,8 @@ mod checkpoint_pack_tests;
 mod draw_order_tests;
 #[cfg(test)]
 mod geometry_tests;
+#[cfg(test)]
+mod live_state_tests;
 #[cfg(test)]
 mod placement_tests;
 #[cfg(test)]

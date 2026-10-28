@@ -36,8 +36,10 @@ fn square_envelope_levels_above_fifteen_render_through_the_nrx2_low_nibble() {
     let level_14_peak = square_peak_at_level(121, 14);
     let level_15_peak = square_peak_at_level(130, 15);
 
-    assert!(level_14_peak > 0);
-    assert!(level_15_peak > 0);
+    // One hardware volume unit swings +-2 DirectSound accumulator units
+    // (`PSG_LEVEL_FIFO_UNITS`'s derivation): +-28 and +-30.
+    assert_eq!(level_14_peak, 28);
+    assert_eq!(level_15_peak, 30);
     assert_eq!(square_peak_at_level(131, 16), 0);
     assert_eq!(square_peak_at_level(243, 30), level_14_peak);
     assert_eq!(square_peak_at_level(255, 31), level_15_peak);
@@ -431,7 +433,10 @@ fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
 }
 
 #[test]
-fn square_gain_at_the_nibble_ceiling_reaches_near_full_scale_like_the_wave_arm() {
+fn square_envelope_gain_at_the_nibble_ceiling_matches_the_wave_arms_full_gain() {
+    // This is the internal Q8 envelope gain, not rendered amplitude: the
+    // rendered PSG swing is scaled to DirectSound units after it
+    // (`BIPOLAR_SAMPLE_SCALE`), so a loud PSG channel stays far below the s8 clip.
     // `envelope_gain_256`'s square/noise arm must reach a ceiling
     // comparable to the wave arm's full-scale gain (`cgb3_wave_gain_256`)
     // once both read the same 0..=15 nibble domain. The bound
