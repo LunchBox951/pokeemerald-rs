@@ -322,6 +322,22 @@ pub struct App {
     /// whose synthetic [`BootScene`] frame never advances through `flow` at
     /// all.
     pack_source: crate::pack_source::PackSource,
+    /// Where [`Self::restart_title_music`] sends the title BGM when the main
+    /// menu's B returns to the title (`CB2_InitTitleScreen` starts
+    /// `MUS_TITLE` again, `pokeemerald/src/title_screen.c:661`).
+    title_audio: TitleAudio,
+}
+
+/// The audio output a returning title restarts its BGM on, mirroring how the
+/// `App` was constructed: the real device ([`App::new`]), the null backend
+/// ([`App::new_headless_real_title`]'s test twin), or none (every other
+/// headless constructor, which never plays music).
+#[derive(Clone, Copy)]
+pub(crate) enum TitleAudio {
+    Disabled,
+    Device,
+    #[cfg(test)]
+    Null,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -340,6 +356,7 @@ fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
         scene,
         tick: 0,
         presented: false,
+        retained_save: None,
     }));
     (frame, app_scene)
 }
@@ -366,6 +383,7 @@ impl App {
             music: None,
             music_context: MusicContext::new(),
             pack_source,
+            title_audio: TitleAudio::Disabled,
         }
     }
 
@@ -439,6 +457,7 @@ impl App {
             || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
+        app.title_audio = TitleAudio::Device;
         app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
@@ -558,6 +577,7 @@ impl App {
             || Ok(SaveSlot::none()),
             crate::pack_source::PackSource::Repo,
         )?;
+        app.title_audio = TitleAudio::Null;
         app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
@@ -628,6 +648,7 @@ impl App {
             // reaches `flow::advance_scene` (`Self::pack_source`'s own field
             // docs).
             pack_source: crate::pack_source::PackSource::Runtime,
+            title_audio: TitleAudio::Disabled,
         }
     }
 
@@ -700,12 +721,16 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
+            let leaving_for_title = scene.returns_to_title();
             let (next, frame) = flow::advance_scene(
                 scene,
                 buttons,
                 &mut self.save_slot,
                 self.pack_source.clone(),
             );
+            if leaving_for_title && matches!(next, AppScene::Title(_)) {
+                self.restart_title_music();
+            }
             self.scene = Some(next);
             self.frame = frame;
         }
@@ -713,6 +738,29 @@ impl App {
         self.platform.wait_for_next_frame();
         self.platform.present(&self.frame)?;
         Ok(true)
+    }
+
+    /// The main menu's B has rebuilt the title: start `mus_title` afresh, as
+    /// `CB2_InitTitleScreen` does (`pokeemerald/src/title_screen.c`). The old
+    /// player, if the fade-out has not dropped it yet, is replaced rather than
+    /// resumed -- a faded sequencer cannot be rewound. A no-op for an `App`
+    /// built without title audio ([`TitleAudio::Disabled`]).
+    fn restart_title_music(&mut self) {
+        let open: fn() -> Result<platform::AudioOutput, PlatformError> = match self.title_audio {
+            TitleAudio::Disabled => return,
+            TitleAudio::Device => {
+                || platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
+            }
+            #[cfg(test)]
+            TitleAudio::Null => || {
+                Ok(platform::AudioOutput::null(
+                    crate::music::RING_CAPACITY_FRAMES,
+                ))
+            },
+        };
+        // Release the old output before opening the new one.
+        self.music = None;
+        self.music = Self::start_title_music(&self.pack_source, &mut self.music_context, open);
     }
 
     /// The title flow's own "play/fade out" cue for its BGM (Discussion

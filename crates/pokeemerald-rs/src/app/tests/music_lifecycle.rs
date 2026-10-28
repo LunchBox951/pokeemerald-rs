@@ -432,3 +432,58 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
         music.map(crate::music::MusicPlayer::fade_finished)
     );
 }
+
+/// B on the main menu returns to the title and `CB2_InitTitleScreen` starts
+/// `MUS_TITLE` again (`pokeemerald/src/title_screen.c:661`), even though the
+/// first title music faded out and was dropped on the way to the menu.
+///
+/// Needs the real pack, so it is `#[ignore]`d and runs in CI's `real-pack` job.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn main_menu_b_restarts_the_title_music_on_the_returning_title() {
+    use crate::flow::AppScene;
+
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let mut app = App::assemble(
+        platform::Platform::new_headless(),
+        crate::app::compose_title_scene(title_scene),
+        SaveSlot::disabled(),
+        crate::pack_source::PackSource::Repo,
+    );
+    app.title_audio = crate::app::TitleAudio::Null;
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    let mut step = |app: &mut App, buttons: Buttons| {
+        app.set_headless_buttons(buttons).unwrap();
+        app.step().unwrap();
+        app.drain_music_for_test(&mut drained);
+    };
+
+    step(&mut app, Buttons::START);
+    for _ in 0..600 {
+        step(&mut app, Buttons::NONE);
+    }
+    assert!(matches!(app.scene, Some(AppScene::MainMenu(_))));
+    assert!(
+        !app.has_music_for_test(),
+        "the title music has faded out and dropped by the menu"
+    );
+
+    step(&mut app, Buttons::B);
+    let mut back_on_title = false;
+    for _ in 0..40 {
+        step(&mut app, Buttons::NONE);
+        if matches!(app.scene, Some(AppScene::Title(_))) {
+            back_on_title = true;
+            break;
+        }
+    }
+    assert!(back_on_title, "B must return to the title screen");
+    for _ in 0..200 {
+        step(&mut app, Buttons::NONE);
+    }
+    assert!(matches!(app.scene, Some(AppScene::Title(_))));
+    assert!(
+        app.music.as_ref().is_some_and(|m| !m.fade_finished()),
+        "the returning title must have its music playing again"
+    );
+}
