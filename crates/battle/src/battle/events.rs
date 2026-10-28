@@ -541,11 +541,12 @@ pub enum BattleEvent {
         /// The primary status Shed Skin cured.
         status: Status1,
     },
-    /// A trainer sent out the next party member after faint resolution.
+    /// A trainer sent out a party member: the forced replacement after a
+    /// faint, or a prechosen voluntary switch.
     TrainerSentOut {
         /// The replacement's species.
         species: SpeciesId,
-        /// Party members remaining on the bench after the replacement.
+        /// Non-fainted party members behind the replacement.
         bench_remaining: usize,
     },
     /// The player sent out the first non-fainted reserve after an active
