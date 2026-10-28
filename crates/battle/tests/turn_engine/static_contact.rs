@@ -1,4 +1,5 @@
-//! Static's contact paralysis (`ABILITYEFFECT_MOVE_END`, `battle_util.c:2821`).
+//! Static's contact paralysis: `ABILITY_STATIC` under `ABILITYEFFECT_ON_DAMAGE`
+//! (`battle_util.c:2821`), run by `MOVEEND_ON_DAMAGE_ABILITIES` (`battle_script_commands.c:4281`).
 
 use crate::poison_support::*;
 use assets::{AbilityId, MoveId};

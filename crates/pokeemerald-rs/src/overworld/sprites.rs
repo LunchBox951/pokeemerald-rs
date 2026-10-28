@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
-use assets::ObjectEvent;
 use engine::event_data::EventData;
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, OamEntry, Palette, Tileset};
 
@@ -28,7 +28,8 @@ pub(super) struct SceneSprites {
     /// First tile of the tall-grass effect's cells, packed after the running
     /// sheet; `None` when the pack carries no field-effect sheet.
     grass_base_tile: Option<u16>,
-    object_events: &'static [ObjectEvent],
+    /// Template-seeded state for callers that own no live collection.
+    seed_objects: ObjectEventCollection,
     bindings: HashMap<&'static str, SpriteBinding>,
 }
 
@@ -74,7 +75,7 @@ impl SceneSprites {
                 palette_ref,
                 grass.as_ref().map(|grass| grass.palette),
             )?,
-            object_events: events.object_events,
+            seed_objects: ObjectEventCollection::from_templates(events.object_events),
             bindings,
         })
     }
@@ -89,10 +90,7 @@ impl SceneSprites {
         self.grass_base_tile.is_some()
     }
 
-    /// Lists the player first, then NPCs in template order, then the tall-grass
-    /// effects, and orders by OBJ priority and y-derived subpriority
-    /// ([`npc::order_by_subpriority`]); the player leads a tie in every sort
-    /// key.
+    /// [`Self::live_entries`] over the template-seeded state.
     #[must_use]
     pub(super) fn entries(
         &self,
@@ -100,17 +98,33 @@ impl SceneSprites {
         event_data: &EventData,
         grass: &TallGrassEffects,
     ) -> Vec<OamEntry> {
-        let mut objects = vec![(
+        self.live_entries(&self.seed_objects, player, event_data, grass)
+    }
+
+    /// Lists the player first, then NPCs in `objects` order, then the tall-grass
+    /// effects, and orders by OBJ priority and y-derived subpriority
+    /// ([`npc::order_by_subpriority`]); the player leads a tie in every sort
+    /// key. `objects` supplies tile, facing, and elevation; the scene's
+    /// templates keep the graphics bindings.
+    #[must_use]
+    pub(super) fn live_entries(
+        &self,
+        objects: &ObjectEventCollection,
+        player: &PlayerState,
+        event_data: &EventData,
+        grass: &TallGrassEffects,
+    ) -> Vec<OamEntry> {
+        let mut elevated = vec![(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
         )];
-        objects.extend(npc::elevated_oam_entries(
-            self.object_events,
+        elevated.extend(npc::elevated_oam_entries(
+            objects,
             &self.bindings,
             player,
             event_data,
         ));
-        let mut entries: Vec<(OamEntry, u16)> = objects
+        let mut entries: Vec<(OamEntry, u16)> = elevated
             .iter()
             .map(|&(entry, elevation)| (entry, npc::subpriority(entry, elevation)))
             .collect();

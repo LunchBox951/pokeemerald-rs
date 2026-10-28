@@ -45,6 +45,44 @@ pub(crate) fn palette_entry_with_colors(
     pack_format::palette_entry(id.into(), &colors).unwrap()
 }
 
+/// [`pack_bytes`], first adding a blank 2-bit glyph sheet for every
+/// [`assets::fonts::FontId`] that `entries` leaves out, so a fixture that
+/// customises one font still carries the five sheets every printer owner
+/// loads.
+pub(crate) fn pack_bytes_with_fonts(mut entries: Vec<PackEntry>) -> Vec<u8> {
+    for font in assets::fonts::FontId::ALL {
+        let id = format!("font/{}/glyphs", font.pack_name());
+        if !entries.iter().any(|entry| entry.id == id) {
+            let pixels =
+                vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
+            entries.push(
+                pack_format::image_entry(
+                    id,
+                    assets::fonts::SHEET_WIDTH,
+                    assets::fonts::SHEET_HEIGHT,
+                    2,
+                    pixels,
+                )
+                .unwrap(),
+            );
+        }
+    }
+    pack_bytes(entries)
+}
+
+/// Asserts `printer` carries a source for every modelled [`assets::fonts::FontId`],
+/// each reporting its own font.
+pub(crate) fn assert_carries_every_font<S: assets::fonts::GlyphSource>(
+    printer: &engine::text::render::Printer<S>,
+) {
+    for font in assets::fonts::FontId::ALL {
+        let source = printer
+            .source(font)
+            .unwrap_or_else(|| panic!("the printer must carry the {font:?} glyph source"));
+        assert_eq!(source.font(), font);
+    }
+}
+
 pub(crate) fn pack_bytes(entries: Vec<PackEntry>) -> Vec<u8> {
     let mut writer = PackWriter::new();
     for entry in entries {
