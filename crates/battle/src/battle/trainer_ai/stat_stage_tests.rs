@@ -1,7 +1,3 @@
-//! Score and draw-budget fixtures for the shared `AI_CBM_*Up` and
-//! `AI_CBM_*Down` labels, including Defense Curl and Minimize
-//! (`data/battle_ai_scripts.s:248-312`).
-
 use super::{
     ai_stat_label, ensure_scoreable, score_bad_move, stat_label_penalty, MoveScores,
     AI_ONLY_STAT_LABELS,
@@ -18,19 +14,19 @@ use assets::trainers::AiFlags;
 use assets::{AbilityId, MoveEffect, MoveId, SpeciesId};
 
 const LEVEL: u8 = 5;
-const FULL: i8 = 100;
-const MINUS_10: i8 = 90;
+const UNPENALIZED_SCORE: i8 = 100;
+const STAT_LABEL_PENALTY: i8 = -10;
+const SCORE_AFTER_ONE_PENALTY: i8 = UNPENALIZED_SCORE + STAT_LABEL_PENALTY;
+
+const STAT_DIRECTION_LABELS: usize = 14;
+const MAGNITUDES_PER_LABEL: usize = 2;
+const SPECIAL_STAT_LABEL_EFFECTS: usize = 2;
 
 const TREECKO: SpeciesId = SpeciesId(277);
-/// Hyper Cutter only.
 const PINSIR: SpeciesId = SpeciesId(127);
-/// Clear Body only.
 const REGIROCK: SpeciesId = SpeciesId(401);
-/// White Smoke only.
 const TORKOAL: SpeciesId = SpeciesId(321);
-/// Speed Boost only.
 const NINJASK: SpeciesId = SpeciesId(302);
-/// Keen Eye only.
 const SPEAROW: SpeciesId = SpeciesId(21);
 
 fn mon(species: SpeciesId, moves: &[MoveId]) -> BattlePokemon {
@@ -50,18 +46,18 @@ fn staged(mut pokemon: BattlePokemon, stat: ChangedStat, offset: i8) -> BattlePo
     pokemon
 }
 
-/// The `CheckBadMove` score of `move_id`, asserting only the simulated-damage
-/// draws are consumed.
 fn score(move_id: MoveId, user: &BattlePokemon, target: &BattlePokemon) -> i8 {
     let mut rng = SequenceRng::new([0; MAX_MON_MOVES]);
     let mut scores = MoveScores::initialize(user, &mut rng);
     score_bad_move(&Dex::new(), &mut scores, 0, move_id, user, target).unwrap();
-    assert_eq!(rng.draws(), MAX_MON_MOVES, "{move_id:?} drew extra values");
+    assert_eq!(
+        rng.draws(),
+        MAX_MON_MOVES,
+        "{move_id:?}: CheckBadMove must consume no draws beyond simulated-damage initialization"
+    );
     scores.values[0]
 }
 
-/// One real move per label the shipped move data reaches, with the stat and
-/// magnitude it must score.
 const MOVE_LABELS: [(MoveId, ChangedStat, i8, bool); 22] = [
     (MoveId::MEDITATE, ChangedStat::Attack, 1, true),
     (MoveId::SWORDS_DANCE, ChangedStat::Attack, 2, true),
@@ -90,14 +86,18 @@ const MOVE_LABELS: [(MoveId, ChangedStat, i8, bool); 22] = [
 #[test]
 fn every_move_label_scores_minus_ten_at_its_cap_and_not_one_stage_short() {
     for (move_id, stat, magnitude, raises) in MOVE_LABELS {
-        let (cap, near) = if raises { (6, 5) } else { (-6, -5) };
+        let (cap, one_stage_from_cap) = if raises {
+            (StatStage::MAX.offset(), StatStage::MAX.offset() - 1)
+        } else {
+            (StatStage::MIN.offset(), StatStage::MIN.offset() + 1)
+        };
         let user = mon(TREECKO, &[move_id]);
         let target = mon(TREECKO, &[MoveId::POUND]);
         let (capped_user, capped_target, near_user, near_target) = if raises {
             (
                 staged(user.clone(), stat, cap),
                 target.clone(),
-                staged(user.clone(), stat, near),
+                staged(user.clone(), stat, one_stage_from_cap),
                 target.clone(),
             )
         } else {
@@ -105,32 +105,37 @@ fn every_move_label_scores_minus_ten_at_its_cap_and_not_one_stage_short() {
                 user.clone(),
                 staged(target.clone(), stat, cap),
                 user.clone(),
-                staged(target.clone(), stat, near),
+                staged(target.clone(), stat, one_stage_from_cap),
             )
         };
-        assert_eq!(score(move_id, &user, &target), FULL, "{move_id:?} neutral");
+        assert_eq!(
+            score(move_id, &user, &target),
+            UNPENALIZED_SCORE,
+            "{move_id:?} neutral"
+        );
         assert_eq!(
             score(move_id, &capped_user, &capped_target),
-            MINUS_10,
+            SCORE_AFTER_ONE_PENALTY,
             "{move_id:?} capped"
         );
-        // The cap check reads the holder only: a one-stage margin is enough
-        // for a two-stage move, so the AI does not model the clamp.
         assert_eq!(
             score(move_id, &near_user, &near_target),
-            FULL,
-            "{move_id:?} near cap ({magnitude}-stage)"
+            UNPENALIZED_SCORE,
+            "{move_id:?}: one stage of room avoids the cap penalty even for a {magnitude}-stage change"
         );
-        // The opposite party's stage never matters.
-        let (wrong_user, wrong_target) = if raises {
+        let (opposite_holder_capped_user, opposite_holder_capped_target) = if raises {
             (user.clone(), staged(target.clone(), stat, cap))
         } else {
             (staged(user.clone(), stat, -cap), target.clone())
         };
         assert_eq!(
-            score(move_id, &wrong_user, &wrong_target),
-            FULL,
-            "{move_id:?} reads the wrong party"
+            score(
+                move_id,
+                &opposite_holder_capped_user,
+                &opposite_holder_capped_target
+            ),
+            UNPENALIZED_SCORE,
+            "{move_id:?}: capping the opposite holder must not change the score"
         );
     }
 }
@@ -140,32 +145,43 @@ fn the_label_table_covers_every_effect_through_the_stat_change_contract() {
     for (effect, change) in STAT_CHANGE_EFFECTS {
         assert_eq!(ai_stat_label(effect), Some(change));
     }
-    for (raw, stat, magnitude, direction) in AI_ONLY_STAT_LABELS {
+    for (effect, stat, magnitude, direction) in AI_ONLY_STAT_LABELS {
         assert!(
-            STAT_CHANGE_EFFECTS.iter().all(|(id, _)| id.0 != raw),
-            "{raw} is already in the execution table"
+            STAT_CHANGE_EFFECTS.iter().all(|(id, _)| *id != effect),
+            "{effect:?} is already in the execution table"
         );
-        let label = ai_stat_label(MoveEffect(raw)).unwrap();
+        let label = ai_stat_label(effect).unwrap();
         assert_eq!(
             (label.stat, label.magnitude, label.direction),
             (stat, magnitude, direction)
         );
     }
-    // Every label the script dispatches: 14 stat-stage labels, each in its
-    // one- and two-stage forms, plus Minimize and Defense Curl.
     let labelled = (0..=255_u8)
         .filter(|raw| ai_stat_label(MoveEffect(*raw)).is_some())
         .count();
-    assert_eq!(labelled, 28 + 2);
-    for raw in [17, 25, 57, 65] {
-        assert_eq!(ai_stat_label(MoveEffect(raw)), None);
+    assert_eq!(
+        labelled,
+        STAT_DIRECTION_LABELS * MAGNITUDES_PER_LABEL + SPECIAL_STAT_LABEL_EFFECTS
+    );
+    for effect in [
+        MoveEffect::ALWAYS_HIT,
+        MoveEffect::HAZE,
+        MoveEffect::TRANSFORM,
+        MoveEffect::REFLECT,
+    ] {
+        assert_eq!(
+            ai_stat_label(effect),
+            None,
+            "{effect:?} is not a stat label"
+        );
     }
 }
 
 #[test]
-fn every_label_descriptor_scores_its_cap_and_guards_in_script_order() {
+fn every_label_descriptor_has_a_supported_magnitude_and_scores_its_cap() {
     let user = mon(TREECKO, &[MoveId::POUND]);
     let target = mon(TREECKO, &[MoveId::POUND]);
+    // Raw sweep of every effect byte, so no label escapes the descriptor check.
     for raw in 0..=255_u8 {
         let Some(label) = ai_stat_label(MoveEffect(raw)) else {
             continue;
@@ -179,7 +195,7 @@ fn every_label_descriptor_scores_its_cap_and_guards_in_script_order() {
         };
         assert_eq!(
             stat_label_penalty(&capped_user, &capped_target, label),
-            Ok(Some(-10)),
+            Ok(Some(STAT_LABEL_PENALTY)),
             "{raw}"
         );
         assert!(matches!(
@@ -204,16 +220,24 @@ fn every_label_descriptor_scores_its_cap_and_guards_in_script_order() {
 fn defense_curl_and_minimize_score_defense_and_evasion_not_their_flags() {
     let user = mon(TREECKO, &[MoveId::DEFENSE_CURL]);
     let target = mon(TREECKO, &[MoveId::POUND]);
-    // Defense Curl reads Defense, not Evasion, and Minimize the reverse.
-    let evasion_capped = staged(user.clone(), ChangedStat::Evasion, 6);
-    let defense_capped = staged(user.clone(), ChangedStat::Defense, 6);
-    assert_eq!(score(MoveId::DEFENSE_CURL, &evasion_capped, &target), FULL);
+    let evasion_capped = staged(user.clone(), ChangedStat::Evasion, StatStage::MAX.offset());
+    let defense_capped = staged(user.clone(), ChangedStat::Defense, StatStage::MAX.offset());
+    assert_eq!(
+        score(MoveId::DEFENSE_CURL, &evasion_capped, &target),
+        UNPENALIZED_SCORE
+    );
     assert_eq!(
         score(MoveId::DEFENSE_CURL, &defense_capped, &target),
-        MINUS_10
+        SCORE_AFTER_ONE_PENALTY
     );
-    assert_eq!(score(MoveId::MINIMIZE, &defense_capped, &target), FULL);
-    assert_eq!(score(MoveId::MINIMIZE, &evasion_capped, &target), MINUS_10);
+    assert_eq!(
+        score(MoveId::MINIMIZE, &defense_capped, &target),
+        UNPENALIZED_SCORE
+    );
+    assert_eq!(
+        score(MoveId::MINIMIZE, &evasion_capped, &target),
+        SCORE_AFTER_ONE_PENALTY
+    );
 }
 
 fn guard_case(
@@ -257,15 +281,16 @@ fn each_ability_guard_discourages_its_stat_drop_at_a_neutral_stage() {
         (MoveId::FAKE_TEARS, REGIROCK, A::CLEAR_BODY, S::SpDefense),
     ] {
         let (guarded, control) = guard_case(move_id, species, ability, stat);
-        assert_eq!(guarded, MINUS_10, "{move_id:?} vs {ability:?}");
-        assert_eq!(control, FULL, "{move_id:?} control");
+        assert_eq!(
+            guarded, SCORE_AFTER_ONE_PENALTY,
+            "{move_id:?} vs {ability:?}"
+        );
+        assert_eq!(control, UNPENALIZED_SCORE, "{move_id:?} control");
     }
 }
 
 #[test]
 fn label_specific_guards_do_not_leak_to_other_labels_or_raises() {
-    // Hyper Cutter guards Attack only; Keen Eye Accuracy only; Speed Boost
-    // Speed only (`data/battle_ai_scripts.s:277-297`).
     for (move_id, species) in [
         (MoveId::LEER, PINSIR),
         (MoveId::SAND_ATTACK, PINSIR),
@@ -277,29 +302,51 @@ fn label_specific_guards_do_not_leak_to_other_labels_or_raises() {
     ] {
         let user = mon(TREECKO, &[move_id]);
         let target = mon(species, &[MoveId::POUND]);
-        assert_eq!(score(move_id, &user, &target), FULL, "{move_id:?}");
+        assert_eq!(
+            score(move_id, &user, &target),
+            UNPENALIZED_SCORE,
+            "{move_id:?}: {species:?}'s ability must not guard this stat label"
+        );
     }
-    // A raise never reads the target's ability.
     let user = mon(TREECKO, &[MoveId::SWORDS_DANCE]);
     for species in [PINSIR, REGIROCK, TORKOAL, NINJASK, SPEAROW] {
         let target = mon(species, &[MoveId::POUND]);
-        assert_eq!(score(MoveId::SWORDS_DANCE, &user, &target), FULL);
+        assert_eq!(
+            score(MoveId::SWORDS_DANCE, &user, &target),
+            UNPENALIZED_SCORE,
+            "a user-side raise must ignore {species:?}'s ability"
+        );
     }
 }
 
-/// Fall-through order: Attack Down checks the floor, then Hyper Cutter, then
-/// the shared Clear Body guard, and the first hit ends the script -- so a
-/// capped Attack on a guarded target still takes a single `-10`.
+// Attack Down checks the floor before Hyper Cutter and Clear Body/White Smoke;
+// the first match exits (`data/battle_ai_scripts.s:277-281,308-312,620-622`).
 #[test]
 fn a_capped_guarded_drop_takes_one_penalty_not_two() {
     let user = mon(TREECKO, &[MoveId::GROWL]);
     for species in [PINSIR, REGIROCK, NINJASK] {
-        let target = staged(mon(species, &[MoveId::POUND]), ChangedStat::Attack, -6);
-        assert_eq!(score(MoveId::GROWL, &user, &target), MINUS_10);
+        let target = staged(
+            mon(species, &[MoveId::POUND]),
+            ChangedStat::Attack,
+            StatStage::MIN.offset(),
+        );
+        assert_eq!(
+            score(MoveId::GROWL, &user, &target),
+            SCORE_AFTER_ONE_PENALTY,
+            "a capped, guarded drop must receive exactly one stat-label penalty"
+        );
     }
     let speed_user = mon(TREECKO, &[MoveId::STRING_SHOT]);
-    let target = staged(mon(NINJASK, &[MoveId::POUND]), ChangedStat::Speed, -6);
-    assert_eq!(score(MoveId::STRING_SHOT, &speed_user, &target), MINUS_10);
+    let target = staged(
+        mon(NINJASK, &[MoveId::POUND]),
+        ChangedStat::Speed,
+        StatStage::MIN.offset(),
+    );
+    assert_eq!(
+        score(MoveId::STRING_SHOT, &speed_user, &target),
+        SCORE_AFTER_ONE_PENALTY,
+        "a capped, guarded drop must receive exactly one stat-label penalty"
+    );
 }
 
 #[test]
@@ -315,20 +362,22 @@ fn stat_labels_are_admitted_only_where_the_other_scripts_are_ported() {
         );
         let setup = ensure_scoreable(&dex, move_id, cbm.union(AiFlags::SETUP_FIRST_TURN));
         let viability = ensure_scoreable(&dex, move_id, cbm.union(AiFlags::CHECK_VIABILITY));
-        // Only Growl and Leer keep the
-        // dedicated Attack/Defense drop paths.
-        let ported_drop = matches!(move_id, MoveId::GROWL | MoveId::LEER);
-        let expected_setup = if ported_drop {
+        let has_dedicated_stat_drop_handler = matches!(
+            dex.move_data(move_id).unwrap().effect,
+            MoveEffect::ATTACK_DOWN | MoveEffect::DEFENSE_DOWN
+        );
+        let expected_setup = if has_dedicated_stat_drop_handler {
             Ok(())
         } else {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         };
         assert_eq!(setup, expected_setup, "{move_id:?} setup");
-        let expected_viability = if ported_drop || move_id == MoveId::DEFENSE_CURL {
-            Ok(())
-        } else {
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        };
+        let expected_viability =
+            if has_dedicated_stat_drop_handler || move_id == MoveId::DEFENSE_CURL {
+                Ok(())
+            } else {
+                Err(BattleError::UnscoreableMoveEffect(move_id))
+            };
         assert_eq!(viability, expected_viability, "{move_id:?} viability");
     }
 }

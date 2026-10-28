@@ -1,4 +1,4 @@
-//! Mixer silence, voice lifetime, scaling, clipping, and admission regressions.
+//! Mixer silence, voice lifetime, scaling, byte wrapping, and admission regressions.
 
 use std::sync::Arc;
 
@@ -79,26 +79,46 @@ fn two_voices_sum() {
 }
 
 #[test]
-fn loud_sum_clips_to_full_scale() {
+fn loud_positive_sum_wraps_instead_of_clipping() {
     let mut mixer = Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES);
     for track in 0..4 {
         mixer.add_voice(constant_voice(i8::MAX, track));
     }
     let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
     mixer.mix_frame(&mut out);
-    let positive_full_scale = f32::from(i8::MAX) / OUTPUT_SCALE;
-    assert!((out[0] - positive_full_scale).abs() < ASSERTION_TOLERANCE);
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(i8::MAX) / SAMPLE_GAIN_DIVISOR;
+    let wrapped = byte_lane(4 * contribution);
+    assert_eq!(wrapped, -8);
+    assert!((out[0] - wrapped as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE);
 }
 
 #[test]
-fn negative_sum_clips_to_minus_one() {
+fn loud_negative_sum_wraps_instead_of_clipping() {
     let mut mixer = Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES);
     for track in 0..4 {
         mixer.add_voice(constant_voice(i8::MIN, track));
     }
     let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
     mixer.mix_frame(&mut out);
-    assert!((out[0] - (-1.0)).abs() < ASSERTION_TOLERANCE);
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(i8::MIN) / SAMPLE_GAIN_DIVISOR;
+    let wrapped = byte_lane(4 * contribution);
+    assert_eq!(wrapped, 4);
+    assert!((out[0] - wrapped as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE);
+}
+
+#[test]
+fn in_range_sums_are_unchanged_by_the_byte_wrap() {
+    const SAMPLE: i8 = 63;
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES);
+    assert!(mixer.add_voice(constant_voice(SAMPLE, 0)));
+    assert!(mixer.add_voice(constant_voice(SAMPLE, 1)));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(SAMPLE) / SAMPLE_GAIN_DIVISOR;
+    assert!((out[0] - (2 * contribution) as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE);
 }
 
 #[test]
@@ -177,4 +197,25 @@ fn masked_zero_master_volume_is_minimum_gain_not_silence() {
         "16 masks to 0"
     );
     assert!(at_masked_zero[0].abs() < render(1)[0].abs());
+}
+
+#[test]
+fn direct_sound_overflow_wraps_like_the_packed_byte_lanes() {
+    // m4a_1.s:308-339 adds each voice into an 8-bit lane with no carry out.
+    const SAMPLE: i8 = 100;
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES);
+    assert!(mixer.add_voice(constant_voice(SAMPLE, 0)));
+    assert!(mixer.add_voice(constant_voice(SAMPLE, 1)));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(SAMPLE) / SAMPLE_GAIN_DIVISOR;
+    let wrapped = byte_lane(2 * contribution);
+    assert_eq!(wrapped, -58);
+    assert!(
+        (out[0] - wrapped as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE,
+        "got {}, upstream byte lane gives {}",
+        out[0] * OUTPUT_SCALE,
+        wrapped
+    );
 }

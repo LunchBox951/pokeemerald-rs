@@ -14,7 +14,8 @@
 //! start a stream of a wanted decompressed size.
 //!
 //! Both return ROM offsets, not bus addresses, and cap each needle at
-//! [`MATCH_LIMIT`] hits.
+//! [`MATCH_LIMIT`] hits unless the caller asks for a larger bound through
+//! `find_all_up_to`.
 
 use std::collections::HashMap;
 
@@ -24,11 +25,13 @@ use rom_import::{lz77_decompress, LZ77_TYPE, ROM_BASE, ROM_WINDOW_END};
 /// every root in the pack is at least this long.
 const ANCHOR: usize = 8;
 
-/// The most hits a search records per needle.
+/// The most hits `find_all` records per needle.
 ///
-/// A locator needs only "one" or "more than one", plus enough addresses to
-/// name the duplicates in an error. The cap bounds memory for a short blob
-/// that repeats hundreds of times.
+/// A locator that needs only "one" or "more than one", plus enough addresses
+/// to name the duplicates in an error, takes this cap. It bounds memory for
+/// a short blob that repeats hundreds of times. A locator that must give each
+/// of several ids its own copy needs at least that many hits and asks for the
+/// bound through `find_all_up_to`.
 pub const MATCH_LIMIT: usize = 16;
 
 /// The fewest distinct byte values an eight-byte window needs to serve as an
@@ -83,6 +86,12 @@ impl<'a> RawSearch<'a> {
     /// [`ANCHOR`] bytes, or longer than the ROM, gets an empty list. Use
     /// [`PointerIndex`] to find a four-byte pointer.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, MATCH_LIMIT)
+    }
+
+    /// [`Self::find_all`] with each needle capped at `limit` hits instead of
+    /// [`MATCH_LIMIT`]; the lowest `limit` offsets are kept.
+    pub fn find_all_up_to(&self, needles: &[Vec<u8>], limit: usize) -> Vec<Vec<u32>> {
         let mut anchors = Vec::with_capacity(needles.len());
         // Bitmap over the anchor's first two bytes: a one-index filter that
         // spares most ROM offsets the hash lookup below.
@@ -124,7 +133,7 @@ impl<'a> RawSearch<'a> {
                 let Some(start) = offset.checked_sub(anchors[index]) else {
                     continue;
                 };
-                if hits[index].len() >= MATCH_LIMIT {
+                if hits[index].len() >= limit {
                     continue;
                 }
                 if self.rom.get(start..start + needle.len()) == Some(needle.as_slice()) {
@@ -198,6 +207,12 @@ impl<'a> Lz77Search<'a> {
     /// Returns one ROM-offset list per needle, in the order given, each
     /// capped at [`MATCH_LIMIT`] and sorted ascending.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, MATCH_LIMIT)
+    }
+
+    /// [`Self::find_all`] with each needle capped at `limit` hits instead of
+    /// [`MATCH_LIMIT`]; the lowest `limit` offsets are kept.
+    pub fn find_all_up_to(&self, needles: &[Vec<u8>], limit: usize) -> Vec<Vec<u32>> {
         let mut by_size: HashMap<usize, Vec<usize>> = HashMap::new();
         for (index, needle) in needles.iter().enumerate() {
             by_size.entry(needle.len()).or_default().push(index);
@@ -221,7 +236,7 @@ impl<'a> Lz77Search<'a> {
                 continue;
             };
             for &index in candidates {
-                if hits[index].len() < MATCH_LIMIT && payload == needles[index] {
+                if hits[index].len() < limit && payload == needles[index] {
                     let truncated =
                         u32::try_from(offset).expect("a ROM offset fits in u32 at 16 MiB");
                     hits[index].push(truncated);
@@ -234,7 +249,7 @@ impl<'a> Lz77Search<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{anchor_offset, Lz77Search, RawSearch, ANCHOR};
+    use super::{anchor_offset, Lz77Search, RawSearch, ANCHOR, MATCH_LIMIT};
 
     /// Find one needle, the shape most of these tests want.
     fn find_one(rom: &[u8], needle: &[u8]) -> Vec<u32> {
@@ -351,5 +366,41 @@ mod tests {
         let hits = Lz77Search::new(&rom).find_all(&[payload, vec![7u8; 64]]);
         assert_eq!(hits[0], vec![2048]);
         assert!(hits[1].is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_search_stops_at_the_match_limit_and_a_raised_bound_does_not() {
+        let needle = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let copies = MATCH_LIMIT + 3;
+        let mut rom = vec![0u8; 4096];
+        for slot in 0..copies {
+            let at = 64 + slot * 64;
+            rom[at..at + ANCHOR].copy_from_slice(&needle);
+        }
+        let search = RawSearch::new(&rom);
+        let capped = search.find_all(&[needle.to_vec()]);
+        assert_eq!(capped[0].len(), MATCH_LIMIT);
+        let raised = search.find_all_up_to(&[needle.to_vec()], copies);
+        assert_eq!(raised[0].len(), copies);
+        assert!(raised[0].windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+    }
+
+    #[test]
+    fn an_ordinary_compressed_search_stops_at_the_match_limit_and_a_raised_bound_does_not() {
+        let payload: Vec<u8> = (0..64u8).collect();
+        let stream = lz77_literals(&payload);
+        let copies = MATCH_LIMIT + 3;
+        let mut rom = vec![0xFFu8; 8192];
+        for slot in 0..copies {
+            let at = 16 + slot * 128;
+            rom[at..at + stream.len()].copy_from_slice(&stream);
+        }
+        let search = Lz77Search::new(&rom);
+        let capped = search.find_all(std::slice::from_ref(&payload));
+        assert_eq!(capped[0].len(), MATCH_LIMIT);
+        let raised = search.find_all_up_to(std::slice::from_ref(&payload), copies);
+        assert_eq!(raised[0].len(), copies);
+        assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
     }
 }

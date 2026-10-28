@@ -84,6 +84,10 @@ impl MosaicSize {
     /// caller still tests footprint membership with the unsnapped coordinate.
     /// This matches mGBA's `SPRITE_MOSAIC_LOOP` edge clamp
     /// `(behavioral-fidelity)`.
+    ///
+    /// A zero-length axis in `dimensions` is an empty footprint with no edge
+    /// texel to clamp to; that axis returns `0` rather than panicking, and the
+    /// caller's footprint test rejects the pixel anyway.
     #[must_use]
     pub const fn snap_local(
         &self,
@@ -108,7 +112,9 @@ impl MosaicSize {
     ) -> usize {
         let block_offset = screen_coordinate % block_size as usize;
         let block_origin = local_coordinate.saturating_sub(block_offset);
-        if block_origin >= dimension {
+        if dimension == 0 {
+            0
+        } else if block_origin >= dimension {
             dimension - 1
         } else {
             block_origin
@@ -193,6 +199,14 @@ mod tests {
         assert_eq!(size.snap_local((1, 0), (3, 0), dimensions), (0, 0));
         assert_eq!(size.snap_local((2, 0), (4, 0), dimensions), (2, 0));
         assert_eq!(size.snap_local((5, 0), (7, 0), dimensions), (2, 0));
+    }
+
+    #[test]
+    fn snap_local_does_not_panic_on_zero_dimensions() {
+        let size = MosaicSize::new(4, 4);
+        assert_eq!(size.snap_local((5, 3), (5, 3), (0, 8)), (0, 0));
+        assert_eq!(size.snap_local((5, 7), (5, 7), (8, 0)), (4, 0));
+        assert_eq!(size.snap_local((5, 7), (5, 7), (0, 0)), (0, 0));
     }
 
     #[test]

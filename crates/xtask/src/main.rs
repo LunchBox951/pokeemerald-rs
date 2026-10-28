@@ -36,8 +36,6 @@ mod rom_build;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
 mod scenario;
 mod staging_names;
-#[cfg(windows)]
-mod windows_file_identity;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\

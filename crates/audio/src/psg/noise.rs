@@ -13,6 +13,8 @@ enum LfsrWidth {
 impl LfsrWidth {
     const WIDE_FEEDBACK_BIT: u16 = 1 << 14;
     const NARROW_FEEDBACK_BIT: u16 = 1 << 6;
+    const WIDE_PERIOD: u64 = 32_767;
+    const NARROW_PERIOD: u64 = 127;
 
     fn feedback_bits(self) -> u16 {
         Self::WIDE_FEEDBACK_BIT
@@ -20,6 +22,29 @@ impl LfsrWidth {
                 Self::FifteenBit => 0,
                 Self::SevenBit => Self::NARROW_FEEDBACK_BIT,
             }
+    }
+
+    /// The LFSR transitions that leave the state and the last-feedback latch
+    /// exactly as `owed` transitions would.
+    ///
+    /// Complementing the register makes every transition linear over GF(2)
+    /// with a primitive feedback polynomial, so the 15-bit register repeats
+    /// every 32_767 transitions from any state (`0x7FFF` is a fixed point).
+    /// In 7-bit mode bits 0..=6 run on their own with period 127, and bits
+    /// 7..=14 are the previous eight feedbacks, so the whole register repeats
+    /// every 127 transitions once eight have run. The width is fixed for the
+    /// whole catch-up, so one modulus applies throughout. A non-empty replay
+    /// stays non-empty because the latch comes from the last transition.
+    fn replayed_shifts(self, owed: u64) -> u64 {
+        let (settle, period) = match self {
+            Self::FifteenBit => (1, Self::WIDE_PERIOD),
+            Self::SevenBit => (8, Self::NARROW_PERIOD),
+        };
+        if owed < settle {
+            owed
+        } else {
+            settle + (owed - settle) % period
+        }
     }
 }
 
@@ -73,6 +98,19 @@ pub struct NoiseChannel {
     /// The volume the latch was last resolved against, the render DC centre.
     centre: u8,
     clocking: bool,
+    /// The predecessor's running hardware, held until this channel's note-on
+    /// writes commit; a replacement cancelled first never consumes it.
+    inherited: Option<InheritedHardware>,
+    /// LFSR transitions executed, for the bounded catch-up regressions.
+    #[cfg(test)]
+    shifts_run: u64,
+}
+
+/// A replaced noise channel's clock state and the hardware volume it ran at.
+#[derive(Clone, Debug)]
+struct InheritedHardware {
+    channel: Box<NoiseChannel>,
+    volume: u8,
 }
 
 impl NoiseChannel {
@@ -89,6 +127,9 @@ impl NoiseChannel {
             level: 0,
             centre: 0,
             clocking: true,
+            inherited: None,
+            #[cfg(test)]
+            shifts_run: 0,
         }
     }
 
@@ -109,8 +150,15 @@ impl NoiseChannel {
         if !self.clocking {
             return;
         }
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
+        self.clock_owed(volume);
+    }
+
+    /// Clocks every whole period in `elapsed`, replaying at most one LFSR
+    /// cycle however many a retune left owed (`LfsrWidth::replayed_shifts`).
+    fn clock_owed(&mut self, volume: u8) {
+        let owed = self.elapsed / self.period;
+        self.elapsed -= owed * self.period;
+        for _ in 0..self.width.replayed_shifts(owed) {
             self.shift_lfsr(volume);
         }
     }
@@ -137,6 +185,54 @@ impl NoiseChannel {
     pub fn continue_output_from(&mut self, previous: &Self) {
         self.level = previous.level;
         self.centre = previous.centre;
+    }
+
+    /// Holds the replaced channel's whole clock state until
+    /// [`Self::commit_initial_writes`], and meanwhile keeps its latch as
+    /// [`Self::continue_output_from`] does. `volume` is the predecessor's
+    /// hardware volume, which its pending clocks resolve against.
+    pub fn inherit_hardware_from(&mut self, previous: &Self, volume: u8) {
+        self.continue_output_from(previous);
+        let mut channel = Box::new(previous.clone());
+        channel.inherited = None;
+        self.inherited = Some(InheritedHardware { channel, volume });
+    }
+
+    /// Plays the note-on writes that precede the trigger against the held
+    /// predecessor: `NR43` carrying only the width (`pokeemerald/src/m4a.c:1020-1022`),
+    /// then the pitched `NR43` (`m4a.c:1197-1202`). mGBA runs channel 4 before
+    /// each `NR43` write and keeps `lastEvent` across it
+    /// (`mgba/src/gb/audio.c:354-358,602-644`), so the first write settles the
+    /// predecessor's owed clocks at its own rate and the second clocks the whole
+    /// elapsed time at the width-only rate, all at the predecessor's volume.
+    /// The latch that results is what the trigger leaves in place
+    /// (`audio.c:371-383`).
+    ///
+    /// A note that `retires_on_first_pass` reaches `oscillator_off` from the
+    /// start block (`m4a.c:1040,1125-1129,1090-1102`) before the pitched `NR43` write
+    /// (`m4a.c:1197-1202`), so the channel keeps the width-only rate the start
+    /// block wrote for the off-write to restart.
+    pub fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
+        let width_only = if self.width == LfsrWidth::SevenBit {
+            NoiseControl::WIDTH_BIT
+        } else {
+            0
+        };
+        if let Some(InheritedHardware {
+            mut channel,
+            volume,
+        }) = self.inherited.take()
+        {
+            channel.settle_owed_clocks(volume);
+            channel.width = self.width;
+            channel.retune(width_only);
+            channel.settle_owed_clocks(volume);
+            self.level = channel.level;
+            self.centre = channel.centre;
+        }
+        if retires_on_first_pass {
+            self.retune(width_only);
+        }
     }
 
     /// Re-resolves the latch at an envelope step as
@@ -173,6 +269,10 @@ impl NoiseChannel {
     }
 
     fn shift_lfsr(&mut self, volume: u8) {
+        #[cfg(test)]
+        {
+            self.shifts_run += 1;
+        }
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
         self.lfsr = (self.lfsr >> 1) & !feedback_bits;
@@ -201,10 +301,7 @@ impl NoiseChannel {
             return self.level;
         }
         self.elapsed += TICKS_PER_SAMPLE;
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
-            self.shift_lfsr(volume);
-        }
+        self.clock_owed(volume);
         self.level
     }
 
@@ -216,6 +313,9 @@ impl NoiseChannel {
 }
 
 const NOISE_UNIT_VOLUME: u8 = 1;
+
+#[cfg(test)]
+mod catch_up_tests;
 
 #[cfg(test)]
 mod tests {
