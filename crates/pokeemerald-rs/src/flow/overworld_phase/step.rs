@@ -18,6 +18,7 @@
 //! [`crate::flow::wild_encounter`]'s predicates already model the
 //! wild-encounter half of this pipeline's precedence rules.
 
+use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, WarpTrigger,
 };
@@ -259,7 +260,9 @@ impl OverworldPhase {
     /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
     /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
     /// `overworld.c:1444-1455`). A script [`crate::overworld::npc_scripts::script_text`]
-    /// recognizes opens an [`NpcDialog`]; any other selected target still
+    /// recognizes opens an [`NpcDialog`], after running its `faceplayer` on the
+    /// selected live object when it has one
+    /// ([`OverworldPhase::start_script_dialog`]); any other selected target still
     /// preempts the frame, and only a press that selects nothing falls through
     /// to movement ([`InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
@@ -433,6 +436,25 @@ impl OverworldPhase {
         // `resolve_pre_movement_field_input`'s `previous_elevation` local.
         let door_warp = landed
             .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.previous_elevation()));
+        // `TryStartStepCountScript` runs inside `TryStartStepBasedScript`
+        // after the coord event and the door-shaped warp, ahead of the
+        // wild-encounter roll (`field_control_avatar.c:155-163,543-553`), so
+        // a fainting poison drain claims this frame before the roll below.
+        // The runtime borrow ends here: the drain mutates the party and may
+        // white the player out.
+        let poison_step = landed
+            .filter(|_| door_warp.is_none())
+            .filter(|&(x, y)| {
+                !is_forced_movement_input_tile(runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL))
+            })
+            .map(|_| runtime.header().map_type);
+        if let Some(map_type) = poison_step {
+            if self.update_poison_step_counter(map_type) {
+                self.sync_saved_position();
+                return;
+            }
+        }
+        let runtime = self.scene.runtime().with_object_events(&self.object_events);
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
         // fightable map (`wild_table_fightable`), and only with a lead the
@@ -557,6 +579,11 @@ impl OverworldPhase {
         // map tiles are far inside i16, so the saturation never fires. Runs
         // after any warp above, so this reflects the post-warp tile on the
         // frame a warp lands.
+        self.sync_saved_position();
+    }
+
+    /// Mirrors the player's logical tile into the retained save state.
+    fn sync_saved_position(&mut self) {
         let (x, y) = self.player.position();
         self.save1.pos = Coords16 {
             x: i16::try_from(x).unwrap_or(i16::MAX),
@@ -747,7 +774,8 @@ impl OverworldPhase {
                 self.take_field_lock();
             }
             match interaction {
-                Some(InteractionOutcome::Dialog(tokens)) => {
+                Some(InteractionOutcome::Dialog(script)) => {
+                    let tokens = self.start_script_dialog(script);
                     let text_speed = self.field_dialog_text_speed();
                     match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),

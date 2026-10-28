@@ -10,11 +10,6 @@ use assets::MoveEffect;
 use crate::damage::BattleRng;
 use crate::stat_stage::StatStage;
 
-const EFFECT_HIGH_CRITICAL: MoveEffect = MoveEffect(43);
-const EFFECT_SKY_ATTACK: MoveEffect = MoveEffect(75);
-const EFFECT_BLAZE_KICK: MoveEffect = MoveEffect(200);
-const EFFECT_POISON_TAIL: MoveEffect = MoveEffect(209);
-
 const FOCUS_ENERGY_STAGE_BONUS: u8 = 2;
 const HIGH_CRIT_EFFECT_STAGE_BONUS: u8 = 1;
 const MAX_CRIT_STAGE: u8 = 4;
@@ -22,10 +17,10 @@ const MAX_CRIT_STAGE: u8 = 4;
 const CRIT_ROLL_DIVISORS_BY_STAGE: [u16; 5] = [16, 8, 4, 3, 2];
 
 const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
-    EFFECT_HIGH_CRITICAL,
-    EFFECT_SKY_ATTACK,
-    EFFECT_BLAZE_KICK,
-    EFFECT_POISON_TAIL,
+    MoveEffect::HIGH_CRITICAL,
+    MoveEffect::SKY_ATTACK,
+    MoveEffect::BLAZE_KICK,
+    MoveEffect::POISON_TAIL,
 ];
 
 /// Returns the critical-hit stage contributed by a move effect.
@@ -110,7 +105,6 @@ mod tests {
     use crate::stat_stage::StatStage;
     use assets::MoveEffect;
 
-    const ORDINARY_HIT_EFFECT: MoveEffect = MoveEffect(0);
     const STAGE_ABOVE_MAXIMUM: u8 = 99;
 
     struct FixedRng(u16);
@@ -136,7 +130,7 @@ mod tests {
         for effect in HIGH_CRIT_EFFECTS {
             assert_eq!(crit_stage_for_effect(effect), 1, "{effect:?}");
         }
-        assert_eq!(crit_stage_for_effect(ORDINARY_HIT_EFFECT), 0);
+        assert_eq!(crit_stage_for_effect(MoveEffect::HIT), 0);
     }
 
     #[test]

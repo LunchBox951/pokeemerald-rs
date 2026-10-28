@@ -122,7 +122,7 @@ use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use rom_import::{ImportError, ImportedPack, OneLinePath};
+use rom_import::{ImportError, ImportedPack, OneLinePath, OneLineText};
 
 use created_dirs::{
     create_directories_pinned, open_shedding_pins, sync_created_directories,
@@ -181,7 +181,9 @@ impl fmt::Display for ImportOutcome {
 /// Concrete per-crate enum `(oop-boundaries)`; no `anyhow`. Every message
 /// is one line, because the binary prints it on one terminal row. The paths
 /// they quote come from `$POKEEMERALD_PACK` and from `--import-rom`, so they
-/// render through [`OneLinePath`] to keep that row intact.
+/// render through [`OneLinePath`] to keep that row intact; the nested causes
+/// render through [`OneLineText`], since an `io::Error` can carry any message
+/// its builder chose. `Error::source` still returns each cause whole.
 #[derive(Debug)]
 pub enum ImportRomError {
     /// No destination could be resolved: `$POKEEMERALD_PACK` is unset and
@@ -304,17 +306,27 @@ impl fmt::Display for ImportRomError {
                 pack_format::PACK_PATH_ENV
             ),
             Self::CreateDirFailed { path, source } => {
-                write!(f, "could not create `{}`: {source}", OneLinePath(path))
+                write!(
+                    f,
+                    "could not create `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )
             }
             Self::OpenDirFailed { path, source } => {
-                write!(f, "could not open `{}`: {source}", OneLinePath(path))
+                write!(
+                    f,
+                    "could not open `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )
             }
             Self::Import {
                 source,
                 temp_path,
                 temp_removed,
             } => {
-                write!(f, "{source}")?;
+                write!(f, "{}", OneLineText(source))?;
                 match temp_path {
                     Some(temp_path) if !*temp_removed => write!(
                         f,
@@ -352,8 +364,9 @@ impl fmt::Display for ImportRomError {
             } => {
                 write!(
                     f,
-                    "could not build the asset pack in `{}`: {source}",
-                    OneLinePath(temp_path)
+                    "could not build the asset pack in `{}`: {}",
+                    OneLinePath(temp_path),
+                    OneLineText(source)
                 )?;
                 if *temp_removed {
                     Ok(())
@@ -369,32 +382,43 @@ impl fmt::Display for ImportRomError {
                 pack_path,
                 source,
                 temp_removed,
-            } => {
-                write!(
-                    f,
-                    "could not publish the finished pack to `{}`: {source}",
-                    OneLinePath(pack_path)
-                )?;
-                if *temp_removed {
-                    write!(
-                        f,
-                        " (the temporary file `{}` was removed)",
-                        OneLinePath(temp_path)
-                    )
-                } else {
-                    // The pack itself is finished and synced, so this is not
-                    // just litter to apologize for -- it is the import's
-                    // whole product, and naming it is what lets the player
-                    // move it into place or delete it themselves.
-                    write!(
-                        f,
-                        " (the finished pack is still at `{}`; move it to the destination or \
-                         delete it yourself)",
-                        OneLinePath(temp_path)
-                    )
-                }
-            }
+            } => write_publish_failed(f, temp_path, pack_path, source, *temp_removed),
         }
+    }
+}
+
+/// The [`ImportRomError::PublishFailed`] message, split out of the `Display`
+/// impl so that `match` stays under the line limit.
+fn write_publish_failed(
+    f: &mut fmt::Formatter<'_>,
+    temp_path: &Path,
+    pack_path: &Path,
+    source: &io::Error,
+    temp_removed: bool,
+) -> fmt::Result {
+    write!(
+        f,
+        "could not publish the finished pack to `{}`: {}",
+        OneLinePath(pack_path),
+        OneLineText(source)
+    )?;
+    if temp_removed {
+        write!(
+            f,
+            " (the temporary file `{}` was removed)",
+            OneLinePath(temp_path)
+        )
+    } else {
+        // The pack itself is finished and synced, so this is not
+        // just litter to apologize for -- it is the import's
+        // whole product, and naming it is what lets the player
+        // move it into place or delete it themselves.
+        write!(
+            f,
+            " (the finished pack is still at `{}`; move it to the destination or \
+             delete it yourself)",
+            OneLinePath(temp_path)
+        )
     }
 }
 
