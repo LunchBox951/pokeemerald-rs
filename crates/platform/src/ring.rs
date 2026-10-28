@@ -368,31 +368,40 @@ impl Consumer {
         if self.shared.pending_discard.load(Ordering::Acquire) == NO_DISCARD {
             return;
         }
+        // Snapshot the queue before claiming the discard. A `stop` that
+        // narrows it after the claim finds nothing pending, and anything it
+        // is followed by is pushed after this snapshot, so `DISCARD_ALL`
+        // drops only what predates the claim. Acquire: synchronizes-with
+        // the producer's `Release` `fetch_add`. Only this consumer ever
+        // lowers `occupied`, so these slots stay queued until the
+        // `fetch_sub` below frees them.
+        let claimed = self.shared.occupied.load(Ordering::Acquire);
         let pending = self
             .shared
             .pending_discard
             .swap(NO_DISCARD, Ordering::AcqRel);
-        // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
-        // which follows its `pushed` update, so every sample counted here
-        // as queued is also counted as pushed. Only this consumer ever
-        // lowers `occupied`, so these slots stay queued until the
-        // `fetch_sub` below frees them.
-        let mut queued = self.shared.occupied.load(Ordering::Acquire);
-        match pending {
+        #[cfg(test)]
+        tests::after_discard_claim();
+        let queued = match pending {
             NO_DISCARD => return,
-            DISCARD_ALL => {}
+            DISCARD_ALL => claimed,
             mark => {
-                // A push landing between these loads is counted as pushed
-                // since the mark but not as queued, so this errs toward
-                // keeping a sample, never toward dropping one after `mark`.
+                // Narrowed before the claim: what is queued now, less what
+                // was pushed since the mark. The `occupied` load precedes the
+                // `pushed` one, which follows the producer's count of every
+                // sample it publishes, so a push landing between them is
+                // counted as pushed since the mark but not as queued: this
+                // errs toward keeping a sample, never toward dropping one
+                // after `mark`.
+                let queued = self.shared.occupied.load(Ordering::Acquire);
                 let since = self
                     .shared
                     .pushed
                     .load(Ordering::Relaxed)
                     .wrapping_sub(mark);
-                queued -= queued.min(usize::try_from(since).unwrap_or(usize::MAX));
+                queued - queued.min(usize::try_from(since).unwrap_or(usize::MAX))
             }
-        }
+        };
         if queued == 0 {
             return;
         }

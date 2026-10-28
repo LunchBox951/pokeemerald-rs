@@ -418,3 +418,39 @@ fn a_held_queue_discards_before_a_mark() {
     assert_eq!(out, [0.5; 2]);
     assert_eq!(consumer.available(), 0);
 }
+
+thread_local! {
+    /// Run inside the next first-read discard, just after it claims the
+    /// pending state, as a `stop` racing a descheduled callback would.
+    static AFTER_DISCARD_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn after_discard_claim() {
+    if let Some(hook) = AFTER_DISCARD_CLAIM.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[test]
+fn a_stop_after_the_first_read_claims_its_discard_keeps_what_queues_after_it() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    consumer.discard_queued_at_first_read();
+    let racer = producer.clone();
+    AFTER_DISCARD_CLAIM.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            // The stop finds nothing pending to narrow, then a prefill lands.
+            racer.keep_pushed_from_at_first_read(racer.pushed());
+            assert_eq!(racer.push(&[0.5; 4]), 4);
+        }));
+    });
+
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [0.5; 2],
+        "only what queued before the claim is dropped"
+    );
+    assert_eq!(consumer.available(), 2);
+}
