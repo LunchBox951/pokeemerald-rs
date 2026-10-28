@@ -381,6 +381,76 @@ fn an_immediately_retiring_square_replacement_never_writes_its_pitch() {
     }
 }
 
+/// A swept predecessor whose frequency left its note's `NR14` high bits:
+/// upstream's retiring first pass goes straight from the swept register to
+/// `CgbOscOff`'s `NR14 = 0x80` (`pokeemerald/src/m4a.c:1053-1056`), never
+/// through the predecessor's stale high bits.
+#[test]
+fn a_swept_predecessors_retiring_replacement_keeps_the_next_notes_duty() {
+    const TRACK: usize = 0;
+    const SWEEP_DOWN: u8 = 0x1F;
+    let channel = CgbChannelNumber::Square1;
+    let slot = channel.slot();
+    let retiring = CgbVoice::square(
+        channel,
+        2,
+        Some(SWEEP_DOWN),
+        CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        },
+        72,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        72,
+        TRACK,
+        0,
+        0,
+        0,
+    );
+    let mut replaced = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut stopped = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut actual = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut expected = actual.clone();
+    assert!(replaced.add_cgb_voice(cgb_square_voice(channel, TRACK, 72, Some(SWEEP_DOWN))));
+    assert!(stopped.add_cgb_voice(cgb_square_voice(channel, TRACK, 72, Some(SWEEP_DOWN))));
+    replaced.mix_frame(&mut actual);
+    stopped.mix_frame(&mut expected);
+    assert_eq!(actual, expected);
+    let swept = replaced.cgb_slots[slot]
+        .as_ref()
+        .and_then(CgbVoice::square_frequency)
+        .expect("the predecessor is a playing square");
+    assert_ne!(
+        swept & 0x700,
+        0x700,
+        "the sweep must cross the high-byte boundary"
+    );
+
+    assert!(replaced.add_cgb_voice(retiring));
+    stopped.stop_track(TRACK);
+    replaced.mix_frame(&mut actual);
+    stopped.mix_frame(&mut expected);
+    assert!(replaced.cgb_slots[slot].is_none());
+
+    assert!(replaced.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, None)));
+    assert!(stopped.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, None)));
+    for frame in 0..4 {
+        replaced.mix_frame(&mut actual);
+        stopped.mix_frame(&mut expected);
+        assert!(actual.iter().any(|&sample| sample != 0.0));
+        assert_eq!(
+            actual, expected,
+            "frame {frame}: the next note must inherit the duty upstream leaves",
+        );
+    }
+}
+
 /// Retires `voice` after `settled_frames` of sound, applying
 /// `retiring_key_shift` on the retiring frame, and returns the idle-tail frames
 /// (plus a replacement note's first frame for a square). Upstream discards that
