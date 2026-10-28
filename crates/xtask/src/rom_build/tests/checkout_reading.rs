@@ -1,5 +1,5 @@
 //! Bounded reading of git's status output: the overlong-line discard and
-//! the read errors `read_head` must surface.
+//! the read errors `read_matching` must surface.
 
 use super::*;
 
@@ -53,7 +53,7 @@ fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
     let tail = std::io::Cursor::new(b"\nnext\n".to_vec());
     let mut reader = BufReader::with_capacity(4096, Endless { left: 64 << 20 }.chain(tail));
     MAX_ALLOC.with(|m| m.set(0));
-    let (lines, more, error) = checkout::read_head(&mut reader, 8);
+    let (lines, more, error) = checkout::read_matching(&mut reader, 8, |_| true);
     let largest = MAX_ALLOC.with(std::cell::Cell::get);
     assert!(error.is_none(), "{error:?}");
     assert!(!more);
@@ -68,7 +68,7 @@ fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
 }
 
 #[test]
-fn read_head_reports_a_read_error_while_discarding_an_overlong_line() {
+fn read_matching_reports_a_read_error_while_discarding_an_overlong_line() {
     struct Flaky {
         stage: u8,
         tail: &'static [u8],
@@ -76,7 +76,7 @@ fn read_head_reports_a_read_error_while_discarding_an_overlong_line() {
     }
     impl std::io::Read for Flaky {
         fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            unreachable!("read_head reads through fill_buf")
+            unreachable!("read_matching reads through fill_buf")
         }
     }
     impl std::io::BufRead for Flaky {
@@ -107,7 +107,7 @@ fn read_head_reports_a_read_error_while_discarding_an_overlong_line() {
         tail: b"tail\n",
         buf: vec![b'a'; 8192],
     };
-    let (lines, more, error) = checkout::read_head(&mut reader, 8);
+    let (lines, more, error) = checkout::read_matching(&mut reader, 8, |_| true);
     assert!(
         error.is_some(),
         "a discard failure must surface as a read error; lines = {:?}",
@@ -117,5 +117,101 @@ fn read_head_reports_a_read_error_while_discarding_an_overlong_line() {
     assert!(
         lines.iter().all(|l| l != "tail"),
         "the overlong line's remainder must not parse as a new line"
+    );
+}
+
+/// Stages `count` extra entries with ~2 KiB paths in `reference`'s index and
+/// returns the last of them in index order.
+fn stage_long_paths(reference: &Path, count: usize) -> String {
+    use std::io::Write;
+    let blob = git(reference, &["rev-parse", "HEAD:Makefile"]);
+    let info = reference.join(".git").join("index-info");
+    let long = "p".repeat(2000);
+    {
+        let mut out = std::io::BufWriter::new(fs::File::create(&info).unwrap());
+        for i in 0..count {
+            writeln!(out, "100644 {blob}\t{long}{i:06}").unwrap();
+        }
+    }
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(reference)
+        .args(["update-index", "--add", "--index-info"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(fs::File::open(&info).unwrap())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    fs::remove_file(&info).unwrap();
+    format!("{long}{:06}", count - 1)
+}
+
+/// Largest single allocation `verify_reference` makes on this thread.
+fn largest_verify_allocation(fx: &Fixture) -> (usize, RomBuildError) {
+    MAX_ALLOC.with(|m| m.set(0));
+    let err =
+        checkout::verify_reference(&fx.config.reference, &fx.config.pinned_revision).unwrap_err();
+    (MAX_ALLOC.with(std::cell::Cell::get), err)
+}
+
+#[test]
+fn a_huge_index_listing_is_not_held_in_memory() {
+    let fx = Fixture::new("huge-index", GOOD);
+    // ~60 MiB of `ls-files -v` output, all of it visible.
+    stage_long_paths(&fx.config.reference, 30_000);
+    let (largest, err) = largest_verify_allocation(&fx);
+    assert!(matches!(err, RomBuildError::DirtyTree { .. }), "{err}");
+    // Collecting the listing would allocate it whole (tens of MiB at once).
+    assert!(
+        largest <= 1 << 20,
+        "verifying allocated {largest} bytes at once"
+    );
+}
+
+#[test]
+fn a_hidden_entry_after_a_huge_index_listing_is_still_rejected() {
+    let fx = Fixture::new("huge-index-hidden", GOOD);
+    let reference = &fx.config.reference;
+    let last = stage_long_paths(reference, 30_000);
+    git(reference, &["update-index", "--assume-unchanged", &last]);
+    let (largest, err) = largest_verify_allocation(&fx);
+    let RomBuildError::HiddenIndexState { entries, .. } = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(entries.lines().count(), 1, "{err}");
+    assert!(entries.starts_with("h ppp"), "{err}");
+    assert!(
+        largest <= 1 << 20,
+        "verifying allocated {largest} bytes at once"
+    );
+}
+
+#[test]
+fn at_most_ten_hidden_entries_are_reported() {
+    let fx = Fixture::new("many-hidden", GOOD);
+    let reference = &fx.config.reference;
+    stage_long_paths(reference, 30);
+    git(
+        reference,
+        &["update-index", "--skip-worktree", "--", "Makefile"],
+    );
+    let paths: Vec<String> = git(reference, &["ls-files"])
+        .lines()
+        .filter(|path| path.starts_with('p'))
+        .map(str::to_owned)
+        .collect();
+    for path in &paths[..12] {
+        git(reference, &["update-index", "--assume-unchanged", path]);
+    }
+    let (_, err) = largest_verify_allocation(&fx);
+    let RomBuildError::HiddenIndexState { entries, .. } = &err else {
+        panic!("{err}");
+    };
+    let lines: Vec<&str> = entries.lines().collect();
+    assert_eq!(lines.len(), 10, "{err}");
+    assert_eq!(lines[0], "S Makefile");
+    assert!(
+        lines[1..].iter().all(|line| line.starts_with("h ppp")),
+        "{err}"
     );
 }
