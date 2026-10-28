@@ -281,6 +281,22 @@ fn a_silent_song_with_an_operandless_voicegroup_flag_is_rejected() {
 }
 
 #[test]
+fn a_silent_song_with_an_underscore_only_voicegroup_flag_is_rejected() {
+    let cfg = "mus_dummy.mid: -E -R40 -G_\nse_beep.mid: -E -R50 -G_rs_sfx_1 -V110 -P5\n";
+    let upstream = FakeUpstream::new("underscore-g", TABLE, cfg, &both_midis());
+    let error = upstream
+        .extract(&[SILENCE])
+        .expect_err("an explicit -G_ names no voicegroup and is malformed, not absent");
+    assert!(
+        matches!(
+            &error,
+            ExtractError::MidiCfg(_, MidiError::CfgMalformedFlag(token)) if token == "-G_"
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn an_ordinary_song_without_a_voicegroup_flag_is_unsupported() {
     let upstream = FakeUpstream::new("no-group", TABLE, "se_beep.mid: -E -R50\n", &both_midis());
     let error = upstream.extract(&[BEEP]).expect_err("-G is required");
