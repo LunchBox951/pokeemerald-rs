@@ -47,7 +47,7 @@
 //!   the observable half of both; there are no other moving object events to
 //!   freeze, and the one control this port's own lock does not reach -- the
 //!   start menu -- is [`super::start_menu`]'s to gate, not this module's.
-//!   [`OverworldPhase::party_lead`] is therefore left in place until the
+//!   the loaded lead is therefore left in place until the
 //!   battle actually starts, so a save taken mid-approach persists an honest
 //!   pre-battle overworld and simply replays the approach on reload.
 
