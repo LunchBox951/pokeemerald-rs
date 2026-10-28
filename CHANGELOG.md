@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.80.0] - 2026-10-28
+## [0.0.81.0] - 2026-10-28
 
 - General improvements in preparation for background music extracted from your game files.
+
+## [0.0.80.0] - 2026-10-28
+
+- Wild and trainer Pokémon with Effect Spore can now put an attacker to sleep, poison it or paralyze it when it hits them with a contact move.
 
 ## [0.0.79.0] - 2026-10-28
 
@@ -381,8 +385,9 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.80.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f42c7a14c1f7405893cf4ba2088d90d76388be3...dev
-[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...8f42c7a14c1f7405893cf4ba2088d90d76388be3
+[0.0.81.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/617c52d7a6314c124c872023c981306e38f5a390...dev
+[0.0.80.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/efade96474fdd159720868bc3d02d1da416f5819...617c52d7a6314c124c872023c981306e38f5a390
+[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...efade96474fdd159720868bc3d02d1da416f5819
 [0.0.78.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/7bb89a891a17166542bca78a24db79325000dae9...d828e8ae72b532a2de0148cbf62942cd0805b7ec
 [0.0.77.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6...7bb89a891a17166542bca78a24db79325000dae9
 [0.0.76.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/42b847579ee1ed8368ccf8fb64f932a7c9bd82f3...1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6

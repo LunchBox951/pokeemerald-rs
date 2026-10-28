@@ -293,6 +293,23 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 }
 
 #[test]
+fn the_any_slot_ability_screen_admits_every_effect_spore_species() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::PARAS,
+        SpeciesId::PARASECT,
+        SpeciesId::SHROOMISH,
+        SpeciesId::BRELOOM,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
@@ -309,10 +326,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::RALTS, assets::AbilityId::TRACE),
         (SpeciesId::KIRLIA, assets::AbilityId::TRACE),
         (SpeciesId::GARDEVOIR, assets::AbilityId::TRACE),
-        (SpeciesId::PARAS, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::PARASECT, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::SHROOMISH, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::BRELOOM, assets::AbilityId::EFFECT_SPORE),
         (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),

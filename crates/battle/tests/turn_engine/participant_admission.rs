@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
 //! (`battle_util.c:2873-2951`) and always-refused abilities (Truant, Intimidate, Speed Boost,
-//! Color Change, Trace, Effect Spore, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! Color Change, Trace, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 29] {
+fn refused() -> [(BattlePokemon, AbilityId); 25] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -44,10 +44,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 29] {
             mon(SpeciesId::GARDEVOIR, 1, Status1::Healthy),
             AbilityId::TRACE,
         ),
-        (healthy(SpeciesId::PARAS), AbilityId::EFFECT_SPORE),
-        (healthy(SpeciesId::PARASECT), AbilityId::EFFECT_SPORE),
-        (healthy(SpeciesId::SHROOMISH), AbilityId::EFFECT_SPORE),
-        (healthy(SpeciesId::BRELOOM), AbilityId::EFFECT_SPORE),
         (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
         (
             mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
@@ -210,6 +206,68 @@ fn trainer_constructor_refuses_a_later_player_reserve_before_drawing() {
     }
 }
 
+const EFFECT_SPORE_HOLDERS: [SpeciesId; 4] = [
+    SpeciesId::PARAS,
+    SpeciesId::PARASECT,
+    SpeciesId::SHROOMISH,
+    SpeciesId::BRELOOM,
+];
+
+/// The constructor script for `player` against `enemy`: the order tiebreak is
+/// drawn only when their turn-order Speeds tie.
+fn admission_script_for(player: &BattlePokemon, enemy: &BattlePokemon) -> Vec<u16> {
+    admission_script(player.speed_for_turn_order() == enemy.speed_for_turn_order())
+}
+
+#[test]
+fn effect_spore_holders_are_admitted_on_every_participant_path() {
+    for species in EFFECT_SPORE_HOLDERS {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            let holder = || {
+                let holder = mon(species, 0, status);
+                assert_eq!(holder.ability(), AbilityId::EFFECT_SPORE);
+                holder
+            };
+            let opponent = || healthy(SpeciesId::ZIGZAGOON);
+            let lead = || healthy(SpeciesId::MUDKIP);
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+            wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            trainer(holder(), vec![], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+            trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(
+                lead(),
+                vec![],
+                vec![opponent(), opponent(), holder()],
+                &mut rng,
+            )
+            .unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(lead(), vec![holder()], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+    }
+}
+
 #[test]
 fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
     assert_ne!(
@@ -278,7 +336,6 @@ fn an_always_refused_ability_is_refused_whatever_the_status() {
         (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, AbilityId::TRACE),
-        (SpeciesId::SHROOMISH, AbilityId::EFFECT_SPORE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
         (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
