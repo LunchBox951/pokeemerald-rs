@@ -310,3 +310,23 @@ fn a_lead_faint_with_only_an_unplayable_member_left_does_not_white_out() {
     );
     assert_eq!(phase.lead_slot_for_test(), Some(1));
 }
+
+/// A reserve whose secure checksum fails is a Bad Egg upstream (`GetBoxMonData`,
+/// `pokeemerald/src/pokemon.c:3742-3747`), which `Cmd_checkteamslost` leaves out of its
+/// HP total, so once the lead faints the party is defeated and whites out.
+#[test]
+fn a_checksum_corrupted_reserve_does_not_prevent_white_out() {
+    let lead = frail_shuckle();
+    let mut bytes = saved(&healthy_treecko(0)).to_bytes();
+    bytes[28] ^= 0xff;
+    let corrupt = Pokemon::from_bytes(bytes);
+    assert!(corrupt.box_data.has_species() && corrupt.hp != 0);
+    assert!(corrupt.box_data.substructures().is_err());
+    let mut phase = phase_with_party(&[saved(&lead), corrupt], 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
+}

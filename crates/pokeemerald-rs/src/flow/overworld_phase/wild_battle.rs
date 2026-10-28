@@ -187,9 +187,10 @@ impl OverworldPhase {
     /// left out. Every slot is inspected, not only the stored count's prefix
     /// (`SetBattlePartyIds` scans all six, `pokeemerald/src/battle_controllers.c:591-606`),
     /// and an unsaved party (count 0) has no reserves. Left out, and so retained untouched:
-    /// eggs and Bad Eggs, records that are empty, fainted members, and the members that
-    /// have HP but cannot join: records that do not decode, and members the battle engine
-    /// cannot play yet ([`ensure_lead_can_battle`]).
+    /// eggs and Bad Eggs (a failed checksum is one), records that are empty, fainted
+    /// members, and the members that have HP but cannot join: valid records that do not
+    /// decode into a battler, and members the battle engine cannot play yet
+    /// ([`ensure_lead_can_battle`]).
     fn wild_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, bool) {
         let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
         let Some(lead_slot) = self.lead.as_ref().map(LoadedLead::slot) else {
@@ -206,7 +207,9 @@ impl OverworldPhase {
             }
             let owner = match LoadedLead::load_slot(dex, slot, record) {
                 Ok(owner) => owner,
-                Err(PartyError::Egg) => continue,
+                // A failed secure checksum makes `GetBoxMonData` report a Bad Egg
+                // (`pokeemerald/src/pokemon.c:3742-3747`), which the HP total leaves out.
+                Err(PartyError::Egg | PartyError::Substructures(_)) => continue,
                 Err(error) => {
                     if record.box_data.has_species() && record.hp != 0 {
                         eprintln!("wild encounter: slot {slot}'s record {error} -- left out");
