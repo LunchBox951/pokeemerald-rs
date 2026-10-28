@@ -124,6 +124,11 @@ mod tests {
         std::fs::write(people.join("brendan/zz_untracked.PNG"), b"not a png").expect("stray");
         std::fs::create_dir_all(people.join("zz_dir")).expect("dir");
         std::fs::write(people.join("zz_dir/nested.png"), b"not a png").expect("stray");
+        // Decodable but not in the manifest: a walk that skipped decode
+        // failures would still pack them as surplus `sprite/*` ids.
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::write(people.join("zz_valid.png"), &png).expect("stray");
+        std::fs::write(people.join("zz_dir/valid.png"), &png).expect("stray");
 
         let mut expected: Vec<String> = sprite_sheet_ids();
         expected.extend(sprite_palette_ids());

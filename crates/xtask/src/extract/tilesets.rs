@@ -126,6 +126,11 @@ mod tests {
             std::fs::write(anim.join(first).join("zz.PNG"), b"not a png").expect("stray");
             std::fs::create_dir_all(anim.join("zz_dir")).expect("dir");
             std::fs::write(anim.join("zz_dir/0.png"), b"not a png").expect("stray");
+            // Decodable but not in the manifest: a walk that skipped decode
+            // failures would still pack them as surplus animation ids.
+            let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+            std::fs::write(anim.join("zz_valid.png"), &png).expect("stray");
+            std::fs::write(anim.join(first).join("98.png"), &png).expect("stray");
 
             let mut writer = PackWriter::new();
             let result = extract_tileset(&upstream, source, &mut writer);
