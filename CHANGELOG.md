@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.80.0] - 2026-10-28
+
+- A Pokémon that levels up in battle now moves its HP by the change in its maximum HP, as the original game does, and a fainted Pokémon is no longer healed by a level-up.
+
 ## [0.0.79.0] - 2026-10-28
 
-- A Pokémon that levels up in battle now keeps the stats its training earned, and a loaded save's party fights with exactly the HP and stats it was saved with.
+- A poisoned Pokémon now loses HP as you walk, faints at 0 HP, and if your whole party faints on the field you white out as in the original game. Saves now remember poison, paralysis and sleep.
 
 ## [0.0.78.0] - 2026-10-27
 

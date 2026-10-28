@@ -7,7 +7,7 @@
 //! save-format defaults for everything else; [`merge_into_save_pokemon`]
 //! overlays those fields onto the record that was loaded, retaining its
 //! header, friendship, contest condition, egg flag, encounter
-//! data, ribbons, status, and mail. EVs are the battler's: the merge writes
+//! data, ribbons, and mail. EVs are the battler's: the merge writes
 //! them back from [`battle::BattlePokemon::evs`].
 //!
 //! # Held item
@@ -42,11 +42,16 @@
 //! that holds that state is threaded through -- [`starter`]'s level-five grant
 //! is the first such caller and stamps all three.
 //!
-//! Non-volatile status is likewise retained rather than merged: `battle`
-//! now models [`battle::Status1::Paralysed`] and [`battle::Status1::Poisoned`]
-//! in-battle, but neither encoder reads or writes either, so a battler
-//! paralysed or poisoned this session keeps the backing record's own stored
-//! status word through an ordinary save.
+//! Primary status is the battler's, in both directions
+//! (`pokeemerald/src/battle_controller_player.c:1636-1640,1983-1987`): both
+//! encoders write [`battle::BattlePokemon::status1`] into the record's status
+//! word, so an inflicted or cured condition reaches the save, and
+//! [`from_save_pokemon`] reads it back. Only healthy, ordinary poison,
+//! paralysis, and sleep (`1..=7` turns left) are modelled
+//! (`pokeemerald/include/constants/battle.h:114-125`); a record whose word is
+//! anything else -- burn, freeze, bad poison, several conditions, or stray
+//! bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather than
+//! reading as healthy and losing the condition on the next save.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -141,6 +146,12 @@ pub(crate) enum PartyError {
     /// model only holds a contiguous moveset, so decoding it would drop the
     /// later moves and PP on the next save.
     InteriorEmptyMove,
+    /// The saved primary-status word is not one the battle model carries --
+    /// burn, freeze, bad poison (with or without its counter), several
+    /// conditions at once, or bits outside `STATUS1_ANY`. Decoding it as
+    /// healthy would let the next save erase the condition, so the record
+    /// stays undecoded and its bytes untouched.
+    UnsupportedStatus(u32),
 }
 
 impl std::fmt::Display for PartyError {
@@ -153,6 +164,12 @@ impl std::fmt::Display for PartyError {
                 write!(
                     f,
                     "saved party member: a known move follows an empty move slot"
+                )
+            }
+            Self::UnsupportedStatus(word) => {
+                write!(
+                    f,
+                    "saved party member: primary status word {word:#x} is not modelled"
                 )
             }
         }
@@ -170,6 +187,63 @@ impl From<engine::save::PokemonError> for PartyError {
 impl From<battle::BattleError> for PartyError {
     fn from(err: battle::BattleError) -> Self {
         Self::Battler(err)
+    }
+}
+
+/// `STATUS1_SLEEP`, `STATUS1_POISON`, `STATUS1_PARALYSIS` -- the primary
+/// status word's encodings for the conditions `battle::Status1` carries
+/// (`pokeemerald/include/constants/battle.h:114-121`). The sleep bits are a
+/// three-bit remaining-turn count, not a flag.
+const STATUS1_SLEEP_MASK: u32 = 7;
+const STATUS1_POISON: u32 = 1 << 3;
+const STATUS1_PARALYSIS: u32 = 1 << 6;
+
+/// Decodes the save record's primary status word (`MON_DATA_STATUS`, copied
+/// into the battler by `CopyPlayerMonData`,
+/// `pokeemerald/src/battle_controller_player.c:1636-1640`) into the battle
+/// model's [`battle::Status1`].
+///
+/// Exactly one modelled condition decodes; burn, freeze, bad poison, any
+/// combination, the toxic counter bits, and anything above `STATUS1_ANY`
+/// (`battle.h:125`) fail closed rather than being masked into a neighbour.
+fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
+    match word {
+        0 => Ok(battle::Status1::Healthy),
+        1..=STATUS1_SLEEP_MASK => Ok(battle::Status1::Asleep {
+            // At most seven: the mask above bounds it.
+            turns: u8::try_from(word).unwrap_or(u8::MAX),
+        }),
+        STATUS1_POISON => Ok(battle::Status1::Poisoned),
+        STATUS1_PARALYSIS => Ok(battle::Status1::Paralysed),
+        unsupported => Err(PartyError::UnsupportedStatus(unsupported)),
+    }
+}
+
+/// Encodes the battler's primary status as the save record's status word
+/// (`SetPlayerMonData`'s `MON_DATA_STATUS` write-back,
+/// `pokeemerald/src/battle_controller_player.c:1983-1987`).
+///
+/// A healthy battler files `STATUS1_NONE`, which is how a cure reaches the
+/// save.
+///
+/// # Panics
+///
+/// Panics if a sleep count exceeds the three bits the word holds; a modelled
+/// infliction draws two to five turns, so a larger one is a broken invariant
+/// that would otherwise corrupt the neighbouring status bits.
+fn status1_to_word(status1: battle::Status1) -> u32 {
+    match status1.normalised() {
+        battle::Status1::Healthy | battle::Status1::Asleep { turns: 0 } => 0,
+        battle::Status1::Paralysed => STATUS1_PARALYSIS,
+        battle::Status1::Poisoned => STATUS1_POISON,
+        battle::Status1::Asleep { turns } => {
+            let word = u32::from(turns);
+            assert!(
+                word <= STATUS1_SLEEP_MASK,
+                "a sleep count of {turns} does not fit STATUS1_SLEEP's three bits"
+            );
+            word
+        }
     }
 }
 
@@ -275,6 +349,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut record = Pokemon {
         box_data,
         mail: MAIL_NONE,
+        status: status1_to_word(mon.status1()),
         ..Pokemon::default()
     };
     // The battler's own cache and HP, as `SavePlayerParty` would copy them
@@ -373,6 +448,7 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
     substructures.evs_and_condition[0..6].copy_from_slice(&evs_to_substruct2(mon.evs()));
 
     let mut merged = *base;
+    merged.status = status1_to_word(mon.status1());
     merged.box_data.set_substructures(&substructures);
     // Re-derives `hasSpecies` alongside the growth species this branch
     // re-files every save (`pokeemerald/src/pokemon.c:4220-4227`).
@@ -441,6 +517,7 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// invalid, or a known move follows an empty move slot.
 pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePokemon, PartyError> {
     let substructures = saved.box_data.substructures()?;
+    let status1 = status1_from_word(saved.status)?;
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
     let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
     let ability_slot = u8::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
@@ -502,6 +579,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_evs(evs)
     .with_held_item(held_item)
     .with_saved_experience(read_u32(&substructures.growth, GROWTH_EXPERIENCE));
+
+    // The saved primary status (`status1_from_word` already screened it), so
+    // a loaded poisoned or paralysed member keeps its condition.
+    mon.set_status1(status1);
 
     for (index, saved_pp) in remaining_pp.iter().copied().take(known_moves).enumerate() {
         let pp_spent = mon.moves()[index].pp.saturating_sub(saved_pp);

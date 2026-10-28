@@ -40,6 +40,12 @@
 //! No frame therefore exists with a fainted party and a controllable player,
 //! so neither driver screens for a fainted lead.
 //!
+//! Field poison is the third caller: when a four-step drain faints the last
+//! member with HP left, [`OverworldPhase::try_field_poison_white_out`] calls
+//! the same [`OverworldPhase::white_out`] from the step that drained it
+//! (`TryFieldPoisonWhiteOut`, `pokeemerald/src/field_poison.c:61-117`, then
+//! `EventScript_FieldPoison`, `pokeemerald/data/scripts/field_poison.inc:1-17`).
+//!
 //! The scripted Route 101 first battle never whites out. It calls
 //! [`OverworldPhase::heal_whole_party_and_reselect_lead`] directly, without
 //! the money loss or the heal-location warp.
