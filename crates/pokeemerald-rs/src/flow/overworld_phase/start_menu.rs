@@ -72,8 +72,15 @@ impl OverworldPhase {
         let outcome = menu.tick(buttons, &mut target);
         // `sStartMenuCursorPos` (`src/start_menu.c`) is session-global, so it outlives the menu.
         self.start_menu_cursor = menu.cursor_position();
-        if outcome == StartMenuOutcome::Open {
-            self.start_menu = Some(menu);
+        match outcome {
+            StartMenuOutcome::Open => self.start_menu = Some(menu),
+            StartMenuOutcome::Closed => {}
+            // The menu is dropped first, so the take runs with field control
+            // already back. The outcome's message is the party menu's to
+            // draw, so nothing is shown here.
+            StartMenuOutcome::TakeItem => {
+                let _ = self.take_lead_held_item();
+            }
         }
         true
     }
@@ -149,7 +156,8 @@ impl OverworldPhase {
         ));
     }
 
-    /// The start menu's take-item hook: `CursorCb_TakeItem`
+    /// The start menu's take-item hook, reached by its TAKE entry
+    /// ([`StartMenuOutcome::TakeItem`]): `CursorCb_TakeItem`
     /// (`pokeemerald/src/party_menu.c:3273-3298`) on the lead. Moves the
     /// lead's held item into the bag ([`party::take_held_item`]) and, only
     /// when it moved, merges the lead into its saved slot so the save
@@ -162,15 +170,10 @@ impl OverworldPhase {
     /// (`lead_screen::ensure_lead_can_battle`) becomes able to
     /// battle. `None` when there is no lead to act on, including while it is
     /// lent to a battle.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the start menu's party entry, which would call this, is not built yet"
-        )
-    )]
     pub(in crate::flow) fn take_lead_held_item(&mut self) -> Option<party::TakeHeldItem> {
-        let outcome = party::take_held_item(self.party_lead.as_mut()?, &mut self.save1.bag);
+        // Split borrow: the lead and the bag are separate fields.
+        let lead = self.lead.as_mut().filter(|lead| !lead.is_lent())?;
+        let outcome = party::take_held_item(lead.battler_mut(), &mut self.save1.bag);
         if matches!(outcome, party::TakeHeldItem::Took(_)) {
             self.flush_lead_to_save();
         }

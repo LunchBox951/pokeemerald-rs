@@ -698,7 +698,7 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
 fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     let treecko = player_mon(277, 50, vec![MoveId::POUND]);
-    phase.party_lead = Some(loaded_holding(&treecko, ItemId::ORAN_BERRY));
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::ORAN_BERRY));
     assert!(!phase.wild_lead_admissible(), "setup: the item is refused");
 
     assert_eq!(
@@ -708,7 +708,7 @@ fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
 
     assert!(phase.wild_lead_admissible());
     assert_eq!(phase.wild_lead_refusal, None);
-    let lead = phase.party_lead.clone().expect("the lead stays home");
+    let lead = phase.lead_for_test().cloned().expect("the lead stays home");
     assert_eq!(lead.held_item(), ItemId::NONE);
     let encounter = WildEncounter {
         slot: 0,

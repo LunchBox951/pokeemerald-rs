@@ -24,8 +24,8 @@
 //!
 //! The way out is `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273`):
 //! [`crate::party::take_held_item`] moves the item into the bag, and the
-//! start menu reaches it through `OverworldPhase::take_lead_held_item`, which
-//! also merges the lead into its saved slot. The screen above then admits the
+//! start menu's TAKE entry reaches it through
+//! `OverworldPhase::take_lead_held_item`, which also merges the lead into its saved slot. The screen above then admits the
 //! lead in every flow, as it admits one that never held the item. A full bag
 //! refuses the take and the lead keeps the item, so the refusal stays honest.
 

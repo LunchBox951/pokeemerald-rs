@@ -1,8 +1,8 @@
 //! Field start-menu state: item selection, SAVE delegation, and composition
 //! over the overworld frame.
 //!
-//! Only [`StartMenuItem::Save`] and [`StartMenuItem::Exit`] are supported;
-//! see [`ITEMS`] for why. [`chrome`] owns this menu's window geometry and
+//! Only [`StartMenuItem::Save`], [`StartMenuItem::TakeItem`] and
+//! [`StartMenuItem::Exit`] are supported; see [`ITEMS`] for why. [`chrome`] owns this menu's window geometry and
 //! palettes; [`save_dialog`] owns the SAVE flow this menu delegates to once
 //! selected.
 //!
@@ -31,6 +31,13 @@ pub(crate) use save_dialog::{SaveMode, SaveTarget};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartMenuItem {
     Save,
+    /// Takes the lead's held item into the bag. Upstream has no such start-menu
+    /// entry: the action is the party menu's `CursorCb_TakeItem`
+    /// (`pokeemerald/src/party_menu.c:3273`), reached through `POKéMON`, then
+    /// the Pokémon, then ITEM, then TAKE. This stands in until that menu
+    /// exists, so a lead whose item `battle` does not model has a way to the
+    /// bag.
+    TakeItem,
     Exit,
 }
 
@@ -38,6 +45,9 @@ impl StartMenuItem {
     const fn label(self) -> &'static str {
         match self {
             Self::Save => "SAVE",
+            // Short enough for the seven-tile window, where "TAKE ITEM" would
+            // not fit.
+            Self::TakeItem => "TAKE",
             Self::Exit => "EXIT",
         }
     }
@@ -46,7 +56,13 @@ impl StartMenuItem {
 /// The menu's items, in upstream's own order among the six this port omits
 /// (`pokeemerald/src/start_menu.c:315-337`): every other destination opens a
 /// screen this port has not built, so listing it would read as a bug.
-const ITEMS: [StartMenuItem; 2] = [StartMenuItem::Save, StartMenuItem::Exit];
+/// [`StartMenuItem::TakeItem`] is the one entry upstream lacks; it sits before
+/// EXIT, which stays last, and goes when the party menu owns the action.
+const ITEMS: [StartMenuItem; 3] = [
+    StartMenuItem::Save,
+    StartMenuItem::TakeItem,
+    StartMenuItem::Exit,
+];
 
 /// Why building a [`StartMenu`] failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +105,11 @@ pub(crate) enum StartMenuOutcome {
     Open,
     /// The menu is done; the caller drops it and resumes field control.
     Closed,
+    /// [`StartMenuItem::TakeItem`] was selected: the menu is done, and the
+    /// caller drops it, takes the lead's held item into the bag and resumes
+    /// field control. The menu cannot take the item itself; the party and bag
+    /// belong to the caller.
+    TakeItem,
 }
 
 /// State of an open field start menu.
@@ -177,6 +198,7 @@ impl StartMenu {
         if buttons.is_newly_pressed(Buttons::A) {
             match self.items[self.cursor] {
                 StartMenuItem::Save => self.save = Some(SaveDialog::new()),
+                StartMenuItem::TakeItem => return StartMenuOutcome::TakeItem,
                 StartMenuItem::Exit => self.exit_pending = true,
             }
             return StartMenuOutcome::Open;
