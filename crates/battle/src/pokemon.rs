@@ -198,6 +198,25 @@ fn calc_stat(
     nature.modify_stat(stat, scaled_stat + NON_HP_STAT_OFFSET)
 }
 
+/// Current HP after a stat recalculation, `CalculateMonStats`' HP rule
+/// (`src/pokemon.c:2866-2892`).
+///
+/// A fainted mon stays at zero; a living Shedinja is rewritten to one; any
+/// other living mon moves by the signed `new_max - old_max`, measured against
+/// the maximum it carried *before* the recalculation. Upstream leaves a
+/// non-positive result to wrap (the Pomeg glitch, fixed only under
+/// `BUGFIX`); a living mon is never made fainted here, so it clamps to one.
+fn hp_after_recalculation(species: SpeciesId, current_hp: u32, old_max: u32, new_max: u32) -> u32 {
+    if current_hp == 0 {
+        return 0;
+    }
+    if species == SPECIES_SHEDINJA {
+        return SHEDINJA_MAX_HP;
+    }
+    let moved = i64::from(current_hp) + i64::from(new_max) - i64::from(old_max);
+    u32::try_from(moved.max(1)).unwrap_or(u32::MAX)
+}
+
 fn calc_max_hp(
     species: SpeciesId,
     base: u8,
@@ -842,7 +861,7 @@ impl BattlePokemon {
         self.raise_level_to_experience();
     }
 
-    /// Raises the level (and stats, preserving damage taken) to match the
+    /// Raises the level (and stats, moving HP by the max-HP delta) to match the
     /// current experience total, returning `Some((old_level, new_level))`
     /// when at least one threshold was crossed. Shared by the in-battle
     /// award ([`BattlePokemon::apply_experience`], which then teaches the
@@ -882,9 +901,8 @@ impl BattlePokemon {
             self.ivs,
         );
         self.apply_speed_forme_evs();
-        self.current_hp = self
-            .current_hp
-            .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
+        self.current_hp =
+            hp_after_recalculation(self.species, self.current_hp, old_max_hp, self.stats.max_hp);
         self.evs_at_last_level_up = self.evs;
         Some((old_level, new_level))
     }

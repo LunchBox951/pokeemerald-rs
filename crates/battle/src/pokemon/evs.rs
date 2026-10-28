@@ -12,7 +12,7 @@
 
 use assets::EvYield;
 
-use super::BattlePokemon;
+use super::{BattlePokemon, Stats};
 
 /// Maximum value [`BattlePokemon::gain_evs`] can store for one stat.
 pub const MAX_PER_STAT_EVS: u16 = 255;
@@ -90,6 +90,21 @@ impl BattlePokemon {
     pub fn with_evs(mut self, evs: Evs) -> Self {
         self.evs = evs;
         self.apply_speed_forme_evs();
+        self
+    }
+
+    /// Adopts a loaded, authoritative stat block and current HP verbatim.
+    ///
+    /// Upstream copies a party record into battle without recalculating it
+    /// (`src/load_save.c:160-178`), so the block may legitimately lag the
+    /// mon's current [`BattlePokemon::evs`]; neither value is recomputed,
+    /// clamped, or normalized here. Call this before
+    /// [`BattlePokemon::with_evs`] when both are loaded, so Deoxys's Speed
+    /// Forme stats see the adopted EVs.
+    #[must_use]
+    pub fn with_cached_stats(mut self, stats: Stats, current_hp: u32) -> Self {
+        self.stats = stats;
+        self.current_hp = current_hp;
         self
     }
 

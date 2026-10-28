@@ -2,7 +2,8 @@
 //! the 0-EV formula while [`Evs`] carries the gain.
 
 use super::super::{
-    compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS,
+    compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs, Stats, MAX_PER_STAT_EVS,
+    MAX_TOTAL_EVS, SPECIES_SHEDINJA,
 };
 use super::shared::sample_mon;
 use super::shared::{BULBASAUR, HARDY_PERSONALITY};
@@ -290,4 +291,146 @@ fn a_ko_that_awards_evs_and_crosses_a_level_keeps_the_gain_on_evs_not_the_live_c
         zero_ev,
         "the live cache stays the 0-EV formula; only a save-time recompute reads evs()"
     );
+}
+
+/// A trained-looking cache whose max HP deliberately lags the zero-EV formula
+/// the level-up still recalculates with here: `(22, 11, 11, 11, 11, 11)`.
+fn divergent_cache() -> Stats {
+    Stats {
+        max_hp: 22,
+        attack: 11,
+        defense: 12,
+        speed: 13,
+        sp_attack: 14,
+        sp_defense: 15,
+    }
+}
+
+fn level_to(mon: &mut BattlePokemon, dex: &Dex, level: u8) {
+    let growth = dex.species(mon.species()).unwrap().growth_rate;
+    mon.reconcile_saved_experience(assets::experience_for_level(growth, level).unwrap());
+    assert_eq!(
+        mon.level(),
+        level,
+        "fixture sanity: the mon reached level {level}"
+    );
+}
+
+#[test]
+fn with_cached_stats_adopts_the_block_and_hp_without_recomputing_from_evs() {
+    let dex = Dex::new();
+    let mon = sample_mon(&dex)
+        .with_evs(Evs {
+            hp: 252,
+            attack: 252,
+            ..Evs::default()
+        })
+        .with_cached_stats(divergent_cache(), 19);
+    assert_eq!(
+        mon.stats(),
+        divergent_cache(),
+        "the block is taken verbatim"
+    );
+    assert_eq!(mon.current_hp(), 19, "current HP is taken verbatim");
+    assert_eq!(mon.evs().hp, 252, "adopting a cache leaves the EVs alone");
+}
+
+#[test]
+fn with_cached_stats_adopts_a_fainted_hp_of_zero() {
+    let dex = Dex::new();
+    let mon = sample_mon(&dex).with_cached_stats(divergent_cache(), 0);
+    assert_eq!(mon.current_hp(), 0);
+    assert!(mon.is_fainted());
+    assert_eq!(mon.stats(), divergent_cache());
+}
+
+#[test]
+fn with_cached_stats_does_not_clamp_hp_to_the_cached_maximum() {
+    let dex = Dex::new();
+    let mon = sample_mon(&dex).with_cached_stats(divergent_cache(), 40);
+    assert_eq!(mon.current_hp(), 40, "no normalization on adoption");
+}
+
+/// `CalculateMonStats` adds `newMaxHP - oldMaxHP` to a living mon
+/// (`src/pokemon.c:2880-2891`), measured against the *cached* old maximum.
+#[test]
+fn a_level_up_moves_living_hp_by_the_signed_delta_against_the_cached_maximum() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex).with_cached_stats(divergent_cache(), 19);
+    level_to(&mut mon, &dex, 6);
+    let bulbasaur = dex.species(mon.species()).unwrap();
+    let new_max = compute_stats(mon.species(), bulbasaur, 6, mon.nature(), mon.ivs()).max_hp;
+    assert_eq!(new_max, 21, "fixture sanity: zero-EV level 6 maximum");
+    assert_eq!(mon.stats().max_hp, new_max);
+    assert_eq!(
+        mon.current_hp(),
+        18,
+        "19 + (21 - 22): a drop in maximum is honoured, not floored at the old HP"
+    );
+}
+
+#[test]
+fn a_level_up_never_turns_a_living_mon_into_a_fainted_one() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex).with_cached_stats(divergent_cache(), 1);
+    level_to(&mut mon, &dex, 6);
+    assert_eq!(mon.current_hp(), 1, "1 + (21 - 22) clamps to one point");
+    assert!(!mon.is_fainted());
+}
+
+#[test]
+fn a_fainted_mon_stays_at_zero_hp_through_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.apply_damage(mon.current_hp());
+    assert!(mon.is_fainted(), "fixture sanity");
+    level_to(&mut mon, &dex, 6);
+    assert_eq!(
+        mon.current_hp(),
+        0,
+        "`pokemon.c:2893` returns before writing HP"
+    );
+    assert!(mon.stats().max_hp > 19, "the stat block itself still grew");
+}
+
+#[test]
+fn a_full_health_mon_gains_the_whole_maximum_delta() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let before = mon.stats().max_hp;
+    assert_eq!(mon.current_hp(), before, "fixture sanity: full health");
+    level_to(&mut mon, &dex, 6);
+    assert_eq!(mon.current_hp(), mon.stats().max_hp);
+}
+
+fn shedinja(dex: &Dex) -> BattlePokemon {
+    BattlePokemon::new(
+        dex,
+        SPECIES_SHEDINJA,
+        5,
+        Ivs::default(),
+        HARDY_PERSONALITY,
+        vec![MoveId::TACKLE],
+    )
+    .unwrap()
+}
+
+/// `src/pokemon.c:2866-2871`: a living Shedinja is rewritten to exactly one HP.
+#[test]
+fn a_living_shedinja_stays_at_one_hp_through_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = shedinja(&dex);
+    assert_eq!((mon.current_hp(), mon.stats().max_hp), (1, 1));
+    level_to(&mut mon, &dex, 6);
+    assert_eq!((mon.current_hp(), mon.stats().max_hp), (1, 1));
+}
+
+#[test]
+fn a_fainted_shedinja_stays_at_zero_hp_through_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = shedinja(&dex);
+    mon.apply_damage(1);
+    assert!(mon.is_fainted(), "fixture sanity");
+    level_to(&mut mon, &dex, 6);
+    assert_eq!((mon.current_hp(), mon.stats().max_hp), (0, 1));
 }
