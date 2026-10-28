@@ -217,8 +217,9 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Validates the dimensions against the payload before they drive packing.
-        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
+        // Validates the dimensions against the payload, and that they hold a whole
+        // tile, before they drive packing: a raster with no tile has no candidates.
+        let (_, width, height, pack_bit_depth) = asset.tiled_image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
