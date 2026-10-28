@@ -470,10 +470,54 @@ class TestChangelogLinks(unittest.TestCase):
         version_check.check_changelog_links(notes)
 
     def test_non_newest_dev_link_with_query_or_fragment_is_rejected(self):
-        for end in ("dev#files", "dev?expand=1"):
+        for end in (
+            "dev#files", "dev?expand=1", "dev\\#files", "dev\\?expand=1",
+            "dev&#35;files", "dev&#63;expand=1",
+        ):
             with self.subTest(end=end):
                 with self.assertRaises(version_check.VersionError):
                     version_check.check_changelog_links(linked_changelog("dev", end))
+
+    def test_inline_heading_link_ending_at_dev_is_rejected(self):
+        base = "https://example.invalid/compare/"
+        for end in ("dev", "dev#files", "dev\\?expand=1"):
+            for dest in (f"{base}aaa...{end}", f"<{base}aaa...{end}>",
+                         f'{base}aaa...{end} "title"'):
+                with self.subTest(dest=dest):
+                    notes = (
+                        changelog("0.1.3.0")
+                        + f"\n## [0.1.2.0]({dest}) - 2026-10-22\n\n- Fixes.\n"
+                    )
+                    with self.assertRaisesRegex(
+                        version_check.VersionError, r"\[0\.1\.2\.0\]"
+                    ):
+                        version_check.check_changelog_links(notes)
+
+    def test_inline_heading_links_that_are_frozen_or_newest_pass(self):
+        base = "https://example.invalid/compare/"
+        notes = (
+            f"## [0.1.3.0]({base}bbb...dev) - 2026-10-23\n\n- Fixes.\n\n"
+            f"## [0.1.2.0]({base}aaa...bbb) - 2026-10-22\n\n- Fixes.\n"
+        )
+        version_check.check_changelog_links(notes)
+
+    def test_definition_destination_on_the_next_line_is_checked(self):
+        for gap in ("\n", "\n  ", " \n\t"):
+            with self.subTest(gap=gap):
+                notes = (
+                    changelog("0.1.3.0")
+                    + "\n## [0.1.2.0] - 2026-10-22\n\n- Fixes.\n\n"
+                    + f"[0.1.2.0]:{gap}https://example.invalid/compare/aaa...dev\n"
+                )
+                with self.assertRaises(version_check.VersionError):
+                    version_check.check_changelog_links(notes)
+
+    def test_blank_line_after_a_definition_label_is_not_a_destination(self):
+        notes = (
+            linked_changelog("dev", "bbb")
+            + "\n[0.1.2.0]:\n\nSee https://example.invalid/compare/aaa...dev\n"
+        )
+        version_check.check_changelog_links(notes)
 
     def test_indented_and_angle_bracket_definitions_are_still_checked(self):
         stale = "[0.1.2.0]: %s\n"
@@ -489,6 +533,25 @@ class TestChangelogLinks(unittest.TestCase):
                 )
                 with self.assertRaises(version_check.VersionError):
                     version_check.check_changelog_links(notes)
+
+    def test_main_rejects_stale_dev_link_in_cumulative_mode(self):
+        repo = _TempGitRepo()
+        try:
+            repo.write("VERSION", "0.1.2.5\n")
+            repo.write("CHANGELOG.md", linked_changelog("dev", "bbb"))
+            repo.commit("baseline")
+            repo.write("VERSION", "0.1.2.6\n")
+            repo.write("CHANGELOG.md", linked_changelog("dev", "dev"))
+            repo.sync_cargo_manifest()
+            self.assertNotEqual(
+                repo.run_version_check(base="baseline", mode="cumulative"), 0
+            )
+            repo.write("CHANGELOG.md", linked_changelog("dev", "bbb"))
+            self.assertEqual(
+                repo.run_version_check(base="baseline", mode="cumulative"), 0
+            )
+        finally:
+            repo.cleanup()
 
     def test_main_rejects_stale_dev_link_even_on_patch_bump(self):
         repo = _TempGitRepo()
