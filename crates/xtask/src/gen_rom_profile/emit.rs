@@ -167,11 +167,22 @@ fn opening_scene_roots(out: &mut String, scene: &OpeningScenePlan) {
 }
 
 fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
-    graphics_family(
+    let _ = writeln!(out, "    battle_interface: BattleInterfaceRoots {{");
+    graphics_fields(
         out,
-        ("battle_interface", "BattleInterfaceRoots"),
         (&interface.images, &interface.palettes, &interface.tilemaps),
     );
+    let _ = writeln!(out, "        healthbox_elements: &[");
+    for blob in &interface.healthbox_elements {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(
+        out,
+        "        battle_bar: Some({}),",
+        blob_root(&interface.battle_bar)
+    );
+    let _ = writeln!(out, "    }},");
 }
 
 /// A family of images, palettes, and tilemap blobs: the `Roots` field and
@@ -179,9 +190,18 @@ fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
 fn graphics_family(
     out: &mut String,
     (field, type_name): (&str, &str),
-    (images, palettes, tilemaps): (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+    lists: (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
 ) {
     let _ = writeln!(out, "    {field}: {type_name} {{");
+    graphics_fields(out, lists);
+    let _ = writeln!(out, "    }},");
+}
+
+/// The three slices a graphics family opens with, at struct-field indent.
+fn graphics_fields(
+    out: &mut String,
+    (images, palettes, tilemaps): (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+) {
     image_slice(out, "        ", "images", images);
     palette_slice(out, "        ", palettes);
     let _ = writeln!(out, "        tilemaps: &[");
@@ -189,7 +209,6 @@ fn graphics_family(
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
     let _ = writeln!(out, "        ],");
-    let _ = writeln!(out, "    }},");
 }
 
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
@@ -877,6 +896,26 @@ mod bag_field_tests {
                 encoding: Encoding::Lz77,
                 len: 4096,
             }],
+            healthbox_elements: vec![
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/hpbar".to_owned(),
+                    addr: 0x081C_0000,
+                    encoding: Encoding::Raw,
+                    len: 384,
+                },
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/expbar".to_owned(),
+                    addr: 0x081C_0180,
+                    encoding: Encoding::Raw,
+                    len: 288,
+                },
+            ],
+            battle_bar: BlobPlan {
+                id: "battle-interface/raw/battle_bar".to_owned(),
+                addr: 0x081D_0000,
+                encoding: Encoding::Lz77,
+                len: 1312,
+            },
         }
     }
 
@@ -899,6 +938,14 @@ mod bag_field_tests {
         );
         assert!(
             module.contains("BlobRoot { id: \"battle-interface/raw/textbox_map\", addr: GbaPtr::at(0x081B_0000), encoding: Encoding::Lz77, len: 4096 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        healthbox_elements: &[\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/hpbar\", addr: GbaPtr::at(0x081C_0000), encoding: Encoding::Raw, len: 384 },\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/expbar\", addr: GbaPtr::at(0x081C_0180), encoding: Encoding::Raw, len: 288 },\n        ],"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        battle_bar: Some(BlobRoot { id: \"battle-interface/raw/battle_bar\", addr: GbaPtr::at(0x081D_0000), encoding: Encoding::Lz77, len: 1312 }),"),
             "{module}"
         );
         assert!(!module.contains("BattleInterfaceRoots::NONE"), "{module}");

@@ -64,7 +64,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     // A level-50 Treecko (species 277) knowing Pound (move 1) -- far faster than a level-2
     // Wurmple, so the driver's run attempt succeeds on the first turn.
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Four steps on ordinary ground: the immunity window, RNG-silent.
     for step in 1..=4 {
@@ -149,7 +149,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
         "exactly one held-item draw happened, and no more -- pinning the shared stream up to turn one"
     );
     // The lead mon moved into the battle, so it can't be fought with twice.
-    assert!(phase.party_lead.is_none());
+    assert!(phase.lead_for_test().is_none());
     // A fired encounter restarts the immunity window (`:679`).
     assert_eq!(phase.wild.immunity_steps(), 0);
 
@@ -168,8 +168,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     }
     // It ended with the player's mon written back, damage and all.
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the battle writes the lead mon back on the frame it ends");
     assert_eq!(lead.species(), SpeciesId(277));
     // The driver runs, and a level-50 mon outruns a level-2 one outright.
@@ -245,7 +244,10 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 fn an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    assert!(phase.party_lead.is_none(), "a bare test phase has no party");
+    assert!(
+        phase.lead_for_test().is_none(),
+        "a bare test phase has no party"
+    );
 
     walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
@@ -271,7 +273,7 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
     // Grass parked well off the walking lane.
     let mut phase = route_101_phase(PlayerState::new((1, 5), 3, Direction::East), (1, 1));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     for _ in 0..(8 * FRAMES_PER_STEP) {
         phase.step(held(Buttons::RIGHT));
@@ -326,7 +328,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
         !phase.wild_table_fightable(),
         "Route 102 must fail the screen"
@@ -426,7 +428,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         crate::pack_source::PackSource::Repo,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Pace back and forth between the two grass tiles. Route 101's land rate
     // is 320/2880 (~11%) per eligible step, so 100 steps missing every time
@@ -557,7 +559,7 @@ fn no_fightable_land_table_can_roll_a_trapping_opponent() {
 fn a_run_onto_an_encounter_returns_from_battle_standing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     phase.save1.event_data.flag_set(0x8C0).unwrap();
     for _ in 1..=4 {
         walk_east_and_land(&mut phase, 1);
@@ -605,7 +607,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
             assets::AbilityId::TRUANT
         )),
     );
-    phase.party_lead = Some(slakoth);
+    phase.set_fresh_lead_for_test(slakoth);
     let immunity_before = phase.wild.immunity_steps();
     let behavior_before = phase.wild.prev_metatile_behavior();
 
@@ -619,7 +621,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     );
     assert_eq!(phase.wild.immunity_steps(), immunity_before);
     assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
-    assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert!(phase.lead_for_test().is_some(), "the lead stays home");
     assert_eq!(
         phase.wild_lead_refusal,
         Some(BattleError::UnportedAbilityInteraction(
@@ -628,7 +630,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
         "the refusal is reported, and remembered so it reports once"
     );
 
-    phase.party_lead = Some(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
+    phase.set_fresh_lead_for_test(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
     assert!(phase.wild_lead_admissible());
     assert_eq!(
         phase.wild_lead_refusal, None,
@@ -662,7 +664,7 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     let treecko = player_mon(277, 50, vec![MoveId::POUND]);
     let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
-    phase.party_lead = Some(lead.clone());
+    phase.set_fresh_lead_for_test(lead.clone());
     let immunity_before = phase.wild.immunity_steps();
 
     walk_east_and_land(&mut phase, 5);
@@ -676,8 +678,8 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     );
     assert_eq!(phase.wild.immunity_steps(), immunity_before);
     assert_eq!(
-        phase.party_lead,
-        Some(lead),
+        phase.lead_for_test(),
+        Some(&lead),
         "the lead keeps its item at home"
     );
     assert_eq!(
@@ -685,7 +687,7 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
         Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
     );
 
-    phase.party_lead = Some(loaded_holding(&treecko, ItemId::NUGGET));
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::NUGGET));
     assert!(phase.wild_lead_admissible(), "Nugget has no effect to drop");
     assert_eq!(phase.wild_lead_refusal, None);
 }

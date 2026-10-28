@@ -1,6 +1,7 @@
 //! Text the screen prints for items, pockets, and context actions
 //! (`item_menu.c:266-282`, `item_menu.c:896-922`, `strings.c:257-294`).
 
+use assets::battle_moves::{MoveTable, MoveType};
 use assets::items::{ItemDisplayTable, ItemId, Pocket};
 use assets::move_names::MoveNames;
 use assets::tmhm_learnsets::TmHmLearnsets;
@@ -18,6 +19,12 @@ const FIRST_BERRY: u16 = 133;
 /// `gText_xVar1`'s multiplication sign.
 const QUANTITY_PREFIX: char = '×';
 const CLOSE_ROW_LABEL: &str = "CLOSE BAG";
+/// `gText_ThreeDashes` (`strings.c:205`).
+const THREE_DASHES: &str = "---";
+/// `TYPE_MYSTERY`, which `sMenuInfoIcons` gives an icon (`pokemon.h`).
+const MYSTERY_TYPE_ID: u8 = 9;
+/// `ConvertIntToDecimalStringN`'s width for the move data (`item_menu.c:2572`).
+const MOVE_DATA_DIGITS: usize = 3;
 
 /// An item row's printable parts: the optional number column and the name.
 pub(super) struct RowLabel {
@@ -81,11 +88,52 @@ pub(super) fn description(item: ItemId) -> String {
 /// count `ConvertIntToDecimalStringN` right-aligns in `digits` positions
 /// with `CHAR_SPACER` (`item_menu.c:966-974`, `string_util.c:209`).
 pub(super) fn quantity_text(quantity: u16, digits: usize) -> String {
-    let count = quantity.to_string();
+    format!("{QUANTITY_PREFIX}{}", right_aligned(quantity, digits))
+}
+
+/// `ConvertIntToDecimalStringN` in `STR_CONV_MODE_RIGHT_ALIGN`: `value` with
+/// `CHAR_SPACER` filling the leading positions of `digits`.
+fn right_aligned(value: u16, digits: usize) -> String {
+    let count = value.to_string();
     let padding = SPACER_SYMBOL
         .to_string()
         .repeat(digits.saturating_sub(count.len()));
-    format!("{QUANTITY_PREFIX}{padding}{count}")
+    format!("{padding}{count}")
+}
+
+/// What `PrintTMHMMoveData` prints for a machine's move (`item_menu.c:2562-2593`).
+pub(super) struct MoveDataText {
+    /// The move's combat type id, which picks its icon.
+    pub(super) type_id: u8,
+    pub(super) power: String,
+    pub(super) accuracy: String,
+    pub(super) pp: String,
+}
+
+/// The move data of the TM or HM `item` (`ItemIdToBattleMoveId`, then
+/// `gBattleMoves`), or `None` for an item that is not a machine.
+pub(super) fn move_data_text(item: ItemId) -> Option<MoveDataText> {
+    let slot = TmHmLearnsets::slot(usize::from(item.0.checked_sub(FIRST_TM)?)).ok()?;
+    let table = MoveTable::new();
+    let data = table.get(TmHmLearnsets::slot_move(slot)).ok()?;
+    let value = |value: u8| right_aligned(u16::from(value), MOVE_DATA_DIGITS);
+    Some(MoveDataText {
+        type_id: match data.move_type {
+            MoveType::Battle(combat_type) => combat_type.id(),
+            MoveType::Mystery => MYSTERY_TYPE_ID,
+        },
+        power: if data.power <= 1 {
+            THREE_DASHES.to_owned()
+        } else {
+            value(data.power)
+        },
+        accuracy: if data.accuracy == 0 {
+            THREE_DASHES.to_owned()
+        } else {
+            value(data.accuracy)
+        },
+        pp: value(data.pp),
+    })
 }
 
 /// `PrintItemDescription`'s close-row text (`item_menu.c:1003-1008`).
@@ -105,6 +153,11 @@ pub(super) const fn pocket_name(browse_index: usize) -> &'static str {
         3 => "BERRIES",
         _ => "KEY ITEMS",
     }
+}
+
+/// `gText_MoveVar1Where` (`strings.c:225`) with the picked-up item's name.
+pub(super) fn move_prompt(item_name: &str) -> String {
+    format!("Move the\n{item_name}\nwhere?")
 }
 
 /// `sItemMenuActions` text (`item_menu.c:266-282`).

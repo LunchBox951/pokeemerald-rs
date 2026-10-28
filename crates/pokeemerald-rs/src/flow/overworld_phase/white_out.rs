@@ -40,6 +40,12 @@
 //! No frame therefore exists with a fainted party and a controllable player,
 //! so neither driver screens for a fainted lead.
 //!
+//! Field poison is the third caller: when a four-step drain faints the last
+//! member with HP left, [`OverworldPhase::try_field_poison_white_out`] calls
+//! the same [`OverworldPhase::white_out`] from the step that drained it
+//! (`TryFieldPoisonWhiteOut`, `pokeemerald/src/field_poison.c:61-117`, then
+//! `EventScript_FieldPoison`, `pokeemerald/data/scripts/field_poison.inc:1-17`).
+//!
 //! The scripted Route 101 first battle never whites out. It calls
 //! [`OverworldPhase::heal_whole_party_and_reselect_lead`] directly, without
 //! the money loss or the heal-location warp.
@@ -233,8 +239,7 @@ mod tests {
         let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
         stored.status = STORED_STATUS;
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.set_fresh_lead_for_test(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
         assert_ne!(
             phase.save1.player_party[0].status, 0,
             "setup: lead is statused"
@@ -263,8 +268,7 @@ mod tests {
         stored.max_hp += EV_HP_BONUS;
         stored.hp = 1;
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.set_fresh_lead_for_test(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
 
         phase.white_out();
 
@@ -284,8 +288,8 @@ mod tests {
     /// must be measured against the same level floor that
     /// [`crate::party::merge_into_save_pokemon`] rebases against; otherwise
     /// the EV-derived HP gap vanishes from the next save. Driven through
-    /// [`OverworldPhase::white_out`] because the offset is written into
-    /// [`OverworldPhase::lead_hp_hidden_by_load`] before any merge runs.
+    /// [`OverworldPhase::white_out`] because the lead's
+    /// hidden-HP offset is re-measured before any merge runs.
     #[test]
     fn white_out_after_a_level_up_files_the_healed_lead_at_full_not_damaged() {
         let dex = battle::Dex::new();
@@ -321,8 +325,7 @@ mod tests {
         stored.hp = stored.max_hp;
 
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.set_fresh_lead_for_test(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
 
         // Raise the level as a won battle would, through the same
         // stats-preserving level-raise machinery, without a battle fixture.
