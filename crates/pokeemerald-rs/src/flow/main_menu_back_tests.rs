@@ -230,8 +230,10 @@ fn b_returns_to_a_fresh_title_with_the_real_pack() {
 
         // Confirming the title reopens the menu with the same live save, not
         // the disk's.
-        let (reopened, _, _) =
+        let (faded, _, _) =
             super::tests::drive_through_fade_wait(title, &mut slot, &PackSource::Repo);
+        let (reopened, _) =
+            super::tests::drive_through_menu_setup(faded, &mut slot, &PackSource::Repo);
         let AppScene::MainMenu(state) = reopened else {
             panic!("{menu_type:?}: the title must reopen the main menu");
         };
