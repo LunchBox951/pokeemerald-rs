@@ -19,6 +19,16 @@ pub(super) const OUTPUT_SCALE: f32 = 128.0;
 pub(super) const ASSERTION_TOLERANCE: f32 = 1e-6;
 pub(super) const FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME: i32 = 254;
 
+/// The signed value of the 8-bit lane a sum lands in (`m4a_1.s:308..339`).
+pub(super) fn byte_lane(sum: i32) -> i32 {
+    let lane = sum.rem_euclid(256);
+    if lane >= 128 {
+        lane - 256
+    } else {
+        lane
+    }
+}
+
 pub(super) fn unity_freq() -> u32 {
     (1 << FRAC_BITS) / DIV_FREQ
 }

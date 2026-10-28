@@ -129,8 +129,11 @@ pub(super) fn advance_title(
 }
 
 /// The [`AppScene::TitleFadeWait`] arm of [`super::advance_scene`]. The
-/// done frame still presents the faded title: upstream's `CB2_GoToMainMenu`
-/// only installs the next callback (`pokeemerald/src/title_screen.c:824-828`).
+/// done frame hands off to [`AppScene::MainMenuFadeIn`] on a white frame:
+/// upstream's `CB2_GoToMainMenu` only installs the next callback
+/// (`pokeemerald/src/title_screen.c:824-828`), and `InitMainMenu(FALSE)`'s
+/// white fade-in and setup tasks run from there
+/// ([`MainMenuFadeIn::from_title`]).
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
     save_slot: &mut SaveSlot,
@@ -229,17 +232,35 @@ pub(super) fn advance_main_menu_fade_wait(
     (AppScene::MainMenuFadeWait(wait), frame)
 }
 
-/// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu, held back while the
-/// fade from black reveals the bare backdrop.
+/// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu, held back while
+/// the fade-in reveals the bare backdrop and upstream's setup tasks run.
 ///
-/// `InitMainMenu(TRUE)` clears VRAM and fades in with no window drawn; the
-/// menu is drawn by a task that waits for the fade to finish
-/// (`pokeemerald/src/main_menu.c:556-650,740-745`).
+/// `InitMainMenu` clears VRAM and fades in with no window drawn: from black
+/// after the Options screen (`InitMainMenu(TRUE)`) and from white after the
+/// title (`InitMainMenu(FALSE)`). Once the fade ends, each task hands off to
+/// the next one frame later: the save check, the battery check, then the
+/// window drawing. The highlight and the first input poll follow in
+/// [`AppScene::MainMenuHighlight`] and [`AppScene::MainMenu`]
+/// (`pokeemerald/src/main_menu.c:556-650,583-588,619-711,740-888`). Only the
+/// intact-save, no-RTC-error path is modelled.
 pub(crate) struct MainMenuFadeIn {
     state: Box<MainMenuState>,
     source: Framebuffer,
-    /// `None` on the handoff frame: the fade begins on the next one.
-    fade: Option<NormalPaletteFade>,
+    /// The colour the fade-in starts from.
+    from: PaletteFadeTarget,
+    phase: SetupPhase,
+}
+
+/// What the next [`advance_main_menu_fade_in`] call does.
+enum SetupPhase {
+    /// The Options return's handoff frame is over: the fade begins on this one.
+    BeginFade,
+    /// Advancing the fade; observing it done is `Task_MainMenuCheckSaveFile`.
+    Fading(NormalPaletteFade),
+    /// `Task_MainMenuCheckBattery`.
+    CheckBattery,
+    /// `Task_DisplayMainMenu`.
+    DisplayMenu,
 }
 
 impl MainMenuFadeIn {
@@ -254,38 +275,78 @@ impl MainMenuFadeIn {
     }
 
     /// Hands off from the Options screen: a black frame, with the fade to
-    /// follow (`pokeemerald/src/main_menu.c:583-586`).
+    /// follow on the next one -- `Task_OptionMenuFadeOut` sees the fade done
+    /// a frame after its last update (`pokeemerald/src/main_menu.c:583-586`,
+    /// `option_menu.c:137-142,364-372`).
     pub(super) fn begin(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
         let source = state.scene.compose_backdrop();
-        let mut black = Framebuffer::new();
-        black.fill(rendering::Rgb888::BLACK);
+        let frame = faded_frame(
+            &source,
+            &NormalPaletteFade::begin_in(PaletteFadeTarget::Black),
+        );
         (
             Self {
                 state,
                 source,
-                fade: None,
+                from: PaletteFadeTarget::Black,
+                phase: SetupPhase::BeginFade,
             },
-            to_platform_frame(&black),
+            frame,
+        )
+    }
+
+    /// Hands off from the title's white fade-out, on the frame that fade's
+    /// last update reports done: that update installs `CB2_InitMainMenu`
+    /// (`pokeemerald/src/title_screen.c:824-828`), so this frame is
+    /// `InitMainMenu(FALSE)`, which begins the white fade-in
+    /// (`pokeemerald/src/main_menu.c:587-588`). The frame is still white.
+    pub(super) fn from_title(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
+        let source = state.scene.compose_backdrop();
+        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::White);
+        let frame = faded_frame(&source, &fade);
+        (
+            Self {
+                state,
+                source,
+                from: PaletteFadeTarget::White,
+                phase: SetupPhase::Fading(fade),
+            },
+            frame,
         )
     }
 }
 
 /// The [`AppScene::MainMenuFadeIn`] arm of [`super::advance_scene`]: input
-/// is ignored until the fade finishes, then the menu is drawn.
+/// is ignored through the fade and the setup tasks, and the windows are drawn
+/// on the second frame after the fade ends.
 pub(super) fn advance_main_menu_fade_in(mut wait: Box<MainMenuFadeIn>) -> (AppScene, Box<Frame>) {
-    let Some(fade) = wait.fade.as_mut() else {
-        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
-        let frame = faded_frame(&wait.source, &fade);
-        wait.fade = Some(fade);
-        return (AppScene::MainMenuFadeIn(wait), frame);
-    };
-    if fade.is_done() {
-        let frame = wait.state.scene.compose_frame();
-        return (AppScene::MainMenu(wait.state), frame);
+    match &mut wait.phase {
+        SetupPhase::BeginFade => {
+            let fade = NormalPaletteFade::begin_in(wait.from);
+            let frame = faded_frame(&wait.source, &fade);
+            wait.phase = SetupPhase::Fading(fade);
+            (AppScene::MainMenuFadeIn(wait), frame)
+        }
+        SetupPhase::Fading(fade) if fade.is_done() => {
+            wait.phase = SetupPhase::CheckBattery;
+            let frame = to_platform_frame(&wait.source);
+            (AppScene::MainMenuFadeIn(wait), frame)
+        }
+        SetupPhase::Fading(fade) => {
+            fade.update();
+            let frame = faded_frame(&wait.source, fade);
+            (AppScene::MainMenuFadeIn(wait), frame)
+        }
+        SetupPhase::CheckBattery => {
+            wait.phase = SetupPhase::DisplayMenu;
+            let frame = to_platform_frame(&wait.source);
+            (AppScene::MainMenuFadeIn(wait), frame)
+        }
+        SetupPhase::DisplayMenu => {
+            let frame = to_platform_frame(&wait.state.scene.compose_before_highlight());
+            (AppScene::MainMenuHighlight(wait.state), frame)
+        }
     }
-    fade.update();
-    let frame = faded_frame(&wait.source, fade);
-    (AppScene::MainMenuFadeIn(wait), frame)
 }
 
 /// Dispatches the [`MainMenuAction`] a press confirmed before the fade
