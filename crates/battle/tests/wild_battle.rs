@@ -272,7 +272,7 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     let dex = Dex::new();
     // Horn Drill has nonzero power but an unsupported OHKO effect, so a
     // power-only check would admit it to the wrong damage/RNG path.
-    let horn_drill_ohko_effect = MoveEffect(38);
+    let horn_drill_ohko_effect = MoveEffect::OHKO;
     let horn_drill_token_power = 1;
     let horn_drill = dex.move_data(MoveId::HORN_DRILL).unwrap();
     assert_eq!(horn_drill.effect, horn_drill_ohko_effect);
