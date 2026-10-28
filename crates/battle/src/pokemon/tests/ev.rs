@@ -1,5 +1,5 @@
-//! EV gain, per-stat and total caps, and level-up: the live stat cache stays
-//! the 0-EV formula while [`Evs`] carries the gain.
+//! EV gain, per-stat and total caps, stat-cache adoption, and the EV-aware
+//! level-up recalculation.
 
 use super::super::{
     compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs, Stats, MAX_PER_STAT_EVS,
@@ -162,7 +162,7 @@ fn gain_evs_applies_the_total_cap_even_with_per_stat_headroom_to_spare() {
 }
 
 #[test]
-fn gain_evs_does_not_disturb_the_live_stat_cache() {
+fn gain_evs_alone_does_not_recompute_the_stat_cache() {
     let dex = Dex::new();
     let mut mon = sample_mon(&dex);
     let before = mon.stats();
@@ -181,54 +181,71 @@ fn gain_evs_does_not_disturb_the_live_stat_cache() {
     );
 }
 
-#[test]
-fn a_level_up_on_a_loaded_ev_trained_mon_grows_current_hp_by_the_zero_ev_delta() {
-    let dex = Dex::new();
-    let mut mon = sample_mon(&dex).with_evs(Evs {
+/// A loaded EV-trained mon: its cache is the EV-aware block, not the zero-EV
+/// one, with three points of damage taken.
+fn trained_bulbasaur(dex: &Dex) -> BattlePokemon {
+    let evs = Evs {
         hp: 252,
         ..Evs::default()
-    });
-    mon.apply_damage(3);
-    let before = mon.current_hp();
+    };
+    let probe = sample_mon(dex);
+    let bulbasaur = dex.species(probe.species()).unwrap();
+    let cache = compute_stats_with_evs(
+        probe.species(),
+        bulbasaur,
+        5,
+        probe.nature(),
+        probe.ivs(),
+        evs,
+    );
+    assert_eq!(
+        cache.max_hp, 22,
+        "fixture sanity: the EV-aware level-5 maximum"
+    );
+    probe.with_cached_stats(cache, 19).with_evs(evs)
+}
+
+#[test]
+fn a_level_up_on_a_loaded_ev_trained_mon_recalculates_from_its_evs_and_keeps_the_damage() {
+    let dex = Dex::new();
+    let mut mon = trained_bulbasaur(&dex);
+    assert_eq!(
+        mon.stats().max_hp,
+        22,
+        "the adopted cache is not recomputed"
+    );
+
+    level_to(&mut mon, &dex, 6);
 
     let bulbasaur = dex.species(mon.species()).unwrap();
-    let award = assets::experience_for_level(bulbasaur.growth_rate, 6).unwrap() - mon.experience();
-    mon.apply_experience(&dex, award)
-        .expect("no move-learn prompt is pending");
-    assert_eq!(mon.level(), 6, "fixture sanity: the mon levelled up");
-
-    let zero_ev_old_max =
-        compute_stats(mon.species(), bulbasaur, 5, mon.nature(), mon.ivs()).max_hp;
-    let zero_ev_new_max =
-        compute_stats(mon.species(), bulbasaur, 6, mon.nature(), mon.ivs()).max_hp;
-    let real_new_max = compute_stats_with_evs(
+    let ev_aware = compute_stats_with_evs(
         mon.species(),
         bulbasaur,
         6,
         mon.nature(),
         mon.ivs(),
         mon.evs(),
-    )
-    .max_hp;
-    assert!(
-        real_new_max > zero_ev_new_max,
-        "fixture sanity: the HP EVs must raise the EV-aware maximum"
     );
     assert_eq!(
-        mon.stats().max_hp,
-        zero_ev_new_max,
-        "the live cache stays the 0-EV formula through this level-up"
+        ev_aware.max_hp, 25,
+        "fixture sanity: the EV-aware level-6 maximum"
     );
+    assert_eq!(
+        mon.stats(),
+        ev_aware,
+        "the whole cache is replaced from the EVs"
+    );
+    assert_eq!(mon.cached_stats(), ev_aware);
     assert_eq!(
         mon.current_hp(),
-        before + (zero_ev_new_max - zero_ev_old_max),
-        "current HP grows by the 0-EV delta, not an EV-aware one"
+        22,
+        "19 + (25 - 22): three points of damage survive, none are healed"
     );
 }
 
 /// Upstream `Cmd_getexp` gains EVs before the exp write (`src/battle_script_commands.c:3420`).
 #[test]
-fn a_ko_that_awards_evs_and_crosses_a_level_keeps_the_gain_on_evs_not_the_live_cache() {
+fn a_ko_that_awards_evs_before_a_level_up_feeds_them_into_the_recalculated_cache() {
     let dex = Dex::new();
     let mut mon = BattlePokemon::new(
         &dex,
@@ -281,15 +298,16 @@ fn a_ko_that_awards_evs_and_crosses_a_level_keeps_the_gain_on_evs_not_the_live_c
         mon.nature(),
         mon.ivs(),
     );
-    assert_ne!(
-        ev_aware, zero_ev,
-        "fixture sanity: the gained EV must move the block away from the 0-EV formula"
+    assert_eq!(
+        ev_aware.sp_attack,
+        zero_ev.sp_attack + 1,
+        "fixture sanity: the KO's own point crosses the ev/4 boundary"
     );
-
     assert_eq!(
         mon.stats(),
-        zero_ev,
-        "the live cache stays the 0-EV formula; only a save-time recompute reads evs()"
+        ev_aware,
+        "the award lands before the level-up (`src/battle_script_commands.c:3420`), \
+         so the recalculated cache already carries it"
     );
 }
 

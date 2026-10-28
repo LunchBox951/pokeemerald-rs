@@ -2,13 +2,16 @@
 //!
 //! A new battler starts with zero EVs. Loaded EVs retain their raw save values,
 //! while battle rewards cap new gains. Reward EVs are applied before
-//! [`BattlePokemon::apply_experience`], so a level-up snapshot includes the
+//! [`BattlePokemon::apply_experience`], so a level-up recalculation sees the
 //! latest gain. This battle model has no Pokérus or held-item EV multipliers.
 //!
-//! Live [`BattlePokemon::stats`] remain zero-EV calculations, except Deoxys's
-//! five Speed Forme stats, which upstream `GetDeoxysStat` computes from the
-//! current EVs. Save-time stat recomputation instead reads
-//! [`BattlePokemon::evs_at_last_level_up`].
+//! [`BattlePokemon::cached_stats`] is the authoritative stat block: built at
+//! zero EVs for a new battler, adopted verbatim by
+//! [`BattlePokemon::with_cached_stats`] for a loaded one, and replaced from the
+//! current EVs only by a level-up (`CalculateMonStats`, `src/pokemon.c:2823-2895`).
+//! Gaining EVs never recomputes it. [`BattlePokemon::stats`] is the same block
+//! except Deoxys's five Speed Forme stats, which upstream `GetDeoxysStat`
+//! computes from the current EVs.
 
 use assets::EvYield;
 
@@ -73,19 +76,10 @@ impl BattlePokemon {
         self.evs
     }
 
-    /// Returns the EV snapshot captured at the most recent level-up.
-    ///
-    /// Save-time stat recomputation uses this snapshot rather than the current
-    /// [`BattlePokemon::evs`].
-    #[must_use]
-    pub const fn evs_at_last_level_up(&self) -> Evs {
-        self.evs_at_last_level_up
-    }
-
     /// Adopts raw loaded EVs without validating caps.
     ///
-    /// Live stats stay zero-EV except Deoxys's Speed Forme stats, which are
-    /// recomputed from `evs`.
+    /// The stat cache is not recomputed; only Deoxys's live Speed Forme stats
+    /// are derived from `evs`.
     #[must_use]
     pub fn with_evs(mut self, evs: Evs) -> Self {
         self.evs = evs;
@@ -99,11 +93,13 @@ impl BattlePokemon {
     /// (`src/load_save.c:160-178`), so the block may legitimately lag the
     /// mon's current [`BattlePokemon::evs`]; neither value is recomputed,
     /// clamped, or normalized here. Call this before
-    /// [`BattlePokemon::with_evs`] when both are loaded, so Deoxys's Speed
-    /// Forme stats see the adopted EVs.
+    /// [`BattlePokemon::with_evs`] when both are loaded: `with_evs` then
+    /// derives Deoxys's Speed Forme live view from the adopted EVs, while the
+    /// stored block ([`BattlePokemon::cached_stats`]) stays as loaded.
     #[must_use]
     pub fn with_cached_stats(mut self, stats: Stats, current_hp: u32) -> Self {
         self.stats = stats;
+        self.cached_stats = stats;
         self.current_hp = current_hp;
         self
     }

@@ -254,10 +254,12 @@ fn an_unsaved_fresh_lead_is_lent_and_restored_without_a_backing_record() {
 fn healing_files_a_damaged_ev_trained_lead_at_full() {
     const EV_HP_BONUS: u16 = 7;
     let mut phase = new_game_phase();
-    let lead = starter();
-    let mut stored = record_of(&lead);
+    let mut stored = record_of(&starter());
     stored.max_hp += EV_HP_BONUS;
-    stored.hp = 1;
+    stored.hp = 2;
+    // The battler adopts the saved cache, so its own maximum is the trained one.
+    let lead = crate::party::from_save_pokemon(&Dex::new(), &stored).unwrap();
+    assert_eq!(lead.stats().max_hp, u32::from(stored.max_hp));
     phase.save1.player_party_count = 1;
     phase.set_backed_lead_for_test(0, stored, lead);
     phase.lead_mut_for_test().unwrap().apply_damage(1);

@@ -100,7 +100,7 @@ pub(crate) fn grant_starter(
 
     party.player_party[0] = record;
     party.player_party_count = 1;
-    Ok(LoadedLead::created(dex, battler, record))
+    Ok(LoadedLead::created(battler, record))
 }
 
 /// `CreateBoxMon`'s OT name, OT gender, and met location stamps

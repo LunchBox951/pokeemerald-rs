@@ -113,14 +113,7 @@ impl OverworldPhase {
             match crate::party::from_save_pokemon(&dex, record) {
                 Ok(mut dormant) => match dormant.heal(&dex) {
                     Ok(()) => {
-                        let mut hidden = crate::party::hp_hidden_by_load(&dex, record, &dormant);
-                        let merged = crate::party::merge_into_save_pokemon(
-                            &dex,
-                            &dormant,
-                            record,
-                            &mut hidden,
-                        );
-                        *record = merged;
+                        *record = crate::party::merge_into_save_pokemon(&dex, &dormant, record);
                     }
                     Err(error) => {
                         eprintln!(
@@ -247,10 +240,9 @@ mod tests {
         assert_eq!(slot.load().block1.player_party[0].status, 0);
     }
 
-    /// An EV-trained record's maximum sits above the battle model's, so the
-    /// battler's `heal` alone would leave the record damaged. The white-out
-    /// restores the record's `hp` to its own `max_hp` (`HealPlayerParty`), so
-    /// the next save files the lead at full.
+    /// An EV-trained record's maximum is the battler's own cache, so the
+    /// white-out heal restores to it (`HealPlayerParty`) and the next save
+    /// files the lead at full.
     #[test]
     fn white_out_restores_the_stored_hp_to_the_retained_maximum() {
         const EV_HP_BONUS: u16 = 7;
@@ -261,6 +253,9 @@ mod tests {
         let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
         stored.max_hp += EV_HP_BONUS;
         stored.hp = 1;
+        // The battler adopts the saved cache, as `LoadPlayerParty` copies it.
+        let lead = crate::party::from_save_pokemon(&battle::Dex::new(), &stored).unwrap();
+        assert_eq!(lead.stats().max_hp, u32::from(stored.max_hp));
         phase.save1.player_party_count = 1;
         phase.set_backed_lead_for_test(0, stored, lead);
 
@@ -277,22 +272,17 @@ mod tests {
         );
     }
 
-    /// A level-up between load and a loss must not cost the lead's retained
-    /// EV points. The white-out's offset between record and battler maximum
-    /// must be measured against the same level floor that
-    /// [`crate::party::merge_into_save_pokemon`] rebases against; otherwise
-    /// the EV-derived HP gap vanishes from the next save. Driven through
-    /// [`OverworldPhase::white_out`] because the lead's
-    /// hidden-HP offset is re-measured before any merge runs.
+    /// A level-up between load and a loss recalculates the lead's cache from
+    /// its EVs (`CalculateMonStats`), and the white-out heal then restores to
+    /// that new maximum, which the next save files.
     #[test]
     fn white_out_after_a_level_up_files_the_healed_lead_at_full_not_damaged() {
         let dex = battle::Dex::new();
         let mut phase = new_game_phase();
         let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
 
-        // The recompute branch reads the record's EV bytes, so they must be
-        // genuine rather than a bumped `max_hp`. The lead carries the same
-        // EVs, as a decoded save would.
+        // The record carries genuine EV bytes and the matching EV-aware
+        // cache; the lead is decoded from it, as a continued save would.
         let evs = battle::Evs {
             hp: 252,
             ..battle::Evs::default()
@@ -318,11 +308,13 @@ mod tests {
         stored.max_hp = u16::try_from(ev_aware_at_level_5.max_hp).unwrap();
         stored.hp = stored.max_hp;
 
+        let lead = crate::party::from_save_pokemon(&dex, &stored).unwrap();
+        assert_eq!(lead.stats().max_hp, ev_aware_at_level_5.max_hp);
         phase.save1.player_party_count = 1;
         phase.set_backed_lead_for_test(0, stored, lead);
 
         // Raise the level as a won battle would, through the same
-        // stats-preserving level-raise machinery, without a battle fixture.
+        // level-raise machinery, without a battle fixture.
         let level_13 = assets::experience_for_level(species.growth_rate, 13)
             .expect("level 13 is on every growth curve");
         let leveled_lead = phase.lead_mut_for_test().expect("setup: a lead is present");
@@ -331,9 +323,8 @@ mod tests {
         assert_eq!(
             leveled_lead.current_hp(),
             leveled_lead.stats().max_hp,
-            "fixture sanity: the leveled lead is unfainted at its own (0-EV) \
-             full, so the white-out heals a live lead; the battler's stats \
-             stay 0-EV regardless of the retained EVs"
+            "fixture sanity: the leveled lead is unfainted at its new full, \
+             so the white-out heals a live lead"
         );
 
         phase.white_out();
