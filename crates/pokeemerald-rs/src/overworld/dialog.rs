@@ -251,11 +251,8 @@ impl NpcDialog {
     /// Draws the message box and visible glyphs over `base`.
     #[must_use]
     pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
-        // A transparent (index 0) window fill shows what lies under the box.
-        let scene = self
-            .window_fill
-            .is_some_and(|fill| fill.background == 0)
-            .then(|| base.clone());
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| base.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut base, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(
@@ -1052,5 +1049,38 @@ mod tests {
         let fb = dialog.compose_over(Framebuffer::new());
         let (x, y) = box_pixel((150, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1 - 2));
         assert_eq!(fb.pixel(x, y), Some(HIGHLIGHT_COLOR));
+    }
+
+    #[test]
+    fn a_scroll_after_highlight_zero_fills_the_exposed_rows_transparently() {
+        // `ScrollWindow(..., PIXEL_FILL(0))` writes palette index 0, which a
+        // window shows as transparent (`pokeemerald/src/text.c:1196-1201`), so
+        // the scene beneath the box shows through the rows the scroll exposed.
+        const SCENE_COLOR: Rgb888 = Rgb888 {
+            r: 10,
+            g: 200,
+            b: 10,
+        };
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x02,
+                args: vec![0],
+            },
+            Token::PromptScroll,
+            Token::End,
+        ]);
+        for _ in 0..8 {
+            dialog.tick(NO_INPUT);
+        }
+        dialog.tick(A_PRESS);
+        for _ in 0..16 {
+            dialog.tick(NO_INPUT);
+        }
+        let mut base = Framebuffer::new();
+        base.fill(SCENE_COLOR);
+        let fb = dialog.compose_over(base);
+        let (x, y) = box_pixel((150, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1 - 2));
+        assert_eq!(fb.pixel(x, y), Some(SCENE_COLOR));
     }
 }

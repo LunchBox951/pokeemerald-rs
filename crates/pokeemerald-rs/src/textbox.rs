@@ -226,13 +226,17 @@ pub(crate) enum WindowOp {
     Glyph(Box<RevealedGlyph>),
     /// A span a `CLEAR`/`CLEAR_TO` control erased (`Printer::cleared_span`).
     ClearSpan(ClearedSpan),
+    /// The rows a window scroll exposed ([`scroll_window_ops`]), filled with
+    /// the background in force. Unlike a `ClearSpan`, a background of index 0
+    /// writes transparent pixels, as `ScrollWindow`'s `PIXEL_FILL(0)` does.
+    ScrollFill(ClearedSpan),
 }
 
 /// Scrolls a window's retained `ops` up by `dy` and fills the rows that
 /// scroll into view with `colors.background`, as `ScrollWindow` does with
 /// `PIXEL_FILL(bgColor)` (`pokeemerald/src/text.c:1196-1201`).
 ///
-/// The fill is a [`WindowOp::ClearSpan`] across the content width at the
+/// The fill is a [`WindowOp::ScrollFill`] across the content width at the
 /// bottom `dy` rows, so a later scroll carries it up with everything else.
 pub(crate) fn scroll_window_ops(
     ops: &mut Vec<WindowOp>,
@@ -243,7 +247,7 @@ pub(crate) fn scroll_window_ops(
     for op in ops.iter_mut() {
         op.shift_y(-dy);
     }
-    ops.push(WindowOp::ClearSpan(ClearedSpan {
+    ops.push(WindowOp::ScrollFill(ClearedSpan {
         x: 0,
         y: content_size.1.saturating_sub(dy),
         width: content_size.0,
@@ -252,12 +256,18 @@ pub(crate) fn scroll_window_ops(
     }));
 }
 
+/// Whether the glyph writes background value 0 over its cell, as
+/// `CopyGlyphToWindow` does for a `HIGHLIGHT 0` (`pokeemerald/src/text.c:363-420`).
+fn is_transparent_cell(glyph: &RevealedGlyph) -> bool {
+    glyph.paint_background && usize::from(glyph.colors.background) == TRANSPARENT_PALETTE_INDEX
+}
+
 impl WindowOp {
     /// Shifts this op vertically by a window scroll.
     pub(crate) fn shift_y(&mut self, dy: i32) {
         match self {
             Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
-            Self::ClearSpan(span) => span.y = span.y.saturating_add(dy),
+            Self::ClearSpan(span) | Self::ScrollFill(span) => span.y = span.y.saturating_add(dy),
         }
     }
 }
@@ -270,7 +280,7 @@ impl WindowOp {
 /// glyphs revealed after it. `window_fill` is the colors the latest
 /// whole-window clear erased with (`Printer::cleared_window_colors`); `scene`
 /// is the framebuffer as it was before the frame tiles were drawn, which a
-/// transparent (index 0) fill shows.
+/// transparent (index 0) fill or scroll fill shows ([`needs_scene`]).
 ///
 /// A `ClearSpan` erases its window-local rectangle with its own background
 /// (see [`erase_with_background`]) before any later glyph lands, covering
@@ -299,6 +309,16 @@ pub(crate) fn compose_window_ops(
     for op in ops {
         match op {
             WindowOp::Glyph(glyph) => {
+                if let Some(scene) = scene.filter(|_| is_transparent_cell(glyph)) {
+                    let cell = ClearedSpan {
+                        x: glyph.x,
+                        y: glyph.y,
+                        width: i32::from(glyph.glyph.advance_width),
+                        height: glyph.raster_height,
+                        colors: glyph.colors,
+                    };
+                    restore_cleared_span(fb, scene, cell, origin, content_size);
+                }
                 blit_glyphs_colored(
                     fb,
                     std::slice::from_ref(glyph.as_ref()),
@@ -310,14 +330,33 @@ pub(crate) fn compose_window_ops(
             WindowOp::ClearSpan(span) => {
                 erase_with_background(fb, &background, None, palette, *span, origin, content_size);
             }
+            WindowOp::ScrollFill(span) => {
+                erase_with_background(fb, &background, scene, palette, *span, origin, content_size);
+            }
         }
     }
 }
 
+/// Whether composing `ops` and `window_fill` needs the pre-frame scene: a
+/// whole-window fill, a `ScrollFill`, or a highlighted glyph cell with
+/// background 0, which [`compose_window_ops`] restores from it.
+pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> bool {
+    window_fill.is_some_and(|fill| fill.background == 0)
+        || ops.iter().any(|op| match op {
+            WindowOp::ScrollFill(span) => span.colors.background == 0,
+            WindowOp::Glyph(glyph) => is_transparent_cell(glyph),
+            WindowOp::ClearSpan(_) => false,
+        })
+}
+
 /// Erases `span` with `span.colors.background`.
 ///
-/// Index 0 is transparent: a span paints nothing, and a whole-window fill
-/// (which passes its `scene`) shows the scene beneath the window. Index
+/// Index 0 is transparent. A scroll fill and a whole-window fill write pixel
+/// value 0 (`ScrollWindow`, `pokeemerald/src/text.c:1196-1201`), so they
+/// restore the `scene` beneath the window; with no `scene` there is nothing to
+/// restore and nothing is painted. A `CLEAR`/`CLEAR_TO` span never gets a
+/// `scene`: upstream's `ClearTextSpan` skips painting when the background is
+/// transparent (`pokeemerald/src/text.c:649-674`). Index
 /// `TEXT_COLOR_WHITE` is the window interior the frame tiles already drew, so
 /// it restores from `background`, the pre-glyph composed framebuffer. Any other
 /// index fills with that palette entry; a missing entry is skipped.

@@ -404,11 +404,8 @@ impl IntroScene {
         let mut fb = Framebuffer::new();
         fb.fill(Rgb888::BLACK);
 
-        // A transparent (index 0) window fill shows what lies under the box.
-        let scene = self
-            .window_fill
-            .is_some_and(|fill| fill.background == 0)
-            .then(|| fb.clone());
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| fb.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(

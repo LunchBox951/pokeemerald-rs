@@ -235,6 +235,52 @@ fn a_clear_erases_with_its_own_background() {
     // Transparent erases nothing.
     let transparent = compose(0);
     assert_eq!(transparent.pixel(0, 0), Some(palette[2]));
+    // Even with the scene supplied, a transparent `CLEAR` span erases nothing
+    // (`ClearTextSpan`, `pokeemerald/src/text.c:649-674`).
+    let mut scene = Framebuffer::new();
+    scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+    let mut fb = marker.clone();
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
+    ops.push(span_with(0));
+    assert!(!needs_scene(&ops, None));
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &palette,
+        None,
+        Some(&scene),
+    );
+    assert_eq!(fb.pixel(0, 0), Some(palette[2]));
+}
+
+#[test]
+fn a_transparent_scroll_fill_shows_the_scene() {
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let mut scene = Framebuffer::new();
+    scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+    let mut fb = marker.clone();
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
+    let WindowOp::ClearSpan(span) = span_with(0) else {
+        unreachable!("span_with builds a ClearSpan")
+    };
+    ops.push(WindowOp::ScrollFill(span));
+    assert!(needs_scene(&ops, None));
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &palette,
+        None,
+        Some(&scene),
+    );
+    assert_eq!(fb.pixel(0, 0), scene.pixel(0, 0));
+    assert_eq!(fb.pixel(3, 1), scene.pixel(3, 1));
+    assert_eq!(fb.pixel(4, 0), marker.pixel(4, 0));
+    assert!(!needs_scene(&glyph_ops(vec![]), None));
 }
 
 #[test]
@@ -338,4 +384,31 @@ fn a_highlight_paints_the_real_fonts_cell_background() {
         }
     }
     assert_eq!(unpainted, 0, "background pixels left unpainted");
+}
+
+#[test]
+fn a_glyph_highlighted_with_index_zero_shows_the_scene_in_its_cell() {
+    // `CopyGlyphToWindow` writes background value 0 over the whole cell, which
+    // a window shows as transparent (`pokeemerald/src/text.c:363-420`).
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let mut scene = Framebuffer::new();
+    scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+    let mut fb = marker.clone();
+    let ops = glyph_ops(vec![mixed_glyph(colors(2, 0, 3), true)]);
+    assert!(needs_scene(&ops, None));
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &palette,
+        None,
+        Some(&scene),
+    );
+    // The foreground pixel still paints; the cell's background shows the scene.
+    assert_eq!(fb.pixel(0, 0), Some(palette[2]));
+    assert_eq!(fb.pixel(2, 0), scene.pixel(2, 0));
+    assert_eq!(fb.pixel(5, 0), scene.pixel(5, 0));
+    assert_eq!(fb.pixel(6, 0), marker.pixel(6, 0), "past the advance width");
 }
