@@ -79,7 +79,7 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
     );
     assert_eq!(
         merged.status, RETAINED_STATUS,
-        "non-volatile status is the save's"
+        "paralysis loaded into the battler is filed back unchanged"
     );
     assert_eq!(merged.mail, RETAINED_MAIL, "the mail slot is the save's");
     assert_eq!(
@@ -127,22 +127,42 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
     );
 }
 
+/// The merge writes the battler's own primary status
+/// (`SetPlayerMonData`'s `MON_DATA_STATUS`,
+/// `pokeemerald/src/battle_controller_player.c:1983-1987`), whatever word the
+/// backing record held: an inflicted condition reaches the save and a cure
+/// clears it. Word values are `STATUS1_*`
+/// (`pokeemerald/include/constants/battle.h:114-121`).
 #[test]
-fn an_in_battle_primary_status_never_overwrites_the_saves_own_status_word() {
+fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
+    const STATUS1_NONE: u32 = 0;
+    const STATUS1_POISON: u32 = 8;
+    const STATUS1_PARALYSIS: u32 = 64;
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();
-    for in_battle_status in [battle::Status1::Paralysed, battle::Status1::Poisoned] {
+    assert_eq!(stored.status, STATUS1_PARALYSIS, "fixture sanity");
+    for (in_battle_status, expected_word) in [
+        (battle::Status1::Poisoned, STATUS1_POISON),
+        (battle::Status1::Paralysed, STATUS1_PARALYSIS),
+        (battle::Status1::Asleep { turns: 3 }, 3),
+        (battle::Status1::Asleep { turns: 0 }, STATUS1_NONE),
+        (battle::Status1::Healthy, STATUS1_NONE),
+    ] {
         let mut loaded =
             LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("the fixture must decode");
+        assert_eq!(loaded.battler().status1(), battle::Status1::Paralysed);
         loaded.battler_mut().set_status1(in_battle_status);
 
         let merged = loaded.merge_and_save(&dex);
 
         assert_eq!(
-            merged.status, RETAINED_STATUS,
-            "{in_battle_status:?} in `battle::BattlePokemon` must not leak into the save's \
-             own non-volatile status word -- neither encoder reads or writes `Status1` \
-             (issue #306 owns wiring that overlay)"
+            merged.status, expected_word,
+            "{in_battle_status:?} must be the merged record's status word"
+        );
+        assert_eq!(
+            merged.box_data.substructures().map(|s| s.growth),
+            stored.box_data.substructures().map(|s| s.growth),
+            "the status write leaves the secure region's growth bytes alone"
         );
     }
 }

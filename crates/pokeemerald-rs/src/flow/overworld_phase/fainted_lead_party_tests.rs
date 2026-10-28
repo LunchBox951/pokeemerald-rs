@@ -275,10 +275,6 @@ fn a_zero_stored_count_still_resumes_with_no_lead() {
          healthy, decodable record"
     );
     assert_eq!(
-        phase.party_lead_slot, 0,
-        "the no-lead default slot is left unchanged"
-    );
-    assert_eq!(
         phase.save1.player_party_count, 0,
         "a zero stored count must not be resurrected into a nonzero one"
     );
@@ -325,10 +321,13 @@ fn a_white_out_with_a_zero_stored_count_skips_reselecting_the_lead() {
     // ineligible even after the unconditional zero-count heal below
     // (`merge_into_save_pokemon` retains the egg bit), so if the reselect
     // ran despite the zero count, it would move on to slot 1 instead.
-    phase.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter()));
     phase.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
-    phase.set_fresh_lead_for_test(fainted_starter());
+    phase.set_backed_lead_for_test(
+        0,
+        as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter())),
+        fainted_starter(),
+    );
 
     phase.white_out();
 
@@ -469,7 +468,7 @@ fn a_white_out_heals_every_occupied_party_member() {
 /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]
 /// since both share
 /// [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`]
-/// rather than each healing only [`super::OverworldPhase::party_lead`].
+/// rather than each healing only the loaded lead.
 #[test]
 fn the_first_battle_conclusion_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
@@ -502,8 +501,7 @@ fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party
     let mut stored = crate::party::to_save_pokemon(&Dex::new(), &lead);
     stored.status = STORED_STATUS;
     phase.save1.player_party_count = 1;
-    phase.save1.player_party[0] = stored;
-    phase.set_fresh_lead_for_test(lead);
+    phase.set_backed_lead_for_test(0, stored, lead);
     assert_ne!(
         phase.save1.player_party[0].status, 0,
         "setup: the saved record is statused"
@@ -547,7 +545,11 @@ fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
         seed.save1,
         seed.save2,
     );
-    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 is the battle lead");
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(1),
+        "setup: slot 1 is the battle lead"
+    );
 
     // A winning coin flip where neither a missing flip nor a plain draw yields Hardy.
     let mut probe = phase.rng.clone();

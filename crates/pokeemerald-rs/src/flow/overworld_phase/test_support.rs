@@ -542,7 +542,7 @@ pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase 
 }
 
 /// Lead construction and inspection for tests, so a test never names the
-/// `party_lead` triad directly (see [`super::lead_owner`]).
+/// `LoadedLead` directly (see [`super::lead_owner`]).
 impl OverworldPhase {
     /// Installs `battler` as an unbacked lead (slot 0, no hidden HP).
     pub(in crate::flow) fn set_fresh_lead_for_test(&mut self, battler: battle::BattlePokemon) {
@@ -559,21 +559,24 @@ impl OverworldPhase {
         battler: battle::BattlePokemon,
     ) {
         self.save1.player_party[slot] = record;
-        self.party_lead_slot = slot;
-        self.lead_hp_hidden_by_load =
-            crate::party::hp_hidden_by_load(&battle::Dex::new(), &record, &battler);
-        self.party_lead = Some(battler);
+        self.lead = Some(crate::party::LoadedLead::backed_for_test(
+            &battle::Dex::new(),
+            slot,
+            battler,
+            record,
+        ));
         self.undecodable_lead_retained = false;
-        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
     }
 
     /// Leaves the phase without a lead; saved bytes are not erased.
     pub(in crate::flow) fn clear_lead_for_test(&mut self) {
-        self.party_lead = None;
-        self.party_lead_slot = 0;
-        self.lead_hp_hidden_by_load = 0;
+        self.lead = None;
         self.undecodable_lead_retained = false;
-        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
+    }
+
+    /// The saved slot backing the lead, if one is loaded.
+    pub(in crate::flow) fn lead_slot_for_test(&self) -> Option<usize> {
+        self.lead.as_ref().map(crate::party::LoadedLead::slot)
     }
 
     pub(in crate::flow) fn lead_for_test(&self) -> Option<&battle::BattlePokemon> {

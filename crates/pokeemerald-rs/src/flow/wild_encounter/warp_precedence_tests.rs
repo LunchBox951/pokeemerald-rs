@@ -95,7 +95,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     // Granite Cave's table fails today's executability screen (its Zubat
     // knows Leech Life), which would freeze the very bookkeeping this test
     // pins. Force the table on: this test is about the warp-vs-roll

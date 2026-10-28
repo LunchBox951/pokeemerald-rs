@@ -157,24 +157,24 @@ pub fn require_opening_scene(pack: &PackSource) -> Result<(), GenRomProfileError
 }
 
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
-/// three palettes, and its tilemap are present, and with [`GenRomProfileError::StructMismatch`]
-/// for a pack `battle-interface/` entry outside the fixed inventory, which the locator, reading
-/// only the inventory, would otherwise silently leave out of the profile. The health-box
-/// elements, battle bar, singles health-box frames, their palettes, and the enemy shadow the
-/// checkout extracts beside them are left unclaimed: no ROM root imports them until #2178.
+/// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
+/// the enemy shadow, and the two ball palettes are present, and with
+/// [`GenRomProfileError::StructMismatch`] for a pack `battle-interface/` entry outside the fixed
+/// inventory, which the locator, reading only the inventory, would otherwise silently leave out
+/// of the profile. The same holds for every health-box record the checkout extracts there.
 pub fn require_battle_interface(pack: &PackSource) -> Result<(), GenRomProfileError> {
-    let expected = battle_interface_ids();
+    let expected: Vec<String> = battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+        .collect();
     expected
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))?;
-    let unclaimed: Vec<String> = healthbox_element_ids()
-        .into_iter()
-        .chain(healthbox_frame_ids())
-        .collect();
     if let Some(surplus) = pack
         .ids_with_prefix("battle-interface/")
         .into_iter()
-        .find(|id| !expected.contains(id) && !unclaimed.contains(id))
+        .find(|id| !expected.contains(id))
     {
         return Err(GenRomProfileError::StructMismatch {
             id: surplus,
