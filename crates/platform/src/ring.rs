@@ -162,7 +162,7 @@ impl Producer {
 
     /// Samples ever accepted by [`Self::push`], wrapping on overflow.
     ///
-    /// A mark taken here splits the queue: [`Consumer::discard_pushed_before`]
+    /// A mark taken here splits the queue: [`HeldQueue::discard_pushed_before`]
     /// keeps only what was pushed after it. Used by the audio transport to
     /// record where a `stop` landed.
     ///
@@ -335,41 +335,19 @@ impl Consumer {
         }
     }
 
-    /// Drop every queued sample without reading it or counting an underrun,
-    /// so playback resumes from whatever is pushed next.
+    /// Hold off every [`Producer::push`] until the returned guard drops, so
+    /// a discard decided while it is held cannot drop a sample pushed after
+    /// that decision: such a push waits for the guard.
     ///
     /// Takes the producer lock, so it belongs on the thread that attaches a
     /// consumer to a device stream, never in the device callback itself.
-    pub(crate) fn discard_queued(&mut self) {
+    pub(crate) fn hold_pushes(&mut self) -> HeldQueue<'_> {
         let head = lock_head(&self.shared.head);
-        self.tail = *head;
-        self.shared.occupied.store(0, Ordering::Release);
-    }
-
-    /// Drop the queued samples pushed before [`Producer::pushed`] returned
-    /// `mark`, keeping those pushed since, without counting an underrun.
-    ///
-    /// Queued samples are unread and in push order, so the newest
-    /// `pushed - mark` of them are the ones pushed after the mark. Takes the
-    /// producer lock, like [`Self::discard_queued`].
-    pub(crate) fn discard_pushed_before(&mut self, mark: u64) {
-        let _head = lock_head(&self.shared.head);
-        let since = self
-            .shared
-            .pushed
-            .load(Ordering::Relaxed)
-            .wrapping_sub(mark);
-        let since = usize::try_from(since).unwrap_or(usize::MAX);
-        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
-        let queued = self.shared.occupied.load(Ordering::Acquire);
-        let stale = queued - queued.min(since);
-        if stale == 0 {
-            return;
+        HeldQueue {
+            head,
+            tail: &mut self.tail,
+            shared: &self.shared,
         }
-        self.tail = (self.tail + stale) % self.shared.capacity;
-        // Release: publishes the freed slots to the producer's `Acquire`
-        // load of `occupied`.
-        self.shared.occupied.fetch_sub(stale, Ordering::Release);
     }
 
     /// Drop whatever is queued when this consumer is next read, before that
@@ -441,6 +419,45 @@ impl Consumer {
 impl Drop for Consumer {
     fn drop(&mut self) {
         self.shared.consumer_alive.store(false, Ordering::Release);
+    }
+}
+
+/// A [`Consumer`] whose producer is held off; see [`Consumer::hold_pushes`].
+pub(crate) struct HeldQueue<'a> {
+    head: std::sync::MutexGuard<'a, usize>,
+    tail: &'a mut usize,
+    shared: &'a Shared,
+}
+
+impl HeldQueue<'_> {
+    /// Drop every queued sample, without counting an underrun.
+    pub(crate) fn discard_all(&mut self) {
+        *self.tail = *self.head;
+        self.shared.occupied.store(0, Ordering::Release);
+    }
+
+    /// Drop the queued samples pushed before [`Producer::pushed`] returned
+    /// `mark`, keeping those pushed since, without counting an underrun.
+    ///
+    /// Queued samples are unread and in push order, so the newest
+    /// `pushed - mark` of them are the ones pushed after the mark.
+    pub(crate) fn discard_pushed_before(&mut self, mark: u64) {
+        let since = self
+            .shared
+            .pushed
+            .load(Ordering::Relaxed)
+            .wrapping_sub(mark);
+        let since = usize::try_from(since).unwrap_or(usize::MAX);
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        let stale = queued - queued.min(since);
+        if stale == 0 {
+            return;
+        }
+        *self.tail = (*self.tail + stale) % self.shared.capacity;
+        // Release: publishes the freed slots to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(stale, Ordering::Release);
     }
 }
 

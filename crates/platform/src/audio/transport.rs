@@ -468,17 +468,23 @@ impl<H: OutputHost> Transport<H> {
         if self.started_while_detached() {
             self.stale_queue = true;
         }
+        // Intent is read with pushes held off, so a `stop` that lands after
+        // the read is followed by no push until the discard below is done:
+        // what queues after it survives as a stopped queue, and the check
+        // after the build sees the changed intent.
+        let mut held = consumer.hold_pushes();
         let playing = self.shared.running.load(Ordering::Acquire);
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             if playing {
-                consumer.discard_queued();
+                held.discard_all();
             } else {
                 // Stopped since playback was meant to advance: only what
                 // queued before the stop is history; the rest is a stopped
                 // queue, kept for the next start.
-                consumer.discard_pushed_before(self.shared.stopped_at.load(Ordering::Relaxed));
+                held.discard_pushed_before(self.shared.stopped_at.load(Ordering::Relaxed));
             }
         }
+        drop(held);
         // A started producer keeps pushing while the build below blocks,
         // and the consumer is the new stream's from then on, so what queues
         // meanwhile is dropped at its first callback. A stopped attach keeps

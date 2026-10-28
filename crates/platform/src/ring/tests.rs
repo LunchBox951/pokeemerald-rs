@@ -60,7 +60,7 @@ fn a_discard_before_a_mark_keeps_what_was_pushed_after_it() {
     assert_eq!(mark, 8);
     assert_eq!(producer.push(&[0.5; 2]), 2);
 
-    consumer.discard_pushed_before(mark);
+    consumer.hold_pushes().discard_pushed_before(mark);
     assert_eq!(consumer.available(), 2);
     let mut out = [0.0; 3];
     consumer.fill(&mut out);
@@ -69,15 +69,17 @@ fn a_discard_before_a_mark_keeps_what_was_pushed_after_it() {
 
     // A mark at the current count drops everything queued.
     assert_eq!(producer.push(&[0.5; 2]), 2);
-    consumer.discard_pushed_before(producer.pushed());
+    consumer
+        .hold_pushes()
+        .discard_pushed_before(producer.pushed());
     assert_eq!(consumer.available(), 0);
 }
 
 #[test]
-fn discard_queued_drops_samples_without_counting_underruns() {
+fn discard_all_drops_samples_without_counting_underruns() {
     let (producer, mut consumer) = ring_buffer(4);
     assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
-    consumer.discard_queued();
+    consumer.hold_pushes().discard_all();
     assert_eq!(consumer.available(), 0);
     assert_eq!(producer.underruns(), 0);
     assert_eq!(producer.available_space(), 4);
@@ -370,4 +372,49 @@ fn a_reclaimed_consumer_does_not_inherit_a_pending_discard() {
     let mut out = [0.0; 2];
     consumer.fill(&mut out);
     assert_eq!(out, [0.5; 2]);
+}
+
+#[test]
+fn a_push_waits_while_the_queue_is_held_so_a_discard_decided_then_spares_it() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    let pushed = Arc::new(AtomicBool::new(false));
+    let mut held = consumer.hold_pushes();
+    let racer = {
+        let (producer, pushed) = (producer.clone(), Arc::clone(&pushed));
+        std::thread::spawn(move || {
+            assert_eq!(producer.push(&[0.5; 4]), 4);
+            pushed.store(true, Ordering::Release);
+        })
+    };
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        !pushed.load(Ordering::Acquire),
+        "a push cannot land while the queue is held"
+    );
+    held.discard_all();
+    drop(held);
+    racer.join().unwrap();
+
+    assert_eq!(consumer.available(), 4, "the push after the hold survives");
+    let mut out = [0.0; 4];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.5; 4]);
+}
+
+#[test]
+fn a_held_queue_discards_before_a_mark() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 3]), 3);
+    let mark = producer.pushed();
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    consumer.hold_pushes().discard_pushed_before(mark);
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.5; 2]);
+    assert_eq!(consumer.available(), 0);
 }
