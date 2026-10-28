@@ -302,32 +302,9 @@ fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
     writer.push(pack_format::raw_entry(id, payload));
 }
 
-fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                walk(&path, out)?;
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                out.push(path);
-            }
-        }
-        Ok(())
-    }
-    let mut out = Vec::new();
-    walk(dir, &mut out).map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
-    out.sort();
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError};
+    use super::{extract_to, jasc_pal, upstream_present, ExtractError};
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -422,11 +399,5 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
-    }
-
-    #[test]
-    fn collect_pngs_sorted_rejects_missing_dir() {
-        let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
-        assert!(matches!(err, super::ExtractError::ReadFailed(..)));
     }
 }
