@@ -301,15 +301,20 @@ fn pitched_wav() -> Vec<u8> {
     )
 }
 
-struct Fixture {
-    root: PathBuf,
-}
+mod fixture;
+
+use fixture::Fixture;
 
 impl Fixture {
     /// 388 cries whose definitions appear in reverse table order; position 5 is a `Cry_HoOh`
     /// style symbol whose file name differs from the lowercased symbol.
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("cry-fixture-{name}-{}", std::process::id()));
+        let fixture = Self::claim(name);
+        Self::populate(&fixture.root);
+        fixture
+    }
+
+    fn populate(root: &std::path::Path) {
         let cries = root.join("sound/direct_sound_samples/cries");
         std::fs::create_dir_all(&cries).unwrap();
         let stems: Vec<String> = (0..CRY_TABLE_LEN).map(Self::stem).collect();
@@ -327,7 +332,6 @@ impl Fixture {
             std::fs::write(cries.join(format!("{}.wav", stems[index])), bytes).unwrap();
         }
         std::fs::write(root.join(CRY_SOURCES_PATH), definitions).unwrap();
-        Self { root }
     }
 
     fn symbol(index: usize) -> String {
@@ -356,12 +360,6 @@ impl Fixture {
         let path = self.root.join("out.pack");
         std::fs::write(&path, self.extract().unwrap()).unwrap();
         AssetPack::load(&path).unwrap()
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
