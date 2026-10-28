@@ -676,12 +676,23 @@ impl Battle {
     /// Upstream's self-target `MOVE_POUND` damage call
     /// (`src/battle_util.c:2157`-`:2166`): 40 power, one variance draw, no
     /// accuracy, critical, STAB, or type stage, and no PP spent.
+    ///
+    /// `selected_move` is the move the battler attempted, upstream's
+    /// `gCurrentMove`. The call passes `MOVE_POUND` as an argument, but
+    /// `CalculateBaseDamage` tests `gBattleMoves[gCurrentMove].effect` for
+    /// `EFFECT_EXPLOSION` and halves the raw Defense before the stage scales
+    /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
+    /// confused Selfdestruct or Explosion user takes the larger self-hit
+    /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
+    /// depleted slot reaches it too).
     pub(super) fn apply_confusion_self_hit(
         &mut self,
         battler_is_player: bool,
+        selected_move: MoveId,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) {
+    ) -> Result<(), BattleError> {
+        let halves_defense = self.dex.move_data(selected_move)?.effect == MoveEffect::EXPLOSION;
         let battler = if battler_is_player {
             &self.player
         } else {
@@ -689,7 +700,12 @@ impl Battle {
         };
         let (raw_attack, attack_stage) = battler.attacking_stat(MoveCategory::Physical);
         let attack_stat = huge_power_attack(battler.ability(), MoveCategory::Physical, raw_attack);
-        let (defense_stat, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let (raw_defense, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let defense_stat = if halves_defense {
+            raw_defense / 2
+        } else {
+            raw_defense
+        };
         let input = DamageInput {
             attacker_level: battler.level(),
             power: u32::from(CONFUSION_SELF_HIT_POWER),
@@ -721,6 +737,7 @@ impl Battle {
             damage: hp_lost,
         });
         self.settle_faint(battler_is_player, events);
+        Ok(())
     }
 
     /// `tryfaintmon` for one side: reports the faint and clears the corpse's
