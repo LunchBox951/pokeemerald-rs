@@ -8,6 +8,8 @@ mod common;
 mod absorbing_abilities;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
+#[path = "turn_engine/confusion_explosion.rs"]
+mod confusion_explosion;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
@@ -44,6 +46,10 @@ mod pressure;
 mod rough_skin_contact;
 #[path = "turn_engine/shed_skin.rs"]
 mod shed_skin;
+#[path = "turn_engine/sleep.rs"]
+mod sleep;
+#[path = "turn_engine/speed_down_hit.rs"]
+mod speed_down_hit;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
 #[path = "turn_engine/static_contact.rs"]

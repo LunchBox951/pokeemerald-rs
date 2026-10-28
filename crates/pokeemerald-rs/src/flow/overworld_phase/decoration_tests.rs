@@ -40,33 +40,14 @@ fn every_decoration_flag_id_is_settable() {
 
 #[test]
 fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
-    // Mirrors `crates/xtask/src/extract/mod.rs` `LAYOUTS` (no `xtask` dependency here);
-    // `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` pins that list.
-    const BUNDLED_LAYOUTS: [&str; 10] = [
-        "LAYOUT_LITTLEROOT_TOWN",
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-        "LAYOUT_ROUTE101",
-        "LAYOUT_OLDALE_TOWN",
-        "LAYOUT_ROUTE103",
-    ];
-
-    let mut bundled_maps: Vec<MapId> = assets::MapHeaderTable::new()
-        .iter()
-        .filter(|header| BUNDLED_LAYOUTS.contains(&header.layout.name()))
-        .map(|header| header.id)
-        .collect();
+    let mut bundled_maps = assets::bundled_overworld::maps_with_bundled_layouts();
     bundled_maps.sort_unstable_by_key(|m| m.0);
     assert_eq!(
         bundled_maps.len(),
-        9,
-        "the ten bundled layouts cover nine maps (the lab's `_WITH_TABLE` \
-         variant is an alternate layout for a map already listed, not a map \
-         of its own)"
+        76,
+        "the sixteen bundled layouts cover seventy-six maps (the lab's \
+         `_WITH_TABLE` variant is an alternate layout for a map already \
+         listed, not a map of its own)"
     );
 
     let table = assets::MapEventsTable::new();
@@ -139,9 +120,8 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
          decoration there"
     );
 
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let scene = crate::overworld::test_support::synthetic_scene(10, 10);
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let scene = crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(BEDROOM);
+    let runtime = scene.runtime();
     let mut player = PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North);
     assert!(
         matches!(
@@ -211,7 +191,7 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
     assert_eq!(
         phase.player.position(),
         PLACEHOLDER_TILE,
-        "load_default must leave an empty decoration slot's tile walkable in the real room"
+        "OverworldPhase::load must leave an empty decoration slot's tile walkable in the real room"
     );
 }
 

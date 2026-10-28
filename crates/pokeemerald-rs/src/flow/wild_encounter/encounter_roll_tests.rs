@@ -20,7 +20,9 @@ use super::test_support::{
     held, player_mon, route_101_phase, walk_east_and_land, ENCOUNTER_SEED, FRAMES_PER_STEP,
     ROUTE_101, TEST_PLAYER_TRAINER_ID, WURMPLE,
 };
+use crate::flow::lead_screen::loaded_holding;
 use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
+use assets::items::ItemId;
 use assets::{MoveId, SpeciesId};
 use battle::{BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, MAX_IV};
 use engine::overworld::metatile_behavior::MB_TALL_GRASS;
@@ -62,7 +64,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     // A level-50 Treecko (species 277) knowing Pound (move 1) -- far faster than a level-2
     // Wurmple, so the driver's run attempt succeeds on the first turn.
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Four steps on ordinary ground: the immunity window, RNG-silent.
     for step in 1..=4 {
@@ -147,7 +149,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
         "exactly one held-item draw happened, and no more -- pinning the shared stream up to turn one"
     );
     // The lead mon moved into the battle, so it can't be fought with twice.
-    assert!(phase.party_lead.is_none());
+    assert!(phase.lead_for_test().is_none());
     // A fired encounter restarts the immunity window (`:679`).
     assert_eq!(phase.wild.immunity_steps(), 0);
 
@@ -166,8 +168,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     }
     // It ended with the player's mon written back, damage and all.
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the battle writes the lead mon back on the frame it ends");
     assert_eq!(lead.species(), SpeciesId(277));
     // The driver runs, and a level-50 mon outruns a level-2 one outright.
@@ -235,7 +236,7 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 
 /// With no party mon there is nothing to fight with, so the encounter is
 /// logged and dropped. Production play never reaches this state --
-/// `load_default` assigns `new_game::provisional_starter` (issue #207
+/// `OverworldPhase::load` assigns `new_game::provisional_starter` (issue #207
 /// review) -- so this pins the defensive arm a bare test phase exercises.
 /// The roll still happened, so the player keeps walking rather than being
 /// wedged.
@@ -243,7 +244,10 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 fn an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    assert!(phase.party_lead.is_none(), "a bare test phase has no party");
+    assert!(
+        phase.lead_for_test().is_none(),
+        "a bare test phase has no party"
+    );
 
     walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
@@ -269,7 +273,7 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
     // Grass parked well off the walking lane.
     let mut phase = route_101_phase(PlayerState::new((1, 5), 3, Direction::East), (1, 1));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     for _ in 0..(8 * FRAMES_PER_STEP) {
         phase.step(held(Buttons::RIGHT));
@@ -324,7 +328,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
         !phase.wild_table_fightable(),
         "Route 102 must fail the screen"
@@ -396,18 +400,12 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let header = assets::MapHeaderTable::new()
-        .header(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-events table");
 
     // Both chosen tiles really are walkable tall grass in the extracted
     // data -- asserted, not assumed, so a re-extraction that moved the grass
     // fails here rather than silently walking on dirt.
     let elevation = {
-        let runtime = scene.runtime(ROUTE_101, header, events);
+        let runtime = scene.runtime();
         for (x, y) in REAL_GRASS {
             assert_eq!(
                 runtime.metatile_behavior(x, y),
@@ -430,7 +428,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         crate::pack_source::PackSource::Repo,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Pace back and forth between the two grass tiles. Route 101's land rate
     // is 320/2880 (~11%) per eligible step, so 100 steps missing every time
@@ -561,7 +559,7 @@ fn no_fightable_land_table_can_roll_a_trapping_opponent() {
 fn a_run_onto_an_encounter_returns_from_battle_standing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     phase.save1.event_data.flag_set(0x8C0).unwrap();
     for _ in 1..=4 {
         walk_east_and_land(&mut phase, 1);
@@ -609,7 +607,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
             assets::AbilityId::TRUANT
         )),
     );
-    phase.party_lead = Some(slakoth);
+    phase.set_fresh_lead_for_test(slakoth);
     let immunity_before = phase.wild.immunity_steps();
     let behavior_before = phase.wild.prev_metatile_behavior();
 
@@ -623,7 +621,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     );
     assert_eq!(phase.wild.immunity_steps(), immunity_before);
     assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
-    assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert!(phase.lead_for_test().is_some(), "the lead stays home");
     assert_eq!(
         phase.wild_lead_refusal,
         Some(BattleError::UnportedAbilityInteraction(
@@ -632,7 +630,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
         "the refusal is reported, and remembered so it reports once"
     );
 
-    phase.party_lead = Some(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
+    phase.set_fresh_lead_for_test(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
     assert!(phase.wild_lead_admissible());
     assert_eq!(
         phase.wild_lead_refusal, None,
@@ -656,4 +654,159 @@ fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
         )),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}
+
+/// A loaded lead holding Oran Berry (`HoldEffect` it does not model) disables the roll
+/// like a Truant lead: refused and reported, never silently played without the effect.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    let treecko = player_mon(277, 50, vec![MoveId::POUND]);
+    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    phase.set_fresh_lead_for_test(lead.clone());
+    let immunity_before = phase.wild.immunity_steps();
+
+    walk_east_and_land(&mut phase, 5);
+
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(!phase.is_wild_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(ENCOUNTER_SEED).state(),
+        "a refused item must not draw at all"
+    );
+    assert_eq!(phase.wild.immunity_steps(), immunity_before);
+    assert_eq!(
+        phase.lead_for_test(),
+        Some(&lead),
+        "the lead keeps its item at home"
+    );
+    assert_eq!(
+        phase.wild_lead_refusal,
+        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+    );
+
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::NUGGET));
+    assert!(phase.wild_lead_admissible(), "Nugget has no effect to drop");
+    assert_eq!(phase.wild_lead_refusal, None);
+}
+
+#[test]
+fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    let lead = loaded_holding(
+        &player_mon(277, 50, vec![MoveId::POUND]),
+        ItemId::ORAN_BERRY,
+    );
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    assert_eq!(
+        start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+    );
+    assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}
+
+/// Mew with personality 0: ability slot 0 is Synchronize and the nature is Hardy.
+fn synchronize_lead() -> BattlePokemon {
+    let lead = player_mon(151, 50, vec![MoveId::POUND]);
+    assert_eq!(lead.ability(), assets::AbilityId::SYNCHRONIZE);
+    assert_eq!(lead.personality() % 25, 0);
+    lead
+}
+
+/// The first personality draw (two `u16`s, low half first) whose `% 25` is `nature`.
+fn matching_personality(probe: &mut Rng, nature: u32) -> u32 {
+    loop {
+        let personality = probe.next_u32();
+        if personality % 25 == nature {
+            return personality;
+        }
+    }
+}
+
+#[test]
+fn a_synchronize_lead_passes_its_nature_on_a_winning_coin_flip() {
+    // Upstream `PickWildMonNature` (`wild_encounter.c:367-372`): a Synchronize lead whose
+    // `Random() % 2 == 0` hands the wild mon its own nature, with no further nature draw.
+    let seed = (0u32..10_000)
+        .find(|&s| {
+            let mut probe = Rng::new(s);
+            let coin = probe.next_u16();
+            let random_nature = probe.next_u16();
+            coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
+        })
+        .unwrap();
+    let mut rng = Rng::new(seed);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(
+        synchronize_lead(),
+        encounter,
+        TEST_PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Synchronize lead is admitted");
+    let mut probe = Rng::new(seed);
+    let _coin = probe.next_u16();
+    let expected = matching_personality(&mut probe, 0);
+    assert_eq!(battle.enemy().personality(), expected, "seed {seed}");
+    assert_eq!(battle.enemy().nature(), synchronize_lead().nature());
+}
+
+#[test]
+fn a_synchronize_lead_spends_a_second_draw_on_a_losing_coin_flip() {
+    // A losing flip falls through to the plain `Random() % NUM_NATURES`, one draw later.
+    let seed = (0u32..10_000)
+        .find(|&s| {
+            let mut probe = Rng::new(s);
+            let coin = probe.next_u16();
+            let random_nature = probe.next_u16();
+            !coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
+        })
+        .unwrap();
+    let mut rng = Rng::new(seed);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(
+        synchronize_lead(),
+        encounter,
+        TEST_PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Synchronize lead is admitted");
+    let mut probe = Rng::new(seed);
+    let _coin = probe.next_u16();
+    let nature = u32::from(probe.next_u16()) % 25;
+    let expected = matching_personality(&mut probe, nature);
+    assert_eq!(battle.enemy().personality(), expected, "seed {seed}");
+    assert_ne!(battle.enemy().nature(), synchronize_lead().nature());
+}
+
+#[test]
+fn a_lead_without_synchronize_spends_no_coin_draw() {
+    let seed = 7;
+    let mut rng = Rng::new(seed);
+    let lead = player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]);
+    assert_ne!(lead.ability(), assets::AbilityId::SYNCHRONIZE);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).unwrap();
+    let mut probe = Rng::new(seed);
+    let nature = u32::from(probe.next_u16()) % 25;
+    let expected = matching_personality(&mut probe, nature);
+    assert_eq!(battle.enemy().personality(), expected);
 }

@@ -211,7 +211,7 @@ impl Scratch {
         }
         #[cfg(windows)]
         {
-            use crate::windows_file_identity::WindowsFileIdentity;
+            use win_fs::WindowsFileIdentity;
             let fresh = open_hold(path)?;
             if WindowsFileIdentity::of(&fresh)? != WindowsFileIdentity::of(hold)? {
                 return Err(not_the_held_directory(path));

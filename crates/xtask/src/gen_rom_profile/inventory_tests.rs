@@ -7,16 +7,17 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
-    sprites, text_window, tilesets, title,
+    bag, battle_anims, battle_interface, battle_messages, battlers, fonts, inventory, layouts,
+    locate_profile, opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
-    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
+    healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
-/// A placeholder for every fixed root; presence is all the preflight reads.
+/// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
 fn complete_inventory() -> Vec<PackEntry> {
     TILESETS
         .iter()
@@ -28,7 +29,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(text_window_ids())
         .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
         .chain(sprite_sheet_ids())
-        // Palettes stay so a sheet deletion is the only thing missing.
+        // Sprite palettes stay, so deleting a sheet removes only that sheet.
         .chain(sprite_palette_ids())
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
@@ -36,11 +37,16 @@ fn complete_inventory() -> Vec<PackEntry> {
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
+        .chain(starter_chooser_ids())
+        .chain(opening_scene_ids())
+        .chain(battle_interface_ids())
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
 
-/// Refuse `entries` through the aggregate and the domain locator, expecting `missing`.
+/// Assert `entries` are refused with `MissingPackEntry(missing)` by both `locate_profile` and the `domain` locator, and neither writes a report line.
 fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &str) {
     let rom = RomFixture::new().emerald_header().finish();
     with_context(label, &rom, entries, |ctx| {
@@ -66,6 +72,12 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             text_window::locate(ctx, &mut report).map(|_| ())
         } else if domain == "bag" {
             bag::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "starter_chooser" {
+            starter_chooser::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "opening_scene" {
+            opening_scene::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_interface" {
+            battle_interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
@@ -92,15 +104,15 @@ fn without(id: &str) -> Vec<PackEntry> {
 
 #[test]
 fn the_fixed_inventory_holds_the_committed_profile_counts() {
-    assert_eq!(TILESETS.len(), 5);
+    assert_eq!(TILESETS.len(), 9);
     assert_eq!(FONTS.len(), 5);
     let ids = title_ids();
     let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
     assert_eq!(count("title/image/"), 6);
     assert_eq!(count("title/raw/"), 3);
     assert_eq!(count("title/palette/"), 5);
-    assert_eq!(LAYOUTS.len(), 10);
-    assert_eq!(layout_ids().len(), 20);
+    assert_eq!(LAYOUTS.len(), 16);
+    assert_eq!(layout_ids().len(), 32);
     let windows = text_window_ids();
     let count = |prefix: &str| windows.iter().filter(|id| id.starts_with(prefix)).count();
     assert_eq!(count("text-window/image/"), TEXT_WINDOW_IMAGE_STEMS.len());
@@ -114,7 +126,14 @@ fn the_fixed_inventory_holds_the_committed_profile_counts() {
 
 #[test]
 fn the_fixed_inventory_ids_are_unique() {
-    for ids in [layout_ids(), text_window_ids(), title_ids()] {
+    for ids in [
+        layout_ids(),
+        text_window_ids(),
+        title_ids(),
+        starter_chooser_ids(),
+        opening_scene_ids(),
+        battle_interface_ids(),
+    ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");
     }
@@ -280,6 +299,152 @@ fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
 }
 
 #[test]
+fn a_pack_missing_a_starter_chooser_entry_is_refused() {
+    for id in starter_chooser_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "starter_chooser");
+    }
+}
+
+#[test]
+fn a_surplus_starter_chooser_entry_is_refused_by_id() {
+    let surplus = "starter-chooser/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-starter-chooser", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = starter_chooser::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_opening_scene_inventory_is_five_sheets_eight_palettes_and_three_tilemaps() {
+    let ids = opening_scene_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 16);
+    assert_eq!(count("opening-scene/image/"), 5);
+    assert_eq!(count("opening-scene/palette/"), 8);
+    assert_eq!(count("opening-scene/raw/"), 3);
+}
+
+#[test]
+fn a_pack_missing_an_opening_scene_entry_is_refused() {
+    for id in opening_scene_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "opening_scene");
+    }
+}
+
+#[test]
+fn a_surplus_opening_scene_entry_is_refused_by_id() {
+    let surplus = "opening-scene/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-opening-scene", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = opening_scene::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn a_pack_missing_a_battle_interface_entry_is_refused() {
+    for id in battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+    {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "battle_interface");
+    }
+}
+
+#[test]
+fn a_surplus_battle_interface_entry_is_refused_by_id() {
+    let surplus = "battle-interface/raw/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-battle-interface", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = battle_interface::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_health_box_element_records_are_part_of_the_required_inventory() {
+    let elements = healthbox_element_ids();
+    assert_eq!(elements.len(), 14, "{elements:?}");
+    // Thirteen table rows in table order, then the battle bar.
+    assert_eq!(&elements[..13], healthbox_table_ids());
+    assert_eq!(elements[13], healthbox_battle_bar_id());
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox ids.
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("health-box-required", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
+    });
+}
+
+#[test]
+fn the_health_box_frame_records_are_part_of_the_required_inventory() {
+    let frames = healthbox_frame_ids();
+    assert_eq!(
+        frames,
+        [
+            "battle-interface/image/healthbox_singles_player",
+            "battle-interface/image/healthbox_singles_opponent",
+            "battle-interface/image/enemy_mon_shadow",
+            "battle-interface/palette/ball_status_bar",
+            "battle-interface/palette/ball_display",
+        ]
+    );
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox and element ids.
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("health-box-frames", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
+    });
+}
+
+#[test]
 fn a_surplus_bag_entry_is_refused_by_id() {
     let surplus = "bag/item-icon/image/not_in_the_inventory";
     let mut entries = complete_inventory();
@@ -330,7 +495,7 @@ fn the_animation_inventory_matches_the_committed_profile() {
         .flat_map(|t| t.anims.iter())
         .flat_map(|a| a.frames.iter().map(|frame| frame.id.to_owned()))
         .collect();
-    // No dedup: a duplicated profile id must surface as a mismatch.
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
     let mut actual = tileset_animation_ids();
     actual.sort();
@@ -395,12 +560,12 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
         .iter()
         .map(|sheet| sheet.id.to_owned())
         .collect();
-    // No dedup: a duplicated profile id must surface as a mismatch.
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
     let mut actual = sprite_sheet_ids();
     actual.sort();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 133);
+    assert_eq!(actual.len(), 146);
 }
 
 #[test]
@@ -420,12 +585,23 @@ fn a_pack_missing_any_one_sprite_palette_is_refused() {
 }
 
 #[test]
-fn the_sprite_palette_inventory_holds_all_six_fixed_banks() {
+fn the_sprite_palette_inventory_holds_all_ten_fixed_banks() {
     assert_eq!(
         sprite_palette_ids(),
-        ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"]
-            .map(|name| format!("sprite/palette/{name}"))
-            .to_vec()
+        [
+            "brendan",
+            "may",
+            "npc_1",
+            "npc_2",
+            "npc_3",
+            "npc_4",
+            "enemy_zigzagoon",
+            "moving_box",
+            "truck",
+            "vigoroth",
+        ]
+        .map(|name| format!("sprite/palette/{name}"))
+        .to_vec()
     );
 }
 

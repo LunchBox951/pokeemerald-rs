@@ -47,11 +47,15 @@ rustix = { version = "1.1", default-features = false, features = [
 ], optional = true }
 
 # `record-snapshot` and the extract pack publish compare a fresh open of a path
-# with the handle they hold on Windows through the same identity query
-# `rom-import` uses. Unconditional on Windows because extraction is not behind
-# `scenes`. Same crate, same pinned version and feature boundary; recorded in
-# `README.md`.
+# with the handle they hold on Windows through `win-fs`'s identity query.
+# Unconditional on Windows because extraction is not behind `scenes`.
+# In-workspace, not a new external dependency; `win-fs` owns the shared
+# `windows-sys` use (dependency ledger, `README.md`). The scratch hold's
+# handle-based cleanup (`scenario/session/hold.rs`) keeps its own edge for what
+# is not shared -- listing a directory by file ID and a volume query -- at the
+# same pinned version and feature boundary, as `engine` does for `ReOpenFile`.
 [target.'cfg(windows)'.dependencies]
+win-fs = { path = "../win-fs" }
 windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
