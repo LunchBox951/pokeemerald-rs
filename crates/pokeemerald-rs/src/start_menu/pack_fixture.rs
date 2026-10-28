@@ -68,7 +68,7 @@ pub(super) fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
     const MESSAGE_BOX_HEIGHT: u32 = 16;
     const FONT_BIT_DEPTH: u8 = 2;
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/1",
             FRAME_SIDE,

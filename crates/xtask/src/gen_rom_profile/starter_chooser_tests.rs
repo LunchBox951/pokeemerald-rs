@@ -7,8 +7,10 @@ use rom_import::Encoding;
 use super::locate;
 use crate::extract::scope::starter_chooser_ids;
 use crate::gen_rom_profile::error::GenRomProfileError;
-use crate::gen_rom_profile::plan::Resolution;
-use crate::gen_rom_profile::tests::{distinctive_tiles, lz77_literals, with_context};
+use crate::gen_rom_profile::plan::{Resolution, SymbolExpectation};
+use crate::gen_rom_profile::tests::{
+    cross_check_ld_map, distinctive_tiles, lz77_literals, with_context,
+};
 
 fn palette_bytes(seed: u16, colors: u16) -> (Vec<u16>, Vec<u8>) {
     let colors: Vec<u16> = (0..colors).map(|n| n * 0x0421 + seed).collect();
@@ -253,4 +255,69 @@ fn a_wrong_kind_chooser_entry_is_refused() {
             "{err}"
         );
     });
+}
+
+/// The chooser roots upstream declares `static`, with their symbols
+/// (`starter_choose.c:55-56,61`).
+const STATIC_ROOTS: [(&str, &str); 3] = [
+    ("starter-chooser/image/starter_circle", "sStarterCircle_Gfx"),
+    (
+        "starter-chooser/palette/pokeball_selection",
+        "sPokeballSelection_Pal",
+    ),
+    (
+        "starter-chooser/palette/starter_circle",
+        "sStarterCircle_Pal",
+    ),
+];
+
+/// Every other chooser root is global (`starter_choose.c:54,57-60`).
+const GLOBAL_ROOTS: [&str; 5] = [
+    "starter-chooser/image/tiles",
+    "starter-chooser/image/pokeball_selection",
+    "starter-chooser/palette/tiles",
+    "starter-chooser/raw/birch_bag",
+    "starter-chooser/raw/birch_grass",
+];
+
+#[test]
+fn static_chooser_roots_survive_a_real_ld_map() {
+    let (rom, entries) = fixture();
+    with_context("chooser-static-map", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        locate(ctx, &mut report).expect("located");
+        assert_eq!(report.len(), 8);
+        for (id, symbol) in STATIC_ROOTS {
+            let line = report.iter().find(|line| line.id == id).expect(id);
+            assert_eq!(
+                line.symbol,
+                SymbolExpectation::Local(symbol.to_owned()),
+                "{id}"
+            );
+        }
+        for id in GLOBAL_ROOTS {
+            let line = report.iter().find(|line| line.id == id).expect(id);
+            assert_eq!(line.symbol, SymbolExpectation::Unnamed, "{id}");
+        }
+        let check = cross_check_ld_map("chooser-static-map", &mut report, &[])
+            .expect("a correct ROM and an ordinary ld map must pass");
+        assert_eq!((check.local, check.confirmed), (3, 5));
+    });
+}
+
+#[test]
+fn a_global_chooser_root_still_needs_its_map_symbol() {
+    for id in GLOBAL_ROOTS {
+        let (rom, entries) = fixture();
+        with_context("chooser-global-map", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            locate(ctx, &mut report).expect("located");
+            let err = cross_check_ld_map("chooser-global-map", &mut report, &[id])
+                .expect_err("a global root missing from the map is a mismatch");
+            assert!(
+                matches!(&err, GenRomProfileError::MapMismatch { id: bad, .. } if bad == id),
+                "{id}: {err}"
+            );
+        });
+    }
 }

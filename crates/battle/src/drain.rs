@@ -19,7 +19,7 @@ use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
 /// The move effect handled by draining-move resolution.
-pub const EFFECT_ABSORB: MoveEffect = MoveEffect(3);
+pub const EFFECT_ABSORB: MoveEffect = MoveEffect::ABSORB;
 
 /// Whether `effect` uses the draining-move pipeline.
 #[must_use]
