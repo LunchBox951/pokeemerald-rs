@@ -68,7 +68,7 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
     );
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -106,7 +106,7 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 /// one at that (`false` onto `false`) -- without the asset pack a real
 /// `OverworldPhase::load` call needs.
 ///
-/// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
+/// `copy_party_and_objects_to_save`'s merge arm is gated on the loaded lead
 /// being `Some` and is checked first, so a real lead always overrides a
 /// stale retained slot regardless of the flag's value: a `Some` lead
 /// never reaches the no-lead arm at all. Retention cannot leak into a
@@ -144,7 +144,10 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     // the `Some` lead alone overrides it.
     let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
     let starter = new_game::provisional_starter().with_original_trainer_id(trainer_id);
-    phase.party_lead = Some(starter.clone());
+    phase.set_fresh_lead_for_test(starter.clone());
+    // Installing a lead clears the flag; set it again so the save below runs
+    // with it true, as the comment above states.
+    phase.undecodable_lead_retained = true;
 
     save_from_the_start_menu(&mut phase, &mut slot);
 
@@ -186,7 +189,7 @@ fn a_genuinely_empty_partys_residual_slot_survives_an_ordinary_save() {
     seed.save1.player_party_count = 0;
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,

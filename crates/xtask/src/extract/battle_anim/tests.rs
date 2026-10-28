@@ -107,13 +107,16 @@ fn script(moves_first: &str, extra: &str) -> String {
 }
 
 fn try_build(script: &str) -> Result<BattleAnimationCatalog, Fault> {
-    let bytes = build(&Sources {
+    let built = build(&Sources {
         script,
         macros: MACROS,
         headers: vec![("header.h", HEADER)],
         assembler: vec![("global.inc", ASSEMBLER)],
     })?;
-    Ok(BattleAnimationCatalog::decode(&bytes).expect("the encoder's output decodes"))
+    let decoded =
+        BattleAnimationCatalog::decode(&built.encode()).expect("the encoder's output decodes");
+    assert_eq!(decoded, built, "encoding round-trips the built catalog");
+    Ok(decoded)
 }
 
 fn catalog(script: &str) -> BattleAnimationCatalog {

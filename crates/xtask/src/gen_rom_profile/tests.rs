@@ -59,6 +59,51 @@ pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [Report
     result.expect("a correctly located static table must survive a real GNU ld map");
 }
 
+/// Run a whole domain's report `lines` through [`super::cross_check`]
+/// against a map shaped like GNU ld `-Map` output: a global symbol at every
+/// root a linker map can list, nothing at a root marked
+/// [`SymbolExpectation::Local`], and nothing at a root named in `unlisted`.
+///
+/// Returns the cross-check's result so a caller can assert either that a
+/// correct ROM/map pair passes or that a missing global symbol is refused.
+pub(super) fn cross_check_ld_map(
+    name: &str,
+    lines: &mut [ReportLine],
+    unlisted: &[&str],
+) -> Result<super::MapCheck, GenRomProfileError> {
+    use std::fmt::Write as _;
+
+    let mut map = String::from(".rodata         0x0000000008000000     0x100000\n");
+    for (index, line) in lines.iter().enumerate() {
+        if matches!(
+            line.symbol,
+            SymbolExpectation::Local(_) | SymbolExpectation::Interior
+        ) || unlisted.contains(&line.id.as_str())
+        {
+            continue;
+        }
+        let symbol = match &line.symbol {
+            SymbolExpectation::Exact(name) => name.clone(),
+            SymbolExpectation::Contains(fragments) => fragments.concat(),
+            _ => format!("gRoot{index}"),
+        };
+        writeln!(
+            map,
+            "{}0x{:016x}                {symbol}",
+            " ".repeat(15),
+            line.addr
+        )
+        .expect("write to a String");
+    }
+    let dir = scratch(name);
+    let map_path = dir.join("pokeemerald.map");
+    std::fs::write(&map_path, map).expect("write map");
+    let result = super::cross_check(Some(&map_path), lines);
+    let _ = std::fs::remove_file(&map_path);
+    let _ = std::fs::remove_dir(&dir);
+    result
+}
+
 /// Tile bytes that are distinctive enough to anchor a search.
 pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
     (0..tile_count * 32)
@@ -216,6 +261,58 @@ fn two_ids_sharing_art_take_one_copy_each() {
             "{report:?}"
         );
     });
+}
+
+/// More ids than the ordinary locator hit cap, each sharing one sheet.
+const SHARING_IDS: usize = super::search::MATCH_LIMIT + 1;
+
+/// Locate [`SHARING_IDS`] ids sharing one sheet planted once per id, by
+/// `encoding`, and require each to take its own copy in address order.
+fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
+    let tiles = distinctive_tiles(4);
+    let stored = match encoding {
+        Encoding::Raw => tiles.clone(),
+        Encoding::Lz77 => lz77_literals(&tiles),
+    };
+    let mut fixture = RomFixture::new().emerald_header();
+    let mut entries = Vec::new();
+    let mut queries = Vec::new();
+    for slot in 0..SHARING_IDS {
+        fixture = fixture.write(0x20_0000 + slot * 0x100, &stored);
+        let id = format!("sprite/{slot:02}");
+        entries.push(image_entry_from_tiles(id.clone(), &tiles, 4, 16, 16, None).expect("entry"));
+        queries.push(match encoding {
+            Encoding::Raw => ImageQuery::raw(id),
+            Encoding::Lz77 => ImageQuery::lz77(id),
+        });
+    }
+    let rom = fixture.finish();
+
+    with_context(name, &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plans = locate_images(ctx, &queries, &mut report).expect("every id has a copy");
+        let addrs: Vec<u32> = plans.iter().map(|plan| plan.addr).collect();
+        let expected: Vec<u32> = (0..SHARING_IDS)
+            .map(|slot| 0x0820_0000 + u32::try_from(slot).expect("small") * 0x100)
+            .collect();
+        assert_eq!(addrs, expected);
+        assert!(
+            report
+                .iter()
+                .all(|line| line.resolution == Resolution::ArbitraryAmongIdentical),
+            "{report:?}"
+        );
+    });
+}
+
+#[test]
+fn more_raw_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-raw-over-cap", Encoding::Raw);
+}
+
+#[test]
+fn more_compressed_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-lz77-over-cap", Encoding::Lz77);
 }
 
 #[test]
@@ -1542,4 +1639,118 @@ fn a_missing_track_is_refused() {
     assert_bytecode_refused("audio-track-missing", |rom| {
         rom[0x30_0008..0x30_000C].copy_from_slice(&0x0900_0000u32.to_le_bytes());
     });
+}
+
+/// Upstream `main_menu.c:406` declares `sMainMenuBgPal` `static`, so a GNU
+/// ld map lists nothing at its address.
+#[test]
+fn the_static_main_menu_bg_palette_survives_a_real_ld_map() {
+    let id = "interface/palette/main_menu_bg";
+    let mut lines = [
+        ReportLine::unique(id, 0x0850_0000, 32).with_symbol(super::interface_palette_symbol(id))
+    ];
+    assert_survives_ld_map("main-menu-static-map", 0x0850_0000, &mut lines);
+    assert_eq!(
+        super::interface_palette_symbol(id),
+        SymbolExpectation::Local("sMainMenuBgPal".to_owned())
+    );
+}
+
+/// `main_menu.c:407` makes the text palette `static` as well, but extraction
+/// emits no pack entry for it, so an id outside the one fixed palette keeps
+/// the any-symbol check rather than an unverified `Local` claim.
+#[test]
+fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
+    assert_eq!(
+        super::interface_palette_symbol("interface/palette/other"),
+        SymbolExpectation::Unnamed
+    );
+}
+
+/// Set in the child [`publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(unix)]
+const PUBLISH_UMASK_CHILD: &str = "POKEEMERALD_GEN_ROM_PROFILE_UMASK_CHILD";
+
+/// A publish under a umask that strips the owner bits (`0444`) over a
+/// readable module leaves a module its owner can still read. The temporary
+/// file is created `0o666 & !umask`, which is `0o222`, and the rename carries
+/// that mode onto the published name. The mode bits are asserted because a
+/// root runner reads a `0o222` file regardless.
+#[cfg(unix)]
+#[test]
+fn publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = "gen_rom_profile::tests::\
+                publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable";
+    if std::env::var_os(PUBLISH_UMASK_CHILD).is_none() {
+        // The umask is process-wide, so the 0o444 one is set only in a re-run
+        // of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().expect("test binary"))
+            .args(["--exact", name, "--test-threads=1"])
+            .env(PUBLISH_UMASK_CHILD, "1")
+            .output()
+            .expect("the child runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let dir = scratch("umask-0444-publish");
+    let out = dir.join("bpee_rev0.rs");
+    std::fs::write(&out, "pub const OLD: u32 = 0;\n").expect("existing module");
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    super::publish(&out, "pub const GENERATED: u32 = 0;\n").expect("the publish succeeds");
+
+    let mode = std::fs::metadata(&out)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o7777;
+    let text = std::fs::read(&out);
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir(&dir);
+    // 0666 & !0444 leaves 0222; only the owner read is restored, so the
+    // group and other bits still honour the umask.
+    assert_eq!(mode, 0o622, "published module mode: {mode:o}");
+    assert_eq!(
+        text.expect("module reads back"),
+        b"pub const GENERATED: u32 = 0;\n"
+    );
+}
+
+/// Locates `sprite/x` built from a payload-shaped raster, and returns the error.
+fn locate_malformed_raster(name: &str, width: u32, height: u32) -> GenRomProfileError {
+    let pixels = vec![1u8; width as usize * height as usize];
+    let entry = image_entry("sprite/x".into(), width, height, 4, pixels).expect("entry");
+    let rom = RomFixture::new().emerald_header().finish();
+    let mut error = None;
+    with_context(name, &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        error = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report).err();
+    });
+    error.expect("a raster without whole 8x8 tiles is malformed, not located")
+}
+
+/// A payload-shaped raster that is empty or not a whole number of 8x8 tiles
+/// is a malformed pack: it must surface as `EntryShape` naming the dimensions,
+/// not as `NotFound` blaming art missing from the ROM.
+#[test]
+fn a_raster_that_is_not_whole_eight_pixel_tiles_is_an_entry_shape_error() {
+    for (width, height) in [(4, 8), (7, 8), (8, 7), (12, 8), (0, 8), (8, 0), (0, 0)] {
+        let err = locate_malformed_raster("malformed-raster", width, height);
+        assert!(
+            matches!(&err, GenRomProfileError::EntryShape { id, reason }
+                if id == "sprite/x" && reason.contains(&format!("{width}x{height}"))),
+            "{width}x{height}: {err:?}"
+        );
+    }
 }
