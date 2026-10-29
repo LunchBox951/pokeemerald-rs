@@ -270,34 +270,7 @@ fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     ])
 }
 
-/// Owns a temporary pack path and removes it on drop. Cleanup is installed
-/// only once the path was exclusively claimed, so a failed claim never
-/// removes an entry this guard does not own.
-struct TempPackGuard {
-    path: std::path::PathBuf,
-}
-
-impl TempPackGuard {
-    /// Exclusively claims `path` (never following a planted symlink or
-    /// truncating an occupant) and writes `bytes` through the claimed handle.
-    fn claim(path: std::path::PathBuf, bytes: &[u8]) -> Self {
-        use std::io::Write as _;
-        let mut file = crate::pack_test_support::claim_scratch_exclusive(&path);
-        let guard = Self { path };
-        file.write_all(bytes).unwrap();
-        guard
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-impl Drop for TempPackGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
+use crate::pack_test_support::ScratchClaim as TempPackGuard;
 
 fn load_synthetic_scene() -> MainMenuScene {
     load_synthetic_scene_with_font(TRANSPARENT_FONT_INDEX)
@@ -327,7 +300,7 @@ fn synthetic_pack_path(font_index: u8, window_frame: u8) -> std::path::PathBuf {
 }
 
 fn claim_synthetic_pack(font_index: u8, window_frame: u8) -> TempPackGuard {
-    TempPackGuard::claim(
+    TempPackGuard::claim_with(
         synthetic_pack_path(font_index, window_frame),
         &synthetic_main_menu_pack_bytes(font_index),
     )
@@ -367,7 +340,7 @@ fn a_pack_missing_an_alternate_font_sheet_is_refused() {
         FONT_BIT_DEPTH,
         0,
     )]);
-    let temp_pack = TempPackGuard::claim(path, &bytes);
+    let temp_pack = TempPackGuard::claim_with(path, &bytes);
     let pack = AssetPack::load(temp_pack.path()).unwrap();
     let err = super::load_sources(&pack).unwrap_err();
     assert!(
@@ -385,7 +358,7 @@ fn unwind_pack_path() -> std::path::PathBuf {
 }
 
 fn claim_unwind_pack() -> TempPackGuard {
-    TempPackGuard::claim(
+    TempPackGuard::claim_with(
         unwind_pack_path(),
         &synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
     )
