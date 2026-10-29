@@ -121,33 +121,50 @@ pub(crate) fn claim_scratch_exclusive(path: &std::path::Path) -> std::fs::File {
 /// A scratch file claimed by [`claim_scratch_exclusive`] and removed on drop
 /// only while its pathname still names the claimed file.
 ///
-/// The guard holds the claim's open handle, so the file's identity (device
-/// and inode on Unix) is pinned for the guard's whole life. Drop reads the
-/// pathname's own metadata (`symlink_metadata`, which never follows a link)
-/// and unlinks only an entry that is a regular file with the held handle's
-/// identity. A file renamed away and replaced under the same name, or a
-/// symlink planted there, is therefore left alone rather than deleted on the
-/// strength of a name this guard no longer owns. Install the guard only after
-/// the claim succeeded, which constructing it does, so a failed claim never
-/// removes an entry the caller does not own.
+/// The guard holds the claim's open handle, so the file's identity is pinned
+/// for the guard's whole life.
 ///
+/// On Unix, drop reads the pathname's own metadata (`symlink_metadata`,
+/// which never follows a link) and unlinks only an entry that is a regular
+/// file with the held handle's device and inode. A file renamed away and
+/// replaced under the same name, or a symlink planted there, is left alone
+/// rather than deleted on the strength of a name this guard no longer owns.
 /// Residual: the identity check and the `remove_file` that follows are two
 /// pathname operations, so a swap landing between them can still unlink the
 /// replacement. Closing that window needs a handle-bound delete, which is
 /// the `rustix` Cargo-feature decision issue #2873 tracks; this crate's
-/// default test leg stays std-only. On Windows `std` exposes no stable file
-/// index, so the creation, write, and size triple of the held handle stands
-/// in for the identity.
+/// default test leg stays std-only here.
+///
+/// On Windows the claim records the held handle's `win_fs::WindowsFileIdentity`
+/// (volume serial and file ID) and drop deletes through
+/// `win_fs::remove_through_verified_handle`, which opens the pathname without
+/// following a reparse point, compares the file ID, and deletes through that
+/// same handle, so no second lookup of the path remains. Timestamps and size
+/// are never used: a replacement can copy both. If the identity cannot be
+/// read, the file is left in the temp directory rather than risk removing a
+/// replacement.
+///
+/// Install the guard only after the claim succeeded, which constructing it
+/// does, so a failed claim never removes an entry the caller does not own.
 pub(crate) struct ScratchClaim {
     path: std::path::PathBuf,
     file: std::fs::File,
+    /// The claimed file's identity; `None` when it could not be read, which
+    /// leaves the file in place at drop.
+    #[cfg(windows)]
+    identity: Option<win_fs::WindowsFileIdentity>,
 }
 
 impl ScratchClaim {
     /// Exclusively claims `path` through [`claim_scratch_exclusive`].
     pub(crate) fn claim(path: std::path::PathBuf) -> Self {
         let file = claim_scratch_exclusive(&path);
-        Self { path, file }
+        Self {
+            #[cfg(windows)]
+            identity: win_fs::WindowsFileIdentity::of(&file).ok(),
+            path,
+            file,
+        }
     }
 
     /// [`claim`](Self::claim), then writes `bytes` through the claimed handle.
@@ -171,9 +188,13 @@ impl ScratchClaim {
     pub(crate) fn file_mut(&mut self) -> &mut std::fs::File {
         &mut self.file
     }
+}
 
+#[cfg(not(windows))]
+impl ScratchClaim {
     /// Whether `path` is still a regular file with the held handle's
-    /// identity.
+    /// identity. Off Unix there is no identity to compare, so nothing is
+    /// removed.
     fn pathname_is_still_ours(&self) -> bool {
         let Ok(found) = std::fs::symlink_metadata(&self.path) else {
             return false;
@@ -188,8 +209,13 @@ impl ScratchClaim {
 
 impl Drop for ScratchClaim {
     fn drop(&mut self) {
+        #[cfg(not(windows))]
         if self.pathname_is_still_ours() {
             let _ = std::fs::remove_file(&self.path);
+        }
+        #[cfg(windows)]
+        if let Some(identity) = self.identity {
+            let _ = win_fs::remove_through_verified_handle(&self.path, identity);
         }
     }
 }
@@ -200,23 +226,9 @@ fn same_file_identity(held: &std::fs::Metadata, found: &std::fs::Metadata) -> bo
     (held.dev(), held.ino()) == (found.dev(), found.ino())
 }
 
-#[cfg(windows)]
-fn same_file_identity(held: &std::fs::Metadata, found: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    (
-        held.creation_time(),
-        held.last_write_time(),
-        held.file_size(),
-    ) == (
-        found.creation_time(),
-        found.last_write_time(),
-        found.file_size(),
-    )
-}
-
 #[cfg(not(any(unix, windows)))]
 fn same_file_identity(_held: &std::fs::Metadata, _found: &std::fs::Metadata) -> bool {
-    true
+    false
 }
 
 /// Writes `bytes` to a fresh file at `path` claimed by
@@ -337,6 +349,45 @@ mod tests {
             survivor.ok().as_deref(),
             Some(&b"replacement"[..]),
             "the guard unlinked a same-name file it did not create"
+        );
+    }
+
+    /// A replacement with the original's length and copied timestamps still
+    /// differs by file identity, so it survives. On Windows the creation time
+    /// is copied too, which defeats any timestamp-and-size comparison.
+    #[test]
+    fn dropping_a_claim_leaves_a_same_size_replacement_with_copied_timestamps_alone() {
+        let path = scratch_path("same-size-replaced");
+        let moved = scratch_path("same-size-replaced-moved-away");
+        let _ = std::fs::remove_file(&moved);
+        let claim = ScratchClaim::claim_with(path.clone(), b"original");
+        let original = claim.file.metadata().unwrap();
+        std::fs::rename(&path, &moved).unwrap();
+        write_scratch_exclusive(&path, b"replaced");
+        let times = std::fs::FileTimes::new()
+            .set_accessed(original.accessed().unwrap())
+            .set_modified(original.modified().unwrap());
+        #[cfg(windows)]
+        let times = {
+            use std::os::windows::fs::FileTimesExt as _;
+            times.set_created(original.created().unwrap())
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        drop(claim);
+
+        let survivor = std::fs::read(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&moved);
+        assert_eq!(
+            survivor.ok().as_deref(),
+            Some(&b"replaced"[..]),
+            "the guard unlinked a same-size replacement with copied timestamps"
         );
     }
 
