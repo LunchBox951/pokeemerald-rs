@@ -4,10 +4,21 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.80.0] - 2026-10-28
+## [0.0.83.0] - 2026-10-29
 
 - A Pokémon that levels up in battle now moves its HP by the change in its maximum HP, as the original game does, and a fainted Pokémon is no longer healed by a level-up. The level-up counts the effort values (EVs) the Pokémon has earned, so its stats grow as they do in the original game.
 - Loading a save now keeps each Pokémon's saved HP and stats exactly as stored instead of recalculating them, and saving writes them back unchanged.
+## [0.0.82.0] - 2026-10-29
+
+- The title screen now fades in from white over the loaded title on boot and when you press B on the main menu, with the music starting partway through the fade as in the original game.
+
+## [0.0.81.0] - 2026-10-28
+
+- Pressing B on the main menu now returns to the title screen with a white fade, as in the original game.
+
+## [0.0.80.0] - 2026-10-28
+
+- Wild and trainer Pokémon with Effect Spore can now put an attacker to sleep, poison it or paralyze it when it hits them with a contact move.
 
 ## [0.0.79.0] - 2026-10-28
 
@@ -16,6 +27,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 ## [0.0.78.0] - 2026-10-27
 
 - The Bag now shows a TM or HM's move type, power, accuracy and PP while its menu is open.
+- The Bag now shows scroll arrows for long lists and lets you reorder items with SELECT.
 
 ## [0.0.77.0] - 2026-10-27
 
@@ -382,7 +394,11 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...dev
+[0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/eec8c96c5f58f10a72a7055cc3e47eff6ef9550f...dev
+[0.0.82.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/91908af79c336519262ccf09e582f2e474451261...eec8c96c5f58f10a72a7055cc3e47eff6ef9550f
+[0.0.81.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/617c52d7a6314c124c872023c981306e38f5a390...91908af79c336519262ccf09e582f2e474451261
+[0.0.80.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/efade96474fdd159720868bc3d02d1da416f5819...617c52d7a6314c124c872023c981306e38f5a390
+[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...efade96474fdd159720868bc3d02d1da416f5819
 [0.0.78.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/7bb89a891a17166542bca78a24db79325000dae9...d828e8ae72b532a2de0148cbf62942cd0805b7ec
 [0.0.77.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6...7bb89a891a17166542bca78a24db79325000dae9
 [0.0.76.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/42b847579ee1ed8368ccf8fb64f932a7c9bd82f3...1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6
