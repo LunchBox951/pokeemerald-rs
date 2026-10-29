@@ -26,8 +26,9 @@
 //! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
 //! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
 //! (`main_menu.c:583-608`). A fresh B on the main menu (checked after A, ahead
-//! of the D-pad) takes the same wait toward white and, once done, rebuilds the
-//! title (`main_menu.c:895-902,1109-1120`).
+//! of the D-pad) takes the same wait toward white and, once done, installs
+//! `CB2_InitTitleScreen` (`main_menu.c:895-902,1109-1120`), which
+//! [`AppScene::TitleInit`] runs on both entries to the title.
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -69,6 +70,8 @@ use fade_wait::{
     advance_title_fade_wait, MainMenuFadeIn, MainMenuFadeWait, TitleFadeWait,
 };
 use options::{advance_options, OptionsState};
+use title_init::advance_title_init;
+pub(crate) use title_init::TitleInit;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
@@ -114,6 +117,11 @@ pub(crate) mod overworld_phase;
 /// place both this module's own trigger and [`overworld_phase`]'s
 /// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
+/// `CB2_InitTitleScreen`'s setup frames and white fade-in on both entries to
+/// the title (I-2) -- this module's own docs.
+mod title_init;
+#[cfg(test)]
+mod title_init_tests;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
@@ -218,6 +226,11 @@ impl AnimatedTitle {
 /// itself stays cheap to move around
 /// (`clippy::large_enum_variant`).
 pub(crate) enum AppScene {
+    /// `CB2_InitTitleScreen` running its setup frames and white fade-in over
+    /// the loaded title, on a fresh boot and after the main menu's B (I-2).
+    /// Input is ignored until it installs `MainCB2`, which becomes
+    /// [`AppScene::Title`].
+    TitleInit(Box<TitleInit>),
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
@@ -272,11 +285,27 @@ pub(crate) enum AppScene {
 
 impl AppScene {
     /// Whether this scene is the main menu's white fade back to the title
-    /// (B, `pokeemerald/src/main_menu.c:895-902`). The app watches it to
-    /// restart the title music when the next frame lands on
-    /// [`AppScene::Title`].
+    /// (B, `pokeemerald/src/main_menu.c:895-902`).
+    #[cfg(test)]
     pub(crate) const fn returns_to_title(&self) -> bool {
         matches!(self, Self::MainMenuFadeWait(wait) if wait.returns_to_title())
+    }
+
+    /// Whether this scene's next frame is `CB2_InitTitleScreen`'s state 4,
+    /// which starts `MUS_TITLE` (`pokeemerald/src/title_screen.c:662`). The
+    /// app starts the title music on the frame that follows a `true` here.
+    pub(crate) const fn starts_title_music(&self) -> bool {
+        matches!(self, Self::TitleInit(init) if init.starts_title_music())
+    }
+
+    /// Whether the title music, once started, should keep playing: the
+    /// settled title, and the initializer from the frame after state 4.
+    pub(crate) const fn holds_title_music(&self) -> bool {
+        match self {
+            Self::Title(_) => true,
+            Self::TitleInit(init) => init.title_music_started(),
+            _ => false,
+        }
     }
 
     /// The `optionsButtonMode` this scene's save carries
@@ -289,6 +318,7 @@ impl AppScene {
     /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
     fn button_mode(&self) -> ButtonMode {
         match self {
+            Self::TitleInit(init) => init.button_mode(),
             Self::Title(title) => title.button_mode(),
             Self::TitleFadeWait(wait) => wait.button_mode(),
             Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
@@ -604,6 +634,7 @@ pub(crate) fn advance_scene(
         buttons
     };
     match scene {
+        AppScene::TitleInit(init) => advance_title_init(init),
         AppScene::Title(title) => advance_title(title, buttons),
         AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),
