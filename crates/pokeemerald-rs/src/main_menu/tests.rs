@@ -302,7 +302,7 @@ fn synthetic_pack_path(font_index: u8, window_frame: u8) -> std::path::PathBuf {
 fn claim_synthetic_pack(font_index: u8, window_frame: u8) -> TempPackGuard {
     TempPackGuard::claim_with(
         synthetic_pack_path(font_index, window_frame),
-        &synthetic_main_menu_pack_bytes(font_index),
+        synthetic_main_menu_pack_bytes(font_index),
     )
 }
 
@@ -360,7 +360,7 @@ fn unwind_pack_path() -> std::path::PathBuf {
 fn claim_unwind_pack() -> TempPackGuard {
     TempPackGuard::claim_with(
         unwind_pack_path(),
-        &synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
+        synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
     )
 }
 

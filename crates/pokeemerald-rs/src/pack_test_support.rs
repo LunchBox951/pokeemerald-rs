@@ -352,9 +352,8 @@ mod tests {
 
         drop(claim);
 
-        let link_survived = std::fs::symlink_metadata(&path)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false);
+        let link_survived =
+            std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink());
         let victim_bytes = std::fs::read(&victim);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&victim);
