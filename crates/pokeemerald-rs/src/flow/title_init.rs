@@ -91,7 +91,7 @@ impl TitleFade {
     /// ones up to the last pair (update 1 is OBJ; 18 onwards finishes).
     const fn background_next(&self) -> bool {
         let next = self.updates + 1;
-        next % 2 == 0 && next <= 2 * PAIRS_AFTER_BEGIN
+        next.is_multiple_of(2) && next <= 2 * PAIRS_AFTER_BEGIN
     }
 
     /// One `UpdatePaletteFade` call.

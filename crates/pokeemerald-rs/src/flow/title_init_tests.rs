@@ -313,7 +313,7 @@ fn a_fresh_press_on_the_first_main_cb2_frame_advances_the_title() {
 fn a_press_held_through_the_initializer_is_not_fresh_on_the_first_main_cb2_frame() {
     for entry in ENTRIES {
         let (mut session, _) = Session::new("held-press", entry, ButtonMode::Normal);
-        let run = session.play(&vec![Buttons::A; FIRST_INPUT_FRAME + 2]);
+        let run = session.play(&[Buttons::A; FIRST_INPUT_FRAME + 2]);
         assert!(
             run.iter().all(|(kind, _)| *kind != Kind::FadeWait),
             "{entry:?}"
