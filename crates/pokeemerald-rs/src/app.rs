@@ -26,6 +26,11 @@
 //!
 //! # Animating the real title screen (I-2)
 //!
+//! Before the animation, `CB2_InitTitleScreen`'s 35 callback frames run
+//! (`crate::flow`'s `title_init` docs): setup frames on white, a white
+//! fade-in, and `mus_title` starting on the fifth. The first [`App::step`]
+//! is the first of them, and a press is read only from the 36th.
+//!
 //! [`crate::title::TitleScene::compose`] takes a `frame` counter (the same
 //! deterministic, wall-clock-free counter [`crate::title`]'s module docs
 //! describe): [`App::new`] keeps the loaded [`TitleScene`] alive alongside a
@@ -103,8 +108,11 @@
 //! *before* presenting and which would therefore stay convincing even if
 //! `present` were never called at all.
 //!
-//! Ticks asserted: 0 (the first `step`), 2 (the third), 13 and 14 (the
-//! fourteenth and fifteenth, checked back to back). [`crate::title`]'s
+//! Before the animation, it checks the 35 initializer steps: the white
+//! frames, and the title unfaded from the 30th step. Ticks are then counted
+//! from the first `MainCB2` step (the 36th overall) and asserted at 0 (that
+//! step), 2 (the third), 13 and 14 (the fourteenth and fifteenth, checked
+//! back to back). [`crate::title`]'s
 //! animation is coarse -- the clouds move once every four ticks, "Press
 //! Start" blinks every sixteen -- so most adjacent ticks compose
 //! bit-identical frames; tick 14 is where both change together (the clouds'
@@ -126,7 +134,7 @@
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
-use crate::flow::{self, AnimatedTitle, AppScene};
+use crate::flow::{self, AppScene, TitleInit};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
 use crate::main_menu::MainMenuItem;
@@ -297,10 +305,11 @@ pub struct App {
     /// equivalent is flash plus the `gSaveCounter`/`gLastWrittenSector`
     /// globals.
     save_slot: SaveSlot,
-    /// This session's title-screen BGM (S-3, issue #185): `Some` from boot
-    /// through [`AppScene::Title`] and its post-title fade/drain (see
+    /// This session's title-screen BGM (S-3, issue #185): `Some` from the
+    /// initializer's state-4 frame ([`Self::restart_title_music`]) through
+    /// [`AppScene::Title`] and its post-title fade/drain (see
     /// [`Self::advance_music`]), given a pack/audio device were both
-    /// available at boot -- `None` otherwise, including for every headless
+    /// available -- `None` before that frame, and otherwise, including for every headless
     /// `App` this module's other constructors build. Best-effort: a missing
     /// pack or audio device silences the BGM rather than failing the whole
     /// boot (module docs' "log-or-ignore is fine" policy, issue #70).
@@ -322,13 +331,13 @@ pub struct App {
     /// whose synthetic [`BootScene`] frame never advances through `flow` at
     /// all.
     pack_source: crate::pack_source::PackSource,
-    /// Where [`Self::restart_title_music`] sends the title BGM when the main
-    /// menu's B returns to the title (`CB2_InitTitleScreen` starts
-    /// `MUS_TITLE` again, `pokeemerald/src/title_screen.c:661`).
+    /// Where [`Self::restart_title_music`] sends the title BGM when
+    /// `CB2_InitTitleScreen`'s state 4 starts `MUS_TITLE`, on the boot and
+    /// after the main menu's B (`pokeemerald/src/title_screen.c:662`).
     title_audio: TitleAudio,
 }
 
-/// The audio output a returning title restarts its BGM on, mirroring how the
+/// The audio output the title's state-4 frame starts its BGM on, mirroring how the
 /// `App` was constructed: the real device ([`App::new`]), the null backend
 /// ([`App::new_headless_real_title`]'s test twin), or none (every other
 /// headless constructor, which never plays music).
@@ -340,25 +349,21 @@ pub(crate) enum TitleAudio {
     Null,
 }
 
-/// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
-/// `(frame, scene)` pair [`App::new`] (and its headless test counterparts)
-/// store: the tick-0 composed frame, plus the fresh [`AppScene::Title`] /
-/// [`AnimatedTitle`] state [`App::step`] advances from there.
+/// Wrap an already-loaded [`title::TitleScene`] in `CB2_InitTitleScreen`'s
+/// initializer (I-2) as the `(frame, scene)` pair [`App::new`] (and its
+/// headless test counterparts) store: a white frame, and the fresh
+/// [`AppScene::TitleInit`] whose first [`App::step`] is state 0. The scene
+/// settles into [`AppScene::Title`] 35 steps later (`flow`'s `title_init`
+/// docs).
 ///
-/// The one production spot that builds an [`AnimatedTitle`] (`flow`'s own
-/// tests build one directly), so [`App::boot`] (which also loads the scene)
-/// and [`App::new_headless_animated`] (which takes an already-loaded scene,
-/// for tests that need their own reference copy to compare ticks against)
-/// never hand-write these same three lines twice `(oop-boundaries)`.
+/// The one production spot that builds the boot title, so [`App::boot`]
+/// (which also loads the scene) and [`App::new_headless_animated`] (which
+/// takes an already-loaded scene, for tests that need their own reference
+/// copy to compare ticks against) never hand-write this twice
+/// `(oop-boundaries)`.
 fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
-    let frame = to_platform_frame(&scene.compose(0));
-    let app_scene = AppScene::Title(Box::new(AnimatedTitle {
-        scene,
-        tick: 0,
-        presented: false,
-        retained_save: None,
-    }));
-    (frame, app_scene)
+    let (init, frame) = TitleInit::new(scene, None);
+    (frame, AppScene::TitleInit(Box::new(init)))
 }
 
 impl App {
@@ -437,11 +442,12 @@ impl App {
     /// which holds the entire construction body -- see the module docs' "The
     /// headless real-boot check" for how both halves are covered.
     ///
-    /// Also starts the title screen's BGM (S-3, issue #185) via
-    /// [`Self::start_title_music`] -- best-effort, so a missing pack or audio
-    /// device silences the BGM rather than failing the boot the title
-    /// screen's own graphics already succeeded at (see [`Self::music`]'s
-    /// field docs).
+    /// Also arms the title screen's BGM (S-3, issue #185) on the real audio
+    /// device. It starts, via [`Self::start_title_music`], on the fifth
+    /// [`App::step`], the initializer's state 4 -- best-effort, so a missing
+    /// pack or audio device silences the BGM rather than failing the boot the
+    /// title screen's own graphics already succeeded at (see
+    /// [`Self::music`]'s field docs).
     ///
     /// # Errors
     ///
@@ -457,10 +463,9 @@ impl App {
             || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
+        // `mus_title` starts on the initializer's state-4 frame
+        // ([`Self::restart_title_music`]), not at construction.
         app.title_audio = TitleAudio::Device;
-        app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
-            platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
-        });
         Ok(app)
     }
 
@@ -556,9 +561,9 @@ impl App {
         )
     }
 
-    /// Test-only: [`App::new_headless_real`] with the title BGM started
+    /// Test-only: [`App::new_headless_real`] with the title BGM armed
     /// against `platform`'s null audio backend (mirroring [`App::new`]'s
-    /// real path, minus the real device), so the I-2 real-boot check's
+    /// real path, minus the real device; it starts on the fifth step), so the I-2 real-boot check's
     /// music assertions run against exactly the same per-step body
     /// [`App::new`] does. The BGM is loaded through this `App`'s own
     /// [`crate::pack_source::PackSource::Repo`] pin, like every other load
@@ -578,11 +583,6 @@ impl App {
             crate::pack_source::PackSource::Repo,
         )?;
         app.title_audio = TitleAudio::Null;
-        app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
-            Ok(platform::AudioOutput::null(
-                crate::music::RING_CAPACITY_FRAMES,
-            ))
-        });
         Ok(app)
     }
 
@@ -685,9 +685,9 @@ impl App {
     /// any newly-pressed buttons, then -- for a real game-flow `App`
     /// ([`App::new`]) -- advance [`crate::flow::AppScene`] by one frame via
     /// [`crate::flow::advance_scene`] (module docs' "Game flow" section;
-    /// for the title phase specifically this is "whose current frame has
+    /// for the settled title specifically this is "whose current frame has
     /// already been presented, advance to and compose the next tick's
-    /// frame," exactly as before I-3), pace to the next GBA vblank (a
+    /// frame," exactly as before I-3, after the 35 initializer steps), pace to the next GBA vblank (a
     /// no-op for a headless `App`, see
     /// `platform::Platform::wait_for_next_frame`), and present the
     /// composed scene. Composing *before* presenting keeps [`App::frame`]'s
@@ -721,14 +721,14 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let leaving_for_title = scene.returns_to_title();
+            let starts_title_music = scene.starts_title_music();
             let (next, frame) = flow::advance_scene(
                 scene,
                 buttons,
                 &mut self.save_slot,
                 self.pack_source.clone(),
             );
-            if leaving_for_title && matches!(next, AppScene::Title(_)) {
+            if starts_title_music {
                 self.restart_title_music();
             }
             self.scene = Some(next);
@@ -740,8 +740,9 @@ impl App {
         Ok(true)
     }
 
-    /// The main menu's B has rebuilt the title: start `mus_title` afresh, as
-    /// `CB2_InitTitleScreen` does (`pokeemerald/src/title_screen.c`). The old
+    /// `CB2_InitTitleScreen`'s state 4 has run, on the boot and after the main
+    /// menu's B alike: start `mus_title` afresh (`m4aSongNumStart(MUS_TITLE)`,
+    /// `pokeemerald/src/title_screen.c:662`). The old
     /// player, if the fade-out has not dropped it yet, is replaced rather than
     /// resumed -- a faded sequencer cannot be rewound. A no-op for an `App`
     /// built without title audio ([`TitleAudio::Disabled`]).
@@ -765,8 +766,11 @@ impl App {
 
     /// The title flow's own "play/fade out" cue for its BGM (Discussion
     /// #227's owner decision): render and push one more frame of `mus_title`
-    /// every frame, and -- once [`AppScene::Title`] is no longer the active
-    /// scene -- fade it out instead of cutting it dead.
+    /// every frame, and -- once neither [`AppScene::Title`] nor the
+    /// initializer past its state 4 ([`AppScene::holds_title_music`]) is the
+    /// active scene -- fade it out instead of cutting it dead. A player
+    /// still fading from the menu keeps fading through the returning
+    /// initializer's states 0 to 3, until state 4 replaces it.
     ///
     /// Upstream's title screen does exactly this: `Task_TitleScreenPhase3`
     /// calls `FadeOutBGM(4)` on the A/START press
@@ -797,14 +801,14 @@ impl App {
     /// recovered, interactive title keeps its music instead of running
     /// down to silence for a screen the player never left.
     ///
-    /// A no-op throughout when [`Self::music`] is already `None` (no
-    /// pack/audio device at boot, or a headless `App` that never requested
-    /// one).
+    /// A no-op throughout when [`Self::music`] is `None` (before the
+    /// initializer's state 4, no pack/audio device, or a headless `App` that
+    /// never requested one).
     fn advance_music(&mut self) {
         let Some(music) = &mut self.music else {
             return;
         };
-        if matches!(self.scene, Some(AppScene::Title(_))) {
+        if self.scene.as_ref().is_some_and(AppScene::holds_title_music) {
             music.cancel_fade();
         } else {
             music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
@@ -842,7 +846,9 @@ impl App {
     pub fn state(&self) -> AppState {
         match self.scene.as_ref() {
             None => AppState::SyntheticBoot,
-            Some(AppScene::Title(_) | AppScene::TitleFadeWait(_)) => AppState::Title,
+            Some(AppScene::TitleInit(_) | AppScene::Title(_) | AppScene::TitleFadeWait(_)) => {
+                AppState::Title
+            }
             Some(AppScene::MainMenu(menu) | AppScene::MainMenuHighlight(menu)) => {
                 AppState::MainMenu(menu.scene.selected())
             }
