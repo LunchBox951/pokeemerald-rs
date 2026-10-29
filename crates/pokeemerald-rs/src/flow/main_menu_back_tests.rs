@@ -193,8 +193,28 @@ fn a_failed_menu_rebuild_keeps_the_retained_save() {
     );
 }
 
-/// With the real pack the hand-off lands on a fresh title at tick 0 that
-/// then behaves as the boot title does.
+/// Frames `CB2_InitTitleScreen` runs before `MainCB2` (S0..S34).
+const TITLE_INIT_FRAMES: usize = 35;
+
+/// Steps the title initializer installed by the hand-off to its last frame
+/// with nothing held, returning the settled title and its last frame.
+fn through_title_init(
+    mut scene: AppScene,
+    slot: &mut crate::game_save::SaveSlot,
+) -> (AppScene, Box<Frame>) {
+    let mut frame = None;
+    for step in 0..TITLE_INIT_FRAMES {
+        assert!(matches!(scene, AppScene::TitleInit(_)), "S{step}");
+        let (next, shown) = advance_scene(scene, ButtonState::new(), slot, PackSource::Repo);
+        scene = next;
+        frame = Some(shown);
+    }
+    (scene, frame.expect("the initializer ran"))
+}
+
+/// With the real pack the hand-off installs `CB2_InitTitleScreen`, whose
+/// frames then settle on a fresh title at tick 0 that behaves as the boot
+/// title does.
 ///
 /// Needs the real pack, so it is `#[ignore]`d and runs in CI's `real-pack` job.
 #[test]
@@ -215,9 +235,15 @@ fn b_returns_to_a_fresh_title_with_the_real_pack() {
             assert!(next.returns_to_title());
             scene = next;
         }
-        let (title, frame) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+        let (init, frame) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+        assert!(
+            matches!(init, AppScene::TitleInit(_)),
+            "{menu_type:?}: P22 must install the title initializer"
+        );
+        assert!(frame.iter().all(|&p| p == WHITE), "{menu_type:?}: P22");
+        let (title, frame) = through_title_init(init, &mut slot);
         let AppScene::Title(animated) = &title else {
-            panic!("{menu_type:?}: P22 must hand off to the title");
+            panic!("{menu_type:?}: S34 must install MainCB2");
         };
         assert_eq!((animated.tick, animated.presented), (0, false));
         assert_eq!(*frame, *reference.compose_frame(0));
@@ -256,12 +282,12 @@ fn returning_title_honours_the_retained_l_equals_a() {
         let (next, _) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
         scene = next;
     }
-    let (title, _) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+    let (init, _) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+    let (title, _) = through_title_init(init, &mut slot);
     assert!(
         matches!(title, AppScene::Title(_)),
-        "P22 must land on the title"
+        "the initializer must land on the title"
     );
-    let (title, _) = advance_scene(title, ButtonState::new(), &mut slot, PackSource::Repo);
     let (next, _) = advance_scene(title, pressed(Buttons::L), &mut slot, PackSource::Repo);
     assert!(
         matches!(next, AppScene::TitleFadeWait(_)),
