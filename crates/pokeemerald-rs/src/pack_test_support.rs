@@ -298,6 +298,43 @@ pub(crate) fn assert_scratch_claim_is_exclusive<G>(
     check("occupied file", &occupied);
 }
 
+/// The marker colours of [`synthetic_title_entries`]: the backdrop (and the
+/// pixels outside the logo layer) are [`TITLE_BACKDROP`], the logo layer is
+/// [`TITLE_LOGO`], and the copyright sprite is [`TITLE_SPRITE`].
+pub(crate) const TITLE_BACKDROP: (u8, u8, u8) = (0, 0, 31);
+/// See [`TITLE_BACKDROP`].
+pub(crate) const TITLE_LOGO: (u8, u8, u8) = (31, 0, 0);
+/// See [`TITLE_BACKDROP`].
+pub(crate) const TITLE_SPRITE: (u8, u8, u8) = (0, 31, 0);
+
+/// Every entry [`crate::title::TitleScene::from_pack`] reads, small enough to
+/// build in a test but with one distinguishable BG colour (the logo layer
+/// over a backdrop) and one OBJ colour (the always-visible copyright
+/// banner), so a palette fade's independent BG and OBJ halves show up
+/// separately in the composed frame.
+pub(crate) fn synthetic_title_entries() -> Vec<PackEntry> {
+    let colour = |(r, g, b): (u8, u8, u8)| Bgr555::from_channels(r, g, b);
+    let raw = |id: &'static str, len: usize| pack_format::raw_entry(id.into(), vec![0u8; len]);
+    vec![
+        image_entry("title/image/rayquaza", 8, 8, 4, 0),
+        image_entry("title/image/clouds", 8, 8, 4, 0),
+        image_entry("title/image/pokemon_logo", 8, 8, 8, 1),
+        palette_entry_with_colors(
+            "title/palette/pokemon_logo",
+            16,
+            &[(0, colour(TITLE_BACKDROP)), (1, colour(TITLE_LOGO))],
+        ),
+        palette_entry("title/palette/rayquaza_and_clouds", 16),
+        raw("title/raw/rayquaza", 2 * 32 * 32),
+        raw("title/raw/clouds", 2 * 32 * 32),
+        raw("title/raw/pokemon_logo", 32 * 32),
+        image_entry("title/image/emerald_version", 128, 32, 8, 0),
+        image_entry("title/image/press_start", 160, 24, 8, 1),
+        palette_entry("title/palette/emerald_version", 16),
+        palette_entry_with_color("title/palette/press_start", 16, 1, colour(TITLE_SPRITE)),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
