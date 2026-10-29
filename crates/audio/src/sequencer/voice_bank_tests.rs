@@ -230,6 +230,7 @@ fn higher_priority_later_track_cgb_voice_survives_earlier_track_allocation_on_ex
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let tracks = vec![
         vec![

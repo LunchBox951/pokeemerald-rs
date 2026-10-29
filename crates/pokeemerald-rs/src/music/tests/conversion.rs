@@ -4,14 +4,14 @@
 //! reverb level and continuous playback.
 
 use assets::{
-    AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, KeySplitVoice, Sample,
-    SampleId, VoiceEntry, VoiceGroup, VoiceGroupId,
+    AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, KeySplitVoice, NoiseVoice,
+    Sample, SampleId, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
 };
 use audio::{Adsr, Instrument, Sequencer, ToneData, WaveData, DEFAULT_MASTER_VOLUME};
 
 use super::super::load_song_from_pack;
 use super::shared::{
-    evictor_track, flat_envelope, occupant_track, pack_with_direct_sound_sample,
+    evictor_track, flat_cgb_envelope, flat_envelope, occupant_track, pack_with_direct_sound_sample,
     pack_with_priority, pack_with_song, write_pack,
 };
 
@@ -54,6 +54,60 @@ fn cgb_fixed_rate_tags_survive_loading() {
         }
         other => panic!("slot 3 must convert to CgbSquare1, got {other:?}"),
     }
+}
+
+#[test]
+fn cgb_sound_lengths_survive_loading() {
+    let vg_id = "audio/voicegroup/lengthtest";
+    let voicegroup = VoiceGroup::new(vec![
+        VoiceEntry::Square1(Square1Voice {
+            base_key: 60,
+            length: 33,
+            sweep: 0,
+            duty: 2,
+            envelope: flat_cgb_envelope(),
+            fixed_rate: false,
+        }),
+        VoiceEntry::Square2(Square2Voice {
+            base_key: 60,
+            length: 17,
+            duty: 2,
+            envelope: flat_cgb_envelope(),
+            fixed_rate: false,
+        }),
+        VoiceEntry::Noise(NoiseVoice {
+            base_key: 60,
+            length: 5,
+            period: 1,
+            envelope: flat_cgb_envelope(),
+            fixed_rate: false,
+        }),
+    ])
+    .expect("three slots is well under VOICE_SLOT_COUNT");
+    let song = assets::Song::new(
+        VoiceGroupId(vg_id.to_owned()),
+        assets::MusicPlayerId(0),
+        0,
+        None,
+        vec![vec![]],
+    )
+    .expect("a one-empty-track song is well-formed");
+    let temp_pack = write_pack(
+        "cgb-lengths",
+        &[
+            ("audio/song/lengthtest", song.encode()),
+            (vg_id, voicegroup.encode()),
+        ],
+    );
+    let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+    let song = load_song_from_pack(&pack, "lengthtest").expect("the synthetic song loads");
+
+    let lengths = (0..3).map(|slot| match song.voice(slot) {
+        Some(Instrument::CgbSquare1(tone) | Instrument::CgbSquare2(tone)) => tone.length,
+        Some(Instrument::CgbNoise(tone)) => tone.length,
+        other => panic!("slot {slot} must convert to a CGB tone, got {other:?}"),
+    });
+    assert_eq!(lengths.collect::<Vec<_>>(), [33, 17, 5]);
 }
 
 #[test]

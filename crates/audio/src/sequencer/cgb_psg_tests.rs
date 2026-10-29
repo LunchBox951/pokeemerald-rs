@@ -28,6 +28,7 @@ fn a_cgb_square_note_produces_sound_through_the_sequencer() {
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let song = Song::new(voices, vec![cgb_test_track()], 150);
     let mut seq = Sequencer::new(song);
@@ -44,6 +45,7 @@ fn a_fixed_rate_cgb_square_note_still_produces_sound_through_the_sequencer() {
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: true,
+        length: 0,
     })];
     let song = Song::new(voices, vec![cgb_test_track()], 150);
     let mut seq = Sequencer::new(song);
@@ -85,6 +87,7 @@ fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
             sweep: 0,
             adsr: CgbAdsr::flat(),
             fixed_rate,
+            length: 0,
         })
     };
     let fixed = rendered_cgb_frames(tone(true), 8);
@@ -146,6 +149,7 @@ fn a_cgb_noise_note_produces_sound_through_the_sequencer() {
     let voices = vec![Instrument::CgbNoise(NoiseTone {
         lfsr_width_selector: 0,
         adsr: CgbAdsr::flat(),
+        length: 0,
     })];
     let song = Song::new(voices, vec![cgb_test_track()], 150);
     let mut seq = Sequencer::new(song);
@@ -166,12 +170,14 @@ fn cgb_square1_and_square2_occupy_independent_channel_slots() {
             sweep: 0,
             adsr: CgbAdsr::flat(),
             fixed_rate: false,
+            length: 0,
         }),
         Instrument::CgbSquare2(SquareTone {
             duty: 1,
             sweep: 0,
             adsr: CgbAdsr::flat(),
             fixed_rate: false,
+            length: 0,
         }),
     ];
     let track_a = vec![
@@ -209,6 +215,7 @@ fn a_new_note_on_the_same_cgb_channel_replaces_the_old_one() {
     let voices = vec![Instrument::CgbNoise(NoiseTone {
         lfsr_width_selector: 0,
         adsr: CgbAdsr::flat(),
+        length: 0,
     })];
     let track = vec![
         Event::Voice(0),
@@ -230,4 +237,59 @@ fn a_new_note_on_the_same_cgb_channel_replaces_the_old_one() {
     let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
     seq.render_frame(&mut out);
     assert_eq!(seq.voice_count(), 1);
+}
+
+/// `SquareTone::length` and `NoiseTone::length` must reach the voice through the
+/// sequencer: length 60 loads 4, which the enable edge takes to 3, so the
+/// counter stops the channel at the third 256 Hz clock (sample 156 of the first
+/// frame) and it holds its level for the rest of that frame.
+#[test]
+fn a_cgb_instruments_length_cuts_its_note_through_the_sequencer() {
+    let square = |length| {
+        Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+            length,
+        })
+    };
+    let noise = |length| {
+        Instrument::CgbNoise(NoiseTone {
+            lfsr_width_selector: 0,
+            adsr: CgbAdsr::flat(),
+            length,
+        })
+    };
+    let first_frame = |instrument| rendered_cgb_frames(instrument, 1);
+    let held_from = 156 * 2;
+    for (uncut, cut) in [(square(0), square(60)), (noise(0), noise(60))] {
+        let uncut = first_frame(uncut);
+        let cut = first_frame(cut);
+        assert_eq!(
+            uncut[..held_from]
+                .iter()
+                .map(|s| s.to_bits())
+                .collect::<Vec<_>>(),
+            cut[..held_from]
+                .iter()
+                .map(|s| s.to_bits())
+                .collect::<Vec<_>>()
+        );
+        let lefts = |frame: &[f32]| -> Vec<u32> {
+            frame[held_from - 2..]
+                .iter()
+                .step_by(2)
+                .map(|s| s.to_bits())
+                .collect()
+        };
+        assert!(
+            lefts(&cut).windows(2).all(|p| p[0] == p[1]),
+            "the stopped channel holds one level"
+        );
+        assert!(
+            lefts(&uncut).windows(2).any(|p| p[0] != p[1]),
+            "sanity: the note without a length keeps changing"
+        );
+    }
 }
