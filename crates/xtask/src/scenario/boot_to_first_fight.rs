@@ -4,7 +4,7 @@ use pokeemerald_rs::main_menu::MainMenuItem;
 use pokeemerald_rs::overworld::WALK_FRAMES_PER_TILE;
 use pokeemerald_rs::{AppButtons, AppState};
 
-use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES};
+use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES, TITLE_INIT_FRAMES};
 
 const INTRO_HANDOFF_FRAMES: usize = 1;
 const BUTTON_EDGE_FRAMES: usize = 1;
@@ -71,6 +71,9 @@ const fn walk(direction: AppButtons, tiles: usize, expected: AppState) -> Scenar
 }
 
 const SEGMENTS: &[ScenarioBlock] = &[
+    // I-2: the title's setup frames and white fade-in ignore input
+    // (`TITLE_INIT_FRAMES`).
+    held(AppButtons::NONE, TITLE_INIT_FRAMES, AppState::Title),
     // I-3, issue #1329: Start lands in the white title fade-wait
     // (`AppState::Title` throughout), settling on the main menu only once
     // the fade reports done.
@@ -229,9 +232,10 @@ mod tests {
 
     /// One press-frame, [`super::FADE_WAIT_FRAMES`] waiting frames, and one
     /// done-frame for each of the title and menu fade-waits (I-3, issue
-    /// #1329), plus the menu's setup frames between them (I-6, issue #2763).
+    /// #1329), plus the menu's setup frames between them (I-6, issue #2763)
+    /// and the title's own before the first press (I-2, issue #2799).
     const EXPECTED_TITLE_AND_MENU_FRAMES: usize =
-        2 * (2 + super::FADE_WAIT_FRAMES) + super::MENU_SETUP_FRAMES;
+        super::TITLE_INIT_FRAMES + 2 * (2 + super::FADE_WAIT_FRAMES) + super::MENU_SETUP_FRAMES;
     const EXPECTED_ROUTE_WALK_TILES: usize = 25;
     /// The three completed-step landings the route runs a field event on
     /// rather than a step, each costing the script a frame of its own
@@ -262,7 +266,7 @@ mod tests {
         // `FADE_WAIT_FRAMES`), settling on the next milestone only on the
         // frame after. I-6, issue #2763: the A press comes
         // `MENU_SETUP_FRAMES` after the menu first appears.
-        let title_press = 0;
+        let title_press = super::TITLE_INIT_FRAMES;
         let title_wait_start = title_press + 1;
         let title_done = title_wait_start + super::FADE_WAIT_FRAMES;
         let menu_setup_start = title_done + 1;
@@ -271,6 +275,10 @@ mod tests {
         let menu_done = menu_wait_start + super::FADE_WAIT_FRAMES;
         assert_eq!(menu_done + 1, EXPECTED_TITLE_AND_MENU_FRAMES);
 
+        for frame in &frames[..title_press] {
+            assert_eq!(frame.buttons, AppButtons::NONE);
+            assert_eq!(frame.expected, AppState::Title);
+        }
         assert_eq!(frames[title_press].buttons, AppButtons::START);
         assert_eq!(frames[title_press].expected, AppState::Title);
         for frame in &frames[title_wait_start..title_done] {
