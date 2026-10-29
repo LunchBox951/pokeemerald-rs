@@ -25,6 +25,8 @@ enum SquareDuty {
 
 impl SquareDuty {
     const REGISTER_MASK: u8 = 0b11;
+    /// The duty field's position in `NRx1` (`mgba/src/gb/audio.c:885-888`).
+    const NRX1_SHIFT: u8 = 6;
 
     fn from_register(value: u8) -> Self {
         match value & Self::REGISTER_MASK {
@@ -113,6 +115,18 @@ impl SquareChannel {
         };
         chan.set_frequency(freq_reg);
         chan
+    }
+
+    /// The `NRx1` store of `CgbSound`'s first pass: the 8-bit sum of the duty
+    /// field and the instrument's raw length byte (`pokeemerald/src/m4a.c:1001`).
+    /// The hardware takes the duty from bits 6-7 of that byte, so an encoded
+    /// length whose carry reaches them changes the pattern
+    /// (`mgba/src/gb/audio.c:885-888`). Returns the stored byte, whose low six
+    /// bits load the length counter.
+    pub fn write_nrx1(&mut self, length_register: u8) -> u8 {
+        let register = ((self.duty as u8) << SquareDuty::NRX1_SHIFT).wrapping_add(length_register);
+        self.duty = SquareDuty::from_register(register >> SquareDuty::NRX1_SHIFT);
+        register
     }
 
     /// Reports whether the most recent trigger's sweep check disabled the channel.

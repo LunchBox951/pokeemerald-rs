@@ -63,6 +63,18 @@ impl Oscillator {
         }
     }
 
+    /// The first pass's `NRx1` store, as the byte the length counter loads
+    /// from. A square sums its duty into the byte and re-selects the duty from
+    /// the result ([`SquareChannel::write_nrx1`]); noise stores the raw length
+    /// byte; wave has no such store and returns `None`.
+    pub(super) fn write_nrx1(&mut self, length_register: u8) -> Option<u8> {
+        match self {
+            Self::Square(square) => Some(square.write_nrx1(length_register)),
+            Self::Noise(_) => Some(length_register),
+            Self::Wave { .. } => None,
+        }
+    }
+
     pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
         match self {
             Self::Noise(noise) => Some(noise),

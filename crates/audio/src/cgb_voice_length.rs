@@ -91,6 +91,44 @@ fn tied_adsr() -> CgbAdsr {
     }
 }
 
+/// `CgbSound` stores `(duty << 6) + length` into `NRx1` (`m4a.c:1001`), and
+/// that one write sets both the duty and the length (`mgba/src/gb/audio.c:885-888`).
+/// An extracted nonzero length carries its `0x80` bit (`0x80 | 0x30 = 0xB0`),
+/// so the helper's duty 2 plus 0xB0 stores 0x30 in the 8-bit register: duty 0,
+/// 16 counts. Same register as a duty-0 voice with length 0x30.
+#[test]
+fn an_encoded_square_length_rewrites_the_duty_bits_of_its_nrx1_store() {
+    for channel in SQUARES {
+        let mut encoded = square(channel, CgbAdsr::flat(), 0xB0);
+        let note = TestNote::default();
+        let sweep = (channel == CgbChannelNumber::Square1).then_some(0x08);
+        let mut register_equivalent = CgbVoice::square(
+            channel,
+            0,
+            sweep,
+            CgbAdsr::flat(),
+            note.note_key,
+            note.fine_pitch,
+            note.track_right,
+            note.track_left,
+            note.velocity,
+            note.gate_time,
+            note.played_key,
+            note.track,
+            note.rhythm_pan,
+            note.echo_volume,
+            note.echo_length,
+        )
+        .with_length(0x30);
+        let a = run(&mut Rig::at_step(6), &mut encoded, 2);
+        let b = run(&mut Rig::at_step(6), &mut register_equivalent, 2);
+        assert_eq!(
+            a, b,
+            "{channel:?}: NRx1 = 0x80 + 0xB0 = 0x30 must play duty 0, as the duty-0/length-0x30 voice does"
+        );
+    }
+}
+
 #[test]
 fn a_square_note_cut_by_its_length_holds_its_last_output() {
     for channel in SQUARES {

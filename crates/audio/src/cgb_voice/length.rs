@@ -46,10 +46,13 @@ impl CgbVoice {
         }
     }
 
-    /// The `SF_START` pass's `NRx1` store.
+    /// The `SF_START` pass's `NRx1` store: `(duty << 6) + length` in one byte
+    /// (`m4a.c:1001`), whose bits 6-7 select a square's duty and whose bits
+    /// 0-5 load the counter (`mgba/src/gb/audio.c:885-888`). The enable bit
+    /// still follows the raw instrument length ([`Self::with_length`]).
     pub(super) fn load_length(&mut self) {
-        if self.has_length_counter() {
-            self.length.load(self.length_register);
+        if let Some(register) = self.oscillator.write_nrx1(self.length_register) {
+            self.length.load(register);
         }
     }
 
