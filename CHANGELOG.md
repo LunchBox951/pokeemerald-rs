@@ -8,6 +8,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - A Pokémon that levels up in battle now moves its HP by the change in its maximum HP, as the original game does, and a fainted Pokémon is no longer healed by a level-up. The level-up counts the effort values (EVs) the Pokémon has earned, so its stats grow as they do in the original game.
 - Loading a save now keeps each Pokémon's saved HP and stats exactly as stored instead of recalculating them, and saving writes them back unchanged.
+
 ## [0.0.82.0] - 2026-10-29
 
 - The title screen now fades in from white over the loaded title on boot and when you press B on the main menu, with the music starting partway through the fade as in the original game.
