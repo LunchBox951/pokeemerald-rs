@@ -84,16 +84,28 @@ fn every_endpoint_pair_matches_the_reference() {
 }
 
 #[test]
-fn new_seeds_the_steady_state_of_unchanged_registers() {
+fn new_starts_the_first_frame_with_the_latch_off() {
+    assert_eq!(
+        WindowRange::new(100, 240),
+        WindowRange::new(100, 240).with_vertical_latch(false)
+    );
+    assert!(!WindowRange::new(100, 240).contains_vertical(0));
+    assert!(!WindowRange::new(100, 40).contains_vertical(0));
+    assert!(!WindowRange::new(200, 40).contains_vertical(0));
+}
+
+#[test]
+fn a_range_carrying_the_previous_outgoing_latch_is_the_steady_state() {
     for &start in &SAMPLE {
         for &end in &SAMPLE {
-            let (_, second_incoming) = reference_frame(start, end, false);
-            let (second, _) = reference_frame(start, end, second_incoming);
+            let (_, outgoing) = reference_frame(start, end, false);
+            let (second, _) = reference_frame(start, end, outgoing);
             let range = WindowRange::new(start, end);
+            let carried = range.with_vertical_latch(range.next_frame_latch(false));
             for (y, expected) in second.iter().enumerate() {
                 let y = u8::try_from(y).unwrap();
                 assert_eq!(
-                    range.contains_vertical(y),
+                    carried.contains_vertical(y),
                     *expected,
                     "({start},{end}) y={y}"
                 );

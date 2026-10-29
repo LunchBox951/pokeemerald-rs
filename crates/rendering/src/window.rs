@@ -18,22 +18,16 @@ pub struct WindowRange {
 impl WindowRange {
     /// Creates a range from its register byte fields.
     ///
-    /// The vertical latch is seeded with the state a frame with these same
-    /// endpoints leaves behind when started from a cleared latch, the steady
-    /// state of unchanged registers. Use
-    /// [`with_vertical_latch`](Self::with_vertical_latch) to carry a real
-    /// frame's latch instead.
+    /// The vertical latch starts off, as mGBA's window latch does at reset.
+    /// A later frame carries the previous frame's
+    /// [`next_frame_latch`](Self::next_frame_latch) in through
+    /// [`with_vertical_latch`](Self::with_vertical_latch).
     #[must_use]
     pub const fn new(start: u8, end: u8) -> Self {
-        let steady = Self {
-            start,
-            end,
-            incoming_on: false,
-        };
         Self {
             start,
             end,
-            incoming_on: steady.next_frame_latch(false),
+            incoming_on: false,
         }
     }
 
@@ -550,7 +544,8 @@ mod tests {
 
     #[test]
     fn vertical_wrapped_with_visible_start_shows_both_bands() {
-        let range = WindowRange::new(100, 40);
+        // Steady state: the previous frame left the latch open from line 100.
+        let range = WindowRange::new(100, 40).with_vertical_latch(true);
         assert!(range.contains_vertical(0));
         assert!(range.contains_vertical(39));
         assert!(!range.contains_vertical(40));
@@ -561,7 +556,8 @@ mod tests {
 
     #[test]
     fn vertical_wrapped_start_in_vblank_reopens_at_line_zero() {
-        let range = WindowRange::new(200, 40);
+        // FinishFrame reopened the latch from the previous frame.
+        let range = WindowRange::new(200, 40).with_vertical_latch(true);
         assert!(range.contains_vertical(0));
         assert!(range.contains_vertical(39));
         assert!(!range.contains_vertical(40));
@@ -574,7 +570,8 @@ mod tests {
         // mGBA: line 100 opens the latch (video-software.c:885-886); end 240 is
         // never a scanline and FinishFrame clears only ends in 160..228
         // (:763-764), so the steady-state frame starts inside the window.
-        let range = WindowRange::new(100, 240);
+        // The previous frame opened the latch at line 100 and never closed it.
+        let range = WindowRange::new(100, 240).with_vertical_latch(true);
         assert!(range.contains_vertical(100));
         assert!(range.contains_vertical(0), "latch carried across the frame");
         assert!(range.contains_vertical(99));
