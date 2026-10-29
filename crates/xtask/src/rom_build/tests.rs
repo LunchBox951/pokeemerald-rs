@@ -628,3 +628,160 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+
+/// Renames the scratch directory aside and puts `replacement` at its path.
+#[cfg(unix)]
+fn swap_scratch(scratch: &Scratch, replacement: impl FnOnce(&Path)) -> PathBuf {
+    let aside = scratch.path.with_extension("aside");
+    fs::rename(&scratch.path, &aside).unwrap();
+    replacement(&scratch.path);
+    aside
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_scratch_never_removes_a_tree_that_replaced_it() {
+    let root = temp_dir("scratch-replaced");
+    let scratch = Scratch::create(&root).unwrap();
+    fs::write(scratch.path.join("owned.txt"), b"mine").unwrap();
+    let path = scratch.path.clone();
+    let aside = swap_scratch(&scratch, |path| {
+        fs::create_dir(path).unwrap();
+        fs::write(path.join("keep.txt"), b"keep me").unwrap();
+    });
+    drop(scratch);
+    let kept = fs::read(path.join("keep.txt"));
+    let owned = fs::read(aside.join("owned.txt"));
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(
+        kept.unwrap(),
+        b"keep me",
+        "cleanup removed a tree it did not create"
+    );
+    assert_eq!(
+        owned.unwrap(),
+        b"mine",
+        "cleanup followed the pathname, not the hold"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_scratch_directory_is_refused_before_any_build_step() {
+    for symlink in [false, true] {
+        let root = temp_dir(if symlink {
+            "scratch-linked"
+        } else {
+            "scratch-swapped"
+        });
+        let foreign = root.join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("keep.txt"), b"keep me").unwrap();
+        let scratch = Scratch::create(&root).unwrap();
+        assert_eq!(scratch.tree().unwrap(), scratch.path.join("pokeemerald"));
+        swap_scratch(&scratch, |path| {
+            if symlink {
+                std::os::unix::fs::symlink(&foreign, path).unwrap();
+            } else {
+                fs::create_dir(path).unwrap();
+            }
+        });
+        assert!(matches!(scratch.tree(), Err(RomBuildError::Scratch(_))));
+        assert!(matches!(scratch.check(), Err(RomBuildError::Scratch(_))));
+        drop(scratch);
+        let kept = fs::read(foreign.join("keep.txt"));
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(kept.unwrap(), b"keep me");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_populated_directory_is_never_claimed_as_scratch() {
+    let root = temp_dir("scratch-claim");
+    let path = root.join("planted");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("keep.txt"), b"keep me").unwrap();
+    assert!(Scratch::claim(path.clone()).is_err());
+    let kept = fs::read(path.join("keep.txt"));
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(kept.unwrap(), b"keep me");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_whose_scratch_is_swapped_mid_make_fails_and_spares_the_replacement() {
+    // The fake `make` runs in `<scratch>/pokeemerald`; it swaps its parent.
+    let script = format!(
+        "cd ..\nroot=$PWD\nmv \"$root\" \"$root.aside\"\nmkdir \"$root\"\n\
+         printf 'keep me' > \"$root/keep.txt\"\n{GOOD}"
+    );
+    let fx = Fixture::new("swap-mid-make", &script);
+    let result = build(&fx.config);
+    let kept: Vec<_> = fs::read_dir(&fx.config.scratch_root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::read(entry.path().join("keep.txt")).ok())
+        .collect();
+    assert!(
+        matches!(result, Err(RomBuildError::Scratch(_))),
+        "{result:?}"
+    );
+    assert_eq!(
+        kept,
+        [b"keep me".to_vec()],
+        "the replacement survived the drop"
+    );
+}
+
+/// Set in the child [`scratch_is_created_under_an_owner_stripping_umask`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const UMASK_CHILD: &str = "POKEEMERALD_ROM_BUILD_UMASK_CHILD";
+
+/// Linux only: other Unixes refuse, rather than restore, a scratch directory
+/// the umask left without owner read (see `restore_private_mode`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn scratch_is_created_under_an_owner_stripping_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "rom_build::tests::scratch_is_created_under_an_owner_stripping_umask";
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        // The umask is process-wide, so 0o400 is set only in a re-run of this
+        // test binary that runs this test alone.
+        let output = Command::new("/bin/sh")
+            .args(["-c", "umask 0400 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0400 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = temp_dir("scratch-umask");
+    // The child's umask made `root` 0o300; give the owner read back so the
+    // run can list and remove it.
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let scratch = Scratch::create(&root);
+    let mode = scratch
+        .as_ref()
+        .map(|scratch| {
+            fs::symlink_metadata(&scratch.path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        })
+        .map_err(ToString::to_string);
+    drop(scratch);
+    let leftover = fs::read_dir(&root).unwrap().count();
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(mode, Ok(0o700));
+    assert_eq!(leftover, 0, "dropping removed the scratch directory");
+}

@@ -11,6 +11,7 @@
 
 mod artifact;
 mod checkout;
+mod scratch;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +26,7 @@ use std::sync::{mpsc, Arc, Mutex};
 pub use artifact::{CompiledArtifact, Provenance};
 
 use crate::gen_rom_profile::SymbolMap;
+use scratch::Scratch;
 
 /// The cartridge image the upstream `rom` rule writes at the tree root.
 const ROM_FILE: &str = "pokeemerald.gba";
@@ -133,7 +135,8 @@ pub enum RomBuildError {
     MissingTool(String),
     /// A git command failed.
     Git(String),
-    /// Scratch storage could not be created.
+    /// Scratch storage could not be created, or stopped being the directory
+    /// this build created.
     Scratch(String),
     /// The pinned tree could not be materialised.
     Materialize(String),
@@ -194,7 +197,7 @@ impl fmt::Display for RomBuildError {
                  toolchain (arm-none-eabi binutils, a host C compiler, make, perl)"
             ),
             Self::Git(reason) => write!(f, "git failed: {reason}"),
-            Self::Scratch(reason) => write!(f, "cannot create scratch storage: {reason}"),
+            Self::Scratch(reason) => write!(f, "scratch storage is unusable: {reason}"),
             Self::Materialize(reason) => {
                 write!(f, "cannot materialise the pinned tree: {reason}")
             }
@@ -215,35 +218,6 @@ impl fmt::Display for RomBuildError {
 }
 
 impl std::error::Error for RomBuildError {}
-
-/// A scratch directory removed when dropped.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn create(root: &Path) -> Result<Self, RomBuildError> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let path = root.join(format!(
-            "pokeemerald-rs-rom-build-{}-{nanos}",
-            std::process::id()
-        ));
-        let builder = &mut std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(builder, 0o700);
-        builder
-            .create(&path)
-            .map_err(|err| RomBuildError::Scratch(format!("{}: {err}", path.display())))?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        // Best effort: a leftover temp directory must not mask the result.
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 /// Builds with the repository's own configuration.
 ///
@@ -279,17 +253,24 @@ pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
         }
     }
     let scratch = Scratch::create(&config.scratch_root)?;
-    let tree = scratch.0.join("pokeemerald");
+    // Every stage that names the tree by path is followed by a check that the
+    // scratch root is still the directory this build created.
+    let tree = scratch.tree()?;
     checkout::materialize(&config.reference, &config.pinned_revision, &tree)?;
+    scratch.check()?;
     // Read before anything else runs in the tree, so the build cannot rewrite
     // the checksum it is checked against.
     let expected = pinned_checksum(&tree)?;
+    scratch.check()?;
     copy_dir(&config.agbcc_source, &tree.join(AGBCC_DEST))
         .map_err(|err| RomBuildError::Materialize(format!("cannot provision agbcc: {err}")))?;
+    scratch.check()?;
     let build_command = run_make(config, &tree)?;
+    scratch.check()?;
     let rom = read_rom(&tree)?;
     verify_checksum(&expected, &rom)?;
     let symbols = read_map(&tree)?;
+    scratch.check()?;
     Ok(CompiledArtifact::new(
         Provenance {
             pinned_revision: config.pinned_revision.clone(),
