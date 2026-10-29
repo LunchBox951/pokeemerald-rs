@@ -15,15 +15,26 @@ use super::RomBuildError;
 /// path still names the held directory (device and inode on Unix, the file ID
 /// on Windows), and the build calls it around every pathname-based stage.
 ///
-/// Limits, since `std` has no `openat`: the check is a stage boundary, not
-/// atomic with the operations between checks, and covers the scratch root, not
-/// a `pokeemerald/` subtree swapped inside it. Cleanup refuses on any
-/// mismatch and removes nothing. On Linux it empties the directory through
-/// `/proc/self/fd/<hold>`, so a swap after the last check cannot redirect the
-/// recursive removal, then removes the root with an identity-checked `rmdir`,
-/// which can lose at most an empty replacement. Other Unix targets empty it by
-/// pathname right after the check. Windows holds the directory without delete
-/// sharing, so it cannot be renamed or replaced while held.
+/// Limits, since `std` has no `openat`/`unlinkat`: the check is a stage
+/// boundary, not atomic with the operations between checks, and covers the
+/// scratch root, not a `pokeemerald/` subtree swapped inside it. Residuals,
+/// each bounded the way the scenario scratch (`scenario/session.rs`) bounds
+/// its own:
+/// - A replacement installed between the mkdir and the open is adopted only
+///   if it is itself an empty, mode-0700 directory, which holds
+///   nothing to lose.
+/// - Cleanup refuses on any mismatch and removes nothing. On Linux it empties
+///   the directory through `/proc/self/fd/<hold>`, so a swap after the last
+///   check cannot redirect the recursive removal; the root itself goes through
+///   an identity-checked, empty-only `remove_dir` by pathname (no parent
+///   handle exists in `std`), so a swap in that last instant can cost an
+///   empty replacement and never content.
+/// - Other Unix targets empty the directory by pathname right after the
+///   identity check, so a swap in that window can redirect the child removal
+///   to the replacement.
+///
+/// Windows holds the directory without delete sharing, so it cannot be
+/// renamed or replaced while held.
 pub(super) struct Scratch {
     pub(super) path: PathBuf,
     /// `None` once the hold was released (Windows removal) or never proven ours.
@@ -46,6 +57,8 @@ impl Scratch {
             match builder.create(&path) {
                 Ok(()) => {
                     return Self::claim(path.clone()).map_err(|err| {
+                        // Empty-only, so a replacement loses nothing but itself.
+                        let _ = std::fs::remove_dir(&path);
                         RomBuildError::Scratch(format!("{}: {err}", path.display()))
                     });
                 }
@@ -62,6 +75,11 @@ impl Scratch {
     /// Cleanup stays disarmed until that holds, so a populated directory
     /// planted at the name is never removed.
     pub(super) fn claim(path: PathBuf) -> std::io::Result<Self> {
+        // A umask that strips owner bits (0o400 leaves 0o300) would make the
+        // directory unopenable for the hold and fail the 0o700 check, so put
+        // back the mode the umask withheld before the hold is taken.
+        #[cfg(unix)]
+        restore_private_mode(&path)?;
         let hold = open_hold(&path)?;
         let mut scratch = Self {
             path,
@@ -209,6 +227,67 @@ impl Drop for Scratch {
         }
     }
 }
+
+/// Sets the directory at `path` to 0o700 if its mode differs, without ever
+/// following a symlink and only on a directory this build could have created.
+///
+/// `mkdir(0o700)` can only yield a subset of 0o700 (plus an inherited setgid
+/// bit), so an entry with any other bit is left untouched and refused. Linux
+/// pins the entry with `O_PATH` (which needs no permission bits), proves the
+/// pinned inode is the directory at `path`, and changes the mode through
+/// `/proc/self/fd/<pin>`, which names that inode itself. Elsewhere there is no
+/// permission-free pin through `std`, so a directory the umask left without
+/// owner read or search is refused rather than restored by pathname.
+#[cfg(unix)]
+fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let found = std::fs::symlink_metadata(path)?;
+    let mode = found.mode() & 0o7777;
+    if !found.is_dir() || mode & 0o5077 != 0 {
+        return Err(not_fresh(path));
+    }
+    if mode & 0o700 == 0o700 {
+        return Ok(());
+    }
+    let Some(o_path) = O_PATH else {
+        return Err(std::io::Error::other(format!(
+            "the scratch directory was created mode {mode:o}: the process umask withheld \
+             owner read or search, and this platform cannot restore the mode safely"
+        )));
+    };
+    let pinned = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(o_path)
+        .open(path)?;
+    let held = pinned.metadata()?;
+    let again = std::fs::symlink_metadata(path)?;
+    if !held.is_dir() || !again.is_dir() || (held.dev(), held.ino()) != (again.dev(), again.ino()) {
+        return Err(not_the_held_directory(path));
+    }
+    let via = format!("/proc/self/fd/{}", pinned.as_raw_fd());
+    std::fs::set_permissions(via, std::fs::Permissions::from_mode(0o700))
+}
+
+/// `O_PATH` on Linux for the architectures whose value is the generic one;
+/// elsewhere there is no pin and the mode is not restored.
+#[cfg(unix)]
+const O_PATH: Option<i32> = if cfg!(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc64",
+        target_arch = "s390x"
+    )
+)) {
+    Some(0o1000_0000)
+} else {
+    None
+};
 
 /// Opens `path` as the scratch hold. Unix opens non-blocking so a FIFO swapped
 /// in at the name cannot stall the open; the claim then refuses it.

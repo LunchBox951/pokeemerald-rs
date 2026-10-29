@@ -733,3 +733,55 @@ fn a_build_whose_scratch_is_swapped_mid_make_fails_and_spares_the_replacement() 
         "the replacement survived the drop"
     );
 }
+
+/// Set in the child [`scratch_is_created_under_an_owner_stripping_umask`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const UMASK_CHILD: &str = "POKEEMERALD_ROM_BUILD_UMASK_CHILD";
+
+/// Linux only: other Unixes refuse, rather than restore, a scratch directory
+/// the umask left without owner read (see `restore_private_mode`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn scratch_is_created_under_an_owner_stripping_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "rom_build::tests::scratch_is_created_under_an_owner_stripping_umask";
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        // The umask is process-wide, so 0o400 is set only in a re-run of this
+        // test binary that runs this test alone.
+        let output = Command::new("/bin/sh")
+            .args(["-c", "umask 0400 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0400 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = temp_dir("scratch-umask");
+    // The child's umask made `root` 0o300; give the owner read back so the
+    // run can list and remove it.
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let scratch = Scratch::create(&root);
+    let mode = scratch
+        .as_ref()
+        .map(|scratch| {
+            fs::symlink_metadata(&scratch.path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        })
+        .map_err(ToString::to_string);
+    drop(scratch);
+    let leftover = fs::read_dir(&root).unwrap().count();
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(mode, Ok(0o700));
+    assert_eq!(leftover, 0, "dropping removed the scratch directory");
+}
