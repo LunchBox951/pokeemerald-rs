@@ -207,7 +207,13 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
             rendered,
             written_oracle(
                 &flat_reference,
-                &[(0, FIRST_EXPIRY), (2 * SAMPLES_PER_FRAME, 3762)],
+                // The pitch write at frame 1's start re-latches the held sample
+                // at that moment's duty position (one refresh sample).
+                &[
+                    (0, FIRST_EXPIRY),
+                    (SECOND_FRAME_START, SECOND_FRAME_START + 1),
+                    (2 * SAMPLES_PER_FRAME, 3762),
+                ],
                 TIED_FRAMES * SAMPLES_PER_FRAME,
             ),
             "{channel:?}"
@@ -323,4 +329,60 @@ fn a_tied_noise_note_restarts_at_the_reloading_write_and_holds_between_counts() 
         "holds after the second expiry"
     );
     assert!(voice.is_active());
+}
+
+#[test]
+fn a_pitch_write_to_a_stopped_square_refreshes_its_held_sample() {
+    // A register write runs the stopped channel's duty index up to date and
+    // re-latches `duty[index] * volume` (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+    for channel in SQUARES {
+        let reference = run(
+            &mut Rig::at_step(6),
+            &mut square(channel, CgbAdsr::flat(), 0),
+            2,
+        );
+        assert_ne!(
+            reference[FIRST_EXPIRY - 1],
+            reference[SECOND_FRAME_START],
+            "sanity: the duty position moved while the channel was stopped"
+        );
+        let mut voice = square(channel, CgbAdsr::flat(), TIED_LENGTH);
+        let mut rig = Rig::at_step(6);
+        rig.frame(&mut voice);
+        assert!(voice.is_length_stopped());
+        voice.set_track_pitch(0, 0);
+        let second = rig.frame(&mut voice);
+        assert_eq!(second[0], reference[SECOND_FRAME_START], "{channel:?}");
+    }
+}
+
+#[test]
+fn replacing_a_length_expired_noise_voice_keeps_its_held_latch() {
+    // A stopped channel 4 is not run before the replacement's `NR43` writes
+    // (`mgba/src/gb/audio.c:602-644`), and its trigger keeps the latch (`:371-383`).
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        for key in [24, 36, 48, 60, 72] {
+            for frames in 1..=CUT_FRAMES {
+                let note = TestNote::at_key(key);
+                let mut predecessor =
+                    noise_voice(CgbAdsr::flat(), width, note).with_length(TIED_LENGTH);
+                let mut rig = Rig::at_step(6);
+                run(&mut rig, &mut predecessor, frames);
+                assert!(predecessor.is_length_stopped());
+                let held = predecessor.noise_output_latch();
+
+                let mut replacement = noise_voice(CgbAdsr::flat(), width, note);
+                replacement.carry_hardware_state_from(&predecessor);
+                rig.sequencer
+                    .advance_clocks_into(SAMPLES_PER_FRAME, &mut rig.clocks);
+                replacement.set_sequencer_step(rig.clocks.start_step);
+                replacement.begin_frame(false);
+                assert_eq!(
+                    replacement.noise_output_latch(),
+                    held,
+                    "width {width} key {key} after {frames} frames"
+                );
+            }
+        }
+    }
 }

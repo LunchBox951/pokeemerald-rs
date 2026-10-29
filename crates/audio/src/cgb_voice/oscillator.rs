@@ -51,6 +51,18 @@ impl Oscillator {
         }
     }
 
+    /// A square's contribution re-latched at its current duty position
+    /// without stepping it; `None` for Wave and Noise.
+    pub(super) fn relatched_square_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(square) => Some(
+                (frame_gain * i32::from(square.held_level()) * BIPOLAR_SAMPLE_SCALE)
+                    >> SAMPLE_GAIN_BITS,
+            ),
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
     pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
         match self {
             Self::Noise(noise) => Some(noise),

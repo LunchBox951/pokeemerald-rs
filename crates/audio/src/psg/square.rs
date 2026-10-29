@@ -253,6 +253,20 @@ impl SquareChannel {
         }
     }
 
+    /// The bipolar unit level at the current duty position, without stepping
+    /// it: what a register write's catch-up re-latches into a channel that is
+    /// not playing (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+    pub fn held_level(&mut self) -> i8 {
+        self.settle_idle_samples();
+        let pattern = self.duty.pattern();
+        let step = (self.phase / PHASE_ONE) as usize % pattern.len();
+        if pattern[step] {
+            1
+        } else {
+            -1
+        }
+    }
+
     /// Produces the next bipolar unit sample.
     pub fn sample(&mut self) -> i8 {
         self.settle_idle_samples();

@@ -478,7 +478,11 @@ impl CgbVoice {
         if let (Oscillator::Noise(noise), Oscillator::Noise(previous)) =
             (&mut self.oscillator, &other.oscillator)
         {
-            noise.inherit_hardware_from(previous, other.hardware_envelope_volume.volume());
+            noise.inherit_hardware_from(
+                previous,
+                other.hardware_envelope_volume.volume(),
+                other.length_stopped,
+            );
         }
     }
 
@@ -615,10 +619,12 @@ impl CgbVoice {
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
         // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
+        let mut register_write_on_stopped_channel = false;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
                 self.oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
+                register_write_on_stopped_channel = self.length_stopped;
             }
         }
         // The note's first pitch block stores `NRx4` with the enable bit.
@@ -684,6 +690,16 @@ impl CgbVoice {
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
         self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
+        // A write's catch-up re-latches a stopped square at its new duty position
+        // (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+        if register_write_on_stopped_channel && self.length_stopped {
+            if let Some(held) = self
+                .oscillator
+                .relatched_square_contribution(self.frame_gain)
+            {
+                self.last_contribution = held;
+            }
+        }
     }
 
     /// A square held at hardware level 0 skips its duty catch-up
