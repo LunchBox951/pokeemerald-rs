@@ -62,12 +62,13 @@ rom-import = { path = "../rom-import" }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
-# `crate::pack_test_support::ScratchClaim` removes its scratch file on
-# Windows through `win-fs`'s handle identity and verified-handle delete,
-# so a replacement under the same name is never unlinked.
-# In-workspace, not a new external dependency; `win-fs` owns the one
-# `windows-sys` use (dependency ledger, `README.md`).
-[target.'cfg(windows)'.dependencies]
+# `crate::pack_test_support::ScratchClaim` (compiled under `cfg(test)` only)
+# removes its scratch file on Windows through `win-fs`'s handle identity and
+# verified-handle delete, so a replacement under the same name is never
+# unlinked. Dev-only, so the shipped Windows binary gains no edge; in-workspace,
+# not a new external dependency, and `win-fs` owns the one `windows-sys` use
+# (dependency ledger, `README.md`).
+[target.'cfg(windows)'.dev-dependencies]
 win-fs = { path = "../win-fs" }
 
 [dev-dependencies]
