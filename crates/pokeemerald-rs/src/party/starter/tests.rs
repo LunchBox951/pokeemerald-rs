@@ -137,7 +137,14 @@ fn runtime_member_equals_the_member_reloaded_from_its_record() {
         let (lead, _, _) = grant(starter, PlayerGender::Female);
         let reloaded = from_save_pokemon(&Dex::new(), lead.record()).unwrap();
         assert_eq!(&reloaded, lead.battler());
-        assert_eq!(lead.hidden_hp_offset(), 0);
+        assert_eq!(
+            (lead.record().hp, lead.record().max_hp),
+            (
+                u16::try_from(lead.battler().current_hp()).unwrap(),
+                u16::try_from(lead.battler().cached_stats().max_hp).unwrap()
+            ),
+            "the record carries the battler's own HP and cache, with no offset"
+        );
     }
 }
 

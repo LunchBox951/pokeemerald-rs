@@ -544,13 +544,12 @@ pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase 
 /// Lead construction and inspection for tests, so a test never names the
 /// `LoadedLead` directly (see [`super::lead_owner`]).
 impl OverworldPhase {
-    /// Installs `battler` as an unbacked lead (slot 0, no hidden HP).
+    /// Installs `battler` as an unbacked lead (slot 0).
     pub(in crate::flow) fn set_fresh_lead_for_test(&mut self, battler: battle::BattlePokemon) {
         self.install_fresh_lead(battler);
     }
 
-    /// Files `record` in `slot` and installs `battler` as its lead, measuring
-    /// the hidden-HP offset against that same pair. The party count and every
+    /// Files `record` in `slot` and installs `battler` as its lead. The party count and every
     /// other record are left as they were.
     pub(in crate::flow) fn set_backed_lead_for_test(
         &mut self,
@@ -560,10 +559,7 @@ impl OverworldPhase {
     ) {
         self.save1.player_party[slot] = record;
         self.lead = Some(crate::party::LoadedLead::backed_for_test(
-            &battle::Dex::new(),
-            slot,
-            battler,
-            record,
+            slot, battler, record,
         ));
         self.undecodable_lead_retained = false;
     }

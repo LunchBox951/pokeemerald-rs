@@ -244,9 +244,8 @@ pub(crate) struct OverworldPhase {
     pub(super) wild_lead_refusal: Option<battle::BattleError>,
     /// The player's lead party mon: its battle-ready form, the saved slot it
     /// was decoded from (`SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`,
-    /// `pokeemerald/src/battle_controllers.c:604`), the backing record, and the
-    /// current-HP points the zero-EV load clamp hid from it
-    /// (`party::hp_hidden_by_load`) -- what a fired encounter is fought with.
+    /// `pokeemerald/src/battle_controllers.c:604`), and the backing
+    /// record -- what a fired encounter is fought with.
     /// Write-back ([`Self::copy_party_and_objects_to_save`]) and
     /// [`Self::white_out`]'s heal both target the lead's own slot, not always
     /// slot 0.
