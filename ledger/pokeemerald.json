@@ -31044,6 +31044,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "MPlayExtender": {
+          "reason": "MPlayExtender's square-channel power-on triggers are modelled: REG_NR12/REG_NR22 = 0x8 and REG_NR14/REG_NR24 = 0x80 (m4a.c:268-273) trigger Square1 and Square2 at frequency 0 with the DAC on before any note, so their duty index free-runs from the start. Mixer::new seeds the Square1/Square2 idle hardware with CgbVoice::initialized_square_hardware, Mixer::mix_frame advances it through CgbVoice::render_idle_hardware, and the first note's Mixer::add_cgb_voice inherits the elapsed duty phase through CgbVoice::carry_hardware_state_from, as mGBA's GBAudioRun catches the index up on a register write (mgba/src/gb/audio.c:162-171,493-510). Not modelled: SOUNDCNT_X/SOUNDCNT_L/NR50 master setup, the NR42/NR44 noise triggers (a freshly started noise channel's latch is already zero), NR30 wave-off, and the SoundInfo ident handshake, which the port has no register state for.",
+          "rust_target": "crates/audio/src/cgb_voice.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        },
         "MidiKeyToCgbFreq": {
           "reason": "MidiKeyToCgbFreq re-implemented behaviourally as cgb_pitch::midi_key_to_cgb_freq_reg/midi_key_to_noise_control (S-3 slice 2).",
           "rust_target": "crates/audio/src/cgb_pitch.rs",
