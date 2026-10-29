@@ -72,9 +72,12 @@ impl BagScreen {
     }
 
     /// Whether the pair exists: not during a pocket switch or a context
-    /// menu, which destroy it (`item_menu.c:1262,1328`), nor once closed.
+    /// menu or the TOSS prompt, which destroy it (`item_menu.c:1262,1328`), nor once closed.
     pub(super) fn arrows_exist(&self) -> bool {
-        self.switch.is_none() && self.done.is_none() && self.menu.context_grid().is_none()
+        self.switch.is_none()
+            && self.done.is_none()
+            && self.toss.is_none()
+            && self.menu.context_grid().is_none()
     }
 
     /// Which of the up and down arrows show: up once the list has scrolled,

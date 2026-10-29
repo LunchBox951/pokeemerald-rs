@@ -131,6 +131,9 @@ impl BagScreen {
         if let Some(grid) = self.menu.context_grid() {
             self.draw_context(&mut base, &grid);
         }
+        if let Some(toss) = &self.toss {
+            self.draw_toss_window(&mut base, toss);
+        }
         self.draw_swap_line(&mut base);
         self.draw_scroll_arrows(&mut base);
         base
@@ -267,7 +270,7 @@ impl BagScreen {
         }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
         let arrow = self.chrome.normal_text(SELECTOR_ARROW);
-        let cursor_colors = if self.menu.context_grid().is_some() {
+        let cursor_colors = if self.menu.context_grid().is_some() || self.toss.is_some() {
             self.chrome.gray_cursor_colors()
         } else {
             colors
@@ -356,6 +359,16 @@ impl BagScreen {
                 .get(swap.item)
                 .map_or("?", |data| data.name);
             self.draw_icon_and_description(fb, Some(swap.item), &labels::move_prompt(name));
+            return;
+        }
+        if let Some(toss) = &self.toss {
+            // The prompt keeps the row's icon and prints in the description
+            // window (`item_menu.c:1810-1835`).
+            self.draw_icon_and_description(
+                fb,
+                Some(toss.selection.item),
+                &Self::toss_message(toss),
+            );
             return;
         }
         let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
@@ -514,7 +527,7 @@ selected.",
 }
 
 /// Draws `glyphs` at a window-local `offset`, clipped to the window.
-fn draw_glyphs(
+pub(super) fn draw_glyphs(
     fb: &mut Framebuffer,
     window_origin: (i32, i32),
     window_size: (i32, i32),
