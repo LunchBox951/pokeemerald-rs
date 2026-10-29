@@ -548,7 +548,6 @@ impl BattlePokemon {
             // mon has no effort values. A saved one restores its own bytes
             // through [`BattlePokemon::with_evs`].
             evs: Evs::default(),
-            // No level-up has happened yet -- see the field's own doc.
             moves: slots,
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
