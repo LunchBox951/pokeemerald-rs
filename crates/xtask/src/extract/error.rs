@@ -319,9 +319,17 @@ pub enum ExtractError {
     Midi(
         /// Source path.
         PathBuf,
-        /// Compilation or encoding failure.
+        /// Compilation failure.
         MidiError,
     ),
+    /// `assets` rejected a compiled MIDI song as outside the pack schema's
+    /// domain when it was encoded.
+    InvalidSongSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -505,6 +513,11 @@ impl fmt::Display for ExtractError {
             Self::Midi(path, error) => {
                 write!(f, "compiling `{}` failed: {error}", path.display())
             }
+            Self::InvalidSongSchema { path, source } => write!(
+                f,
+                "MIDI song `{}`: the asset pack schema rejected the compiled song: {source}",
+                path.display()
+            ),
         }
     }
 }
