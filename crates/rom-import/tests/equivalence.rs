@@ -224,12 +224,6 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
-/// Ids the two backends are known and accepted to disagree on, each with
-/// the reason it was signed off.
-///
-/// Empty. Every entry here is a promise not kept, so adding one needs a
-/// reason that survives review, not a convenient way to make this test
-/// pass `(test-ratchet)`.
 /// `field-message/table` as both backends must write it: schema header, then
 /// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
 /// through `charmap.txt`.
@@ -238,6 +232,12 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
     0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
 ];
 
+/// Ids the two backends are known and accepted to disagree on, each with
+/// the reason it was signed off.
+///
+/// Empty. Every entry here is a promise not kept, so adding one needs a
+/// reason that survives review, not a convenient way to make this test
+/// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
 
 #[test]
@@ -595,7 +595,6 @@ fn rom_path() -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-/// Parse a pack's directory into an id-keyed map.
 /// The `field-message/table` pin applied to each backend's pack, given as
 /// `(bytes, index)` pairs: named by id and bytes so a message both backends
 /// drop or misencode together still fails.
@@ -623,6 +622,7 @@ fn field_message_differences(
     differences
 }
 
+/// Parse a pack's directory into an id-keyed map.
 fn index(bytes: &[u8], what: &str) -> BTreeMap<String, DirectoryEntry> {
     parse_directory(bytes)
         .unwrap_or_else(|err| panic!("{what} is not a well-formed pack: {err}"))
