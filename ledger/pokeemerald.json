@@ -31513,10 +31513,10 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsNonAnimDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
+          "reason": "Re-implemented as metatile_behavior::is_non_anim_door, matching all three ids (MB_NON_ANIMATED_DOOR, MB_WATER_DOOR, MB_DEEP_SOUTH_WARP). is_warp_trigger consumes it, so the completed-step warp poll (engine::overworld::warp::trigger_door_warp) accepts the water door and the deep-south warp as IsWarpMetatileBehavior does; warp_in_facing keeps their distinct arrival facing (deep-south precedes the door arm, as GetAdjustedInitialDirection orders them). Pinned by the metatile_behavior and warp unit tests and by flow/overworld_phase/warp_tests/step_completion_aliases.rs.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
-          "status": "stubbed"
+          "status": "rewritten"
         },
         "MetatileBehavior_IsNorthArrowWarp": {
           "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_north_arrow_warp (exact upstream id membership incl. the MB_STAIRS_OUTSIDE_ABANDONED_SHIP alias), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",

@@ -80,13 +80,14 @@ pub const MB_NORTH_ARROW_WARP: u8 = 0x64;
 /// A south-facing arrow warp.
 pub const MB_SOUTH_ARROW_WARP: u8 = 0x65;
 
-/// A non-animated-door alias used only to determine arrival facing.
+/// A non-animated-door alias: a completed-step warp trigger and an arrival-facing door.
 pub const MB_WATER_DOOR: u8 = 0x6C;
 
 /// A south-facing arrow-warp alias used on water.
 pub const MB_WATER_SOUTH_ARROW_WARP: u8 = 0x6D;
 
-/// A south-warp identity that takes precedence over general door arrival facing.
+/// A south-warp identity: a completed-step warp trigger whose arrival facing
+/// takes precedence over general door arrival facing.
 pub const MB_DEEP_SOUTH_WARP: u8 = 0x6E;
 
 /// A door alias used only to determine arrival facing.
@@ -247,20 +248,36 @@ pub const fn is_forced_movement_input_tile(behavior: u8) -> bool {
     is_forced_movement(behavior) || behavior == MB_CRACKED_FLOOR
 }
 
-/// Returns whether a behavior is one of the supported door-shaped warp triggers.
+/// Returns whether a behavior is a supported door-shaped warp trigger.
 ///
-/// Arrival-facing door aliases are not triggers.
+/// Covers [`MB_NON_ANIMATED_DOOR`] and [`MB_ANIMATED_DOOR`]. The
+/// non-animated aliases are [`is_non_anim_door`]'s; [`MB_PETALBURG_GYM_DOOR`]
+/// is an arrival-facing alias only.
 #[must_use]
 pub const fn is_door(behavior: u8) -> bool {
     matches!(behavior, MB_NON_ANIMATED_DOOR | MB_ANIMATED_DOOR)
 }
 
+/// Returns whether a behavior is one of `MetatileBehavior_IsNonAnimDoor`'s ids
+/// (`metatile_behavior.c:262-270`): [`MB_NON_ANIMATED_DOOR`],
+/// [`MB_WATER_DOOR`] and [`MB_DEEP_SOUTH_WARP`].
+#[must_use]
+pub const fn is_non_anim_door(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_NON_ANIMATED_DOOR | MB_WATER_DOOR | MB_DEEP_SOUTH_WARP
+    )
+}
+
 /// Returns whether a behavior unconditionally triggers a supported door-shaped warp.
 ///
-/// Unknown behaviors and direction-gated arrow warps fail closed.
+/// This is the supported subset of `IsWarpMetatileBehavior`
+/// (`field_control_avatar.c:751-765`): the animated door plus every
+/// [`is_non_anim_door`] id. Unknown behaviors and direction-gated arrow
+/// warps fail closed.
 #[must_use]
 pub const fn is_warp_trigger(behavior: u8) -> bool {
-    is_door(behavior)
+    behavior == MB_ANIMATED_DOOR || is_non_anim_door(behavior)
 }
 
 /// Returns whether a behavior permits land encounters.
@@ -578,6 +595,17 @@ mod tests {
     }
 
     #[test]
+    fn non_animated_door_aliases_are_warp_triggers() {
+        for behavior in [MB_NON_ANIMATED_DOOR, MB_WATER_DOOR, MB_DEEP_SOUTH_WARP] {
+            assert!(is_non_anim_door(behavior), "{behavior:#04x}");
+            assert!(is_warp_trigger(behavior), "{behavior:#04x}");
+        }
+        assert!(!is_non_anim_door(MB_ANIMATED_DOOR));
+        assert!(!is_non_anim_door(MB_PETALBURG_GYM_DOOR));
+        assert!(!is_non_anim_door(MB_NORMAL));
+    }
+
+    #[test]
     fn arrow_warp_and_arrival_facing_only_ids_are_not_door_shaped_warp_triggers() {
         for behavior in [
             MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
@@ -586,9 +614,7 @@ mod tests {
             MB_WEST_ARROW_WARP,
             MB_NORTH_ARROW_WARP,
             MB_SOUTH_ARROW_WARP,
-            MB_WATER_DOOR,
             MB_WATER_SOUTH_ARROW_WARP,
-            MB_DEEP_SOUTH_WARP,
             MB_PETALBURG_GYM_DOOR,
         ] {
             assert!(
