@@ -2,7 +2,7 @@
 
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
-use crate::ability::huge_power_attack;
+use crate::ability::{burn_halves_damage, huge_power_attack};
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -684,7 +684,8 @@ impl Battle {
     /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
     /// confused Selfdestruct or Explosion user takes the larger self-hit
     /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
-    /// depleted slot reaches it too).
+    /// depleted slot reaches it too). The same call halves a burned battler's
+    /// damage unless it has Guts (`:3262`-`:3264`).
     pub(super) fn apply_confusion_self_hit(
         &mut self,
         battler_is_player: bool,
@@ -714,10 +715,10 @@ impl Battle {
             attack_stage,
             defense_stat,
             defense_stage,
-            // A burned battler's self-hit should halve like any physical
-            // hit (`pokeemerald/src/pokemon.c:3262`-`:3264`); that call site
-            // is tracked by #2850.
-            attacker_burned: false,
+            // `CalculateBaseDamage` halves a burned non-Guts attacker's
+            // damage after the division by 50 (`pokeemerald/src/pokemon.c:3262`
+            // -`:3264`); the confused battler is the attacker here.
+            attacker_burned: burn_halves_damage(battler.ability(), battler.status1()),
             reflect: false,
             light_screen: false,
             weather: Weather::None,
