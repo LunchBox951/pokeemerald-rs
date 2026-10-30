@@ -229,6 +229,15 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A field-message source does not parse as the pinned upstream shape.
+    FieldMessageSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A cry table or cry sample source does not parse as the pinned upstream shape.
     CrySource {
         /// Source path.
@@ -310,9 +319,17 @@ pub enum ExtractError {
     Midi(
         /// Source path.
         PathBuf,
-        /// Compilation or encoding failure.
+        /// Compilation failure.
         MidiError,
     ),
+    /// `assets` rejected a compiled MIDI song as outside the pack schema's
+    /// domain when it was encoded.
+    InvalidSongSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -453,6 +470,9 @@ impl fmt::Display for ExtractError {
             Self::BattleMessageSource { path, line, detail } => {
                 write!(f, "battle-message source `{}` line {line}: {detail}", path.display())
             }
+            Self::FieldMessageSource { path, line, detail } => {
+                write!(f, "field-message source `{}` line {line}: {detail}", path.display())
+            }
             Self::CrySource { path, line, detail } => {
                 write!(f, "cry source `{}` line {line}: {detail}", path.display())
             }
@@ -493,6 +513,11 @@ impl fmt::Display for ExtractError {
             Self::Midi(path, error) => {
                 write!(f, "compiling `{}` failed: {error}", path.display())
             }
+            Self::InvalidSongSchema { path, source } => write!(
+                f,
+                "MIDI song `{}`: the asset pack schema rejected the compiled song: {source}",
+                path.display()
+            ),
         }
     }
 }
