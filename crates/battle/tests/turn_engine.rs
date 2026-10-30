@@ -26,6 +26,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/oran_berry.rs"]
+mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
 mod paralysis;
 #[path = "turn_engine/participant_admission.rs"]

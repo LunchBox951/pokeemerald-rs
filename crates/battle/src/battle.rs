@@ -1005,9 +1005,10 @@ impl Battle {
             rng,
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
-        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_LEECH_SEED,
-        // ENDTURN_LEECH_SEED before ENDTURN_POISON, ENDTURN_POISON before
-        // ENDTURN_BURN, and ENDTURN_BURN before ENDTURN_CHARGE
+        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_ITEMS1 (Oran Berry),
+        // ENDTURN_ITEMS1 before ENDTURN_LEECH_SEED, ENDTURN_LEECH_SEED before
+        // ENDTURN_POISON, ENDTURN_POISON before ENDTURN_BURN, and
+        // ENDTURN_BURN before ENDTURN_CHARGE
         // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
@@ -1020,6 +1021,7 @@ impl Battle {
                 continue;
             }
             self.apply_shed_skin_residual(is_player, rng, events);
+            self.apply_held_item_residual(is_player, events);
             if self.apply_leech_seed_residual(is_player, events) {
                 // `BattleScript_LeechSeedTurnDrain` ends in `end2` without
                 // `checkteamslost`, so a drain that fells the battler cannot
