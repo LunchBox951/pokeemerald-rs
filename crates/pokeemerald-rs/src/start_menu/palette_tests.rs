@@ -138,10 +138,12 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
 
     let frame_5_red = Bgr555::from_channels(31, 0, 0).to_rgb888();
 
-    let item_window_border_corner = menu.compose_over(Framebuffer::new()).pixel(
-        usize::try_from((MENU_TILEMAP_LEFT - 1) * 8).unwrap(),
-        usize::try_from((MENU_TILEMAP_TOP - 1) * 8).unwrap(),
-    );
+    let item_window_border_corner = menu
+        .compose_over(Framebuffer::new(), rendering::PaletteStage::default())
+        .pixel(
+            usize::try_from((MENU_TILEMAP_LEFT - 1) * 8).unwrap(),
+            usize::try_from((MENU_TILEMAP_TOP - 1) * 8).unwrap(),
+        );
     assert_eq!(
         item_window_border_corner,
         Some(frame_5_red),
@@ -162,14 +164,157 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
         "the save flow must reach a Yes/No prompt within the frame budget"
     );
 
-    let yes_no_window_border_corner = menu.compose_over(Framebuffer::new()).pixel(
-        usize::try_from((YES_NO_TILEMAP_LEFT - 1) * 8).unwrap(),
-        usize::try_from((YES_NO_TILEMAP_TOP - 1) * 8).unwrap(),
-    );
+    let yes_no_window_border_corner = menu
+        .compose_over(Framebuffer::new(), rendering::PaletteStage::default())
+        .pixel(
+            usize::try_from((YES_NO_TILEMAP_LEFT - 1) * 8).unwrap(),
+            usize::try_from((YES_NO_TILEMAP_TOP - 1) * 8).unwrap(),
+        );
     assert_eq!(
         yes_no_window_border_corner,
         Some(frame_5_red),
         "a save whose optionsWindowFrameType is {CHOSEN_FRAME} must draw that \
          frame's border around the start menu's Yes/No prompt too, not frame 0's"
     );
+}
+
+mod staged {
+    use super::*;
+    use crate::palette_overlay::IdentityTransform;
+    use assets::pack::AssetPack;
+    use rendering::{
+        Bgr555, Framebuffer, NormalPaletteFade, PaletteColorTransform, PaletteFadeTarget,
+        PaletteStage, Rgb888,
+    };
+
+    const CHOSEN_FRAME: u8 = 5;
+    /// A field pixel the menu never covers.
+    const FIELD: Rgb888 = Rgb888 {
+        r: 80,
+        g: 100,
+        b: 120,
+    };
+
+    fn frame_5_red() -> Rgb888 {
+        Bgr555::from_channels(31, 0, 0).to_rgb888()
+    }
+
+    fn field() -> Framebuffer {
+        let mut field = Framebuffer::new();
+        field.fill(FIELD);
+        field
+    }
+
+    /// The fixture menu at its item window, and again once SAVE has reached
+    /// its Yes/No prompt.
+    fn menus(label: &str) -> (StartMenu, StartMenu) {
+        let path = synthetic_pack_path(label);
+        let _guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
+        let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
+        let build = || {
+            let chrome = StartMenuChrome::from_pack(&pack, CHOSEN_FRAME)
+                .expect("the fixture pack has frame 5");
+            StartMenu::assemble(chrome, 0)
+        };
+        let items = build();
+        let mut prompt = build();
+        let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+        for _ in 0..=FRAME_BUDGET {
+            if prompt.yes_no_cursor().is_some() {
+                break;
+            }
+            prompt.tick(pressed(Buttons::A), &mut target);
+        }
+        assert!(prompt.yes_no_cursor().is_some(), "SAVE must reach Yes/No");
+        (items, prompt)
+    }
+
+    fn item_corner() -> (usize, usize) {
+        (
+            usize::try_from((MENU_TILEMAP_LEFT - 1) * 8).unwrap(),
+            usize::try_from((MENU_TILEMAP_TOP - 1) * 8).unwrap(),
+        )
+    }
+
+    fn prompt_corner() -> (usize, usize) {
+        (
+            usize::try_from((YES_NO_TILEMAP_LEFT - 1) * 8).unwrap(),
+            usize::try_from((YES_NO_TILEMAP_TOP - 1) * 8).unwrap(),
+        )
+    }
+
+    #[test]
+    fn the_identity_stage_composes_the_frame_it_always_did() {
+        let (items, prompt) = menus("start-menu-staged-identity");
+        let identity = IdentityTransform;
+        let forced = PaletteStage {
+            bg: Some(&identity),
+            obj: Some(&identity),
+        };
+        let obj_black = NormalPaletteFade::begin_in(PaletteFadeTarget::Black).obj_blend();
+        let obj_only = PaletteStage {
+            bg: None,
+            obj: Some(&obj_black),
+        };
+        for menu in [&items, &prompt] {
+            let plain = menu.compose_over(field(), PaletteStage::default());
+            assert_ne!(plain.pixels(), field().pixels(), "the menu draws");
+            assert_eq!(
+                menu.compose_over(field(), forced).pixels(),
+                plain.pixels(),
+                "an identity transform must not change a pixel"
+            );
+            assert_eq!(
+                menu.compose_over(field(), obj_only).pixels(),
+                plain.pixels(),
+                "the menu windows are BG, so an OBJ stage never reaches them"
+            );
+        }
+        let corner = |menu: &StartMenu, at: (usize, usize)| {
+            menu.compose_over(field(), PaletteStage::default())
+                .pixel(at.0, at.1)
+        };
+        assert_eq!(corner(&items, item_corner()), Some(frame_5_red()));
+        assert_eq!(corner(&prompt, prompt_corner()), Some(frame_5_red()));
+    }
+
+    #[test]
+    fn a_fully_black_stage_blanks_the_item_window_and_the_save_prompt() {
+        let (items, prompt) = menus("start-menu-staged-black");
+        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
+        let black = Rgb888::BLACK;
+        for (menu, corner) in [(&items, item_corner()), (&prompt, prompt_corner())] {
+            let composed = menu.compose_over(field(), fade.palette_stage());
+            assert_eq!(composed.pixel(corner.0, corner.1), Some(black));
+            assert!(
+                composed
+                    .pixels()
+                    .iter()
+                    .all(|&pixel| pixel == black || pixel == FIELD),
+                "every pixel is a staged menu pixel or the untouched field"
+            );
+            let over_black = menu.compose_over(Framebuffer::new(), fade.palette_stage());
+            assert!(over_black.pixels().iter().all(|&pixel| pixel == black));
+        }
+    }
+
+    #[test]
+    fn menu_pixels_are_staged_once_and_the_field_beneath_is_left_as_given() {
+        let (items, prompt) = menus("start-menu-staged-once");
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::Black);
+        fade.update();
+        fade.update();
+        let bg = fade.bg_blend();
+        let stage = PaletteStage {
+            bg: Some(&bg),
+            obj: None,
+        };
+        let staged_red = bg.transform(frame_5_red());
+        assert_ne!(staged_red, frame_5_red(), "the BG blend must have begun");
+        for (menu, corner) in [(&items, item_corner()), (&prompt, prompt_corner())] {
+            let composed = menu.compose_over(field(), stage);
+            assert_eq!(composed.pixel(corner.0, corner.1), Some(staged_red));
+            assert_eq!(composed.pixel(0, Framebuffer::HEIGHT - 1), Some(FIELD));
+        }
+    }
 }
