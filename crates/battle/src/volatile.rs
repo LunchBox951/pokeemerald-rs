@@ -6,7 +6,7 @@
 //! `STATUS2_FOCUS_ENERGY` but omits `STATUS2_DEFENSE_CURL`
 //! (`src/battle_main.c:3173`-`:3217`), the opposite of how Focus Energy
 //! itself survives the pass. Baton Pass is not modelled, so every switch
-//! clears all four (`Battle::switch_enemy_to` and the player's reserve
+//! clears every one of them (`Battle::switch_enemy_to` and the player's reserve
 //! send-out call `BattlePokemon::clear_battle_scratch`).
 //!
 //! Charge's timer is also its active flag because upstream raises and clears
