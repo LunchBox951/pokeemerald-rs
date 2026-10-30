@@ -586,6 +586,38 @@ pub enum BattleEvent {
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
     },
+    /// Leech Seed took hold of its target (`STRINGID_PKMNSEEDED`,
+    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss,
+    /// an already-seeded target, and a Grass-type target report
+    /// [`BattleEvent::Missed`], [`BattleEvent::Missed`], and
+    /// [`BattleEvent::NoEffect`] instead (`gLeechSeedStringIds`,
+    /// `src/battle_message.c:960`-`:967`).
+    Seeded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that planted the seed.
+        move_id: MoveId,
+    },
+    /// `STRINGID_PKMNSAPPEDBYLEECHSEED` (`data/battle_scripts_1.s:3265`-
+    /// `:3284`): the seeded battler's `ENDTURN_LEECH_SEED` loss, which
+    /// precedes its [`BattleEvent::HurtByPoison`] slot
+    /// (`pokeemerald/src/battle_util.c:1509`-`:1523`). Always followed by the
+    /// seeder's [`BattleEvent::LeechSeedHealed`].
+    SappedByLeechSeed {
+        /// Whether the player's battler was drained.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the drain.
+        damage: u32,
+    },
+    /// The seeder's share of a [`BattleEvent::SappedByLeechSeed`]: it regains
+    /// exactly the HP the seeded battler lost (`copyword gBattleMoveDamage,
+    /// gHpDealt`, `data/battle_scripts_1.s:3270`), capped at its maximum HP.
+    LeechSeedHealed {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// HP actually gained, zero for a full-HP seeder.
+        healed: u32,
+    },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
     /// holder's end-turn draw cured its primary status, before that

@@ -19,6 +19,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::{ensure_admissible, try_run_from_battle};
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
+use crate::leech_seed::leech_seed_residual_damage;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
@@ -1004,9 +1005,10 @@ impl Battle {
             rng,
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
-        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
-        // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
-        // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
+        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_LEECH_SEED,
+        // ENDTURN_LEECH_SEED before ENDTURN_POISON, ENDTURN_POISON before
+        // ENDTURN_BURN, and ENDTURN_BURN before ENDTURN_CHARGE
+        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -1018,6 +1020,15 @@ impl Battle {
                 continue;
             }
             self.apply_shed_skin_residual(is_player, rng, events);
+            if self.apply_leech_seed_residual(is_player, events) {
+                // `BattleScript_LeechSeedTurnDrain` ends in `end2` without
+                // `checkteamslost`, so a drain that fells the battler cannot
+                // end the battle here, unlike poison and burn
+                // (`data/battle_scripts_1.s:3265`-`:3284`, `:3736`-`:3753`).
+                // The rest of this battler's pass is skipped, and the other
+                // battler's pass still runs.
+                continue;
+            }
             self.apply_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
@@ -1081,6 +1092,58 @@ impl Battle {
             by_player: is_player,
             status,
         });
+    }
+
+    /// `ENDTURN_LEECH_SEED`: a seeded battler loses an eighth of its max HP,
+    /// at least one, and the seeder's slot regains the HP actually lost, with
+    /// no RNG draw. Nothing happens unless the seeder's slot is occupied by a
+    /// living battler (`src/battle_util.c:1509`-`:1523`;
+    /// `data/battle_scripts_1.s:3265`-`:3284`). Reports whether the drain
+    /// felled the seeded battler, after settling that faint.
+    fn apply_leech_seed_residual(
+        &mut self,
+        is_player: bool,
+        events: &mut Vec<BattleEvent>,
+    ) -> bool {
+        let seeded = if is_player { &self.player } else { &self.enemy };
+        let Some(source) = seeded.volatiles().leech_seed_source else {
+            return false;
+        };
+        let receiver_is_player = source == BattlerSide::Player;
+        let receiver = if receiver_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        if seeded.is_fainted() || receiver.is_fainted() {
+            return false;
+        }
+        let damage = leech_seed_residual_damage(seeded.stats().max_hp);
+        let dealt = damage.min(seeded.current_hp());
+        let victim = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        victim.apply_damage(dealt);
+        let fainted = victim.is_fainted();
+        events.push(BattleEvent::SappedByLeechSeed {
+            by_player: is_player,
+            damage: dealt,
+        });
+        let receiver = if receiver_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let before = receiver.current_hp();
+        receiver.heal_hp(dealt);
+        events.push(BattleEvent::LeechSeedHealed {
+            by_player: receiver_is_player,
+            healed: receiver.current_hp() - before,
+        });
+        self.settle_faint(is_player, events);
+        fainted
     }
 
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {

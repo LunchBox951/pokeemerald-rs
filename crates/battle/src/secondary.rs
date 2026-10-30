@@ -22,6 +22,7 @@ use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 use crate::damage::{aggregate_type_effectiveness, BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::leech_seed::is_leech_seed_effect;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
@@ -277,6 +278,12 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
+/// Leech Seed is refused against a non-Grass Liquid Ooze defender: the seed's
+/// end-of-turn drain inverts into damage to the seeder there
+/// (`BattleScript_LeechSeedTurnPrintLiquidOoze`,
+/// `data/battle_scripts_1.s:3275`-`:3276`), which is unmodelled. A Grass
+/// defender never takes the seed, so it stays admitted.
+///
 /// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
 /// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
 /// both values stay in the same chance branch, spend its `Random() % 100`
@@ -297,6 +304,15 @@ pub fn ensure_admissible(
     defender: &BattlePokemon,
 ) -> Result<(), BattleError> {
     let mv = dex.move_data(move_id)?;
+    if is_leech_seed_effect(mv.effect) {
+        if defender.ability() == AbilityId::LIQUID_OOZE && !defender.types().contains(&Type::Grass)
+        {
+            return Err(BattleError::UnportedAbilityInteraction(
+                AbilityId::LIQUID_OOZE,
+            ));
+        }
+        return Ok(());
+    }
     if is_poison_hit_effect(mv.effect) {
         let move_type = mv
             .move_type
