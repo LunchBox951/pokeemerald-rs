@@ -12,6 +12,7 @@ use rendering::{Framebuffer, NormalPaletteFade, PaletteFadeStatus, PaletteFadeTa
 use super::{
     intro, log_game_continued, menu_action, new_game_options_for, title_advance_pressed,
     title_to_main_menu, AnimatedTitle, AppScene, MainMenuAction, MainMenuState, OverworldPhase,
+    TitleInit,
 };
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
@@ -59,6 +60,7 @@ enum MenuExit {
 
 impl MainMenuFadeWait {
     /// Whether this wait is the B path back to the title screen.
+    #[cfg(test)]
     pub(super) const fn returns_to_title(&self) -> bool {
         matches!(self.exit, MenuExit::Back)
     }
@@ -281,14 +283,10 @@ pub(super) fn advance_main_menu_fade_wait(
 
 /// `Task_HandleMainMenuBPressed`'s hand-off once the white fade is done:
 /// `SetMainCallback2(CB2_InitTitleScreen)` (`pokeemerald/src/main_menu.c:1109-1120`).
-/// The title is rebuilt from `pack_source` like the boot title -- tick 0, not
-/// yet presented -- and the menu is dropped; the app restarts the title music
-/// on this transition (`App::step`).
-///
-/// Known gap: `CB2_InitTitleScreen` spans several callback frames and fades
-/// in from white (`title_screen.c:570-671`), while the port's title models
-/// only the settled idle screen (`title.rs` module docs), so the title
-/// appears at once.
+/// The title is rebuilt from `pack_source` and the menu is dropped. This frame
+/// only installs the initializer, so it presents the fully white fade;
+/// [`AppScene::TitleInit`] runs the setup frames and the white fade-in from the
+/// next one, starting `mus_title` on its state 4 (`App::step`).
 ///
 /// A failed pack load is logged once and leaves the menu as it was, like
 /// [`title_to_main_menu`].
@@ -302,16 +300,10 @@ fn main_menu_to_title(
         .and_then(|pack| crate::title::TitleScene::from_pack(&pack));
     match loaded {
         Ok(scene) => {
-            let frame = scene.compose_frame(0);
-            let title = AnimatedTitle {
-                scene,
-                tick: 0,
-                presented: false,
-                // The session save travels with the title (`AnimatedTitle`'s
-                // field docs).
-                retained_save: Some(Box::new(state.saved)),
-            };
-            (AppScene::Title(Box::new(title)), frame)
+            // The session save travels with the title (`AnimatedTitle`'s
+            // field docs).
+            let (init, frame) = TitleInit::new(scene, Some(Box::new(state.saved)));
+            (AppScene::TitleInit(Box::new(init)), frame)
         }
         Err(err) => {
             eprintln!("{err} -- staying on the main menu");

@@ -48,6 +48,11 @@ fn real_pack_restart_continues_the_game_the_first_boot_saved() {
 
     let mut restarted = session.start().expect("restart onto the same save");
     assert_eq!(restarted.state(), AppState::Title);
+    // The title ignores input through its setup frames and white fade-in.
+    for _ in 0..super::super::TITLE_INIT_FRAMES {
+        restarted.set_headless_buttons(AppButtons::NONE).unwrap();
+        assert!(restarted.step().unwrap());
+    }
     restarted.set_headless_buttons(AppButtons::START).unwrap();
     assert!(restarted.step().unwrap());
     for _ in 0..=super::super::FADE_WAIT_FRAMES {
