@@ -533,7 +533,8 @@ fn a_disagreeing_ability_slot_survives_the_save_round_trip() {
 }
 
 /// `STATUS1_*` (`pokeemerald/include/constants/battle.h:114-125`): the three
-/// sleep bits count turns left, poison is `0x08`, paralysis is `0x40`.
+/// sleep bits count turns left, poison is `0x08`, burn is `0x10`, paralysis
+/// is `0x40`.
 #[test]
 fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     let dex = Dex::new();
@@ -547,6 +548,7 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
         (6, battle::Status1::Asleep { turns: 6 }),
         (7, battle::Status1::Asleep { turns: 7 }),
         (8, battle::Status1::Poisoned),
+        (16, battle::Status1::Burned),
         (64, battle::Status1::Paralysed),
     ] {
         let mut record = to_save_pokemon(&dex, &treecko_fixture());
@@ -562,7 +564,7 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     }
 }
 
-/// Burn `0x10`, freeze `0x20`, bad poison `0x80` and its counter bits
+/// Freeze `0x20`, bad poison `0x80` and its counter bits
 /// (`0x0F00`), several conditions at once, a sleep count beside poison, and
 /// bits above `STATUS1_ANY` are not modelled
 /// (`pokeemerald/include/constants/battle.h:117-125`): decoding fails closed
@@ -571,7 +573,6 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
 fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
     let dex = Dex::new();
     for word in [
-        0x10,
         0x20,
         0x80,
         0x180,
@@ -580,6 +581,9 @@ fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
         0x9,
         0x48,
         0x88,
+        0x18,
+        0x50,
+        0x11,
         0x8000_0000,
         0x1_0000,
     ] {
