@@ -149,3 +149,36 @@ fn a_loss_while_playing_is_stale_even_if_stop_lands_before_the_worker_sees_it() 
         "history queued after a loss while playing is discarded"
     );
 }
+
+#[test]
+fn refused_pauses_do_not_spend_the_retry_budget() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.no_hw_pause = true;
+    });
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(with(&w).builds, 1);
+
+    // Four stop/start cycles, all inside `STABLE_AFTER`. Each refused pause
+    // re-attaches a stopped stream; none of them is a failure, so the fourth
+    // must not close a burst and push its re-attach out by `COOLDOWN`.
+    let mut now = MS(20);
+    for cycle in 0..4 {
+        rig.shared.set_running(false, &rig.producer);
+        rig.transport.step(now);
+        rig.transport.step(now + MS(500));
+        assert_eq!(
+            with(&w).builds,
+            cycle + 2,
+            "the stopped re-attach after refused pause {} is not delayed",
+            cycle + 1
+        );
+        rig.shared.set_running(true, &rig.producer);
+        rig.transport.step(now + MS(520));
+        now += MS(540);
+    }
+    assert!(now < STABLE_AFTER);
+    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+}

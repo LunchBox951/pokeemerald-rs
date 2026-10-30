@@ -30,6 +30,8 @@
 //!   missing or flapping output is polled at a bounded rate and never given
 //!   up on. A newly observed default identity starts a fresh burst; a stream
 //!   that fails again before surviving [`STABLE_AFTER`] continues the old one.
+//!   A `stop` whose pause the backend refuses re-attaches a stopped stream at
+//!   once and spends none of that budget.
 //! - When a stream re-attaches after an earlier one and playback was meant to
 //!   advance while no stream drained the ring (a stream was lost while
 //!   started, or `start` held while none was attached, even when a `stop`
@@ -405,14 +407,21 @@ impl<H: OutputHost> Transport<H> {
             // A loss raised after the check above, while this stream was
             // still playing, happened while started; latch it before a
             // concurrent `stop` clears `playing` or retires the stream.
-            if live.playing && live.health.lost.load(Ordering::Acquire) {
+            let lost = live.playing && live.health.lost.load(Ordering::Acquire);
+            if lost {
                 self.stale_queue = true;
             }
             if result.is_ok() {
                 live.playing = want;
-            } else {
+            } else if want || lost {
                 self.retire(TransportFailure::StreamLost);
                 self.fail(self.finished(now));
+            } else {
+                // A refused pause (a backend without hardware pause) is a
+                // deliberate stop, not a failure: re-attach a stopped stream
+                // at once without spending the retry budget.
+                self.retire(TransportFailure::StreamLost);
+                self.next_attempt = self.finished(now);
             }
         }
     }

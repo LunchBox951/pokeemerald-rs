@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.85.0] - 2026-10-30
 
-- General improvements in preparation for audio that recovers after the output device is lost.
+- Game music now comes back on its own when the sound device is unplugged or changed, and starts once a sound device is connected if none was there at launch.
 
 ## [0.0.84.0] - 2026-10-30
 
