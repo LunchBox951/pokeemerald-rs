@@ -445,6 +445,35 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
     .expect("synthetic pack should decode cleanly")
 }
 
+/// [`synthetic_scene`] with its one tile painted as a non-repeating run of
+/// seven distinct opaque colours instead of one, so a BG mosaic block above one
+/// pixel visibly flattens the composed frame.
+pub(crate) fn synthetic_patterned_scene(width: u16, height: u16) -> super::OverworldScene {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+    let tiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/tiles")
+        .expect("the general fixture always fabricates its own tiles entry");
+    tiles.payload = (0..8u8)
+        .flat_map(|y| (0..8u8).map(move |x| 1 + (x ^ (y * 3)) % 7))
+        .collect();
+    let bank0 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/00")
+        .expect("the general fixture always fabricates its own bank-0 palette");
+    bank0.meta = 8u16.to_le_bytes().to_vec();
+    bank0.payload = (0..8u16)
+        .flat_map(|index| (index * 0x0841).to_le_bytes())
+        .collect();
+    synthetic_scene_result(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("the patterned synthetic pack should decode cleanly")
+}
+
 /// [`synthetic_scene`], loaded with `events` instead of no object events,
 /// plus an opaque 16x32 people sheet for each of `sprite_paths` so those
 /// events' sprites bind and draw.

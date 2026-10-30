@@ -445,22 +445,28 @@ fn the_identity_stage_leaves_the_field_frame_as_it_was() {
     );
     assert!(count_of(&frame, RED) > 0 && count_of(&frame, BLUE) > 0);
 
-    assert_eq!(*phase.compose_frame_staged(PaletteStage::default()), *frame);
+    assert_eq!(
+        *phase.compose_frame_staged(PaletteStage::default(), None),
+        *frame
+    );
     let identity = IdentityTransform;
     let forced = PaletteStage {
         bg: Some(&identity),
         obj: Some(&identity),
     };
     assert_eq!(
-        *phase.compose_frame_staged(forced),
+        *phase.compose_frame_staged(forced, None),
         *frame,
         "an identity transform on both banks must not change a pixel"
     );
 
-    let scene_frame =
-        phase
-            .scene
-            .compose_staged(&phase.player, &phase.save1.event_data, phase.tick, forced);
+    let scene_frame = phase.scene.compose_staged(
+        &phase.player,
+        &phase.save1.event_data,
+        phase.tick,
+        forced,
+        None,
+    );
     assert_eq!(
         scene_frame.pixels(),
         phase
@@ -474,7 +480,7 @@ fn the_identity_stage_leaves_the_field_frame_as_it_was() {
 fn a_fully_black_stage_blanks_the_field() {
     let phase = field_phase();
     let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
-    let black = phase.compose_frame_staged(fade.palette_stage());
+    let black = phase.compose_frame_staged(fade.palette_stage(), None);
     assert_eq!(count_of(&black, BLACK), black.len());
 
     let scene_frame = phase.scene.compose_staged(
@@ -482,6 +488,7 @@ fn a_fully_black_stage_blanks_the_field() {
         &phase.save1.event_data,
         phase.tick,
         fade.palette_stage(),
+        None,
     );
     assert!(scene_frame
         .pixels()
@@ -497,10 +504,13 @@ fn each_bank_stages_only_its_own_field_pixels() {
     let faded_ground = pack(bg.transform(rendering::Rgb888 { r: 255, g: 0, b: 0 }));
     assert_ne!(faded_ground, RED, "the BG blend must have begun");
 
-    let bg_only = phase.compose_frame_staged(PaletteStage {
-        bg: Some(&bg),
-        obj: None,
-    });
+    let bg_only = phase.compose_frame_staged(
+        PaletteStage {
+            bg: Some(&bg),
+            obj: None,
+        },
+        None,
+    );
     assert!(count_of(&bg_only, faded_ground) > 0);
     assert_eq!(
         count_of(&bg_only, BLUE),
@@ -509,10 +519,13 @@ fn each_bank_stages_only_its_own_field_pixels() {
     );
 
     let obj_black = NormalPaletteFade::begin_in(PaletteFadeTarget::Black).obj_blend();
-    let obj_only = phase.compose_frame_staged(PaletteStage {
-        bg: None,
-        obj: Some(&obj_black),
-    });
+    let obj_only = phase.compose_frame_staged(
+        PaletteStage {
+            bg: None,
+            obj: Some(&obj_black),
+        },
+        None,
+    );
     assert_eq!(
         count_of(&obj_only, BLUE),
         0,
@@ -536,7 +549,7 @@ fn the_start_menu_is_staged_once_over_a_staged_field() {
         "the open menu paints its own colours"
     );
 
-    let black = phase.compose_frame_staged(fade.palette_stage());
+    let black = phase.compose_frame_staged(fade.palette_stage(), None);
     assert_eq!(count_of(&black, BLACK), black.len());
 
     let stepped = half_stepped_fade();
@@ -545,7 +558,7 @@ fn the_start_menu_is_staged_once_over_a_staged_field() {
         bg: Some(&bg),
         obj: None,
     };
-    let faded = phase.compose_frame_staged(stage);
+    let faded = phase.compose_frame_staged(stage, None);
     let ground = unstaged_field[(Framebuffer::HEIGHT - 1) * Framebuffer::WIDTH];
     let once = pack(bg.transform(rendering::Rgb888 { r: 255, g: 0, b: 0 }));
     let twice = pack(bg.transform(bg.transform(rendering::Rgb888 { r: 255, g: 0, b: 0 })));
@@ -572,14 +585,53 @@ fn the_field_dialog_is_staged_with_the_field() {
     assert!(count_of(&phase.compose_frame(), pack(BOX)) > 0);
 
     let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
-    let black = phase.compose_frame_staged(fade.palette_stage());
+    let black = phase.compose_frame_staged(fade.palette_stage(), None);
     assert_eq!(count_of(&black, BLACK), black.len());
 
     let bg_black = fade.bg_blend();
-    let bg_only = phase.compose_frame_staged(PaletteStage {
-        bg: Some(&bg_black),
-        obj: None,
-    });
+    let bg_only = phase.compose_frame_staged(
+        PaletteStage {
+            bg: Some(&bg_black),
+            obj: None,
+        },
+        None,
+    );
     assert_eq!(count_of(&bg_only, pack(BOX)), 0);
     assert!(count_of(&bg_only, BLUE) > 0, "the avatar is not BG");
+}
+
+#[test]
+fn a_bg_mosaic_reaches_the_field_frame_and_not_the_avatar() {
+    let phase = OverworldPhase::for_test(
+        crate::overworld::test_support::synthetic_patterned_scene(10, 10),
+        ONE_F,
+        PlayerState::new((7, 4), 3, Direction::South),
+        None,
+    );
+    let plain = phase.compose_frame();
+    // `Task_FieldPoisonEffect` peaks at `tMosaic` 10, writing `REG_MOSAIC` 0xAA
+    // (`pokeemerald/src/fldeff_misc.c:1212-1226`).
+    let size = rendering::MosaicSize::from_raw(0xA, 0xA);
+    let mosaicked = phase.compose_frame_staged(PaletteStage::default(), Some(size));
+
+    assert_ne!(*mosaicked, *plain, "the BG mosaic must change the field");
+    assert_eq!(
+        count_of(&mosaicked, BLUE),
+        count_of(&plain, BLUE),
+        "the avatar is not mosaicked"
+    );
+    assert_eq!(
+        *phase.compose_frame_staged(PaletteStage::default(), Some(rendering::MosaicSize::NONE)),
+        *plain
+    );
+
+    let scene_frame = phase.scene.compose_live(
+        &phase.player,
+        &phase.save1.event_data,
+        phase.tick,
+        &phase.object_events,
+        PaletteStage::default(),
+        Some(size),
+    );
+    assert_eq!(*mosaicked, *crate::frame::to_platform_frame(&scene_frame));
 }
