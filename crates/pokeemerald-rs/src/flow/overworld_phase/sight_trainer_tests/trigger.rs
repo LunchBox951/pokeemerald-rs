@@ -241,13 +241,13 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
 }
 
 /// The player-side item refusal, end to end through the trigger: Rhett's party constructs
-/// for an ordinary lead (the Nugget control), so only the loaded Oran Berry stops the
+/// for an ordinary lead (the Nugget control), so only the loaded Sitrus Berry stops the
 /// approach -- before any draw, with the lead left in the party.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_draw() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    let lead = loaded_holding(&overwhelming_lead(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&overwhelming_lead(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     let before = phase.rng.state();
 
@@ -274,7 +274,7 @@ fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_
 // -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------
 
 /// Miguel's cone reaches, but his real party refuses to construct -- his
-/// Skitty's selected Cute Charm, ahead of its Attract and its Oran Berry --
+/// Skitty's selected Cute Charm, ahead of its Attract --
 /// so no battle starts, the lead is untouched, and the refusal draws nothing
 /// (the pre-flight runs before any RNG draw,
 /// `crate::flow::npc_trainer_battle`'s own docs).
