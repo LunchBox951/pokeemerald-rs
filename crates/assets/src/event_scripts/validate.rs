@@ -258,7 +258,7 @@ pub(super) fn read_standard_table(
         u32::from(STANDARD_SCRIPT_COUNT) * POINTER_ALIGNMENT,
     )?;
     let mut standard = Vec::new();
-    for (index, word) in raw.chunks_exact(4).enumerate() {
+    for (index, word) in raw.as_chunks::<4>().0.iter().enumerate() {
         let target = CartridgeAddress(u32::from_le_bytes([word[0], word[1], word[2], word[3]]));
         if targets.check(target).is_err() {
             let id = u8::try_from(index).expect("standard slot count fits u8");

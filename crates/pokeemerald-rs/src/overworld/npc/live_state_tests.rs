@@ -140,5 +140,5 @@ fn the_template_hide_flag_still_hides_a_live_entry() {
     data.flag_set(super::test_support::HIDE_BRENDAN_BEDROOM_RIVAL)
         .unwrap();
     let drawn = oam_entries(&objects, &bindings(), &player_at((5, 5)), &data);
-    assert!(drawn.is_empty());
+    assert_eq!(drawn.len(), 0);
 }

@@ -318,7 +318,7 @@ fn empty_track_list_round_trips() {
     let song = song(vec![]);
     let bytes = song.encode();
     assert_eq!(Song::decode(&bytes).unwrap(), song);
-    assert!(song.tracks().is_empty());
+    assert_eq!(song.tracks().len(), 0);
 }
 
 #[test]

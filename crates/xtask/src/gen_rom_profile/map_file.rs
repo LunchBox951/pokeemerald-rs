@@ -122,21 +122,21 @@ Memory Configuration
         let map = SymbolMap::parse(
             "                0x00000001083df704                gBogusOutOfRange\n",
         );
-        assert!(map.symbols_at(0x083D_F704).is_empty());
+        assert_eq!(map.symbols_at(0x083D_F704).len(), 0);
         assert!(map.is_empty());
     }
 
     #[test]
     fn non_symbol_lines_are_ignored() {
         let map = SymbolMap::parse(SYNTHETIC_LD_MAP_EXCERPT);
-        assert!(map.symbols_at(0x0864_C2E4).is_empty());
-        assert!(map.symbols_at(0x0800_0000).is_empty());
+        assert_eq!(map.symbols_at(0x0864_C2E4).len(), 0);
+        assert_eq!(map.symbols_at(0x0800_0000).len(), 0);
     }
 
     #[test]
     fn an_address_with_no_symbol_reports_nothing() {
         let map = SymbolMap::parse(SYNTHETIC_LD_MAP_EXCERPT);
-        assert!(map.symbols_at(0x0812_3456).is_empty());
+        assert_eq!(map.symbols_at(0x0812_3456).len(), 0);
         assert!(!map.is_empty());
     }
 

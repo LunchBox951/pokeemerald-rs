@@ -48,12 +48,12 @@ fn every_level_the_import_must_create_is_listed_outermost_first() {
     );
     // A destination that is already there is created by nobody, which is
     // also how a failed import knows not to remove it.
-    assert!(directories_to_create(&dir.path).is_empty());
+    assert_eq!(directories_to_create(&dir.path).len(), 0);
 
     fs::create_dir_all(&one).expect("the first level is created");
     assert_eq!(directories_to_create(&three), [two.clone(), three.clone()]);
     fs::create_dir_all(&three).expect("the rest are created");
-    assert!(directories_to_create(&three).is_empty());
+    assert_eq!(directories_to_create(&three).len(), 0);
 }
 
 #[test]

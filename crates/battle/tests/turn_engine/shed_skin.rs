@@ -437,5 +437,5 @@ fn slower_player_run_after_a_shed_skin_cure_still_refuses_serene_grace() {
         err.error(),
         BattleError::UnportedAbilityInteraction(assets::AbilityId::SERENE_GRACE)
     );
-    assert!(err.events().is_empty());
+    assert_eq!(err.events(), []);
 }

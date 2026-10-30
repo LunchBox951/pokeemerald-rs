@@ -261,7 +261,10 @@ fn write_pocket<const N: usize>(
     pocket: &[ItemSlot; N],
     quantity_key: u16,
 ) -> usize {
-    for (slot, destination) in pocket.iter().zip(out.chunks_exact_mut(ItemSlot::LEN)) {
+    for (slot, destination) in pocket
+        .iter()
+        .zip(out.as_chunks_mut::<{ ItemSlot::LEN }>().0.iter_mut())
+    {
         slot.write_to(destination, quantity_key);
     }
     N * ItemSlot::LEN
@@ -269,7 +272,10 @@ fn write_pocket<const N: usize>(
 
 fn read_pocket<const N: usize>(bytes: &[u8], quantity_key: u16) -> [ItemSlot; N] {
     let mut pocket = [ItemSlot::default(); N];
-    for (slot, source) in pocket.iter_mut().zip(bytes.chunks_exact(ItemSlot::LEN)) {
+    for (slot, source) in pocket
+        .iter_mut()
+        .zip(bytes.as_chunks::<{ ItemSlot::LEN }>().0.iter())
+    {
         *slot = ItemSlot::read_from(source, quantity_key);
     }
     pocket

@@ -81,7 +81,7 @@ pub(super) fn bpp4_tile_with_every_row(
     palette_indices_by_column: [u8; BitDepth::TILE_DIM],
 ) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
     let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
-    for row in bytes.chunks_exact_mut(BitDepth::TILE_DIM / 2) {
+    for row in bytes.as_chunks_mut::<{ BitDepth::TILE_DIM / 2 }>().0 {
         row.copy_from_slice(&bpp4_row(palette_indices_by_column));
     }
     bytes

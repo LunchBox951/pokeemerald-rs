@@ -505,10 +505,6 @@ mod test_support;
 mod tests;
 
 #[cfg(test)]
-#[expect(
-    clippy::float_cmp,
-    reason = "silence checks compare exactly-representable zero on purpose"
-)]
 #[path = "mixer_tie.rs"]
 mod tie_tests;
 

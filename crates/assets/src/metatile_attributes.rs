@@ -132,7 +132,9 @@ impl<'a> MetatileAttributeTable<'a> {
     /// Iterates over complete attributes in local metatile identity order.
     pub fn attributes(&self) -> impl Iterator<Item = Result<MetatileAttribute, AssetError>> + 'a {
         self.bytes
-            .chunks_exact(BYTES_PER_METATILE_ATTRIBUTE)
+            .as_chunks::<BYTES_PER_METATILE_ATTRIBUTE>()
+            .0
+            .iter()
             .map(|b| MetatileAttribute::from_raw(u16::from_le_bytes([b[0], b[1]])))
     }
 }

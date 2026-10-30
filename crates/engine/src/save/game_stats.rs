@@ -74,7 +74,12 @@ impl GameStats {
     /// Each word `XOR`ed with `encryption_key` (`pokeemerald/src/overworld.c:447-466`).
     pub(super) fn to_bytes(&self, encryption_key: u32) -> [u8; Self::LEN] {
         let mut out = [0u8; Self::LEN];
-        for (chunk, value) in out.chunks_exact_mut(STAT_LEN).zip(self.values) {
+        for (chunk, value) in out
+            .as_chunks_mut::<STAT_LEN>()
+            .0
+            .iter_mut()
+            .zip(self.values)
+        {
             chunk.copy_from_slice(&(value ^ encryption_key).to_le_bytes());
         }
         out
@@ -88,7 +93,10 @@ impl GameStats {
             });
         }
         let mut values = [0u32; GAME_STAT_COUNT];
-        for (value, chunk) in values.iter_mut().zip(bytes.chunks_exact(STAT_LEN)) {
+        for (value, chunk) in values
+            .iter_mut()
+            .zip(bytes.as_chunks::<STAT_LEN>().0.iter())
+        {
             *value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ encryption_key;
         }
         Ok(Self { values })

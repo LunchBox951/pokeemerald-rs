@@ -305,7 +305,7 @@ mod tests {
         let hits = RawSearch::new(&rom).find_all(&needles);
         assert_eq!(hits[0], vec![10]);
         assert_eq!(hits[1], vec![500]);
-        assert!(hits[2].is_empty());
+        assert_eq!(hits[2].len(), 0);
     }
 
     #[test]
@@ -331,14 +331,14 @@ mod tests {
         rom[52..56].copy_from_slice(&0x0300_0000u32.to_le_bytes());
         let index = PointerIndex::build(&rom);
         assert_eq!(index.refs_to(0x0800_1234), [0x0800_0008, 0x0800_0020]);
-        assert!(index.refs_to(0x0300_0000).is_empty());
-        assert!(index.refs_to(0x0900_0000).is_empty());
+        assert_eq!(index.refs_to(0x0300_0000), []);
+        assert_eq!(index.refs_to(0x0900_0000), []);
     }
 
     #[test]
     fn a_needle_longer_than_the_rom_matches_nothing() {
         let rom = vec![0u8; 16];
-        assert!(find_one(&rom, &[1u8; 64]).is_empty());
+        assert_eq!(find_one(&rom, &[1u8; 64]).len(), 0);
     }
 
     /// Compress `data` as a type `0x10` stream of literals only. Valid
@@ -365,7 +365,7 @@ mod tests {
         rom[2048..2048 + stream.len()].copy_from_slice(&stream);
         let hits = Lz77Search::new(&rom).find_all(&[payload, vec![7u8; 64]]);
         assert_eq!(hits[0], vec![2048]);
-        assert!(hits[1].is_empty());
+        assert_eq!(hits[1].len(), 0);
     }
 
     #[test]

@@ -451,7 +451,9 @@ fn encode_attacks(mon: &BattlePokemon) -> [u8; SUBSTRUCTURE_LEN] {
     let mut attacks = [0u8; SUBSTRUCTURE_LEN];
     let (move_ids, remaining_pp) = attacks.split_at_mut(ATTACK_PP_OFFSET);
     for ((move_id, pp), slot) in move_ids
-        .chunks_exact_mut(MOVE_ID_WIDTH)
+        .as_chunks_mut::<MOVE_ID_WIDTH>()
+        .0
+        .iter_mut()
         .zip(remaining_pp)
         .zip(mon.moves())
     {
@@ -687,7 +689,9 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 
     let (move_ids, remaining_pp) = substructures.attacks.split_at(ATTACK_PP_OFFSET);
     let slot_moves: Vec<assets::MoveId> = move_ids
-        .chunks_exact(MOVE_ID_WIDTH)
+        .as_chunks::<MOVE_ID_WIDTH>()
+        .0
+        .iter()
         .map(|bytes| assets::MoveId(u16::from_le_bytes([bytes[0], bytes[1]])))
         .collect();
     let known_moves = slot_moves

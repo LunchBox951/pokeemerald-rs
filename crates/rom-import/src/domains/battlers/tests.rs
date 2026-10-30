@@ -255,7 +255,7 @@ fn a_profile_with_no_battlers_reads_no_tables() {
     let mut roots = roots(&[]);
     roots.battlers.front_table = GbaPtr::at(ROM_BASE + 0x00FF_FFF0);
     let (_, entries) = run_on(&rom(), &roots).expect("nothing to corroborate");
-    assert!(entries.is_empty());
+    assert_eq!(entries.len(), 0);
 }
 
 #[test]

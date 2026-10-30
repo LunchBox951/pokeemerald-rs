@@ -143,7 +143,7 @@ impl Script {
                     let mut expanded = Vec::new();
                     macros
                         .expand(constants, word, operands, &mut expanded)
-                        .map_err(&fault)?;
+                        .map_err(fault)?;
                     script
                         .stream
                         .extend(expanded.into_iter().map(|pending| Item { pending, line }));

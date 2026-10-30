@@ -188,9 +188,11 @@ impl<'a> LayoutGrid<'a> {
     /// Iterates over the declared cells in row-major order.
     pub fn cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
         self.bytes
-            .chunks_exact(BYTES_PER_METATILE_CELL)
+            .as_chunks::<BYTES_PER_METATILE_CELL>()
+            .0
+            .iter()
             .take(self.cell_count())
-            .map(decode_metatile_cell)
+            .map(|bytes| decode_metatile_cell(bytes))
     }
 }
 
@@ -231,8 +233,10 @@ impl<'a> BorderGrid<'a> {
     /// Iterates over the stored border cells in row-major order, collision unforced.
     pub fn cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
         self.bytes
-            .chunks_exact(BYTES_PER_METATILE_CELL)
-            .map(decode_metatile_cell)
+            .as_chunks::<BYTES_PER_METATILE_CELL>()
+            .0
+            .iter()
+            .map(|bytes| decode_metatile_cell(bytes))
     }
 }
 

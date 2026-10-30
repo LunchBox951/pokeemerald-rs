@@ -355,10 +355,6 @@ fn tempo_event_is_clamped_before_it_can_overflow_the_accumulator() {
 /// [`Event::Pan`]'s range minimum.
 const HARD_LEFT_PAN: i8 = -64;
 
-#[expect(
-    clippy::float_cmp,
-    reason = "a hard-left pan must silence the right channel to exactly 0.0"
-)]
 #[test]
 fn panned_note_is_louder_on_one_side() {
     let track = vec![

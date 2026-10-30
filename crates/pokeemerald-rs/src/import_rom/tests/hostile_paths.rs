@@ -174,7 +174,7 @@ fn a_destination_naming_no_file_is_refused_before_anything_is_written() {
         matches!(err, ImportRomError::DestinationNamesNoFile { .. }),
         "expected a no-file-name refusal, got: {err}"
     );
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }
 
 #[test]
