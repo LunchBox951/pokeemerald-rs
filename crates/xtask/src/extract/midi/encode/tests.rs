@@ -111,8 +111,7 @@ fn absent_reverb_encodes_a_false_flag_and_zero_value() {
 /// The compiler leaves wait shape to the schema, so a raw track must encode as `assets`
 /// canonicalizes it: zero rests vanish, adjacent rests merge and split at 255 ticks, a
 /// rest a `Goto` targets stays addressable, and `Goto` targets follow the events they
-/// name. These bytes were the output of the former hand-written canonicalizer and
-/// encoder.
+/// name. The expected bytes are the canonical wire form of the raw track below.
 #[test]
 fn raw_waits_encode_in_the_canonical_shape() {
     let raw = vec![
