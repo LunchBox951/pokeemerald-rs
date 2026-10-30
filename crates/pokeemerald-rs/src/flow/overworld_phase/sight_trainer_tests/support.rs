@@ -26,9 +26,10 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// `TRAINER_ISABELLE` (`include/constants/opponents.h`): her party fails to
-/// construct (`MOVE_ROLLOUT`), so tests use her id as the refused party.
-pub(super) const TRAINER_ISABELLE: u16 = 736;
+/// The trainer whose party Taillow knows Headbutt (`EFFECT_FLINCH_HIT`), which
+/// the battle crate does not execute: its construction is refused for a move,
+/// so tests use its id as the refused party.
+pub(super) const TRAINER_REFUSED_FOR_MOVE: u16 = 292;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw

@@ -29,8 +29,8 @@
 //! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`).
 //! Andrew's, Rhett's, Marcos's and Pete's real parties do construct, and
 //! `real_parties` drives each from its own cone to its conclusion. The
-//! `trigger` tests that need a refusal use Isabelle's id (her party stops at
-//! Rollout) in place of Rhett's at Rhett's cone through
+//! `trigger` tests that need a refusal use the id of a party that stops at
+//! Taillow's Headbutt in place of Rhett's at Rhett's cone through
 //! `synthetic_sight_trainer`, so the geometry stays Rhett's while the refused
 //! party is real.
 //!
