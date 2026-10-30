@@ -266,6 +266,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             scene: title_scene,
             tick: 0,
             presented: false,
+            retained_save: None,
         }));
 
         // I-3, issue #1329: the press must land in the white fade-wait
@@ -472,8 +473,11 @@ fn the_empty_scratch_pack_writer_refuses_a_planted_symlink() {
 fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
     if std::env::var_os(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD).is_some() {
         let (_temp, mut save_slot) = empty_slot("main-menu-load-failure-boundary-child");
-        let transitioned =
-            super::title_to_main_menu(&crate::pack_source::PackSource::Runtime, &mut save_slot);
+        let transitioned = super::title_to_main_menu(
+            &crate::pack_source::PackSource::Runtime,
+            &mut save_slot,
+            &mut None,
+        );
         assert!(
             transitioned.is_none(),
             "an entryless pack must fail the main menu load, not build one"
@@ -547,6 +551,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
         scene: title_scene,
         tick: 0,
         presented: false,
+        retained_save: None,
     }));
 
     let (waiting, _press_frame) = advance_scene(
@@ -602,6 +607,7 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
         scene: title_scene,
         tick: 0,
         presented: true, // as if this were the second frame onward.
+        retained_save: None,
     }));
 
     let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
@@ -1641,6 +1647,7 @@ fn title_confirm_freezes_clouds_but_not_sprites_on_the_press_frame() {
         scene: title_scene,
         tick: 0,
         presented: false,
+        retained_save: None,
     }));
     for _ in 0..14 {
         let (next, _frame) = advance_scene(
@@ -1699,5 +1706,28 @@ fn title_confirm_freezes_clouds_but_not_sprites_on_the_press_frame() {
             rows(&expected, cloud_rows.clone()),
             "every retained fade frame keeps the tick-13 clouds"
         );
+    }
+}
+
+/// `Task_HandleMainMenuInput` checks B ahead of the D-pad
+/// (`main_menu.c:895-902`): B, alone or with Down, begins the white fade
+/// back to the title on either boot-menu type, never staying or navigating.
+#[test]
+fn main_menu_b_leaves_the_menu_on_both_types() {
+    for menu_type in [MainMenuType::NoSavedGame, MainMenuType::SavedGame] {
+        for keys in [Buttons::B, Buttons::B | Buttons::DOWN] {
+            let (_temp, mut save_slot) = empty_slot("b-cancel");
+            let scene = pack_free_menu(menu_type, &mut save_slot);
+            let (next, _) = advance_scene(
+                scene,
+                pressed(keys),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
+            assert!(
+                !matches!(next, AppScene::MainMenu(_) | AppScene::MainMenuHighlight(_)),
+                "{menu_type:?} with {keys:?} must take the B cancel path"
+            );
+        }
     }
 }
