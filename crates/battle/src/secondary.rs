@@ -278,25 +278,26 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
-/// Leech Seed is refused against a non-Grass Liquid Ooze defender: the seed's
-/// end-of-turn drain inverts into damage to the seeder there
-/// (`BattleScript_LeechSeedTurnPrintLiquidOoze`,
-/// `data/battle_scripts_1.s:3275`-`:3276`), which is unmodelled. A Grass
-/// defender never takes the seed, so it stays admitted.
-///
 /// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
 /// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
 /// both values stay in the same chance branch, spend its `Random() % 100`
 /// draw, and clear the same comparison (`:2923-2930`), so the doubling
 /// changes neither outcome nor RNG use.
 ///
+/// Leech Seed is refused against a non-Grass Liquid Ooze defender: the seed's
+/// end-of-turn drain inverts into damage to the seeder there
+/// (`BattleScript_LeechSeedTurnPrintLiquidOoze`,
+/// `data/battle_scripts_1.s:3275`-`:3276`), which is unmodelled. A Grass
+/// defender never takes the seed, so it stays admitted.
+///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
 /// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
 /// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
-/// the attacker's Serene Grace, when the move would newly poison or confuse
-/// the defender.
+/// either the attacker's Serene Grace, when the move would newly poison or
+/// confuse the defender, or the defender's Liquid Ooze, when the move is
+/// Leech Seed and the defender is not a Grass type.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
