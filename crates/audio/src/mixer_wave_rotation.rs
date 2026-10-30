@@ -174,8 +174,12 @@ fn a_retired_wave_slot_holds_its_sample_on_the_committed_route_only() {
     assert!(continued.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), FULL_TRACK_VOLUME, 0)));
     frame(&mut continued);
     let held = frame(&mut continued)[..2].to_vec();
-    assert_eq!(held[0], 0.0, "sanity: the left side is not routed");
-    assert_ne!(held[1], 0.0, "sanity: the right side carries the nibble");
+    assert_eq!(held[0].to_bits(), 0, "sanity: the left side is not routed");
+    assert_ne!(
+        held[1].to_bits(),
+        0,
+        "sanity: the right side carries the nibble"
+    );
 
     let mut stopped = Mixer::new(MAX_MASTER_VOLUME, 1);
     assert!(stopped.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), FULL_TRACK_VOLUME, 0)));
