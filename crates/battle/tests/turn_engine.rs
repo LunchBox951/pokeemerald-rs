@@ -50,6 +50,8 @@ mod poison_synchronize;
 mod poison_trainer_aftermath;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
+#[path = "turn_engine/rollout/mod.rs"]
+mod rollout;
 #[path = "turn_engine/rough_skin_contact.rs"]
 mod rough_skin_contact;
 #[path = "turn_engine/shed_skin.rs"]

@@ -69,9 +69,9 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; Isabelle's (Rollout) does not, so her id
+    // Rhett's party constructs; the Headbutt party does not, so its id
     // stands in for the refusal at Rhett's cone.
-    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     refused.step(pressed(Buttons::START));
     assert!(
         refused.sight_approach.is_none(),
@@ -91,8 +91,8 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (Isabelle's
-/// Rollout at Rhett's cone, the trigger's own "Refusals cost nothing,
+/// All three refusal shapes are covered: an unimplemented moveset (the Headbutt
+/// party at Rhett's cone, the trigger's own "Refusals cost nothing,
 /// forever"), an unported ability
 /// (Miguel's Cute Charm, same), and a double battle refused before construction is even
 /// attempted (Amy, `trainer_data_wants_double_battle`).
@@ -103,7 +103,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (ax, ay) = AMY_TILE;
     let cases = [
         (
-            "Isabelle at Rhett's cone (unimplemented moveset)",
+            "the Headbutt party at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
         ("Miguel (unported ability)", (mx + 2, my)),
@@ -112,9 +112,10 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.set_fresh_lead_for_test(overwhelming_lead());
-        if name.starts_with("Isabelle") {
-            // Rhett's party constructs; Isabelle's refuses.
-            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+        if name.starts_with("the Headbutt") {
+            // Rhett's party constructs; the Headbutt party refuses.
+            phase.synthetic_sight_trainer =
+                Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
         }
         let before = phase.rng.state();
         for frame in 0..FRAMES_STANDING_STILL {
@@ -410,9 +411,9 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
     phase.set_fresh_lead_for_test(overwhelming_lead());
-    // Rhett's party constructs; Isabelle's refuses, so her id stands in at
-    // Rhett's real cone.
-    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+    // Rhett's party constructs; the Headbutt party refuses, so its id stands
+    // in at Rhett's real cone.
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     let before = phase.rng.state();
 
     for frame in 0..FRAMES_STANDING_STILL {

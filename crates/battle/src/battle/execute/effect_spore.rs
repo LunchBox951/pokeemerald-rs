@@ -81,6 +81,10 @@ impl Battle {
                 if let Some(asleep) = try_inflict_sleep(attacker.status1(), attacker.ability(), rng)
                 {
                     attacker.set_status1(asleep);
+                    // `SetMoveEffect` cancels the sleeper's multi-turn move
+                    // when the sleep is accepted
+                    // (`battle_script_commands.c:2296`).
+                    self.cancel_multi_turn_moves(attacker_is_player);
                     events.push(BattleEvent::AsleepByEffectSpore {
                         by_player: attacker_is_player,
                         move_id,

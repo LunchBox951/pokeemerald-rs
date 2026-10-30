@@ -129,6 +129,10 @@ fn wonder_guard_cancels_everything_but_an_exactly_super_effective_hit() {
     let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
     assert_eq!(prologue(MoveId::WATER_GUN, &shedinja), (true, MINUS_10));
     assert_eq!(prologue(MoveId::WING_ATTACK, &shedinja), (false, FULL));
+    // Rollout shares Ice Ball's effect: Rock is super effective against
+    // Shedinja's Bug typing, Ice is not.
+    assert_eq!(prologue(MoveId::ROLLOUT, &shedinja), (false, FULL));
+    assert_eq!(prologue(MoveId::ICE_BALL, &shedinja), (true, MINUS_10));
 }
 
 #[test]
@@ -170,6 +174,8 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::ROLLOUT,
+        MoveId::ICE_BALL,
     ];
     for move_id in moves {
         let effect = Dex::new().move_data(move_id).unwrap().effect;
@@ -194,6 +200,7 @@ fn the_audited_row_set_is_exact() {
         MoveEffect::SPLASH,
         MoveEffect::QUICK_ATTACK,
         MoveEffect::CHARGE,
+        MoveEffect::ROLLOUT,
     ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected: Vec<u8> = UNCHANGED_AFTER_PROLOGUE_EFFECTS
