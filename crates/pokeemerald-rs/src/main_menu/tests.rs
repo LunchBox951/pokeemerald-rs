@@ -416,7 +416,8 @@ fn temp_pack_cleanup_is_unwind_safe() {
 }
 
 /// A symlink or an occupied file planted at a main-menu scratch pack's
-/// predictable path must be replaced, never written through or truncated.
+/// predictable path must be refused and left intact, never written through,
+/// truncated, or unlinked.
 #[test]
 fn the_main_menu_scratch_packs_never_write_through_a_planted_entry() {
     let font_index = TRANSPARENT_FONT_INDEX;
