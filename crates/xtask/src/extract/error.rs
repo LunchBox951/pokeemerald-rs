@@ -287,6 +287,14 @@ pub enum ExtractError {
         /// Actual byte length.
         actual: usize,
     },
+    /// `assets` rejected a decoded direct-sound sample as outside the pack
+    /// schema's domain when it was encoded.
+    InvalidSampleSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
     /// A voicegroup or key-split source violates its extraction grammar.
     VoiceGroupFile(
         /// Source path.
@@ -491,6 +499,11 @@ impl fmt::Display for ExtractError {
             Self::ProgrammableWaveWrongSize { path, actual } => write!(
                 f,
                 "programmable-wave source `{}` is {actual} bytes: expected exactly 16",
+                path.display()
+            ),
+            Self::InvalidSampleSchema { path, source } => write!(
+                f,
+                "direct-sound sample `{}`: the asset pack schema rejected the decoded sample: {source}",
                 path.display()
             ),
             Self::VoiceGroupFile(path, error) => {
