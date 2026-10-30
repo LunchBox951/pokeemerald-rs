@@ -33024,6 +33024,14 @@
       "status": "pending"
     },
     "src/strings.c": {
+      "artifacts": {
+        "gText_PkmnFainted_FldPsn": {
+          "reason": "src/strings.c:1189 defines gText_PkmnFainted_FldPsn as {STR_VAR_1} fainted…\\p\\n, shown by Task_TryFieldPoisonWhiteOut (src/field_poison.c:76). Its charmap token stream through EOS is extracted into field-message/table by crates/xtask/src/extract/field_message.rs (src/strings.c through charmap.txt) and by crates/rom-import/src/domains/field_messages.rs (profiled EOS-terminated root), validated by assets::pack::FieldMessageTable, with the {STR_VAR_1} placeholder, \\p, newline, single-glyph ellipsis, and EOS retained. Only this one symbol is modelled; message sequencing, nickname substitution, and the poison white-out task are not.",
+          "rust_target": "crates/rom-import/src/domains/field_messages.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
