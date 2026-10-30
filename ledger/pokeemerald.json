@@ -30224,8 +30224,8 @@
           "status": "rewritten"
         },
         "FieldGetPlayerInput": {
-          "reason": "Partially modeled by phase-owned field-input gates. Completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains, in crates/pokeemerald-rs/src/flow/overworld_phase/pre_movement.rs's OverworldPhase::resolve_pre_movement_field_input. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "reason": "Partially modeled by phase-owned field-input gates. The tile-center/at-rest button gating that is FieldGetPlayerInput's core -- heldDirection, pressedAButton, pressedStartButton and the dpad read behind the forced-movement and tile-center checks (field_control_avatar.c:89-115) -- lives in OverworldPhase::resolve_pre_movement_field_input in this file. The completed-step half stays in crates/pokeemerald-rs/src/flow/overworld_phase/step.rs: completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/pre_movement.rs",
           "spec": "S-5",
           "status": "stubbed"
         },
