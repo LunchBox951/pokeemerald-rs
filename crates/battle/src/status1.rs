@@ -1,5 +1,5 @@
-//! Primary status ([`Status1`]), the full-paralysis gate, poison's end-turn
-//! damage, and Shed Skin's end-turn cure draw.
+//! Primary status ([`Status1`]), the full-paralysis gate, poison's and burn's
+//! end-turn damage, and Shed Skin's end-turn cure draw.
 //!
 //! `status1` persists across a switch, unlike the volatile bits in
 //! [`crate::volatile::Volatiles`]. Confusion belongs to those volatile bits
@@ -32,6 +32,11 @@ pub enum Status1 {
     /// Poisoned: [`poison_residual_damage`] fires every end of turn
     /// (`ENDTURN_POISON`, `pokeemerald/src/battle_util.c:1525`-`:1535`).
     Poisoned,
+    /// Burned: [`burn_residual_damage`] fires every end of turn
+    /// (`ENDTURN_BURN`, `pokeemerald/src/battle_util.c:1550`-`:1560`), and
+    /// the attacker's physical damage is halved unless it has Guts
+    /// ([`crate::ability::burn_halves_damage`]).
+    Burned,
     /// Asleep with `turns` actions left before waking: the canceller
     /// ([`tick_sleep`]) decrements it ahead of every chosen move
     /// (`CANCELER_ASLEEP`, `pokeemerald/src/battle_util.c:2015`-`:2057`).
@@ -56,6 +61,12 @@ impl Status1 {
     #[must_use]
     pub const fn is_poisoned(self) -> bool {
         matches!(self, Self::Poisoned)
+    }
+
+    /// Whether this status is [`Status1::Burned`].
+    #[must_use]
+    pub const fn is_burned(self) -> bool {
+        matches!(self, Self::Burned)
     }
 
     /// Whether this status is [`Status1::Asleep`] with at least one turn left;
@@ -192,6 +203,22 @@ pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     }
 }
 
+/// `ENDTURN_BURN` deals max HP / 8 (`pokeemerald/src/battle_util.c:1553`).
+const BURN_DAMAGE_DENOMINATOR: u32 = 8;
+
+/// `ENDTURN_BURN`'s damage for a battler with `max_hp`: an eighth of it,
+/// never less than one, with no RNG draw
+/// (`pokeemerald/src/battle_util.c:1553-1555`).
+#[must_use]
+pub const fn burn_residual_damage(max_hp: u32) -> u32 {
+    let damage = max_hp / BURN_DAMAGE_DENOMINATOR;
+    if damage == 0 {
+        1
+    } else {
+        damage
+    }
+}
+
 /// Shed Skin cures on `Random() % 3 == 0` (`pokeemerald/src/battle_util.c:2621`).
 const SHED_SKIN_CURE_CHANCE_DENOMINATOR: u16 = 3;
 
@@ -214,8 +241,8 @@ pub fn draws_shed_skin_cure(status1: Status1, rng: &mut impl BattleRng) -> bool 
 #[cfg(test)]
 mod tests {
     use super::{
-        draw_sleep_duration, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
-        tick_sleep, try_inflict_sleep, SleepTick, Status1,
+        burn_residual_damage, draw_sleep_duration, draws_full_paralysis, draws_shed_skin_cure,
+        poison_residual_damage, tick_sleep, try_inflict_sleep, SleepTick, Status1,
     };
     use crate::damage::BattleRng;
     use assets::AbilityId;
@@ -270,15 +297,17 @@ mod tests {
 
     #[test]
     fn each_variant_answers_exactly_its_own_predicates() {
-        for (status, healthy, paralysed, poisoned) in [
-            (Status1::Healthy, true, false, false),
-            (Status1::Paralysed, false, true, false),
-            (Status1::Poisoned, false, false, true),
-            (Status1::Asleep { turns: 3 }, false, false, false),
+        for (status, healthy, paralysed, poisoned, burned) in [
+            (Status1::Healthy, true, false, false, false),
+            (Status1::Paralysed, false, true, false, false),
+            (Status1::Poisoned, false, false, true, false),
+            (Status1::Burned, false, false, false, true),
+            (Status1::Asleep { turns: 3 }, false, false, false, false),
         ] {
             assert_eq!(status.is_healthy(), healthy, "{status:?}");
             assert_eq!(status.is_paralysed(), paralysed, "{status:?}");
             assert_eq!(status.is_poisoned(), poisoned, "{status:?}");
+            assert_eq!(status.is_burned(), burned, "{status:?}");
             assert_eq!(
                 status.is_asleep(),
                 matches!(status, Status1::Asleep { .. }),
@@ -342,7 +371,12 @@ mod tests {
 
     #[test]
     fn a_battler_that_is_not_asleep_does_not_tick() {
-        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+        for status in [
+            Status1::Healthy,
+            Status1::Paralysed,
+            Status1::Poisoned,
+            Status1::Burned,
+        ] {
             assert_eq!(
                 tick_sleep(status, AbilityId::EARLY_BIRD),
                 SleepTick::NotAsleep
@@ -365,6 +399,7 @@ mod tests {
         for (status, ability) in [
             (Status1::Paralysed, AbilityId::NONE),
             (Status1::Poisoned, AbilityId::NONE),
+            (Status1::Burned, AbilityId::NONE),
             (Status1::Asleep { turns: 2 }, AbilityId::NONE),
             (Status1::Healthy, AbilityId::VITAL_SPIRIT),
             (Status1::Healthy, AbilityId::INSOMNIA),
@@ -401,7 +436,7 @@ mod tests {
 
     #[test]
     fn one_in_three_values_cure_a_statused_shed_skin_holder() {
-        for status in [Status1::Paralysed, Status1::Poisoned] {
+        for status in [Status1::Paralysed, Status1::Poisoned, Status1::Burned] {
             assert!(draws_shed_skin_cure(status, &mut FixedRng(0)), "{status:?}");
             assert!(draws_shed_skin_cure(status, &mut FixedRng(3)), "{status:?}");
             assert!(
@@ -431,5 +466,25 @@ mod tests {
             1,
             "even a zero max HP still floors to one (`battle_util.c:1529-1530`)"
         );
+    }
+
+    #[test]
+    fn burn_residual_damage_is_an_eighth_of_max_hp_floored_to_one() {
+        assert_eq!(burn_residual_damage(80), 10);
+        assert_eq!(burn_residual_damage(79), 9, "integer division truncates");
+        assert_eq!(burn_residual_damage(8), 1);
+        assert_eq!(
+            burn_residual_damage(7),
+            1,
+            "a fraction below one HP is floored up to one, not zero"
+        );
+        assert_eq!(burn_residual_damage(0), 1);
+    }
+
+    #[test]
+    fn a_burned_battler_draws_nothing_for_full_paralysis() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        assert!(!draws_full_paralysis(Status1::Burned, &mut rng));
+        assert_eq!(rng.draws, 0);
     }
 }

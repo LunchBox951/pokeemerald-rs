@@ -29,6 +29,7 @@ mod battle_messages;
 mod battlers;
 mod emit;
 mod error;
+mod field_messages;
 mod fonts;
 mod images;
 mod inventory;
@@ -166,6 +167,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        field_messages: field_messages::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
@@ -519,6 +521,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
 mod battle_anim_tests;
 #[cfg(test)]
 mod battle_message_tests;
+#[cfg(test)]
+mod field_message_tests;
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
