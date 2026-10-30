@@ -480,6 +480,51 @@ fn a_slides_movement_direction_resyncs_to_facing_on_the_first_poll_off_the_tile(
     );
 }
 
+/// A dispatched crossing sets `PLAYER_AVATAR_FLAG_FORCED_MOVE`, which stays
+/// set through the landing frame on ordinary ground and clears at the first
+/// poll off the tile (`ForcedMovement_None`,
+/// `field_player_avatar.c:429-440, 443-470`).
+#[test]
+fn a_forced_crossing_holds_the_forced_move_flag_until_the_first_poll_off_the_tile() {
+    let runtime = slide_east_runtime();
+    let mut player = PlayerState::new((2, 1), 3, Direction::South);
+    player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert!(
+        !player.forced_move_flag(),
+        "a manual step onto the tile is not a forced crossing"
+    );
+
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (3, 2),
+        },
+        "fixture precondition: the slide dispatches east"
+    );
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        assert!(player.forced_move_flag(), "set for the whole crossing");
+        player.tick();
+    }
+    assert!(!player.in_transit());
+    assert!(
+        player.forced_move_flag(),
+        "still set on the landing frame, before any poll"
+    );
+
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Idle
+    );
+    assert!(
+        !player.forced_move_flag(),
+        "ForcedMovement_None clears the flag on the first poll off the tile"
+    );
+}
+
 /// A dispatched walk or slide tile selects the other foot on its first
 /// command (`field_player_avatar.c:526-537`, `event_object_movement.c:5101-5107`)
 /// `(behavioral-fidelity)`.

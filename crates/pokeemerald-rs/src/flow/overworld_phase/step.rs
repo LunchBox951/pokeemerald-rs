@@ -422,8 +422,16 @@ impl OverworldPhase {
         // a fainting poison drain claims this frame before the roll below.
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
+        //
+        // The flag test sits beside the tile test: a forced crossing's
+        // landing on ordinary ground still has `PLAYER_AVATAR_FLAG_FORCED_MOVE`
+        // set here, because only the later `PlayerStep` clears it
+        // (`field_control_avatar.c:547-553`). The flag also gates the
+        // egg-hatch and later step-count scripts of that block; this port
+        // models none of them.
         let poison_step = landed
             .filter(|_| door_warp.is_none())
+            .filter(|_| !self.player.forced_move_flag())
             .filter(|&(x, y)| {
                 !is_forced_movement_input_tile(runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL))
             })

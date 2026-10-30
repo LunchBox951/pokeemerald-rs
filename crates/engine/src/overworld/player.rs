@@ -179,6 +179,10 @@ pub struct PlayerState {
     landing_elevation: u8,
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
+    /// `PLAYER_AVATAR_FLAG_FORCED_MOVE`: set by a dispatched forced
+    /// crossing, held through its landing frame, and cleared by the first
+    /// poll that no longer dispatches (`ForcedMovement_None`).
+    forced_move_flag: bool,
     rest_pose: RestPose,
     /// The current walk-cycle phase (`sAnim_Go*` alternate cells,
     /// `object_event_anims.h:202-272`).
@@ -281,6 +285,7 @@ impl PlayerState {
             landing_elevation: elevation,
             forced_movement_armed: false,
             forced_input_tile_center: false,
+            forced_move_flag: false,
             rest_pose: RestPose::Standing,
             leading_foot: LeadingFoot::Fresh,
         }
@@ -394,6 +399,18 @@ impl PlayerState {
     #[must_use]
     pub const fn field_input_suppressed(&self) -> bool {
         self.forced_input_tile_center
+    }
+
+    /// Returns whether `PLAYER_AVATAR_FLAG_FORCED_MOVE` is set: a dispatched
+    /// forced crossing sets it, and it stays set through the landing's
+    /// `ProcessPlayerFieldInput` -- even on ordinary ground -- until the next
+    /// poll's `ForcedMovement_None` clears it
+    /// (`field_player_avatar.c:429-440, 443-470`; `overworld.c:1442-1455`).
+    /// `TryStartStepCountScript` skips its poison counter while it is set
+    /// (`field_control_avatar.c:547-553`).
+    #[must_use]
+    pub const fn forced_move_flag(&self) -> bool {
+        self.forced_move_flag
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -697,10 +714,12 @@ impl PlayerState {
         }
 
         // `ForcedMovement_None`, reached off a forced tile or through a
-        // blocked `DoForcedMovement`, clears a slide's facing lock and
-        // resets `movementDirection` to the locked facing
-        // (`field_player_avatar.c:429-440, 449-451`). A no-op unless a slide
-        // left the two apart; deferred armed tiles keep theirs.
+        // blocked `DoForcedMovement`, clears the forced-move flag, a slide's
+        // facing lock, and resets `movementDirection` to the locked facing
+        // (`field_player_avatar.c:429-440, 449-451`). The facing reset is a
+        // no-op unless a slide left the two apart; deferred armed tiles keep
+        // theirs.
+        self.forced_move_flag = false;
         if !self.forced_movement_armed || supported_mover.is_some() {
             self.movement_direction = self.facing;
         }
@@ -1024,6 +1043,7 @@ impl PlayerState {
         )
         .ok()?;
         self.advance_step_parity(keep_foot);
+        self.forced_move_flag = true;
 
         self.movement_streak_active = true;
         self.movement_direction = direction;
