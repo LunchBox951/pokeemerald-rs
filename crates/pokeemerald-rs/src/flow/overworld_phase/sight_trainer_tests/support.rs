@@ -20,11 +20,15 @@ pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
 pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `TRAINER_RHETT` (`include/constants/opponents.h`): a single-battle,
-/// no-held-item, level-15 party -- the main subject for the
+/// no-held-item, level-15 party that constructs -- the main subject for the
 /// trigger/win/loss/defeated-flag tests. His own object event stands at
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
+
+/// `TRAINER_ISABELLE` (`include/constants/opponents.h`): her party fails to
+/// construct (`MOVE_ROLLOUT`), so tests use her id as the refused party.
+pub(super) const TRAINER_ISABELLE: u16 = 736;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
@@ -45,9 +49,9 @@ pub(super) const RHETT_TILE: (i32, i32) = (67, 5);
 pub(super) const ANDREW_TILE: (i32, i32) = (50, 8);
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
-/// `TrainerParty::ItemDefaultMoves` party (`begin_sight_trainer_approach_if_seen`'s
-/// own "Refusals cost nothing, forever") --
-/// [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
+/// `TrainerParty::ItemDefaultMoves` Skitty holding an Oran Berry
+/// (`begin_sight_trainer_approach_if_seen`'s own "Refusals cost nothing,
+/// forever") -- [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
 /// event stands at `(56, 13)`, elevation 3, facing east, sight range 5.
 pub(super) const MIGUEL_TILE: (i32, i32) = (56, 13);
 
@@ -154,13 +158,18 @@ pub(super) fn seed_battle(
     rng_seed: u32,
 ) {
     phase.rng = engine::rng::Rng::new(rng_seed);
+    // Lend through the owner, as `start_sight_trainer_battle` does; the battle
+    // is built from the lent mon and hands it back when it ends.
+    phase.set_fresh_lead_for_test(player_lead);
+    let lent = phase
+        .take_lead_battler()
+        .expect("the lead was just installed");
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
-        player_lead,
+        lent,
         assets::trainers::TrainerId(STAND_IN_TRAINER),
         &mut phase.rng,
     )
     .expect("the stand-in Route 103 rival must always construct");
-    phase.party_lead = None;
     phase.active_battle = Some(ActiveBattle::SightTrainer {
         battle,
         trainer_id: assets::trainers::TrainerId(trainer_id),
@@ -213,7 +222,7 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
         &mut phase.rng,
     )
     .expect("the stand-in Route 103 rival must always construct");
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
         ObjectEventState::from_template(rhetts_object_event()),
         walk_tiles,

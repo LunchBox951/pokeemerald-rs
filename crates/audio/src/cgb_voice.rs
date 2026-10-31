@@ -12,10 +12,29 @@ mod routing;
 
 use self::{oscillator::Oscillator, routing::StereoRouting};
 
-const BIPOLAR_SAMPLE_SCALE: i32 = 127;
-const WAVE_SAMPLE_SCALE: i32 = 16;
+// PSG output in DirectSound accumulator units (one s8 FIFO unit each).
+//
+// Emerald mixes the PSG at 100% (`SOUND_ALL_MIX_FULL`) with NR50 = 0x77
+// (`pokeemerald/src/m4a.c:275,370-372`; `include/gba/io_reg.h:618-623`). mGBA sums
+// the unipolar channel outputs, shifts them left 3, and multiplies by
+// `1 + 7` (`mgba/src/gb/audio.c:778-793`), then shifts right by `4 - 2` for the
+// full PSG mix (`mgba/src/gba/audio.c:362-366`): one PSG volume or nibble unit
+// is `8 * 8 >> 2 = 16` hardware units. A full-volume FIFO s8 sample is
+// `<< 2` with no halving (`mgba/src/gba/audio.c:368-384`): 4 hardware units. The mixer
+// accumulates in FIFO units, so one PSG unit is `16 / 4 = 4`.
+const PSG_HARDWARE_UNITS_PER_LEVEL: i32 = ((1 << 3) * (1 + 7)) >> (4 - 2);
+const FIFO_HARDWARE_UNITS_PER_SAMPLE: i32 = 1 << 2;
+const PSG_LEVEL_FIFO_UNITS: i32 = PSG_HARDWARE_UNITS_PER_LEVEL / FIFO_HARDWARE_UNITS_PER_SAMPLE;
+const WAVE_SAMPLE_SCALE: i32 = PSG_LEVEL_FIFO_UNITS;
 const LINEAR_ENVELOPE_SCALE: u32 = 16;
 const SAMPLE_GAIN_BITS: u32 = 8;
+// Square and noise are unipolar on hardware (`0..=volume`, `mgba/src/gb/audio.c:641,917`)
+// but rendered about their midpoint as `+-volume`: one volume unit then spans
+// half of `PSG_LEVEL_FIFO_UNITS` per side. `frame_gain` already carries
+// `LINEAR_ENVELOPE_SCALE` per volume unit in Q8, so the scale below makes a
+// full `+-1` sample contribute `+-volume * PSG_LEVEL_FIFO_UNITS / 2`.
+const BIPOLAR_SAMPLE_SCALE: i32 =
+    (PSG_LEVEL_FIFO_UNITS << SAMPLE_GAIN_BITS) / (2 * LINEAR_ENVELOPE_SCALE.cast_signed());
 const MIDI_KEY_COUNT: i32 = 256;
 const CGB_FREQUENCY_REGISTER_BITS: u32 = 11;
 const EVEN_FREQUENCY_REGISTER_MASK: u16 = (1 << CGB_FREQUENCY_REGISTER_BITS) - 2;
@@ -26,8 +45,7 @@ const HALF_GAIN_256: u32 = FULL_GAIN_256 / 2;
 const QUARTER_GAIN_256: u32 = FULL_GAIN_256 / 4;
 const SILENT_GAIN_256: u32 = 0;
 
-// `gCgb3Vol` maps M4A envelope levels to the GBA's five NR32 gains
-// (`m4a_tables.c:168`, `m4a.c:1211`).
+// `gCgb3Vol`: M4A envelope levels onto the five NR32 gains (`m4a_tables.c:168`).
 #[rustfmt::skip]
 const LEVEL_256: [u32; 16] = [
     SILENT_GAIN_256, SILENT_GAIN_256,
@@ -71,11 +89,9 @@ fn noise_control_byte(note_key: u8, lfsr_width_selector: u8) -> u8 {
 /// Whether a voice's note-on trigger has reached the (modelled) hardware.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitialTrigger {
-    /// Owed until the first frame.
     Pending,
-    /// Written to hardware, so the voice's registers are committed state.
     Committed,
-    /// Consumed by a cancellation: nothing was ever written.
+    /// Note-off arrived first, so no trigger was ever written.
     Cancelled,
 }
 
@@ -97,8 +113,6 @@ impl DacCorrection {
     fn apply(self, frequency_register: u16) -> u16 {
         match self {
             Self::None => frequency_register,
-            // Emerald rounds fixed-rate square and wave registers before
-            // initializing the oscillator and sweep shadow (`m4a.c:1184..1202`).
             Self::FixedRate8Bit => (frequency_register + 1) & EVEN_FREQUENCY_REGISTER_MASK,
         }
     }
@@ -136,29 +150,22 @@ pub struct CgbVoice {
     gate: Gate,
     identity: VoiceIdentity,
     dac_correction: DacCorrection,
-    /// A retrigger owed to the oscillator, applied at the next
-    /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
     pending_retrigger: bool,
-    /// The note-on trigger, owed until the first frame so a pre-render retune
-    /// reaches the sweep (`m4a.c:988-994,1219-1225`).
     initial_trigger: InitialTrigger,
-    /// The track's latest requested `(note_key, fine_pitch)`, committed to the
-    /// oscillator only when [`Self::begin_frame`] reaches upstream's pitch
-    /// write (`m4a.c:1194-1203`); a retiring frame jumps to `CgbOscOff` and
-    /// skips it (`m4a.c:1053-1056`), discarding the request.
+    /// The track's latest `(note_key, fine_pitch)`; a retiring frame discards it
+    /// (`m4a.c:1053-1056,1194-1203`).
     pending_pitch: Option<(u8, u8)>,
-    /// Set when a sweep overflow silences the hardware channel, whether at a
-    /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
-    /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
+    /// Sweep overflow silenced the channel; a later safe trigger revives it
+    /// (`mgba/src/gb/audio.c:180-186,667-672`).
     hardware_muted: bool,
-    /// [`HardwareEnvelopeVolume`]'s doc; unused by a Wave voice.
     hardware_envelope_volume: HardwareEnvelopeVolume,
 }
 
 impl CgbVoice {
     /// Start a square-channel voice without fixed-rate DAC correction.
-    /// `channel` must be [`CgbChannelNumber::Square1`] or `Square2`;
-    /// `sweep_byte` is silently dropped unless `channel` is `Square1`.
+    ///
+    /// `sweep_byte` is dropped unless `channel` is `Square1`, the only channel
+    /// with NR10 (`mgba/src/gb/audio.c:170-186`).
     ///
     /// # Panics
     ///
@@ -237,8 +244,6 @@ impl CgbVoice {
         );
         let dac_correction = DacCorrection::from_fixed_rate(fixed_rate);
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
-        // Only channel 1 has NR10 (`mgba/src/gb/audio.c:170-186`), so a
-        // channel-2 sweep byte is dropped rather than trusted.
         let sweep = sweep_byte
             .filter(|_| channel == CgbChannelNumber::Square1)
             .map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
@@ -260,15 +265,48 @@ impl CgbVoice {
         )
     }
 
+    /// The square channel `MPlayExtender` leaves triggered at frequency 0 with
+    /// its DAC on before any note (`pokeemerald/src/m4a.c:268-273`). It is
+    /// idle-slot hardware only: its duty index free-runs while the slot is
+    /// empty, and the first note on the slot inherits it
+    /// (`mgba/src/gb/audio.c:162-171,493-510`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is [`CgbChannelNumber::Wave`] or `Noise`.
+    #[must_use]
+    pub(crate) fn initialized_square_hardware(channel: CgbChannelNumber) -> Self {
+        assert!(
+            matches!(
+                channel,
+                CgbChannelNumber::Square1 | CgbChannelNumber::Square2
+            ),
+            "square hardware requires Square1 or Square2, got {channel:?}"
+        );
+        let mut hardware = Self::new(
+            channel,
+            Oscillator::Square(SquareChannel::new(0, 0, None)),
+            CgbAdsr::flat(),
+            DacCorrection::None,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        hardware.initial_trigger = InitialTrigger::Committed;
+        hardware
+    }
+
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
     /// `fixed_rate` applies the 8-bit DAC correction at note-on and retunes.
     ///
-    /// `wave_id` names the immutable wave asset `samples` decodes. Equal IDs
-    /// must identify the same table: when this voice replaces or retires a
-    /// wave voice with an equal ID, it inherits that voice's retained wave-RAM
-    /// rotation instead of starting from `samples`, as the hardware keeps the
-    /// wave RAM it already holds (`m4a.c:1003-1012`). A different ID reloads
-    /// `samples` into wave RAM from its start.
+    /// Equal `wave_id`s must name the same table; a voice replacing one with an
+    /// equal ID keeps its wave-RAM rotation (`m4a.c:1003-1012`).
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -314,8 +352,8 @@ impl CgbVoice {
         )
     }
 
-    /// Start a noise-channel voice. The selector's low bit chooses the narrow
-    /// LFSR; noise ignores fine pitch and fixed-rate DAC correction.
+    /// Start a noise-channel voice; the selector's low bit chooses the narrow
+    /// LFSR.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -406,8 +444,6 @@ impl CgbVoice {
 
     #[must_use]
     pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
-        // Rhythm voices pitch from the child key but end ties by the played
-        // track key (`ply_note`, `ply_endtie`, `m4a_1.s:1594,1819`).
         self.identity.pitch_key = pitch_key;
         self
     }
@@ -451,28 +487,28 @@ impl CgbVoice {
         self.envelope.is_stopping()
     }
 
-    /// Carries the oscillator's hardware state (square duty phase, noise
-    /// output latch) forward from the voice this one replaces on a shared
-    /// hardware slot.
+    /// Inherit the oscillator's duty phase and noise latch from the voice this
+    /// one replaces on the shared slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
         self.oscillator.carry_hardware_state_from(&other.oscillator);
+        // Hold the predecessor's clocks for the note-on writes (`commit_initial_writes`).
+        if let (Oscillator::Noise(noise), Oscillator::Noise(previous)) =
+            (&mut self.oscillator, &other.oscillator)
+        {
+            noise.inherit_hardware_from(previous, other.hardware_envelope_volume.volume());
+        }
     }
 
-    /// Applies the off-write a voice's slot receives the instant it idles
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); its trigger
-    /// revives or re-mutes the hardware channel like any other.
+    /// Apply the off-write the slot receives the instant its voice idles.
     pub(crate) fn apply_hardware_off_write(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.apply_hardware_off_write();
         if self.oscillator.noise_mut().is_some() {
-            // `NR42 = 8` leaves the channel at volume zero; the noise latch
-            // keeps its level until the restarted LFSR first clocks.
             self.hardware_envelope_volume.write_off();
         }
     }
 
-    /// Whether this retained slot hardware is a noise channel whose held
-    /// latch a clock has yet to settle, so the idle slot still renders.
+    /// Whether the idle slot is a noise channel whose latch is yet to settle.
     pub(crate) fn has_unsettled_noise_output(&self) -> bool {
         match &self.oscillator {
             Oscillator::Noise(noise) => noise.has_unsettled_output(),
@@ -480,11 +516,9 @@ impl CgbVoice {
         }
     }
 
-    /// Accounts one idle frame of a vacated slot's retained hardware: a square
-    /// keeps its duty register running ([`Self::advance_idle_duty`]); a noise
-    /// channel keeps clocking at its retained rate and emits its resolved
-    /// latch, which a zero-volume clock settles to silence
-    /// (`mgba/src/gb/audio.c:606-641,782`). Wave is unchanged.
+    /// Account one idle frame of a vacated slot: a noise channel keeps clocking
+    /// and emits its latch (`mgba/src/gb/audio.c:606-641,782`), a square keeps
+    /// its duty running, and wave is unchanged.
     pub(crate) fn render_idle_hardware(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
         if self.oscillator.noise_mut().is_some() {
             let volume = self.hardware_envelope_volume.volume();
@@ -497,17 +531,9 @@ impl CgbVoice {
         }
     }
 
-    /// Accounts an idle square slot's `samples` of silence, whose duty
-    /// position the free-running register catches up over
-    /// (`mgba/src/gb/audio.c:493-510`); a no-op for Wave/Noise.
-    /// The idle channel's sweep keeps ticking at the frame's `sweep_ticks`,
-    /// retuning it as [`Self::render`] does, and a sweep overflow mutes the
-    /// channel, freezing its frequency. The catch-up itself is deferred to
-    /// the next note-on ([`SquareChannel::defer_idle_samples`]'s doc), so the
-    /// silence is rated at the frequency the sweep finally reaches.
+    /// Account an idle square slot's `samples` of silence while its sweep keeps
+    /// ticking (`mgba/src/gb/audio.c:493-510`); a no-op for wave and noise.
     pub(crate) fn advance_idle_duty(&mut self, samples: usize, sweep_ticks: &[usize]) {
-        // Mark the deferral first so the sweep retunes below leave the
-        // inherited duty remainder unrated until settlement.
         self.oscillator.defer_idle_samples(samples);
         if !self.hardware_muted {
             for _ in sweep_ticks {
@@ -519,8 +545,7 @@ impl CgbVoice {
         }
     }
 
-    /// Return whether `ply_endtie` may select this voice
-    /// ([`CgbEnvelope::is_end_tie_eligible`]'s doc).
+    /// Return whether `ply_endtie` may select this voice.
     #[must_use]
     pub(crate) fn is_end_tie_eligible(&self) -> bool {
         self.envelope.is_end_tie_eligible()
@@ -533,23 +558,18 @@ impl CgbVoice {
         }
     }
 
-    /// Request note-off immediately; may owe the oscillator a retrigger
-    /// ([`CgbEnvelope::note_off`]'s doc).
+    /// Request note-off immediately.
     pub fn note_off(&mut self) {
         if self.envelope.note_off() {
             self.pending_retrigger = true;
         }
     }
 
-    /// Applies [`Oscillator::retrigger`], muting the channel instead of
-    /// retiring the voice when the trigger disables it (`m4a.c:1053-1056`).
     fn apply_retrigger(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.retrigger();
     }
 
-    /// Settles a retune's owed noise clocks at the volume the register holds
-    /// before this write ([`NoiseChannel::settle_owed_clocks`]'s doc).
     fn settle_owed_noise_clocks(&mut self) {
         let volume = self.hardware_envelope_volume.volume();
         if let Some(noise) = self.oscillator.noise_mut() {
@@ -557,40 +577,37 @@ impl CgbVoice {
         }
     }
 
-    /// Update the live base volume; itself a retrigger, matching upstream's
-    /// live volume/pan write (`m4a_1.s:1391-1400`). The envelope goal folds
-    /// in only at the next real boundary ([`CgbEnvelope::step_frame`]'s doc),
-    /// not here; the stereo route similarly stays latched until
-    /// [`Self::begin_frame`] commits it.
+    /// Update the live base volume and owe a retrigger, as upstream's live
+    /// volume/pan write does (`m4a_1.s:1391-1400`).
+    ///
+    /// The new volumes reach the envelope goal and the stereo route only from
+    /// the envelope's next boundary on (`m4a.c:903-923,1077-1085`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_volumes(vol_mr, vol_ml);
         self.pending_retrigger = true;
     }
 
-    /// Request a retune from the owning track, preserving note identity and
-    /// noise width. The request is held until [`Self::begin_frame`] commits it
-    /// to the oscillator, and is discarded if that frame retires the voice
-    /// (`m4a.c:1053-1056`, `:1194-1203`).
+    /// Request a retune, held until [`Self::begin_frame`] commits it; a frame
+    /// that retires the voice discards it (`m4a.c:1053-1056`). Noise ignores
+    /// `pit_m` (`m4a.c:810-826`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let translated_key = (i32::from(self.identity.pitch_key) + key_m).max(0) % MIDI_KEY_COUNT;
         let note_key = u8::try_from(translated_key).unwrap_or(0);
         self.pending_pitch = Some((note_key, pit_m));
     }
 
-    /// Whether this voice's initial trigger has been written to hardware.
     pub(crate) fn initial_trigger_committed(&self) -> bool {
         self.initial_trigger == InitialTrigger::Committed
     }
 
-    /// Advance the software envelope and prepare gain for one render
-    /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
+    /// Advance the envelope and prepare gain for one render frame.
     ///
-    /// Never scales by the DirectSound master volume: `MPlayExtender` pins
-    /// CGB output at full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
+    /// Ignores the DirectSound master volume: `MPlayExtender` pins CGB output at
+    /// full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
     pub fn begin_frame(&mut self, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
-        // A note stopped before its first pass jumps to the off-write and
-        // never reaches the note-on hardware writes (`m4a.c:1043-1056`).
+        // A note stopped before its first pass never reaches the note-on
+        // hardware writes (`m4a.c:1043-1056`).
         let initial_trigger =
             self.initial_trigger == InitialTrigger::Pending && !self.envelope.is_stopping();
         if self.initial_trigger == InitialTrigger::Pending {
@@ -600,41 +617,49 @@ impl CgbVoice {
                 InitialTrigger::Cancelled
             };
         }
-        // The goal `CgbModVol` would compute right now from the current side
-        // volumes/pan; folded in only at a real boundary (`step_frame`'s doc).
         let live_goal = self.routing.envelope_goal();
         let (retriggered_by_transition, envelope_boundary) = self
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
-        // The pitch write sits after the retirement jump, so a retiring frame
-        // never commits it (`m4a.c:1053-1056`, `:1194-1203`).
+        // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
                 self.oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
             }
         }
-        // `CgbModVol` recomputes `chan->pan` at every boundary, transition or
-        // not (`m4a.c:1077-1085`); by itself this writes nothing audible.
+        // Pan is recomputed at every boundary, transition or not
+        // (`m4a.c:1077-1085`).
         if envelope_boundary {
             self.routing.recompute_pan();
         }
-        // NR51 moves only under `CGB_CHANNEL_MO_VOL`: a transition, a live
-        // write (using whatever pan was last recomputed), or, Wave only,
-        // any bare boundary (`m4a.c:1081-1082`, `:1205-1208`).
+        // A retiring frame jumps through `oscillator_off` to `channel_complete`,
+        // past the `CGB_CHANNEL_MO_VOL` NR51 and NRx2/NRx4 writes
+        // (`m4a.c:1053-1056,1084-1101,1205-1226`); only a note's first pass keeps
+        // its note-on writes.
+        let commits_hardware = self.envelope.is_active() || initial_trigger;
+        // NR51 moves only under `CGB_CHANNEL_MO_VOL` (`m4a.c:1081-1082,1205-1208`).
         let is_wave = matches!(self.channel, CgbChannelNumber::Wave);
-        if retriggered_by_transition || retriggered_by_note_off || (is_wave && envelope_boundary) {
+        if commits_hardware
+            && (retriggered_by_transition
+                || retriggered_by_note_off
+                || (is_wave && envelope_boundary))
+        {
             self.routing.commit_pan();
         }
-        let hardware_write = retriggered_by_note_off || retriggered_by_transition;
+        let hardware_write =
+            commits_hardware && (retriggered_by_note_off || retriggered_by_transition);
+        if initial_trigger {
+            self.oscillator
+                .commit_initial_writes(!self.envelope.is_active());
+        }
         if hardware_write || initial_trigger {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
         if hardware_write || initial_trigger {
-            // A noise trigger whose NR42 byte holds a zero volume nibble and
-            // a clear direction bit disables the channel
-            // (`mgba/src/gb/audio.c:856-860`).
+            // A zero volume nibble with a clear direction bit disables the
+            // channel (`mgba/src/gb/audio.c:856-860`).
             let runs = self.envelope.hardware_dac_enabled();
             if let Some(noise) = self.oscillator.noise_mut() {
                 noise.set_clocking(runs);
@@ -672,8 +697,7 @@ impl CgbVoice {
     }
 
     /// Accumulate this voice into one frame after [`Self::begin_frame`].
-    /// `sweep_ticks` must contain ascending sample offsets from the shared
-    /// 128 Hz CGB frame sequencer.
+    /// `sweep_ticks` holds ascending sample offsets of the 128 Hz sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
         if self.is_dead_at_zero() {
             self.advance_idle_duty(acc.len(), sweep_ticks);
@@ -709,6 +733,14 @@ impl CgbVoice {
 
 #[cfg(test)]
 impl CgbVoice {
+    /// Writes `freq_reg` through `NR13`/`NR14` to a square voice's hardware.
+    pub(crate) fn with_square_frequency_register(mut self, freq_reg: u16) -> Self {
+        if let Oscillator::Square(square) = &mut self.oscillator {
+            square.set_frequency(freq_reg);
+        }
+        self
+    }
+
     fn noise_is_narrow(&self) -> Option<bool> {
         match &self.oscillator {
             Oscillator::Noise(n) => Some(n.is_narrow()),

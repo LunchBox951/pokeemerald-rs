@@ -22,7 +22,7 @@
 //! fixtures below use hand-built parties instead — pinning behaviour only
 //! against a one-mon party would pin nothing. A forced post-faint send-out
 //! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
-//! falling back to party order; see `TrainerContext::send_out_next`'s docs.
+//! falling back to party order; see `TrainerContext::select_replacement`'s docs.
 
 use crate::common::{max_iv_mon, script, SequenceRng};
 use assets::trainers::TrainerId;

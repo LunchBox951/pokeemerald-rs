@@ -1,11 +1,12 @@
 use super::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
-    initial_moveset, roll_ivs, roll_nature, roll_personality_for_nature,
+    initial_moveset, pick_wild_nature, roll_ivs, roll_nature, roll_personality_for_nature,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::Nature;
-use crate::pokemon::{Ivs, MAX_MON_MOVES, MOVE_NONE};
+use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES, MOVE_NONE};
 use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
 
@@ -128,7 +129,7 @@ fn build_wild_pokemon_draws_nature_then_personality_then_ivs_in_order() {
         hp_only_iv_draw,
         special_attack_only_iv_draw,
     ]);
-    let mon = build_wild_pokemon(&dex, BULBASAUR, 5, vec![TACKLE], &mut rng).unwrap();
+    let mon = build_wild_pokemon(&dex, BULBASAUR, 5, vec![TACKLE], None, None, &mut rng).unwrap();
     assert_eq!(mon.nature(), Nature::Quirky);
     assert_eq!(mon.personality(), personality);
     assert_eq!(
@@ -164,7 +165,7 @@ fn build_wild_pokemon_rejects_bad_inputs_before_drawing_anything() {
     ] {
         let mut rng = SequenceRng::new([]);
         assert_eq!(
-            build_wild_pokemon(&dex, BULBASAUR, level, moves, &mut rng),
+            build_wild_pokemon(&dex, BULBASAUR, level, moves, None, None, &mut rng),
             Err(expected)
         );
         assert_eq!(rng.draws(), 0, "a rejected request must not draw");
@@ -293,6 +294,23 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 }
 
 #[test]
+fn the_any_slot_ability_screen_admits_every_effect_spore_species() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::PARAS,
+        SpeciesId::PARASECT,
+        SpeciesId::SHROOMISH,
+        SpeciesId::BRELOOM,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
@@ -309,10 +327,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::RALTS, assets::AbilityId::TRACE),
         (SpeciesId::KIRLIA, assets::AbilityId::TRACE),
         (SpeciesId::GARDEVOIR, assets::AbilityId::TRACE),
-        (SpeciesId::PARAS, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::PARASECT, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::SHROOMISH, assets::AbilityId::EFFECT_SPORE),
-        (SpeciesId::BRELOOM, assets::AbilityId::EFFECT_SPORE),
         (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),
@@ -357,8 +371,79 @@ fn an_unknown_species_yields_no_moves_and_is_rejected_downstream() {
     let dex = Dex::new();
     let mut rng = SequenceRng::new([]);
     assert_eq!(
-        build_wild_pokemon(&dex, UNKNOWN_SPECIES, 5, Vec::new(), &mut rng),
+        build_wild_pokemon(&dex, UNKNOWN_SPECIES, 5, Vec::new(), None, None, &mut rng),
         Err(BattleError::InvalidMoveCount(0))
     );
     assert_eq!(rng.draws(), 0);
 }
+
+#[test]
+fn pick_wild_nature_without_synchronize_draws_once() {
+    let mut rng = SequenceRng::new([3]);
+    assert_eq!(pick_wild_nature(None, &mut rng), Nature::ALL[3]);
+    rng.assert_exhausted();
+}
+
+#[test]
+fn pick_wild_nature_synchronize_win_returns_lead_nature_after_one_draw() {
+    let mut rng = SequenceRng::new([4]);
+    assert_eq!(
+        pick_wild_nature(Some(Nature::Quirky), &mut rng),
+        Nature::Quirky
+    );
+    rng.assert_exhausted();
+}
+
+#[test]
+fn pick_wild_nature_synchronize_loss_spends_a_second_draw_on_a_random_nature() {
+    let mut rng = SequenceRng::new([5, 3]);
+    assert_eq!(
+        pick_wild_nature(Some(Nature::Quirky), &mut rng),
+        Nature::ALL[3]
+    );
+    rng.assert_exhausted();
+}
+
+#[test]
+fn build_wild_pokemon_with_a_winning_synchronize_flip_uses_the_lead_nature() {
+    let dex = Dex::new();
+    let personality = u32::from(Nature::Quirky.id());
+    let [low, high] = personality_draw(personality);
+    // coin, personality (2), IVs (2): the winning flip spends no nature draw.
+    let mut rng = SequenceRng::new([0, low, high, 0, 0]);
+    let mon = build_wild_pokemon(
+        &dex,
+        BULBASAUR,
+        5,
+        vec![TACKLE],
+        Some(Nature::Quirky),
+        None,
+        &mut rng,
+    )
+    .unwrap();
+    assert_eq!(mon.nature(), Nature::Quirky);
+    assert_eq!(rng.draws(), 5);
+}
+
+#[test]
+fn build_wild_pokemon_with_a_losing_synchronize_flip_draws_six_times() {
+    let dex = Dex::new();
+    let personality = u32::from(Nature::Adamant.id());
+    let [low, high] = personality_draw(personality);
+    // coin (odd), nature, personality (2), IVs (2).
+    let mut rng = SequenceRng::new([1, u16::from(Nature::Adamant.id()), low, high, 0, 0]);
+    let mon = build_wild_pokemon(
+        &dex,
+        BULBASAUR,
+        5,
+        vec![TACKLE],
+        Some(Nature::Quirky),
+        None,
+        &mut rng,
+    )
+    .unwrap();
+    assert_eq!(mon.nature(), Nature::Adamant);
+    assert_eq!(rng.draws(), 6);
+}
+
+mod cute_charm;

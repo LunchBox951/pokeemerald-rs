@@ -223,11 +223,10 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_the_winners_shed_skin_cure_can_dr
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// The residual pass held back by a move-learn prompt runs when the prompt is
-/// answered (`src/battle_util.c:1912`-`:1923`, `src/battle_main.c:3960`-`:3968`),
-/// so `resolve_move_learn`'s `rng` must feed the deferred cure draw.
-#[test]
-fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
+/// A poisoned level-15 [`SEVIPER`] one experience point short of level 16,
+/// brought to the Poison Tail prompt by knocking out the trainer's first
+/// [`TREECKO`] with `setup_rng` supplying the setup turns.
+fn deferred_shed_skin_battle(setup_rng: &mut SequenceRng) -> Battle {
     let dex = Dex::new();
     let growth_rate = dex.species(SEVIPER).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
@@ -241,16 +240,13 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
-
-    // `u16::MAX` is a multiple of 3, so every Shed Skin draw cures.
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
     let mut battle =
-        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, setup_rng).unwrap();
 
     let mut events = Vec::new();
     for _ in 0..8 {
         events = battle
-            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .take_turn(PlayerAction::UseMove(0), setup_rng)
             .unwrap();
         if battle.pending_move_learn().is_some() {
             break;
@@ -268,10 +264,22 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
             .any(|event| matches!(event, BattleEvent::ShedSkinCured { .. })),
         "the residual pass waits on the answer with everything else: {events:?}"
     );
+    battle
+}
 
+/// The residual pass held back by a move-learn prompt runs when the prompt is
+/// answered (`src/battle_util.c:1912`-`:1923`, `src/battle_main.c:3960`-`:3968`),
+/// so `resolve_move_learn`'s `rng` must feed the deferred cure draw.
+#[test]
+fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
+    let mut setup_rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle = deferred_shed_skin_battle(&mut setup_rng);
+
+    let mut rng = SequenceRng::new([CURE_HIT_DRAW]);
     let answered = battle
         .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
+    rng.assert_exhausted();
     assert_eq!(
         answered,
         vec![
@@ -287,10 +295,41 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
                 status: Status1::Poisoned,
             },
         ],
-        "the answer releases the replacement, then the deferred cure draw \
-         the caller's own rng argument must feed: {answered:?}"
+        "{answered:?}"
     );
     assert_eq!(battle.player().status1(), Status1::Healthy);
+    assert_eq!(battle.outcome(), None, "the battle plays on");
+}
+
+#[test]
+fn a_missed_deferred_shed_skin_cure_draw_keeps_the_poison_and_takes_its_tick() {
+    let mut setup_rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle = deferred_shed_skin_battle(&mut setup_rng);
+    let max_hp = battle.player().stats().max_hp;
+
+    let mut rng = SequenceRng::new([CURE_MISS_DRAW]);
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
+        .unwrap();
+    rng.assert_exhausted();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined {
+                move_id: POISON_TAIL
+            },
+            BattleEvent::TrainerSentOut {
+                species: TREECKO,
+                bench_remaining: 0,
+            },
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                damage: poison_residual_damage(max_hp),
+            },
+        ],
+        "{answered:?}"
+    );
+    assert_eq!(battle.player().status1(), Status1::Poisoned);
     assert_eq!(battle.outcome(), None, "the battle plays on");
 }
 

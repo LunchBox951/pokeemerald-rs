@@ -75,8 +75,8 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
-    // Stands in for the un-ported Birch-bag handout, as `load_default` assigns it.
-    phase.party_lead = Some(new_game::provisional_starter());
+    // Stands in for the un-ported Birch-bag handout, as `OverworldPhase::load` assigns it.
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
     for _ in 0..3 {
         walk_one_tile(&mut phase, Buttons::UP);
@@ -108,8 +108,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
         );
     }
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the battle writes the lead mon back once it ends");
     assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
     assert!(
