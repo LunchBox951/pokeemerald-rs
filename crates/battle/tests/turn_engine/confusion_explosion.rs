@@ -1,5 +1,6 @@
-//! The confusion self-hit's `EFFECT_EXPLOSION` Defense halving, driven through
-//! complete turns with a confused wild Koffing.
+//! The confusion self-hit's `EFFECT_EXPLOSION` Defense halving and burn
+//! damage halving, driven through complete turns with a confused wild
+//! Koffing.
 //!
 //! `SequenceRng` panics once its scripted values run out, so a script sized
 //! to exactly the expected draws is itself the proof that nothing further
@@ -7,7 +8,7 @@
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, Dex, PlayerAction, StatStage};
+use battle::{Battle, BattleEvent, Dex, PlayerAction, StatStage, Status1};
 
 const TACKLE: MoveId = MoveId::TACKLE;
 /// `SPECIES_KOFFING`: Hardy L20 with all IVs at 31 has Attack 37 and Defense 49.
@@ -175,4 +176,39 @@ fn the_explosion_halving_applies_before_the_defense_stage() {
     );
     let control = confused_koffing_turn(MoveId::EXPLOSION, true, 0, staged);
     assert_eq!(self_hit_damage(&control.events), 6);
+}
+
+/// `CalculateBaseDamage` halves a burned attacker's damage after the division
+/// by 50 (`pokemon.c:3262-3264`), and the confusion branch hands it the
+/// confused battler as both attacker and defender (`battle_util.c:2173`).
+/// Tackle control: ((2 * 20 / 5 + 2) * 40 * 37 / 49) / 50 = 6, +2 = 8; burned,
+/// 6 / 2 + 2 = 5.
+#[test]
+fn a_burned_battlers_confusion_self_hit_halves_its_damage() {
+    let burned = |enemy: &mut battle::BattlePokemon| enemy.set_status1(Status1::Burned);
+    let control = confused_koffing_turn(MoveId::SCRATCH, false, 0, |_| {});
+    assert_eq!(self_hit_damage(&control.events), 8, "unburned control");
+
+    let hit = confused_koffing_turn(MoveId::SCRATCH, false, 0, burned);
+    assert_eq!(
+        self_hit_damage(&hit.events),
+        5,
+        "a burned self-hit is halved: {:?}",
+        hit.events
+    );
+    assert_self_hit_branch_only(&hit.events);
+    assert_eq!(hit.enemy_pp, [35, 35], "a self-hit spends no PP");
+    assert_eq!(hit.draws, 6);
+}
+
+/// The burn halving is independent of the raw-stat Defense halving: a burned
+/// Explosion selection gives (37 * 40 * 10 / 24) / 50 = 12, halved to 6, +2 =
+/// 8, against the unburned 14.
+#[test]
+fn the_burn_halving_stacks_with_the_explosion_defense_halving() {
+    let burned = |enemy: &mut battle::BattlePokemon| enemy.set_status1(Status1::Burned);
+    let unburned = confused_koffing_turn(MoveId::EXPLOSION, true, 1, |_| {});
+    assert_eq!(self_hit_damage(&unburned.events), 14);
+    let hit = confused_koffing_turn(MoveId::EXPLOSION, true, 1, burned);
+    assert_eq!(self_hit_damage(&hit.events), 8, "{:?}", hit.events);
 }
