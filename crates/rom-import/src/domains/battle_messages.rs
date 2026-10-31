@@ -127,7 +127,7 @@ fn check_roots(family: &BattleMessageRoots) -> Result<(), ImportError> {
 /// # Errors
 ///
 /// [`ImportError::Truncated`] if the image ends before an `EOS`.
-fn stream<'a>(reader: &RomReader<'a>, ptr: GbaPtr) -> Result<&'a [u8], ImportError> {
+pub(super) fn stream<'a>(reader: &RomReader<'a>, ptr: GbaPtr) -> Result<&'a [u8], ImportError> {
     let start = ptr.offset();
     let tail = reader.tail(start)?;
     let end = tail

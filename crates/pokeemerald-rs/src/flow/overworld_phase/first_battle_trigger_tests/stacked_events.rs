@@ -52,9 +52,6 @@ fn route_101_runtime_with_stack(
     stack: Vec<assets::CoordEvent>,
 ) -> MapRuntime<'_> {
     let coord_events: &'static [assets::CoordEvent] = Box::leak(stack.into_boxed_slice());
-    let header = assets::MapHeaderTable::new()
-        .header(MapId("MAP_ROUTE101"))
-        .expect("Route 101 resolves in the generated map-header table");
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
         id: MapId("MAP_ROUTE101"),
         shared_events_map: None,
@@ -63,7 +60,7 @@ fn route_101_runtime_with_stack(
         coord_events,
         bg_events: &[],
     }));
-    phase.scene.runtime(MapId("MAP_ROUTE101"), header, events)
+    phase.scene.runtime_over_events_for_test(events)
 }
 
 fn phase_on_the_trigger_tile() -> OverworldPhase {

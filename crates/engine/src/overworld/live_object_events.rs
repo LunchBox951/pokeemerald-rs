@@ -62,6 +62,11 @@ impl ObjectEventCollection {
         }
     }
 
+    /// Iterates entries in declaration order.
+    pub fn iter(&self) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter()
+    }
+
     /// Returns the entry whose template declares `local_id`, or the first
     /// such entry in declaration order if `local_id` repeats, matching
     /// upstream's linear scan (`GetObjectEventIdByLocalId`,
@@ -83,9 +88,9 @@ impl ObjectEventCollection {
     /// Iterates entries at `(x, y, elevation)` by *live* position, in
     /// declaration order.
     ///
-    /// Unlike [`crate::overworld::map_runtime::MapRuntime::object_events_at`],
-    /// which scans authored template coordinates, this scans live position
-    /// and elevation. Either side's elevation may be
+    /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
+    /// delegates here when a collection is bound; unbound, it scans authored
+    /// template coordinates instead. Either side's elevation may be
     /// [`crate::overworld::collision::ELEVATION_TRANSITION`] to match the
     /// other, mirroring upstream's `GetObjectEventIdByPosition`/
     /// `ObjectEventDoesElevationMatch` (`event_object_movement.c:2192-2215`).

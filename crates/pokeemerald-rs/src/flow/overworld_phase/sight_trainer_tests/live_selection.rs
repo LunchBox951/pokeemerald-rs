@@ -21,7 +21,7 @@ fn phase_after(
     edit: impl FnOnce(&mut engine::overworld::ObjectEventState),
 ) -> OverworldPhase {
     let mut phase = route_103_phase(PlayerState::new(player, 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     edit(
         phase
