@@ -641,3 +641,61 @@ fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot
          established at x=3 must have kept advancing underneath"
     );
 }
+
+/// A single affine BG tile whose rows each fill with a distinct opaque
+/// color (channel `row + 1`) -- the vertical counterpart to
+/// [`gradient_affine_bg_fixture`], distinguishing which source *row* a
+/// sample landed in.
+fn row_gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
+    let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+    let mut bytes = vec![0u8; tile_byte_len];
+    for (row, chunk) in bytes.chunks_exact_mut(BitDepth::TILE_DIM).enumerate() {
+        chunk.fill(u8::try_from(row + 1).unwrap());
+    }
+    let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+    let mut colors = [Bgr555::default(); Palette::LEN];
+    for (row, color) in colors[1..=BitDepth::TILE_DIM].iter_mut().enumerate() {
+        *color = Bgr555::from_channels(u8::try_from(row + 1).unwrap(), 0, 0);
+    }
+    let palette = Palette::new(colors);
+    let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+    (tileset, palette, tilemap)
+}
+
+#[test]
+fn affine_mosaic_vertical_snaps_rows_to_the_block_origin_row() {
+    // Vertical mosaic snaps every scanline to its block's first row, so with
+    // a vertical size of 4 rows 0-3 show source row 0 and rows 4-7 show
+    // source row 4; no other affine-BG test varies a fixture by row.
+    let (tiles, palette, tilemap) = row_gradient_affine_bg_fixture();
+    let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+    let slot = BgSlot::new_affine(
+        layer,
+        0,
+        0,
+        AffineMatrix::IDENTITY,
+        0,
+        0,
+        Overflow::Transparent,
+        true,
+    )
+    .with_mosaic(true);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+    let effects = FrameEffects {
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::new(1, 4),
+            obj: MosaicSize::NONE,
+        },
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+    for y in 0..8usize {
+        let source_row = (y / 4) * 4;
+        let want = Bgr555::from_channels(u8::try_from(source_row + 1).unwrap(), 0, 0).to_rgb888();
+        assert_eq!(fb.pixel(0, y), Some(want), "screen y={y}");
+    }
+}

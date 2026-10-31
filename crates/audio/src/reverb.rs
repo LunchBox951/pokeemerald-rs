@@ -6,13 +6,14 @@
 //! The 1,584-sample hardware buffer holds seven whole 224-sample frames under
 //! `pcmDmaPeriod` (`m4a.c:407`), so the ring has 1,568 positions.
 //!
-//! Upstream adds one when the stored byte's sign bit is set after the shift
-//! (`m4a_1.s:109..112`), which biases exact negative multiples toward zero;
-//! signed division is not equivalent.
+//! With wrapped byte samples and the supported `0..=127` level, upstream
+//! shifts the scaled sum right by nine and adds one when the stored byte's
+//! sign bit is set (`m4a_1.s:109..112`), which biases exact negative multiples
+//! toward zero; signed division is not equivalent.
 //!
-//! The mixer commits the clipped frame back to the ring, so clipping sits
-//! inside the feedback loop and, unlike the hardware byte accumulator,
-//! overflow does not wrap.
+//! The mixer commits the wrapped wet-plus-DirectSound-dry frame back to the
+//! ring, so the byte wrap (`m4a_1.s:308..339`) occurs inside the feedback loop,
+//! as on the hardware's byte accumulator.
 
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::voice::StereoAcc;
@@ -69,12 +70,12 @@ impl Reverb {
         }
     }
 
-    pub(crate) fn commit_frame(&mut self, clipped_mix: &[StereoAcc]) {
-        for (frame_offset, &sample) in clipped_mix.iter().enumerate() {
+    pub(crate) fn commit_frame(&mut self, wrapped_mix: &[StereoAcc]) {
+        for (frame_offset, &sample) in wrapped_mix.iter().enumerate() {
             let write_index = (self.next_frame_start + frame_offset) % DELAY_SAMPLES;
             self.delay[write_index] = sample;
         }
-        self.next_frame_start = (self.next_frame_start + clipped_mix.len()) % DELAY_SAMPLES;
+        self.next_frame_start = (self.next_frame_start + wrapped_mix.len()) % DELAY_SAMPLES;
     }
 }
 

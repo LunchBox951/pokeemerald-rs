@@ -1,8 +1,11 @@
 //! DirectSound voice playback and stereo accumulation.
 //!
-//! `SoundMainRAM` lets packed sample lanes carry into each other
-//! (`m4a_1.s:396..437`); this mixer accumulates each output sample in its own
-//! `i32` and does not reproduce that bleed.
+//! `SoundMainRAM` mixes four packed sample lanes, but masks each voice term
+//! (`bic 0xFF0000`) into a lane's top byte, so a lane wraps modulo 256 and
+//! never carries into its neighbour (`m4a_1.s:308..339`, `395..416`). This
+//! mixer accumulates each output sample in its own `i32`; the mixer wraps the
+//! finished sum to a signed byte, which gives the same result. Fixed-rate
+//! voices advance by exactly one source sample, preserving raw playback.
 //!
 //! Loop and retirement use [`WaveData::logical_len`]. Interpolation reads
 //! the sample after the current one (the `current + 1` prefetch in
@@ -13,7 +16,7 @@ use std::sync::Arc;
 
 use crate::envelope::{Adsr, Envelope};
 use crate::gate::Gate;
-use crate::pitch::{self, FRAC_MASK};
+use crate::pitch::{self, WHOLE_SAMPLE_MASK};
 use crate::sample::WaveData;
 
 const MASTER_VOLUME_BITS: u32 = 4;
@@ -29,14 +32,14 @@ pub type StereoAcc = (i32, i32);
 #[derive(Clone, Copy, Debug)]
 struct SourcePosition {
     sample_index: usize,
-    fractional_phase: u32,
+    phase: u32,
 }
 
 impl SourcePosition {
     fn start() -> Self {
         Self {
             sample_index: 0,
-            fractional_phase: 0,
+            phase: 0,
         }
     }
 
@@ -65,17 +68,19 @@ impl SourcePosition {
         } else {
             samples[self.sample_index]
         };
-        let weighted_delta = (i64::from(self.fractional_phase)
-            * i64::from(i32::from(next) - current))
-            >> pitch::FRAC_BITS;
-        current + i32::try_from(weighted_delta).unwrap_or(0)
+        // The whole retained phase word is multiplied in 32-bit registers, so
+        // the product wraps before the arithmetic shift (`m4a_1.s:403..404`).
+        let delta = i32::from(next) - current;
+        let weighted_delta = self.phase.wrapping_mul(delta.cast_unsigned());
+        current + (weighted_delta.cast_signed() >> pitch::FRAC_BITS)
     }
 
     fn advance_wrapping(&mut self, phase_step: u32) {
-        self.fractional_phase = self.fractional_phase.wrapping_add(phase_step);
-        self.sample_index +=
-            usize::try_from(self.fractional_phase >> pitch::FRAC_BITS).unwrap_or(0);
-        self.fractional_phase &= FRAC_MASK;
+        // Only bits 23..29 are cleared after counting whole samples, so bits
+        // 30..31 carry into the next advance (`m4a_1.s:413..418`).
+        self.phase = self.phase.wrapping_add(phase_step);
+        self.sample_index += usize::try_from(self.phase >> pitch::FRAC_BITS).unwrap_or(0);
+        self.phase &= !WHOLE_SAMPLE_MASK;
     }
 }
 
@@ -554,7 +559,7 @@ mod tests {
     fn interpolated_sample_reads_the_retained_guard_at_the_final_logical_step() {
         let wave = WaveData::one_shot(0, vec![0, 40]).with_logical_len(1);
         let mut position = SourcePosition::start();
-        position.fractional_phase = pitch::FRAC_ONE / 2;
+        position.phase = pitch::FRAC_ONE / 2;
         let sample = position.interpolated_sample(&wave);
         assert!(
             (18..=22).contains(&sample),
@@ -617,6 +622,39 @@ mod tests {
             acc[0].1,
             (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
         );
+    }
+
+    #[test]
+    fn advance_retains_phase_bits_30_and_31_like_sound_main_ram() {
+        // `SoundMainRAM` takes `lr = r9 lsr 23` but clears only bits 23..29
+        // (`bic r9, r9, 0x3F800000`, m4a_1.s:415-418), so bits 30..31 survive
+        // into the next advance.
+        let phase_step = pitch::phase_step(2_097_152);
+        assert_eq!(phase_step, 0x4E60_0000);
+        let (mut r9, mut upstream_index) = (0u32, 0usize);
+        let mut position = SourcePosition::start();
+        for _ in 0..2 {
+            r9 = r9.wrapping_add(phase_step);
+            upstream_index += (r9 >> 23) as usize;
+            r9 &= !0x3F80_0000;
+            position.advance_wrapping(phase_step);
+        }
+        assert_eq!(upstream_index, 441);
+        assert_eq!(position.sample_index, upstream_index);
+        assert_eq!(position.phase, r9);
+    }
+
+    #[test]
+    fn interpolation_multiplies_the_retained_phase_word_with_wrapping_arithmetic() {
+        // `mul lr, r9, r1` / `add lr, r0, lr, asr 23` (m4a_1.s:403-404) runs
+        // on the whole retained word in 32-bit registers, so the product
+        // wraps before the arithmetic shift.
+        let wave = WaveData::looping(0, 0, vec![10, 90, 10, 90]);
+        let mut position = SourcePosition::start();
+        position.phase = 0x4000_0000 | (pitch::FRAC_ONE / 2);
+        let delta = 80u32;
+        let upstream = 10 + (position.phase.wrapping_mul(delta).cast_signed() >> 23);
+        assert_eq!(position.interpolated_sample(&wave), upstream);
     }
 
     #[test]

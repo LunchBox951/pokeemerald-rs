@@ -4,31 +4,35 @@
 //! [`OUTPUT_RELATIVE_PATH`]. The runtime pack resolver is intentionally not
 //! used because this command owns the checkout-local build product.
 //!
-//! The facade owns pipeline order, checkout and output paths, common pack-entry
-//! builders, and manifests for layouts, title graphics, and interface palettes.
-//! Specialized child modules own source decoding, tileset and sprite extraction,
-//! and the remaining asset manifests; `error` defines the public failure
-//! contracts.
+//! The facade owns pipeline order, checkout and output paths, and the
+//! pack-entry helpers shared by several extractors. Each child module owns one
+//! asset family's decoding and entries, `scope` owns the manifests naming them,
+//! and `error` defines the public failure contracts.
 //!
 //! # Extraction scope
 //!
 //! The pack contains:
 //!
 //! - every tile image and animation, all 16 palettes, and both raw metatile
-//!   tables for the primary `general` and `building` tilesets and the secondary
-//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//!   tables for each tileset in `TILESETS`;
 //! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
 //!   palettes for `emerald_version` and `press_start` and the upstream colour
 //!   limit applied to `pokemon_logo`;
-//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
-//!   generic `npc_1` through `npc_4` palettes;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, the four
+//!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
+//!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes and both Birch tilemaps;
+//! - Birch's speech scene (shadow sheet, background tilemap and palettes, his
+//!   sprite, and Lotad's front picture with its normal palette) and the wall
+//!   clock (face and hand sheets, both gender palettes, the prompt palette, and
+//!   both tilemaps);
 //! - the static battler art of Treecko, Torchic, and Mudkip: front and back
 //!   images with normal and shiny palettes;
+//! - the Brendan and May trainer front pictures with their palettes;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -36,10 +40,19 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
+//! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
+//!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references; and
+//!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
-//!   templates `BufferStringBattle` selects).
+//!   templates `BufferStringBattle` selects); and
+//! - the naming screen's 15 sheets (the three cursors cut to their first five
+//!   tiles), seven palettes, and four decoded tilemaps;
+//! - the battle-animation catalog (`data/battle_anim_scripts.s`); and
+//! - the sheet and palette of every battle-effect sprite a catalog program loads.
+//!
+//! The battle interface also contributes the player and opponent singles health-box
+//! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
 //!
 //! # Asset id scheme
 //!
@@ -53,13 +66,22 @@
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `opening-scene/{image,palette,raw}/<name>`
+//! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
-//! - `battle-interface/{image,palette,raw}/<name>`
+//! - `battle-interface/{image,palette,raw}/<name>` and
+//!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
-//! - `audio/sample/{direct-sound,programmable-wave}/<name>`
+//! - `audio/sample/{direct-sound,programmable-wave}/<name>` and
+//!   `audio/sample/direct-sound/cry/<stem>`
+//! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `field-message/table`
+//! - `naming-screen/{image,palette,raw}/<stem>`
+//! - `battle-anim/catalog`
+//! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -67,23 +89,37 @@
 mod audio_samples;
 mod bag;
 mod battle_anim;
+mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod bundled_inventory_tests;
+#[cfg(test)]
+mod checkpoint_maps_tests;
+pub(crate) mod cry;
 mod error;
+mod field_message;
 mod fonts;
 pub mod inflate;
+mod interface;
 pub mod jasc_pal;
+mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
+mod naming_screen;
+mod opening_scene;
 pub mod png;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;
+mod text_source;
 mod text_window;
 mod tilesets;
+mod title;
+mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -94,7 +130,7 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 use publish::write_pack_atomically;
 
-use scope::{LAYOUTS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS};
+use scope::TILESETS;
 
 /// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
@@ -148,22 +184,30 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     for tileset in TILESETS {
         tilesets::extract_tileset(&upstream, tileset, &mut writer)?;
     }
-    extract_title_screen(&upstream, &mut writer)?;
+    title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
-    extract_layouts(&upstream, &mut writer)?;
+    trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
+    layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
-    extract_interface_palettes(&upstream, &mut writer)?;
+    interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    opening_scene::extract_opening_scene(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
+    cry::extract_cries(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
-    battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    field_message::extract_field_message(&upstream, &mut writer)?;
+    let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
+    battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
+    naming_screen::extract_naming_screen(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -285,201 +329,15 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
-/// Refuse a title directory missing a source the generator requires.
-fn require_title_sources(dir: &Path, entries: &[PathBuf]) -> Result<(), ExtractError> {
-    let required = scope::TITLE_SCREEN_IMAGES
-        .iter()
-        .chain(&scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS)
-        .map(|stem| format!("{stem}.png"))
-        .chain(
-            scope::TITLE_SCREEN_TILEMAPS
-                .iter()
-                .map(|stem| format!("{stem}.bin")),
-        )
-        .chain(
-            scope::TITLE_SCREEN_FILE_PALETTES
-                .iter()
-                .map(|stem| format!("{stem}.pal")),
-        );
-    for name in required {
-        if !entries
-            .iter()
-            .any(|p| p.file_name().is_some_and(|f| *f == *name))
-        {
-            return Err(ExtractError::ReadFailed(
-                dir.join(&name),
-                "required title screen source is missing".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let dir = upstream.join("graphics/title_screen");
-
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .and_then(|it| {
-            it.map(|entry| entry.map(|e| e.path()))
-                .collect::<std::io::Result<_>>()
-        })
-        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
-    entries.sort();
-    require_title_sources(&dir, &entries)?;
-
-    for path in entries {
-        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("png") => {
-                let bytes = read_file(&path)?;
-                let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-                if TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS.contains(&stem.as_str()) {
-                    if image.palette.is_empty() {
-                        return Err(ExtractError::MissingEmbeddedPalette(path.clone()));
-                    }
-                    let colors: Vec<jasc_pal::Rgb888> = image
-                        .palette
-                        .iter()
-                        .map(|&[r, g, b]| jasc_pal::Rgb888 { r, g, b })
-                        .collect();
-                    let entry =
-                        build_palette_entry(&path, &colors, format!("title/palette/{stem}"))?;
-                    writer.push(entry);
-                }
-                writer.push(build_image_entry(
-                    &path,
-                    format!("title/image/{stem}"),
-                    image,
-                )?);
-            }
-            Some("pal") => {
-                let color_limit = TITLE_SCREEN_PALETTE_CUTS
-                    .iter()
-                    .find_map(|&(sheet, limit)| (sheet == stem).then_some(limit));
-                push_palette_entry_with_limit(
-                    &path,
-                    format!("title/palette/{stem}"),
-                    color_limit,
-                    writer,
-                )?;
-            }
-            Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn extract_interface_palettes(
-    upstream: &Path,
-    writer: &mut PackWriter,
-) -> Result<(), ExtractError> {
-    push_palette_entry(
-        &upstream.join("graphics/interface/main_menu_bg.pal"),
-        scope::MAIN_MENU_BG_PALETTE_ID.to_owned(),
-        writer,
-    )
-}
-
-const BORDER_SIDE_CELLS: usize = 2;
-const BORDER_BLOCK_BYTES: usize =
-    BORDER_SIDE_CELLS * BORDER_SIDE_CELLS * std::mem::size_of::<u16>();
-
-fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let json_path = upstream.join("data/layouts/layouts.json");
-    let text = read_text(&json_path)?;
-    let entries =
-        layouts_json::parse(&text).map_err(|e| ExtractError::LayoutsJson(json_path.clone(), e))?;
-
-    for layout in LAYOUTS {
-        let entry = entries
-            .iter()
-            .find(|entry| entry.id == layout.upstream_id)
-            .ok_or(ExtractError::UnknownLayoutInJson(
-                json_path.clone(),
-                layout.upstream_id,
-            ))?;
-
-        let map_bytes = read_file(&upstream.join(&entry.blockdata_filepath))?;
-        let width = usize::try_from(entry.width).unwrap_or(usize::MAX);
-        let height = usize::try_from(entry.height).unwrap_or(usize::MAX);
-        let expected_min = width
-            .saturating_mul(height)
-            .saturating_mul(std::mem::size_of::<u16>());
-        if map_bytes.len() < expected_min {
-            return Err(ExtractError::LayoutGridTooShort {
-                layout_id: layout.upstream_id,
-                expected: expected_min,
-                actual: map_bytes.len(),
-            });
-        }
-        writer.push(pack_format::raw_entry(
-            format!("layout/{}/map", layout.pack_name),
-            map_bytes,
-        ));
-
-        let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
-        if border_bytes.len() != BORDER_BLOCK_BYTES {
-            return Err(ExtractError::LayoutBorderWrongSize {
-                layout_id: layout.upstream_id,
-                actual: border_bytes.len(),
-            });
-        }
-        writer.push(pack_format::raw_entry(
-            format!("layout/{}/border", layout.pack_name),
-            border_bytes,
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError, LAYOUTS,
-    };
+    use super::{collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError};
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "pokeemerald-rs-extract-test-{name}-{}.pack",
             std::process::id()
         ))
-    }
-
-    // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
-    // `BUNDLED_LAYOUTS`, `overworld/npc.rs`'s `EXTRACTED_MAPS`,
-    // `overworld/mod.rs`'s `resolve_tileset_pack_name`, and
-    // `overworld_phase/decoration_tests.rs`'s `BUNDLED_LAYOUTS`.
-    #[test]
-    fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
-        let ids: Vec<&str> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
-        assert_eq!(
-            ids,
-            [
-                "LAYOUT_LITTLEROOT_TOWN",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-                "LAYOUT_ROUTE101",
-                "LAYOUT_OLDALE_TOWN",
-                "LAYOUT_ROUTE103",
-            ],
-            "update the cross-crate LAYOUTS mirrors with this manifest"
-        );
-    }
-
-    fn assert_pack_contains_entry_id(bytes: &[u8], id: &str) {
-        assert!(
-            bytes
-                .windows(id.len())
-                .any(|window| window == id.as_bytes()),
-            "missing pack entry id `{id}`"
-        );
     }
 
     #[test]
@@ -503,32 +361,6 @@ mod tests {
         let second = std::fs::read(extract_to(&path).unwrap().output_path).unwrap();
         assert_eq!(first, second);
         let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn embedded_palette_sheets_get_a_title_palette_entry() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("embedded-palettes");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        for name in super::scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
-            let id = format!("title/palette/{name}");
-            assert_pack_contains_entry_id(&bytes, &id);
-        }
-        let _ = std::fs::remove_file(report.output_path);
-    }
-
-    #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn main_menu_bg_palette_gets_an_interface_palette_entry() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("interface-palette");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        let id = "interface/palette/main_menu_bg";
-        assert_pack_contains_entry_id(&bytes, id);
-        let _ = std::fs::remove_file(report.output_path);
     }
 
     #[test]
@@ -570,87 +402,35 @@ mod tests {
     }
 
     #[test]
+    fn zero_colour_jasc_palette_is_rejected_without_queuing_an_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-zero-jasc-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zero.pal");
+        std::fs::write(&path, "JASC-PAL\r\n0100\r\n0\r\n").unwrap();
+
+        let mut writer = pack_format::PackWriter::new();
+        let err =
+            super::push_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ExtractError::Pal(error_path, jasc_pal::JascPalError::NoColors)
+                    if error_path == &path
+            ),
+            "wrong error for a zero-colour JASC palette: {err:?}"
+        );
+        assert_eq!(writer.len(), 0, "zero-colour palette must not be queued");
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
     fn collect_pngs_sorted_rejects_missing_dir() {
         let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
         assert!(matches!(err, super::ExtractError::ReadFailed(..)));
-    }
-
-    #[test]
-    fn layouts_list_has_no_duplicate_ids_or_names() {
-        let ids: Vec<_> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
-        let names: Vec<_> = LAYOUTS.iter().map(|layout| layout.pack_name).collect();
-        let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
-        let unique_names: std::collections::HashSet<_> = names.iter().collect();
-        assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
-        assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
-        for id in &ids {
-            assert!(
-                id.starts_with("LAYOUT_LITTLEROOT_TOWN")
-                    || *id == "LAYOUT_ROUTE101"
-                    || *id == "LAYOUT_OLDALE_TOWN"
-                    || *id == "LAYOUT_ROUTE103"
-            );
-        }
-        for name in &names {
-            assert!(
-                name.starts_with("littleroot_town")
-                    || *name == "route101"
-                    || *name == "oldale_town"
-                    || *name == "route103"
-            );
-            assert!(name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
-        }
-    }
-
-    #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn layout_grids_are_extracted() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("layouts");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        for layout in LAYOUTS {
-            for suffix in ["map", "border"] {
-                let id = format!("layout/{}/{suffix}", layout.pack_name);
-                assert_pack_contains_entry_id(&bytes, &id);
-            }
-        }
-        let _ = std::fs::remove_file(report.output_path);
-    }
-}
-
-#[cfg(test)]
-mod title_source_tests {
-    use super::{extract_title_screen, ExtractError, PackWriter};
-
-    #[test]
-    fn a_title_directory_missing_a_required_source_is_refused() {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-title-source-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let dir = upstream.join("graphics/title_screen");
-        std::fs::create_dir_all(&dir).unwrap();
-        // Every required source except `rayquaza.bin`; contents are never
-        // read because the presence check runs first.
-        for stem in super::scope::TITLE_SCREEN_IMAGES {
-            std::fs::write(dir.join(format!("{stem}.png")), b"").unwrap();
-        }
-        for stem in ["clouds", "pokemon_logo"] {
-            std::fs::write(dir.join(format!("{stem}.bin")), b"").unwrap();
-        }
-        for stem in super::scope::TITLE_SCREEN_FILE_PALETTES {
-            std::fs::write(dir.join(format!("{stem}.pal")), b"").unwrap();
-        }
-
-        let err = extract_title_screen(&upstream, &mut PackWriter::new()).unwrap_err();
-        let _ = std::fs::remove_dir_all(&upstream);
-        assert!(
-            matches!(&err, ExtractError::ReadFailed(path, _) if path == &dir.join("rayquaza.bin")),
-            "{err:?}"
-        );
     }
 }
