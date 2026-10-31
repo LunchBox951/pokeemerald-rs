@@ -774,8 +774,8 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
-        // `FaintClearSetData` resets the battler's history and Perish Song
-        // countdown (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
+        // `FaintClearSetData` resets the battler's history, Perish Song
+        // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
             BattlerState::default();
     }
