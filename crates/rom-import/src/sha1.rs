@@ -117,7 +117,7 @@ impl FromStr for Digest {
             return Err(DigestParseError::WrongLength(text.len()));
         }
         let mut bytes = [0u8; 20];
-        for (byte, pair) in bytes.iter_mut().zip(text.chunks_exact(2)) {
+        for (byte, pair) in bytes.iter_mut().zip(text.as_chunks::<2>().0.iter()) {
             let hi = checked_nibble(pair[0]).ok_or(DigestParseError::NotHex)?;
             let lo = checked_nibble(pair[1]).ok_or(DigestParseError::NotHex)?;
             *byte = (hi << 4) | lo;
@@ -241,7 +241,7 @@ impl Sha1 {
         self.absorb(&len_bits.to_be_bytes());
 
         let mut out = [0u8; 20];
-        for (chunk, word) in out.chunks_exact_mut(4).zip(self.state) {
+        for (chunk, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         Digest(out)
@@ -251,7 +251,7 @@ impl Sha1 {
 /// One 64-byte block of the FIPS 180-4 section 6.1.2 compression function.
 fn compress(state: &mut [u32; 5], block: &[u8; 64]) {
     let mut w = [0u32; 80];
-    for (word, chunk) in w.iter_mut().zip(block.chunks_exact(4)) {
+    for (word, chunk) in w.iter_mut().zip(block.as_chunks::<4>().0.iter()) {
         *word = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
     for i in 16..80 {
@@ -304,14 +304,14 @@ mod tests {
         padded.extend_from_slice(&bits.to_be_bytes());
 
         let mut state = INITIAL_STATE;
-        for chunk in padded.chunks_exact(64) {
+        for chunk in padded.as_chunks::<64>().0 {
             let mut block = [0u8; 64];
             block.copy_from_slice(chunk);
             compress(&mut state, &block);
         }
 
         let mut out = [0u8; 20];
-        for (slot, word) in out.chunks_exact_mut(4).zip(state) {
+        for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
             slot.copy_from_slice(&word.to_be_bytes());
         }
         Digest::from_bytes(out)

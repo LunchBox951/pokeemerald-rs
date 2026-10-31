@@ -254,7 +254,9 @@ pub(super) fn payload<'a>(bytes: &'a [u8], entries: &[DirectoryEntry], id: &str)
 
 fn palette_colours(bytes: &[u8]) -> Vec<u16> {
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect()
 }
@@ -345,7 +347,7 @@ fn the_domain_list_dispatches_the_battle_interface() {
 #[test]
 fn an_empty_family_writes_nothing() {
     let (_, entries) = written(&Roots::NONE).expect("nothing to read");
-    assert!(entries.is_empty());
+    assert_eq!(entries.len(), 0);
     assert_eq!(Roots::NONE.battle_interface, BattleInterfaceRoots::NONE);
 }
 
@@ -382,7 +384,7 @@ fn a_root_past_the_rom_fails_with_nothing_queued() {
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
     // The good image read before the bad palette was not queued.
     let bytes = writer.finish().expect("an empty pack");
-    assert!(parse_directory(&bytes).expect("a valid pack").is_empty());
+    assert_eq!(parse_directory(&bytes).expect("a valid pack").len(), 0);
 }
 
 #[test]

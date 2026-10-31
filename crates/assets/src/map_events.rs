@@ -63352,7 +63352,7 @@ mod tests {
         for alias in aliases {
             let own = table.events(MapId(alias)).unwrap();
             assert_eq!(own.shared_events_map, Some(MapId("MAP_CONTEST_HALL")));
-            assert!(own.object_events.is_empty());
+            assert_eq!(own.object_events, []);
 
             let resolved = table.resolve(MapId(alias)).unwrap();
             assert_eq!(resolved.id, MapId("MAP_CONTEST_HALL"));
@@ -63425,10 +63425,10 @@ mod tests {
             bg_event_count += e.bg_events.len();
             if e.shared_events_map.is_some() {
                 shared_events_map_count += 1;
-                assert!(e.object_events.is_empty());
-                assert!(e.warp_events.is_empty());
-                assert!(e.coord_events.is_empty());
-                assert!(e.bg_events.is_empty());
+                assert_eq!(e.object_events, []);
+                assert_eq!(e.warp_events, []);
+                assert_eq!(e.coord_events, []);
+                assert_eq!(e.bg_events, []);
             }
         }
         assert_eq!(object_event_count, 2776);

@@ -21,6 +21,16 @@ updates:
   # Cargo dependencies (root Cargo.toml workspace manifest).
   - package-ecosystem: "cargo"
     directory: "/"
+    allow:
+      - dependency-type: "all"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "rust"
+      - "needs-review"
+
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
     schedule:
       interval: "weekly"
     labels:

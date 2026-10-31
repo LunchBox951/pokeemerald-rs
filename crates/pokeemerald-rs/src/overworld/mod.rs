@@ -955,7 +955,7 @@ fn pack_4bpp_region(
                 tile_pixels[tile_row_start..tile_row_start + TILE_SIDE]
                     .copy_from_slice(&image.pixels[source_row_start..source_row_start + TILE_SIDE]);
             }
-            for pixel_pair in tile_pixels.chunks_exact(PIXELS_PER_BYTE) {
+            for pixel_pair in tile_pixels.as_chunks::<PIXELS_PER_BYTE>().0 {
                 if let Some(&index) = pixel_pair.iter().find(|&&index| index > MAX_PIXEL_INDEX) {
                     return Err(OverworldSceneError::ImagePaletteIndexOutOfRange { label, index });
                 }

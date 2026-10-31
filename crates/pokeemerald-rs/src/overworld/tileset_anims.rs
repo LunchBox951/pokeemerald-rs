@@ -136,7 +136,7 @@ impl AnimatedTileset {
                 spec.fire_phase,
                 spec.fire_interval
             );
-            debug_assert!(!spec.frame_sequence.is_empty());
+            debug_assert_ne!(spec.frame_sequence, []);
             debug_assert_eq!(
                 UPSTREAM_COUNTER_PERIOD
                     % (spec.fire_interval

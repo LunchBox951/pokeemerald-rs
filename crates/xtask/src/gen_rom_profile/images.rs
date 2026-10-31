@@ -433,7 +433,7 @@ mod tests {
             ["gEnemyMonShadow_Gfx"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
-        assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
+        assert_eq!(symbol_fragments("tileset/general/anim/water/0").len(), 0);
     }
 
     #[test]

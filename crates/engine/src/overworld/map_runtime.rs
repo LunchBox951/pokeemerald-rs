@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(ids_at(6, 6, 3), vec![2]);
         assert_eq!(ids_at(6, 6, ELEVATION_TRANSITION), vec![1, 2]);
         assert_eq!(ids_at(7, 7, 9), vec![3]);
-        assert!(ids_at(0, 0, ELEVATION_TRANSITION).is_empty());
+        assert_eq!(ids_at(0, 0, ELEVATION_TRANSITION).len(), 0);
     }
 
     #[test]

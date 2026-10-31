@@ -145,7 +145,7 @@ fn the_payload_reader_and_the_domain_agree() {
 fn a_profile_without_battle_messages_writes_nothing() {
     let rom = rom_of(fixture());
     let entries = written(&rom, BattleMessageRoots::NONE).expect("no roots is no work");
-    assert!(entries.is_empty());
+    assert_eq!(entries.len(), 0);
 }
 
 #[test]

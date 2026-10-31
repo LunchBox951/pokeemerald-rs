@@ -78,7 +78,7 @@ pub(super) fn pack_tile_bytes(
                     // GBA 4bpp stores the left pixel in the low nibble and
                     // the right pixel in the high nibble. Both indices are
                     // already checked to fit one nibble above.
-                    for pair in tile_pixels.chunks_exact(2) {
+                    for pair in tile_pixels.as_chunks::<2>().0 {
                         packed.push(pair[0] | (pair[1] << 4));
                     }
                 }

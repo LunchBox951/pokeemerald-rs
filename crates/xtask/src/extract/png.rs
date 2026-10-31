@@ -425,7 +425,9 @@ fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
         return Err(PngError::TooManyPaletteEntries(count));
     }
     Ok(data
-        .chunks_exact(RGB_CHANNEL_COUNT)
+        .as_chunks::<RGB_CHANNEL_COUNT>()
+        .0
+        .iter()
         .map(|channels| [channels[0], channels[1], channels[2]])
         .collect())
 }
@@ -1037,7 +1039,7 @@ pub(crate) mod tests {
         let image = decode(&super::tests::grayscale_png_from_raw(4, 4, 2, &raw)).unwrap();
         assert_eq!((image.width, image.height, image.bit_depth), (4, 2, 4));
         assert_eq!(image.pixels, [14, 0, 5, 15, 15, 12, 8, 15]);
-        assert!(image.palette.is_empty());
+        assert_eq!(image.palette, [] as [[u8; 3]; 0]);
     }
 
     #[test]
@@ -1160,7 +1162,7 @@ pub(crate) mod tests {
     fn decode_without_a_plte_chunk_leaves_the_palette_empty() {
         let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 2, &[1, 2, 3, 0]);
         let image = decode(&png).unwrap();
-        assert!(image.palette.is_empty());
+        assert_eq!(image.palette, [] as [[u8; 3]; 0]);
     }
 
     #[test]

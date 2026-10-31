@@ -266,7 +266,9 @@ impl PokemonStorage {
     #[must_use]
     pub fn from_payload(bytes: &[u8; Self::PAYLOAD_LEN]) -> Self {
         let boxes = bytes[BOXES_OFFSET..]
-            .chunks_exact(BOX_POKEMON_LEN)
+            .as_chunks::<BOX_POKEMON_LEN>()
+            .0
+            .iter()
             .take(TOTAL_BOXES_COUNT * IN_BOX_COUNT)
             .map(|source| {
                 let mut record = [0; BOX_POKEMON_LEN];
@@ -275,10 +277,12 @@ impl PokemonStorage {
             })
             .collect();
         let mut box_names = [[0; BOX_NAME_BUF_LEN]; TOTAL_BOXES_COUNT];
-        for (name, source) in box_names
-            .iter_mut()
-            .zip(bytes[BOX_NAMES_OFFSET..].chunks_exact(BOX_NAME_BUF_LEN))
-        {
+        for (name, source) in box_names.iter_mut().zip(
+            bytes[BOX_NAMES_OFFSET..]
+                .as_chunks::<BOX_NAME_BUF_LEN>()
+                .0
+                .iter(),
+        ) {
             name.copy_from_slice(source);
         }
         let mut box_wallpapers = [0; TOTAL_BOXES_COUNT];
@@ -295,18 +299,20 @@ impl PokemonStorage {
     /// `currentBox` as `base` holds it.
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN]) {
         base[CURRENT_BOX_OFFSET] = self.current_box;
-        for (record, destination) in self
-            .boxes
-            .iter()
-            .zip(base[BOXES_OFFSET..].chunks_exact_mut(BOX_POKEMON_LEN))
-        {
+        for (record, destination) in self.boxes.iter().zip(
+            base[BOXES_OFFSET..]
+                .as_chunks_mut::<BOX_POKEMON_LEN>()
+                .0
+                .iter_mut(),
+        ) {
             destination.copy_from_slice(&record.to_bytes());
         }
-        for (name, destination) in self
-            .box_names
-            .iter()
-            .zip(base[BOX_NAMES_OFFSET..].chunks_exact_mut(BOX_NAME_BUF_LEN))
-        {
+        for (name, destination) in self.box_names.iter().zip(
+            base[BOX_NAMES_OFFSET..]
+                .as_chunks_mut::<BOX_NAME_BUF_LEN>()
+                .0
+                .iter_mut(),
+        ) {
             destination.copy_from_slice(name);
         }
         base[BOX_WALLPAPERS_OFFSET..][..TOTAL_BOXES_COUNT].copy_from_slice(&self.box_wallpapers);

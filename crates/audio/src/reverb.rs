@@ -137,14 +137,14 @@ mod tests {
 
     fn load_ring(reverb: &mut Reverb, samples: &[StereoAcc]) {
         assert_eq!(samples.len(), DELAY_SAMPLES);
-        for frame in samples.chunks_exact(SAMPLES_PER_FRAME) {
+        for frame in samples.as_chunks::<SAMPLES_PER_FRAME>().0 {
             reverb.commit_frame(frame);
         }
     }
 
     fn feedback_cycle(reverb: &mut Reverb) -> Vec<StereoAcc> {
         let mut cycle = vec![(0, 0); DELAY_SAMPLES];
-        for frame in cycle.chunks_exact_mut(SAMPLES_PER_FRAME) {
+        for frame in cycle.as_chunks_mut::<SAMPLES_PER_FRAME>().0 {
             reverb.seed_frame(frame);
             reverb.commit_frame(frame);
         }

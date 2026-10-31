@@ -202,7 +202,7 @@ fn unrecognized_text_meta_yields_no_event() {
     push_timed(&mut body, 0, meta_event(TRACK_NAME_META_EVENT, b"MUS1"));
 
     let parsed = parse_track(&terminated_track(body)).unwrap();
-    assert!(parsed.events.is_empty());
+    assert_eq!(parsed.events.len(), 0);
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn sysex_and_aftertouch_are_skipped() {
     push_timed(&mut body, 0, channel_pressure(0, 50));
 
     let parsed = parse_track(&terminated_track(body)).unwrap();
-    assert!(parsed.events.is_empty());
+    assert_eq!(parsed.events.len(), 0);
 }
 
 #[test]

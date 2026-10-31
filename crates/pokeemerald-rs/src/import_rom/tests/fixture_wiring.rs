@@ -46,5 +46,5 @@ fn a_missing_rom_reports_a_read_failure_and_writes_nothing() {
         "expected a read failure, got: {err}"
     );
     assert!(!pack_path.exists());
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }

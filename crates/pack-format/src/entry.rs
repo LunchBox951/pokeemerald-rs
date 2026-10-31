@@ -326,7 +326,7 @@ pub fn image_entry_from_tiles(
             if bit_depth == 8 {
                 out.copy_from_slice(packed);
             } else {
-                for (pair, byte) in out.chunks_exact_mut(2).zip(packed) {
+                for (pair, byte) in out.as_chunks_mut::<2>().0.iter_mut().zip(packed) {
                     pair[0] = byte & 0x0F;
                     pair[1] = byte >> 4;
                 }
@@ -433,7 +433,7 @@ pub fn tiles_from_image(
                 out_row.copy_from_slice(src);
             } else {
                 // Both nibbles are already checked to fit `0..=15` above.
-                for (byte, pair) in out_row.iter_mut().zip(src.chunks_exact(2)) {
+                for (byte, pair) in out_row.iter_mut().zip(src.as_chunks::<2>().0.iter()) {
                     *byte = pair[0] | (pair[1] << 4);
                 }
             }

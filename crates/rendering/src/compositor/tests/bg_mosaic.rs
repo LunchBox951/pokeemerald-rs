@@ -649,7 +649,12 @@ fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot
 fn row_gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
     let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
     let mut bytes = vec![0u8; tile_byte_len];
-    for (row, chunk) in bytes.chunks_exact_mut(BitDepth::TILE_DIM).enumerate() {
+    for (row, chunk) in bytes
+        .as_chunks_mut::<{ BitDepth::TILE_DIM }>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         chunk.fill(u8::try_from(row + 1).unwrap());
     }
     let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();

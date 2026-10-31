@@ -13,7 +13,7 @@
 #[must_use]
 pub fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
-    for word_bytes in data.chunks_exact(4) {
+    for word_bytes in data.as_chunks::<4>().0 {
         let word = u32::from_le_bytes([word_bytes[0], word_bytes[1], word_bytes[2], word_bytes[3]]);
         sum = sum.wrapping_add(word);
     }

@@ -834,7 +834,7 @@ mod tests {
         ];
         for case in cases {
             let text = case.to_string();
-            assert!(!text.is_empty());
+            assert_ne!(text, "");
             assert!(!text.contains('\n'), "{text}");
         }
     }

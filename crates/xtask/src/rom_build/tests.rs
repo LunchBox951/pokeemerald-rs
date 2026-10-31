@@ -286,7 +286,7 @@ fn the_real_pinned_checkout_builds() {
         artifact.provenance().pinned_revision,
         checkout::read_pin(&crate::extract::repo_root().join("init.sh")).unwrap()
     );
-    assert!(!artifact.rom().is_empty());
+    assert_ne!(artifact.rom(), []);
     assert!(!artifact.symbols().is_empty());
 }
 
@@ -458,7 +458,10 @@ fn the_build_inherits_the_windows_os_marker() {
         inherited_env(lookup, []),
         env_pairs(&[("OS", "Windows_NT")])
     );
-    assert!(inherited_env(|name| (name == "SECRET").then(OsString::new), []).is_empty());
+    assert_eq!(
+        inherited_env(|name| (name == "SECRET").then(OsString::new), []).len(),
+        0
+    );
 }
 
 #[test]
