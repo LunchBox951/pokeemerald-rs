@@ -154,7 +154,14 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them. The paralysis pipeline still reads Limber and the accuracy
+//! them. [`ability::burn_halves_damage`] feeds the hit pipeline's,
+//! the trainer AI estimate's and the forced-replacement selector's
+//! `attacker_burned` input (the confusion self-hit still passes `false`): a burned attacker's physical damage halves unless
+//! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and
+//! `Battle::residual_effects` deals the burn tick after poison's
+//! ([`status1::burn_residual_damage`]). A burned participant with Water Veil
+//! is refused at admission, as a poisoned Immunity holder is, because the
+//! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
 //! `Battle::residual_effects`.
@@ -198,8 +205,8 @@
 //! Out of scope (see each module's own docs for exactly what is/isn't
 //! modelled): the *general* trainer AI beyond the four scripts above and
 //! mid-battle switching AI (`I-5`) — the *first* screen some Route 103
-//! sight-trainer parties hit, at `battle::trainer_ai::ensure_scoreable`
-//! (issue #325 tracks widening it) — battle
+//! sight-trainer parties hit, at `battle::trainer_ai::ensure_scoreable` —
+//! battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
 //! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
@@ -217,10 +224,14 @@
 //! modelled, so the block is unconditional wherever it applies), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
-//! guard left unmodelled there; [`secondary`] models it for poison) —
-//! held items, every primary status but
-//! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
-//! (sleep, freeze, burn, toxic — see [`status1`]'s module docs), every
+//! guard left unmodelled there; [`secondary`] models it for poison, confusion
+//! and the secondary Speed drop) —
+//! the effect of any held item (a mon carries one, and [`ensure_held_item_playable`]
+//! refuses every item that has an effect), every primary status but [`status1::Status1::Paralysed`],
+//! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`], and
+//! [`status1::Status1::Asleep`] (freeze, toxic — see [`status1`]'s module
+//! docs; no modelled move inflicts sleep or burn yet, so they arrive only
+//! through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
@@ -233,8 +244,9 @@
 //! and the move effects the nine
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
-//! [`secondary::EFFECT_POISON_HIT`] and [`secondary::EFFECT_CONFUSE_HIT`] are
-//! the two resolved; the other 29 are not, including
+//! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and
+//! [`secondary::EFFECT_SPEED_DOWN_HIT`] are the three resolved; the other 28
+//! are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
 //! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
@@ -259,6 +271,7 @@ pub mod escape;
 pub mod exp;
 pub mod fixed_damage;
 pub mod flag_move;
+pub mod gender;
 pub mod hit;
 mod move_gate;
 pub mod multi_hit;
@@ -279,6 +292,7 @@ mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
 pub use battle::admission::ensure_participant_admissible;
+pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{
     build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, roll_non_shiny_ot_id,
     shiny_value, trainer_data, trainer_money, TrainerContext, TrainerPartyMon, SHINY_ODDS,
@@ -299,6 +313,7 @@ pub use error::BattleError;
 pub use exp::{trainer_faint_exp, wild_faint_exp};
 pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move, FixedDamage};
 pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
+pub use gender::Gender;
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
@@ -311,8 +326,9 @@ pub use pokemon::{
     SPECIES_SHEDINJA,
 };
 pub use secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, spend_effect_chance_draw,
-    SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
+    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,
+    spend_effect_chance_draw, SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT,
+    EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
@@ -324,5 +340,5 @@ pub use status1::Status1;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
-    initial_moveset,
+    initial_moveset, pick_wild_nature,
 };

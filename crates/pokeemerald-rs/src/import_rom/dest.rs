@@ -323,6 +323,38 @@ pub(super) fn sync_directory(path: &Path) {
     let _ = File::open(path).and_then(|dir| dir.sync_all());
 }
 
+/// Give `file`'s owner read and write access if the umask took either, and
+/// leave every other mode bit as it is.
+///
+/// [`Dest::create_new`] asks for `0o666`, and a umask that strips the owner
+/// bits (`0444`) leaves a file its owner can no longer read. The rename in
+/// [`Dest::publish`] carries that mode onto the installed pack, and the
+/// engine then fails to load it. The mode changes only when an owner bit is
+/// missing, through the descriptor that created the file.
+///
+/// # Errors
+///
+/// Whatever `fstat(2)` or `fchmod(2)` reports.
+#[cfg(unix)]
+pub(super) fn restore_owner_access(file: &File) -> io::Result<()> {
+    let owner = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR;
+    let mode = rustix::fs::Mode::from_raw_mode(rustix::fs::fstat(file)?.st_mode);
+    if !mode.contains(owner) {
+        rustix::fs::fchmod(file, mode | owner)?;
+    }
+    Ok(())
+}
+
+/// Off Unix a file has no owner mode bits to restore.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix twin is fallible, so callers see one signature on every target"
+)]
+pub(super) fn restore_owner_access(_file: &File) -> io::Result<()> {
+    Ok(())
+}
+
 /// The destination directory, pinned open.
 ///
 /// On Unix this is a descriptor for the directory itself: the kernel

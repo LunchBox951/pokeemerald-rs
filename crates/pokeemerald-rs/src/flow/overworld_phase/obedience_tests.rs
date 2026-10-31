@@ -18,7 +18,7 @@ fn phase() -> OverworldPhase {
     seed.save1.player_party[0] =
         crate::party::to_save_pokemon(&battle::Dex::new(), &new_game::provisional_starter());
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,

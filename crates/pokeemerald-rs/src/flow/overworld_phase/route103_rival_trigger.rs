@@ -314,7 +314,7 @@ impl OverworldPhase {
     /// `super::route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
     /// for the replacement, strictly stronger pin.
     ///
-    /// This method reads the same [`OverworldPhase::party_lead`] the sight
+    /// This method lends the same lead the sight
     /// trigger does, off the same overworld state -- so the closed
     /// precondition above applied to `super::sight_trainer_trigger`'s own
     /// caller-side fainted-lead screen exactly as much as it did to this
@@ -341,7 +341,7 @@ impl OverworldPhase {
             );
             return;
         };
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.take_lead_battler() else {
             eprintln!("route 103 rival: no party mon yet -- no battle to start");
             return;
         };
@@ -349,6 +349,7 @@ impl OverworldPhase {
             Ok(value) => value,
             Err(error) => {
                 eprintln!("route 103 rival: couldn't read VAR_STARTER_MON ({error}) -- no battle to start");
+                self.restore_lead_battler(lead);
                 return;
             }
         };
@@ -357,13 +358,13 @@ impl OverworldPhase {
                 "route 103 rival: VAR_STARTER_MON reads {starter_value}, which names no \
                  PlayerStarter -- no battle to start"
             );
+            self.restore_lead_battler(lead);
             return;
         };
         let trainer = route103_rival::route103_rival_for(rival, starter);
-        match npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut self.rng) {
+        match npc_trainer_battle::start_npc_trainer_battle(lead.clone(), trainer, &mut self.rng) {
             Ok(battle) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
-                self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::Rival {
                     battle,
                     trainer_id: trainer,
@@ -377,7 +378,10 @@ impl OverworldPhase {
                 // handoff `(behavioral-fidelity)`.
                 self.wild.restart_immunity_steps();
             }
-            Err(error) => eprintln!("route 103 rival: can't start ({error})"),
+            Err(error) => {
+                eprintln!("route 103 rival: can't start ({error})");
+                self.restore_lead_battler(lead);
+            }
         }
     }
 
@@ -396,12 +400,17 @@ impl OverworldPhase {
     ) -> Option<ActiveBattle> {
         self.take_field_lock();
         let mut slot = Some(battle);
+        let mut returned_lead = None;
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut slot,
-            &mut self.party_lead,
+            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
+        // Back with the owner before the flags, the white-out or any routing.
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
         if let Some(outcome) = outcome {
             eprintln!("route 103 rival: ended -- {outcome:?}");
             self.rival_battle_outcome = Some(outcome);

@@ -170,8 +170,23 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An opening-scene source (Birch's speech scene or the wall clock) differs
+    /// from its upstream graphic's shape.
+    OpeningSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler source differs from its upstream graphic's shape.
     BattlerAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A trainer front picture source differs from its upstream graphic's shape.
+    TrainerPicAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -186,6 +201,13 @@ pub enum ExtractError {
     },
     /// A battle interface source differs from its upstream graphic's shape.
     BattleInterfaceAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A naming-screen source differs from its upstream graphic's shape.
+    NamingScreenAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -207,12 +229,47 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A field-message source does not parse as the pinned upstream shape.
+    FieldMessageSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A cry table or cry sample source does not parse as the pinned upstream shape.
+    CrySource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battle-animation source does not parse as the pinned upstream shape.
     BattleAnimationSource {
         /// Source path.
         path: PathBuf,
         /// One-based line, or zero when the fault is not tied to one line.
         line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle-effect registration, declaration, or constant does not parse as
+    /// the pinned upstream shape.
+    BattleEffectSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle-effect sheet or palette differs from its upstream shape.
+    BattleEffectAssetMismatch {
+        /// Source path.
+        path: PathBuf,
         /// What differs from the expected shape.
         detail: String,
     },
@@ -229,6 +286,14 @@ pub enum ExtractError {
         path: PathBuf,
         /// Actual byte length.
         actual: usize,
+    },
+    /// `assets` rejected a decoded direct-sound sample as outside the pack
+    /// schema's domain when it was encoded.
+    InvalidSampleSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
     },
     /// A voicegroup or key-split source violates its extraction grammar.
     VoiceGroupFile(
@@ -262,9 +327,17 @@ pub enum ExtractError {
     Midi(
         /// Source path.
         PathBuf,
-        /// Compilation or encoding failure.
+        /// Compilation failure.
         MidiError,
     ),
+    /// `assets` rejected a compiled MIDI song as outside the pack schema's
+    /// domain when it was encoded.
+    InvalidSongSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -381,8 +454,14 @@ impl fmt::Display for ExtractError {
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
             }
+            Self::OpeningSceneAssetMismatch { path, detail } => {
+                write!(f, "opening-scene asset `{}` {detail}", path.display())
+            }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())
+            }
+            Self::TrainerPicAssetMismatch { path, detail } => {
+                write!(f, "trainer picture asset `{}` {detail}", path.display())
             }
             Self::PokedexGraphicsAssetMismatch { path, detail } => {
                 write!(f, "pokedex-graphics asset `{}` {detail}", path.display())
@@ -390,14 +469,29 @@ impl fmt::Display for ExtractError {
             Self::BattleInterfaceAssetMismatch { path, detail } => {
                 write!(f, "battle interface asset `{}` {detail}", path.display())
             }
+            Self::NamingScreenAssetMismatch { path, detail } => {
+                write!(f, "naming-screen asset `{}` {detail}", path.display())
+            }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())
             }
             Self::BattleMessageSource { path, line, detail } => {
                 write!(f, "battle-message source `{}` line {line}: {detail}", path.display())
             }
+            Self::FieldMessageSource { path, line, detail } => {
+                write!(f, "field-message source `{}` line {line}: {detail}", path.display())
+            }
+            Self::CrySource { path, line, detail } => {
+                write!(f, "cry source `{}` line {line}: {detail}", path.display())
+            }
             Self::BattleAnimationSource { path, line, detail } => {
                 write!(f, "battle-animation source `{}` line {line}: {detail}", path.display())
+            }
+            Self::BattleEffectSource { path, line, detail } => {
+                write!(f, "battle-effect source `{}` line {line}: {detail}", path.display())
+            }
+            Self::BattleEffectAssetMismatch { path, detail } => {
+                write!(f, "battle-effect asset `{}` {detail}", path.display())
             }
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())
@@ -405,6 +499,11 @@ impl fmt::Display for ExtractError {
             Self::ProgrammableWaveWrongSize { path, actual } => write!(
                 f,
                 "programmable-wave source `{}` is {actual} bytes: expected exactly 16",
+                path.display()
+            ),
+            Self::InvalidSampleSchema { path, source } => write!(
+                f,
+                "direct-sound sample `{}`: the asset pack schema rejected the decoded sample: {source}",
                 path.display()
             ),
             Self::VoiceGroupFile(path, error) => {
@@ -427,6 +526,11 @@ impl fmt::Display for ExtractError {
             Self::Midi(path, error) => {
                 write!(f, "compiling `{}` failed: {error}", path.display())
             }
+            Self::InvalidSongSchema { path, source } => write!(
+                f,
+                "MIDI song `{}`: the asset pack schema rejected the compiled song: {source}",
+                path.display()
+            ),
         }
     }
 }
