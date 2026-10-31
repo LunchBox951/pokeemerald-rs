@@ -4,6 +4,7 @@ use super::test_support::{
 };
 use super::*;
 use assets::MovementType;
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::Direction;
 
 #[test]
@@ -73,7 +74,7 @@ fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
         MovementType::FaceDown,
     )]));
     let drawn = oam_entries(
-        here,
+        &ObjectEventCollection::from_templates(here),
         &bindings,
         &PlayerState::new(player, DEFAULT_ELEVATION, Direction::South),
         &data,
@@ -165,7 +166,12 @@ fn oam_entries_skips_a_hidden_object_and_one_with_no_binding() {
     );
 
     let player = PlayerState::new((7, 2), DEFAULT_ELEVATION, Direction::North);
-    let entries = oam_entries(events, &bindings, &player, &data);
+    let entries = oam_entries(
+        &ObjectEventCollection::from_templates(events),
+        &bindings,
+        &player,
+        &data,
+    );
     assert!(
         entries.is_empty(),
         "the hidden rival and the unrecognized decoration must both be skipped"
@@ -188,7 +194,12 @@ fn oam_entries_draws_a_visible_recognized_object() {
     );
 
     let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
-    let entries = oam_entries(events, &bindings, &player, &data);
+    let entries = oam_entries(
+        &ObjectEventCollection::from_templates(events),
+        &bindings,
+        &player,
+        &data,
+    );
     assert_eq!(entries.len(), 1);
     let entry = entries[0];
     assert_eq!(entry.palette_bank(), NpcPaletteTag::Npc4.bank());
@@ -221,7 +232,13 @@ fn oam_entries_take_their_priority_from_the_templates_elevation() {
     );
     let flat: &'static [ObjectEvent] = Box::leak(Box::new([flat]));
     assert_eq!(
-        oam_entries(flat, &bindings, &player, &data)[0].priority(),
+        oam_entries(
+            &ObjectEventCollection::from_templates(flat),
+            &bindings,
+            &player,
+            &data
+        )[0]
+        .priority(),
         avatar::PLAYER_OBJ_PRIORITY,
     );
 
@@ -232,7 +249,13 @@ fn oam_entries_take_their_priority_from_the_templates_elevation() {
     };
     let raised: &'static [ObjectEvent] = Box::leak(Box::new([raised]));
     assert_eq!(
-        oam_entries(raised, &bindings, &player, &data)[0].priority(),
+        oam_entries(
+            &ObjectEventCollection::from_templates(raised),
+            &bindings,
+            &player,
+            &data
+        )[0]
+        .priority(),
         RAISED_PRIORITY,
         "a raised object must not draw at the flat priority"
     );
@@ -276,7 +299,12 @@ fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_pla
     let data = EventData::new();
 
     let north_edge = PlayerState::new(NORTH_EDGE, DEFAULT_ELEVATION, Direction::South);
-    let entries = oam_entries(events.object_events, &bindings, &north_edge, &data);
+    let entries = oam_entries(
+        &ObjectEventCollection::from_templates(events.object_events),
+        &bindings,
+        &north_edge,
+        &data,
+    );
     assert!(
         entries.iter().all(|e| e.y() != avatar::PLAYER_OBJ_Y),
         "a distant NPC must not alias onto the player's row"
@@ -287,12 +315,31 @@ fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_pla
     );
 
     let near = PlayerState::new(NEAR_BOY, DEFAULT_ELEVATION, Direction::South);
-    let entries = oam_entries(events.object_events, &bindings, &near, &data);
+    let entries = oam_entries(
+        &ObjectEventCollection::from_templates(events.object_events),
+        &bindings,
+        &near,
+        &data,
+    );
     assert_eq!(entries.len(), 1, "in view from five tiles away");
     let tile_distance = BOY_POSITION.1 - NEAR_BOY.1;
     let expected_y =
         avatar::PLAYER_OBJ_Y + u8::try_from(tile_distance * super::METATILE_PX).unwrap();
     assert_eq!(entries[0].y(), expected_y);
+}
+
+fn draw_templates(
+    events: &'static [ObjectEvent],
+    bindings: &HashMap<&'static str, SpriteBinding>,
+    player: &PlayerState,
+    data: &EventData,
+) -> Vec<rendering::OamEntry> {
+    oam_entries(
+        &ObjectEventCollection::from_templates(events),
+        bindings,
+        player,
+        data,
+    )
 }
 
 #[test]
@@ -323,7 +370,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
         let events: &'static [ObjectEvent] = Box::leak(Box::new([mom]));
 
         let mut player = PlayerState::new(start, DEFAULT_ELEVATION, direction);
-        let at_rest = oam_entries(events, &bindings, &player, &data);
+        let at_rest = draw_templates(events, &bindings, &player, &data);
         assert_eq!(
             at_rest.len(),
             1,
@@ -337,7 +384,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
             "{direction:?}: an open runtime must let the step through"
         );
 
-        let progress0 = oam_entries(events, &bindings, &player, &data);
+        let progress0 = draw_templates(events, &bindings, &player, &data);
         assert_eq!(
             (progress0[0].x(), progress0[0].y()),
             (rest_x, rest_y),
@@ -351,7 +398,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
             player.in_transit(),
             "{direction:?}: the midpoint must remain in transit"
         );
-        let mid = oam_entries(events, &bindings, &player, &data);
+        let mid = draw_templates(events, &bindings, &player, &data);
 
         for _ in 0..remaining_transit_ticks {
             player.tick();
@@ -360,14 +407,14 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
             player.in_transit(),
             "{direction:?}: the last transit frame must remain in transit"
         );
-        let last = oam_entries(events, &bindings, &player, &data);
+        let last = draw_templates(events, &bindings, &player, &data);
 
         player.tick();
         assert!(
             !player.in_transit(),
             "{direction:?}: the final tick must end the transit"
         );
-        let settled = oam_entries(events, &bindings, &player, &data);
+        let settled = draw_templates(events, &bindings, &player, &data);
 
         let (dx, dy) = direction.delta();
         let step = |a: rendering::OamEntry, b: rendering::OamEntry| {
@@ -400,7 +447,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
 
         let fresh_at_destination =
             PlayerState::new(player.position(), DEFAULT_ELEVATION, direction);
-        let fresh = oam_entries(events, &bindings, &fresh_at_destination, &data);
+        let fresh = draw_templates(events, &bindings, &fresh_at_destination, &data);
         assert_eq!(
             (settled[0].x(), settled[0].y()),
             (fresh[0].x(), fresh[0].y()),

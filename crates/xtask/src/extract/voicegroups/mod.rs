@@ -28,11 +28,9 @@ use parser::RawVoiceGroup;
 
 pub(crate) use error::VoiceGroupError;
 
-/// Number of addressable slots in the asset-pack voicegroup schema.
-/// Duplicated from `crates/assets/src/audio/voicegroup.rs`'s own
-/// `VOICE_SLOT_COUNT` rather than imported (this crate never depends on
-/// `crates/assets` -- see `pack_format`'s module docs).
-pub(super) const VOICE_SLOT_COUNT: usize = 128;
+/// Number of addressable slots in the asset-pack voicegroup schema, owned by
+/// `crates/assets/src/audio/voicegroup.rs`.
+pub(super) use assets::VOICE_SLOT_COUNT;
 
 const TITLE_VOICEGROUP_LABEL: &str = "title";
 
@@ -193,7 +191,7 @@ pub(super) fn extract_voicegroups(
     for group in &resolved_groups {
         writer.push(pack_format::raw_entry(
             resolve::voice_group_pack_id(&group.label),
-            encode::encode_voice_group(group),
+            encode::encode_voice_group(group).map_err(ExtractError::VoiceGroup)?,
         ));
     }
     Ok(())

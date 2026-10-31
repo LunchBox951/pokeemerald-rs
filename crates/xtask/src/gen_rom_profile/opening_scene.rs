@@ -11,6 +11,11 @@
 //! (`src/data/graphics/pokemon.h:1889`) and the other palettes are raw
 //! `.gbapal` runs; the tilemaps are `.lz` streams. The 16-colour banks are
 //! all 4-bit in the ROM and in the pack, so no depth split is needed.
+//!
+//! Linkage is read from the same files. A linker map lists only global
+//! symbols, so a root upstream declares `static` is marked
+//! [`super::plan::SymbolExpectation::Local`] ([`local_symbol`]) and the rest keep the
+//! any-symbol check.
 
 use std::collections::BTreeMap;
 
@@ -19,6 +24,7 @@ use rom_import::Encoding;
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::locate::{exactly_one, to_addr};
+use super::lz77_blobs::{locate_lz77_blobs, unnamed};
 use super::plan::{BlobPlan, OpeningScenePlan, PalettePlan, ReportLine, Resolution};
 use super::tilesets::len32;
 use super::Context;
@@ -40,6 +46,29 @@ fn ids_under(prefix: &str) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// The upstream name of a scene root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
+///
+/// Static: `main_menu.c:250-257` (`sBirchSpeechBgPals`, whose rows are `bg0`
+/// and `bg1`, then the shadow sheet, the speech tilemap and the `bg2`
+/// gradient), `field_effect.c:245,247` (Birch's sheet and palette) and
+/// `wallclock.c:74-75` (the hand sheet and the text-prompt palette). Global:
+/// `pokemon.h:1888-1889` (Lotad's sheet and palette) and `graphics.c:1350-1354`
+/// (the clock sheet, the male and female palettes, both tilemaps).
+fn local_symbol(id: &str) -> Option<&'static str> {
+    match id {
+        "opening-scene/image/shadow" => Some("sBirchSpeechShadowGfx"),
+        "opening-scene/image/birch" => Some("sNewGameBirch_Gfx"),
+        "opening-scene/image/clock_hand" => Some("sHand_Gfx"),
+        "opening-scene/palette/bg0" | "opening-scene/palette/bg1" => Some("sBirchSpeechBgPals"),
+        "opening-scene/palette/bg2" => Some("sBirchSpeechBgGradientPal"),
+        "opening-scene/palette/birch" => Some("sNewGameBirch_Pal"),
+        "opening-scene/palette/clock_text_prompt" => Some("sTextPrompt_Pal"),
+        "opening-scene/raw/birch_speech_map" => Some("sBirchSpeechBgMap"),
+        _ => None,
+    }
 }
 
 /// Locate every opening-scene root the checkout expects.
@@ -67,11 +96,14 @@ pub fn locate(
             }
         })
         .collect();
-    Ok(OpeningScenePlan {
+    let first = report.len();
+    let plan = OpeningScenePlan {
         images: locate_images(ctx, &queries, report)?,
         palettes: locate_palettes(ctx, report)?,
         tilemaps: locate_tilemaps(ctx, report)?,
-    })
+    };
+    super::mark_local_roots(&mut report[first..], &local_symbol);
+    Ok(plan)
 }
 
 /// Locate each palette under the encoding its symbol is linked with.
@@ -156,26 +188,7 @@ fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let ids = ids_under(TILEMAP_PREFIX);
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        report.push(ReportLine::unique(id, addr, len));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(ctx, &ids_under(TILEMAP_PREFIX), &unnamed, report)
 }
 
 #[cfg(test)]

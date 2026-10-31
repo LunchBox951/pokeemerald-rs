@@ -3,6 +3,7 @@
 pub mod background_event;
 pub mod collision;
 pub mod direction;
+pub mod interaction;
 pub mod map_runtime;
 pub mod metatile_behavior;
 pub mod metatile_interaction;
@@ -20,6 +21,7 @@ pub use collision::{
     ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
 };
 pub use direction::Direction;
+pub use interaction::{select_interaction_target, InteractionTarget, ObjectInteraction};
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use metatile_interaction::{classify_metatile_interaction, MetatileInteractionTarget};
 pub use object_event::{
