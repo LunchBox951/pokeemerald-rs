@@ -60,6 +60,8 @@ mod stat_changes;
 mod static_contact;
 #[path = "turn_engine/status_ability_matrix.rs"]
 mod status_ability_matrix;
+#[path = "turn_engine/traded_recipient_exp.rs"]
+mod traded_recipient_exp;
 #[path = "turn_engine/trainer_battle.rs"]
 mod trainer_battle;
 #[path = "turn_engine/turn_order.rs"]
