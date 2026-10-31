@@ -96,6 +96,29 @@ impl PackAsset {
         }
         Ok((&self.payload, width, height, bit_depth))
     }
+
+    /// [`Self::image_raster`] for a caller that packs the raster into 8x8 tiles.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::image_raster`]; also [`GenRomProfileError::EntryShape`] if a dimension is
+    /// zero or not a multiple of 8. Such a raster has no whole tile to search for, so it must
+    /// not be located and then reported as art missing from the ROM.
+    pub fn tiled_image_raster(
+        &self,
+        id: &str,
+    ) -> Result<(&[u8], u32, u32, u8), GenRomProfileError> {
+        let raster @ (_, width, height, _) = self.image_raster(id)?;
+        if width == 0 || height == 0 || !width.is_multiple_of(8) || !height.is_multiple_of(8) {
+            return Err(GenRomProfileError::EntryShape {
+                id: id.to_owned(),
+                reason: format!(
+                    "a {width}x{height} raster is not a nonzero whole number of 8x8 tiles"
+                ),
+            });
+        }
+        Ok(raster)
+    }
 }
 
 /// Pack entries keyed by id.
@@ -343,6 +366,34 @@ mod tests {
             matches!(err, GenRomProfileError::EntryShape { .. }),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_tiled_image_raster_of_whole_tiles_passes_and_one_without_is_an_entry_shape_error() {
+        for (width, height, whole) in [(8, 8, true), (16, 24, true), (4, 8, false), (0, 0, false)] {
+            let source = unchecked_single_asset_source(
+                "sprite/x",
+                EntryKind::Image {
+                    width,
+                    height,
+                    bit_depth: 4,
+                },
+                vec![0u8; (width * height) as usize],
+            );
+            let result = source
+                .get("sprite/x")
+                .unwrap()
+                .tiled_image_raster("sprite/x");
+            if whole {
+                assert_eq!(result.unwrap().1, width);
+            } else {
+                let err = result.unwrap_err();
+                assert!(
+                    matches!(err, GenRomProfileError::EntryShape { .. }),
+                    "{width}x{height}: {err}"
+                );
+            }
+        }
     }
 
     #[test]

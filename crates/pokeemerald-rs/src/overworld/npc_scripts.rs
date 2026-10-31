@@ -23,6 +23,16 @@ pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
     }
 }
 
+/// Whether the supported `script` opens with upstream's `faceplayer`, turning the selected
+/// object toward the player before its message (`scrcmd.c:1153-1158`).
+///
+/// Only Mom's path is recognised: its `lock`, `faceplayer`, then `msgbox` order is
+/// `data/scripts/players_house.inc:299-308`. Every other script, supported or not, is `false`.
+#[must_use]
+pub(crate) fn script_faces_player(script: &str) -> bool {
+    script == MOM_FRESH_SAVE_SCRIPT
+}
+
 fn mom_text() -> String {
     format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?")
 }
@@ -39,6 +49,13 @@ mod tests {
         assert!(script_text(MOM_FRESH_SAVE_SCRIPT).is_some());
         assert!(script_text(UNSCRIPTED_OBJECT_EVENT).is_none());
         assert!(script_text(UNSUPPORTED_SCRIPT).is_none());
+    }
+
+    #[test]
+    fn only_moms_script_faces_the_player() {
+        assert!(script_faces_player(MOM_FRESH_SAVE_SCRIPT));
+        assert!(!script_faces_player(UNSCRIPTED_OBJECT_EVENT));
+        assert!(!script_faces_player(UNSUPPORTED_SCRIPT));
     }
 
     #[test]

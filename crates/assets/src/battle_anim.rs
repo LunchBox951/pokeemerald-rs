@@ -23,7 +23,22 @@ pub use command::{AnimCommand, AnimSymbol, EffectSpriteId, PanSweep, ProgramId};
 pub use command::{ANIM_ARGS_COUNT, EFFECT_SPRITE_COUNT, SUBPRIORITY_MASK};
 pub use error::BattleAnimationError;
 
-const MOVES_COUNT: u16 = 355; // include/constants/moves.h:360
+/// The move table's cardinality (`include/constants/moves.h:360`) as the `u16`
+/// a selector index uses, derived from the canonical [`crate::MOVES_COUNT`] so
+/// a move-table expansion moves this bound with it. A count beyond `u16` fails
+/// the build.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the assert below bounds the count to u16"
+)]
+const MOVES_COUNT: u16 = {
+    let count = crate::MOVES_COUNT;
+    assert!(
+        count <= u16::MAX as usize,
+        "the move table outgrew the u16 animation selector"
+    );
+    count as u16
+};
 const STATUS_CONDITION_COUNT: u16 = 9;
 const GENERAL_ANIM_COUNT: u16 = 23;
 const SPECIAL_ANIM_COUNT: u16 = 7;

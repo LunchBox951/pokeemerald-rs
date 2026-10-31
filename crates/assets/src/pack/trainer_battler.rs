@@ -20,7 +20,7 @@
 //! extraction.
 
 use super::battler::BattlerDirection;
-use super::starter_chooser::PalettedImage;
+use super::PalettedImage;
 use super::{AssetPack, PackError};
 use crate::TrainerPicId;
 

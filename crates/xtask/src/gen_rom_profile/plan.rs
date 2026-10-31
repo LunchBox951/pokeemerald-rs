@@ -404,6 +404,22 @@ pub struct BattleMessagePlan {
     pub specials: Vec<SpecialMessagePlan>,
 }
 
+/// One field message's root, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessageRootPlan {
+    /// The upstream symbol, as `FieldMessage::symbol` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the message's token stream.
+    pub addr: u32,
+}
+
+/// The field-message roots, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessagePlan {
+    /// Every field message, in `FieldMessage::ALL` order.
+    pub messages: Vec<FieldMessageRootPlan>,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -548,6 +564,23 @@ pub struct TrainerBattlerPlan {
     pub backs: Vec<TrainerBackPlan>,
 }
 
+/// The battle textbox, menu text palettes, health-box elements, and battle
+/// bar, owned.
+#[derive(Debug, Clone)]
+pub struct BattleInterfacePlan {
+    /// Every `battle-interface/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `battle-interface/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `battle-interface/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+    /// The thirteen `battle-interface/raw/healthbox_element/*` roots, in
+    /// `gHealthboxElementsGfxTable` order.
+    pub healthbox_elements: Vec<BlobPlan>,
+    /// `battle-interface/raw/battle_bar`.
+    pub battle_bar: BlobPlan,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -569,6 +602,8 @@ pub struct ProfilePlan {
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,
+    /// The field-message token table.
+    pub field_messages: FieldMessagePlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
@@ -577,6 +612,8 @@ pub struct ProfilePlan {
     pub starter_chooser: StarterChooserPlan,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningScenePlan,
+    /// The battle textbox and menu text palettes.
+    pub battle_interface: BattleInterfacePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
     /// The Birch-speech trainer front pictures.

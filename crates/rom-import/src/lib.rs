@@ -46,11 +46,13 @@
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
+//!   battle textbox with the two menu text palettes (`battle-interface/*`), the
 //!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
 //!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
 //!   battlers (`trainer/*`: the same front pictures again, the uncompressed
 //!   four-frame back sheets behind `gTrainerBackPicTable`, and one palette per
-//!   trainer that `gTrainerBackPicPaletteTable` shares with the front). The sound engine's
+//!   trainer that `gTrainerBackPicPaletteTable` shares with the front).
+//!   The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
@@ -106,13 +108,17 @@ pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
 };
+pub use domains::battle_interface::{
+    HEALTHBOX_BATTLE_BAR, HEALTHBOX_ELEMENTS, HEALTHBOX_TILE_BYTES,
+};
 pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };
+pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
 pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
-pub use one_line::{OneLine, OneLinePath};
+pub use one_line::{OneLine, OneLinePath, OneLineText};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
     KNOWN_PROFILES,
@@ -121,10 +127,11 @@ pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
-    InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots, PaletteRoot, Roots, SampleRoot,
-    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
+    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};
