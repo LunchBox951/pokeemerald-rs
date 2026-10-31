@@ -23,8 +23,8 @@ use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEV
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
-    draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, tick_sleep, SleepTick,
-    Status1,
+    burn_residual_damage, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
+    tick_sleep, SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
@@ -266,9 +266,9 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, asleep with Insomnia or
+    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
-    /// Speed Boost, Color Change, Trace, Effect Spore, Flame Body, Cute Charm,
+    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
@@ -1016,8 +1016,8 @@ impl Battle {
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
         // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
-        // ENDTURN_POISON before ENDTURN_CHARGE
-        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
+        // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
+        // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -1030,6 +1030,7 @@ impl Battle {
             }
             self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_poison_residual(is_player, events);
+            self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
             } else {
@@ -1107,6 +1108,28 @@ impl Battle {
         let dealt = damage.min(target.current_hp());
         target.apply_damage(dealt);
         events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
+    /// `ENDTURN_BURN`: a living burned battler loses an eighth of its max HP,
+    /// at least one, with no RNG draw (`pokeemerald/src/battle_util.c:1550`-
+    /// `:1560`).
+    fn apply_burn_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || !battler.status1().is_burned() {
+            return;
+        }
+        let damage = burn_residual_damage(battler.stats().max_hp);
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByBurn {
             by_player: is_player,
             damage: dealt,
         });
@@ -1400,7 +1423,7 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
-                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
                 self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
             }
