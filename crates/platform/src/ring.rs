@@ -448,15 +448,20 @@ impl Drop for Consumer {
 }
 
 /// How many of `queued` samples were pushed before `mark`: the samples
-/// numbered from `consumed` up to `mark` in push order, none if the mark
-/// predates the queue, and at most the queue if it lies past it.
+/// numbered from `consumed` up to `mark` in push order, none if the
+/// consumer already read past the mark, and at most the queue if the mark
+/// lies past it. The counts wrap, so their difference is read as signed: a
+/// mark behind the consumer is a small negative distance, never a huge
+/// positive one.
 fn stale_before(mark: u64, consumed: u64, queued: usize) -> usize {
-    usize::try_from(
-        mark.wrapping_sub(consumed)
-            .min(u64::try_from(queued).unwrap_or(u64::MAX)),
-    )
-    .unwrap_or(usize::MAX)
-    .min(queued)
+    // Reinterpreting the wrapped difference as signed is the point: a mark
+    // behind `consumed` must read as negative.
+    #[allow(clippy::cast_possible_wrap)]
+    let ahead = mark.wrapping_sub(consumed) as i64;
+    if ahead <= 0 {
+        return 0;
+    }
+    usize::try_from(ahead).unwrap_or(usize::MAX).min(queued)
 }
 
 /// A [`Consumer`] whose producer is held off; see [`Consumer::hold_pushes`].

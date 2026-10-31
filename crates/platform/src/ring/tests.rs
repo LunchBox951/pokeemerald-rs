@@ -508,3 +508,33 @@ fn a_bounded_discard_after_reads_counts_only_what_is_still_queued() {
     );
     assert_eq!(consumer.available(), 0);
 }
+
+#[test]
+fn a_discard_mark_the_consumer_already_passed_keeps_the_whole_queue() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    let mark = producer.pushed();
+    // The callback drained past the stop mark before the stream was lost.
+    let mut drained = [0.0; 4];
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    consumer.fill(&mut drained);
+    assert_eq!(drained, [0.25, 0.25, 0.5, 0.5]);
+    // The stopped reconnect queues a prefill and applies the stale mark.
+    assert_eq!(producer.push(&[0.75; 2]), 2);
+    consumer.hold_pushes().discard_pushed_before(mark);
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [0.75; 2],
+        "a mark behind the consumer discards nothing"
+    );
+
+    consumer.discard_queued_at_first_read();
+    producer.keep_pushed_from_at_first_read(mark);
+    assert_eq!(producer.push(&[1.0; 2]), 2);
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [1.0; 2],
+        "the same mark at a first read discards nothing either"
+    );
+}
