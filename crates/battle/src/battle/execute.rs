@@ -34,6 +34,7 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod effect_spore;
 mod pipelines;
 use pipelines::hit_failure_event;
 
@@ -215,6 +216,7 @@ impl Battle {
     ) -> Result<(), BattleError> {
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
@@ -284,27 +286,39 @@ impl Battle {
             return Ok(());
         }
         let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
-        let (attacker, holder) = if attacker_is_player {
-            (&mut self.player, &mut self.enemy)
-        } else {
-            (&mut self.enemy, &mut self.player)
-        };
-        attacker.set_status1(Status1::Paralysed);
+        self.battler_mut(attacker_is_player)
+            .set_status1(Status1::Paralysed);
         events.push(BattleEvent::ParalyzedByStatic {
             by_player: attacker_is_player,
             move_id,
         });
-        if attacker_synchronizes
-            && !holder.is_fainted()
-            && resolve_synchronize_reflection(holder) == SynchronizeReflectionOutcome::Applied
-        {
-            holder.set_status1(Status1::Paralysed);
-            events.push(BattleEvent::ParalyzedByAttackerSynchronize {
-                by_player: attacker_is_player,
-                move_id,
-            });
+        if attacker_synchronizes {
+            self.reflect_contact_paralysis(attacker_is_player, move_id, events);
         }
         Ok(())
+    }
+
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` for a paralysis a contact ability just
+    /// put on the attacker (`battle_util.c:2987`-`:3001`): a surviving holder
+    /// that Limber and an existing primary status leave open is paralysed
+    /// without a draw.
+    fn reflect_contact_paralysis(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let holder = self.battler_mut(!attacker_is_player);
+        if holder.is_fainted()
+            || resolve_synchronize_reflection(holder) != SynchronizeReflectionOutcome::Applied
+        {
+            return;
+        }
+        holder.set_status1(Status1::Paralysed);
+        events.push(BattleEvent::ParalyzedByAttackerSynchronize {
+            by_player: attacker_is_player,
+            move_id,
+        });
     }
 
     /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_POISON_POINT`
@@ -340,18 +354,32 @@ impl Battle {
             return Ok(());
         }
         let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
-        let (attacker, holder) = if attacker_is_player {
-            (&mut self.player, &mut self.enemy)
-        } else {
-            (&mut self.enemy, &mut self.player)
-        };
-        attacker.set_status1(Status1::Poisoned);
+        self.battler_mut(attacker_is_player)
+            .set_status1(Status1::Poisoned);
         events.push(BattleEvent::PoisonedByPoisonPoint {
             by_player: attacker_is_player,
             move_id,
         });
-        if !attacker_synchronizes || holder.is_fainted() {
-            return Ok(());
+        if attacker_synchronizes {
+            self.reflect_contact_poison(attacker_is_player, move_id, events);
+        }
+        Ok(())
+    }
+
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` for a poison a contact ability just put
+    /// on the attacker (`battle_util.c:2987`-`:3001`): a surviving holder is
+    /// poisoned without a draw, and the reflection is `primary`, so a Poison-
+    /// or Steel-typed holder earns its own prevention event
+    /// (`battle_script_commands.c:2320`-`:2329`).
+    fn reflect_contact_poison(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let holder = self.battler_mut(!attacker_is_player);
+        if holder.is_fainted() {
+            return;
         }
         match resolve_synchronize_poison_reflection(holder) {
             SynchronizePoisonReflectionOutcome::Applied => {
@@ -369,10 +397,9 @@ impl Battle {
             }
             SynchronizePoisonReflectionOutcome::AlreadyStatused => {}
             SynchronizePoisonReflectionOutcome::ImmunityProtected => {
-                unreachable!("a Poison Point holder does not carry Immunity")
+                unreachable!("a contact-ability holder does not carry Immunity")
             }
         }
-        Ok(())
     }
 
     fn execute_move_pipeline(
@@ -649,12 +676,23 @@ impl Battle {
     /// Upstream's self-target `MOVE_POUND` damage call
     /// (`src/battle_util.c:2157`-`:2166`): 40 power, one variance draw, no
     /// accuracy, critical, STAB, or type stage, and no PP spent.
+    ///
+    /// `selected_move` is the move the battler attempted, upstream's
+    /// `gCurrentMove`. The call passes `MOVE_POUND` as an argument, but
+    /// `CalculateBaseDamage` tests `gBattleMoves[gCurrentMove].effect` for
+    /// `EFFECT_EXPLOSION` and halves the raw Defense before the stage scales
+    /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
+    /// confused Selfdestruct or Explosion user takes the larger self-hit
+    /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
+    /// depleted slot reaches it too).
     pub(super) fn apply_confusion_self_hit(
         &mut self,
         battler_is_player: bool,
+        selected_move: MoveId,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) {
+    ) -> Result<(), BattleError> {
+        let halves_defense = self.dex.move_data(selected_move)?.effect == MoveEffect::EXPLOSION;
         let battler = if battler_is_player {
             &self.player
         } else {
@@ -662,7 +700,12 @@ impl Battle {
         };
         let (raw_attack, attack_stage) = battler.attacking_stat(MoveCategory::Physical);
         let attack_stat = huge_power_attack(battler.ability(), MoveCategory::Physical, raw_attack);
-        let (defense_stat, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let (raw_defense, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let defense_stat = if halves_defense {
+            raw_defense / 2
+        } else {
+            raw_defense
+        };
         let input = DamageInput {
             attacker_level: battler.level(),
             power: u32::from(CONFUSION_SELF_HIT_POWER),
@@ -671,6 +714,9 @@ impl Battle {
             attack_stage,
             defense_stat,
             defense_stage,
+            // A burned battler's self-hit should halve like any physical
+            // hit (`pokeemerald/src/pokemon.c:3262`-`:3264`); that call site
+            // is tracked by #2850.
             attacker_burned: false,
             reflect: false,
             light_screen: false,
@@ -694,6 +740,7 @@ impl Battle {
             damage: hp_lost,
         });
         self.settle_faint(battler_is_player, events);
+        Ok(())
     }
 
     /// `tryfaintmon` for one side: reports the faint and clears the corpse's
@@ -1017,6 +1064,14 @@ impl Battle {
                     move_id,
                 });
             }
+        }
+    }
+
+    const fn battler_mut(&mut self, is_player: bool) -> &mut crate::pokemon::BattlePokemon {
+        if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
         }
     }
 
