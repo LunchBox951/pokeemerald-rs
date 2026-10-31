@@ -423,7 +423,7 @@ impl OverworldPhase {
     /// by this module's
     /// `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`:
     ///
-    /// - **Four trainers fight**: Andrew, Rhett, Marcos and Pete carry
+    /// - **Five trainers fight**: Daisy, Andrew, Rhett, Marcos and Pete carry
     ///   `NoItemDefaultMoves` parties -- real level-up movesets
     ///   ([`battle::initial_moveset`]) whose every move the engine executes
     ///   and the trainer AI scores.
