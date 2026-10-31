@@ -8,7 +8,7 @@
 use assets::MoveId;
 
 /// One of the two battlers in a single battle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BattlerSide {
     /// The player's active battler.
     Player,

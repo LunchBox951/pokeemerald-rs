@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the nine pipelines
+//! one of the battle scripts this crate reproduces — the ten pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -41,6 +41,7 @@
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
+//! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -232,7 +233,7 @@
 //! [`status1::Status1::Asleep`] (freeze, toxic — see [`status1`]'s module
 //! docs; no modelled move inflicts sleep or burn yet, so they arrive only
 //! through [`pokemon::BattlePokemon::set_status1`]), every
-//! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
+//! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s tracked set
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! attacker ability that still reaches an unported chance-doubling for a
@@ -240,8 +241,9 @@
 //! [`secondary::ensure_admissible`], which screens the *defender*'s primary
 //! status for a poison landing and the *defender*'s Own
 //! Tempo and Shield Dust — never a primary status — for a confusion
-//! landing) —
-//! and the move effects the nine
+//! landing, and Leech Seed's defender against Liquid Ooze, whose inverted
+//! drain is unmodelled) —
+//! and the move effects the ten
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and
@@ -249,7 +251,7 @@
 //! are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
-//! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
+//! Submission stay refused), OHKO, Counter, Bide and the rest of the end-of-turn
 //! residual family, and so on.
 //!
 //! Paralysis reaches past its own pipeline, so read those two owners before
@@ -273,6 +275,7 @@ pub mod fixed_damage;
 pub mod flag_move;
 pub mod gender;
 pub mod hit;
+pub mod leech_seed;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
@@ -314,6 +317,10 @@ pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move, FixedD
 pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
 pub use gender::Gender;
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
+pub use leech_seed::{
+    is_leech_seed_effect, leech_seed_residual_damage, resolve_leech_seed_move, LeechSeedOutcome,
+    EFFECT_LEECH_SEED,
+};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
 pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};

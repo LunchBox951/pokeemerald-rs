@@ -423,7 +423,7 @@ impl OverworldPhase {
     /// by this module's
     /// `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`:
     ///
-    /// - **Four trainers fight**: Andrew, Rhett, Marcos and Pete carry
+    /// - **Five trainers fight**: Daisy, Andrew, Rhett, Marcos and Pete carry
     ///   `NoItemDefaultMoves` parties -- real level-up movesets
     ///   ([`battle::initial_moveset`]) whose every move the engine executes
     ///   and the trainer AI scores.
@@ -433,7 +433,7 @@ impl OverworldPhase {
     ///   effect it does not model ([`battle::ensure_held_item_playable`]).
     ///   Miguel's Skitty holds an Oran Berry and is refused earlier still,
     ///   for its selected Cute Charm.
-    /// - **Daisy, Isabelle, Miguel and Amy & Liv** stop on a move, an
+    /// - **Isabelle, Miguel and Amy & Liv** stop on a move, an
     ///   ability or (for Amy & Liv) a double battle this port does not field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
@@ -784,8 +784,8 @@ mod tests {
     }
 
     /// The construction wall that remains, pinned rather than left as prose:
-    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the four
-    /// that fight (Andrew, Rhett, Marcos, Pete: `real_party_outcome` below)
+    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the five
+    /// that fight (Daisy, Andrew, Rhett, Marcos, Pete: `real_party_outcome` below)
     /// fails to construct through
     /// [`npc_trainer_battle::start_npc_trainer_battle`], each for the first
     /// move this battle engine does not yet implement or score, or for the
@@ -815,11 +815,6 @@ mod tests {
         // Cute Charm before the ability screen reaches its Attract or its Oran
         // Berry, each of which the later screens would refuse in turn.
         let expected = [
-            (
-                "Daisy",
-                TrainerId(36),
-                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
-            ),
             (
                 "Amy & Liv",
                 TrainerId(481),
@@ -879,12 +874,13 @@ mod tests {
         }
     }
 
+    const DAISY: TrainerId = TrainerId(36);
     const ANDREW: TrainerId = TrainerId(336);
     const RHETT: TrainerId = TrainerId(703);
     const MARCOS: TrainerId = TrainerId(702);
     const PETE: TrainerId = TrainerId(735);
-    /// The four sight trainers whose real parties construct and fight.
-    const FIGHTING_TRAINERS: [TrainerId; 4] = [ANDREW, RHETT, MARCOS, PETE];
+    /// The five sight trainers whose real parties construct and fight.
+    const FIGHTING_TRAINERS: [TrainerId; 5] = [DAISY, ANDREW, RHETT, MARCOS, PETE];
 
     /// Plays `trainer`'s real party against a strong lead and returns the
     /// outcome.
@@ -918,6 +914,17 @@ mod tests {
             }
         }
         outcome
+    }
+
+    /// Daisy (`CheckBadMove` only) has Leech Seed on her Shroomish, which the
+    /// seeded-drain pipeline executes and `AI_CBM_LeechSeed` scores, so her
+    /// party constructs and plays out.
+    #[test]
+    fn daisys_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(DAISY),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
     }
 
     /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
