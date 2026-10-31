@@ -52,6 +52,9 @@ struct World {
     /// Run inside the next successful build, as a producer pushing while it
     /// blocks would.
     during_build: Option<WorldHook>,
+    /// Run inside the next `play`, before it fails or succeeds, as a
+    /// producer and a `stop` racing a blocked `play` would.
+    during_play: Option<WorldHook>,
     /// Block the next discovery, with the world unlocked, until this
     /// channel's sender sends or drops, as a wedged audio server would.
     block_discovery: Option<std::sync::mpsc::Receiver<()>>,
@@ -173,6 +176,9 @@ impl OutputStream for FakeStream {
     fn play(&self) -> Result<(), cpal::Error> {
         let mut w = with(&self.0);
         w.ops += 1;
+        if let Some(hook) = w.during_play.take() {
+            hook(&mut w);
+        }
         if w.fail_play {
             return Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
         }

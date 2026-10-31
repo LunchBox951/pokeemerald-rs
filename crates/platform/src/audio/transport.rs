@@ -414,6 +414,12 @@ impl<H: OutputHost> Transport<H> {
             if result.is_ok() {
                 live.playing = want;
             } else if want || lost {
+                // A failed `play` of a started stream means nothing queued
+                // since the start was drained, even when a `stop` landed
+                // during the call and `retire` sees the transport stopped.
+                if want {
+                    self.stale_queue = true;
+                }
                 self.retire(TransportFailure::StreamLost);
                 self.fail(self.finished(now));
             } else {

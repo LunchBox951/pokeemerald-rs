@@ -187,3 +187,40 @@ fn refused_pauses_do_not_spend_the_retry_budget() {
     assert!(now < STABLE_AFTER);
     assert_eq!(rig.events().last(), Some(&TransportState::Ready));
 }
+
+#[test]
+fn a_resume_that_fails_after_a_racing_stop_discards_history_through_the_stop() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    // First attach, stopped: a paused stream.
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+
+    // `start`; while the worker's `play` blocks, the producer queues and
+    // then `stop` lands, and the `play` fails.
+    rig.shared.set_running(true, &rig.producer);
+    let producer = rig.producer.clone();
+    let shared = Arc::clone(&rig.shared);
+    {
+        let mut world = with(&w);
+        world.fail_play = true;
+        world.during_play = Some(Box::new(move |_| {
+            assert_eq!(producer.push(&[0.5; 4]), 4);
+            shared.set_running(false, &producer);
+        }));
+    }
+    rig.transport.step(MS(20));
+    assert_eq!(
+        rig.events(),
+        [TransportState::Unavailable(TransportFailure::StreamLost)]
+    );
+    // Queued after the stop: a stopped queue for the next start.
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2);
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 2,
+        "history queued while started is discarded; the stopped queue is kept"
+    );
+}
