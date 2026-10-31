@@ -8,6 +8,7 @@ use super::bag::{Bag, BAG_LEN};
 use super::game_stats::GameStats;
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
+use assets::items::ItemId;
 
 const PLAYER_NAME_OFFSET: usize = 0x00;
 const PLAYER_GENDER_OFFSET: usize = 0x08;
@@ -52,6 +53,9 @@ const LAST_HEAL_LOCATION_OFFSET: usize = 0x1C;
 const PARTY_COUNT_OFFSET: usize = 0x234;
 const PARTY_OFFSET: usize = 0x238;
 const MONEY_OFFSET: usize = 0x490;
+// `SaveBlock1::registeredItem` follows `money` (u32 at 0x490) and `coins` (u16
+// at 0x494) as a plain, unencrypted u16 (`pokeemerald/include/global.h:1002-1004`).
+const REGISTERED_ITEM_OFFSET: usize = 0x496;
 const BAG_ITEMS_OFFSET: usize = 0x560;
 const POKEBLOCKS_OFFSET: usize = 0x848;
 const FLAGS_OFFSET: usize = 0x1270;
@@ -622,6 +626,10 @@ pub struct SaveBlock1 {
     pub player_party: [Pokemon; PARTY_SIZE],
     /// Plaintext money.
     pub money: u32,
+    /// Item registered for use with SELECT, stored unencrypted at 0x496
+    /// (`registeredItem`, `pokeemerald/include/global.h:1004`);
+    /// [`ItemId::NONE`] means nothing is registered.
+    pub registered_item: ItemId,
     /// Plaintext bag contents.
     pub bag: Bag,
     /// Persistent flags and variables.
@@ -642,6 +650,7 @@ impl Default for SaveBlock1 {
             player_party_count: 0,
             player_party: [Pokemon::default(); PARTY_SIZE],
             money: 0,
+            registered_item: ItemId::NONE,
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
@@ -698,6 +707,8 @@ impl SaveBlock1 {
         }
         base[MONEY_OFFSET..MONEY_OFFSET + SERIALIZED_U32_LEN]
             .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
+        base[REGISTERED_ITEM_OFFSET..REGISTERED_ITEM_OFFSET + SERIALIZED_U16_LEN]
+            .copy_from_slice(&self.registered_item.index().to_le_bytes());
         base[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
             .copy_from_slice(&self.bag.to_bytes(encryption_key));
         base[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]
@@ -763,6 +774,7 @@ impl SaveBlock1 {
             player_party_count: bytes[PARTY_COUNT_OFFSET],
             player_party,
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
+            registered_item: ItemId(read_u16(bytes, REGISTERED_ITEM_OFFSET)),
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
             game_stats: GameStats::from_bytes(
@@ -1303,6 +1315,7 @@ mod tests {
         let mut block = SaveBlock1 {
             pos: Coords16 { x: -1234, y: 2345 },
             money: 0x1234_5678,
+            registered_item: ItemId(0x1234),
             ..SaveBlock1::default()
         };
         block.bag.items[0] = ItemSlot {
@@ -1328,6 +1341,12 @@ mod tests {
         assert_eq!(
             SaveBlock1::from_bytes(&patched, key).unwrap().money,
             block.money
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&patched, key)
+                .unwrap()
+                .registered_item,
+            block.registered_item
         );
 
         let mut base = [0xEE_u8; SaveBlock1::PAYLOAD_LEN];
@@ -1403,6 +1422,7 @@ mod tests {
             player_party_count: 0xFE,
             player_party: std::array::from_fn(|index| sample_pokemon(u8::try_from(index).unwrap())),
             money: 0x1234_5678,
+            registered_item: ItemId(0xABCD),
             player_object_event: SavedObjectEvent {
                 facing_direction: DIRECTION_WEST,
                 movement_direction: DIRECTION_EAST,
@@ -1445,6 +1465,11 @@ mod tests {
             block.money ^ key,
             "money uses the full 32-bit key"
         );
+        assert_eq!(
+            &bytes[0x496..0x498],
+            &[0xCD, 0xAB],
+            "the registered item is a plain little-endian u16, never keyed"
+        );
         assert_eq!(&bytes[0x560..0x564], &[0x34, 0x12, 0xAC, 0x95]);
         assert_eq!(&bytes[0x844..0x848], &[0xCD, 0xAB, 0xD5, 0x2C]);
         assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
@@ -1461,6 +1486,7 @@ mod tests {
         assert_eq!(restored.player_party_count, 0xFE);
         assert_eq!(restored.player_party, block.player_party);
         assert_eq!(restored.money, block.money);
+        assert_eq!(restored.registered_item, ItemId(0xABCD));
         assert_eq!(restored.bag, block.bag);
         assert_eq!(restored.event_data.flag_get(0x95F), Ok(true));
         assert_eq!(
@@ -1509,6 +1535,43 @@ mod tests {
     }
 
     #[test]
+    fn save_block1_registered_item_defaults_to_none_and_decodes_empty() {
+        let key = 0xA1B2_C3D4;
+        assert_eq!(SaveBlock1::default().registered_item, ItemId::NONE);
+        let bytes = SaveBlock1::default().to_bytes(key);
+        assert_eq!(&bytes[0x496..0x498], &[0, 0]);
+        assert_eq!(
+            SaveBlock1::from_bytes(&bytes, key).unwrap().registered_item,
+            ItemId::NONE
+        );
+    }
+
+    #[test]
+    fn save_block1_patch_bytes_preserves_a_registered_item_over_its_loaded_base() {
+        let key = 0xA1B2_C3D4;
+        let mut bytes = [0xEE_u8; SaveBlock1::PAYLOAD_LEN];
+        bytes[0x496..0x498].copy_from_slice(&0x0145_u16.to_le_bytes());
+
+        let mut block = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(block.registered_item, ItemId(0x0145));
+        block.money = 7;
+        block.patch_bytes(&mut bytes, key);
+
+        assert_eq!(&bytes[0x496..0x498], &0x0145_u16.to_le_bytes());
+        let reloaded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(reloaded.registered_item, ItemId(0x0145));
+        assert_eq!(reloaded.money, 7);
+
+        block.registered_item = ItemId::NONE;
+        block.patch_bytes(&mut bytes, key);
+        assert_eq!(
+            &bytes[0x496..0x498],
+            &[0, 0],
+            "clearing the registration writes the empty item"
+        );
+    }
+
+    #[test]
     fn hand_built_block1_bytes_decode_signed_warps_money_and_bag() {
         let key = u32::MAX;
         let mut bytes = [0u8; SaveBlock1::PAYLOAD_LEN];
@@ -1518,6 +1581,7 @@ mod tests {
         bytes[0x1C..0x24].copy_from_slice(&sample_warp(-10).to_bytes());
         bytes[0x234] = 7;
         bytes[0x490..0x494].copy_from_slice(&(PLAINTEXT_MONEY ^ key).to_le_bytes());
+        bytes[0x496..0x498].copy_from_slice(&[0x45, 0x01]);
         bytes[0x560..0x564].copy_from_slice(&[2, 0, 0xFC, 0xFF]);
 
         let block = SaveBlock1::from_bytes(&bytes, key).unwrap();
@@ -1527,6 +1591,11 @@ mod tests {
         assert_eq!(block.last_heal_location, sample_warp(-10));
         assert_eq!(block.player_party_count, 7);
         assert_eq!(block.money, PLAINTEXT_MONEY);
+        assert_eq!(
+            block.registered_item,
+            ItemId(0x0145),
+            "the unkeyed u16 at 0x496 decodes as the registered item"
+        );
         assert_eq!(
             block.bag.items[0],
             ItemSlot {

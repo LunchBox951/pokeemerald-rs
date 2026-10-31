@@ -12,6 +12,14 @@ pub(crate) enum EnemyAction {
     Move(usize),
     Struggle,
     Flee,
+    /// Switch to the healthy non-active trainer party member in this
+    /// original slot. Nothing selects it yet: the trainer AI's switch
+    /// decision is a later change.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no AI decision selects a switch yet")
+    )]
+    Switch(usize),
 }
 
 /// Whether the slot holds a real move, regardless of remaining PP.
