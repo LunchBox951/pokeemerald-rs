@@ -1,7 +1,7 @@
 //! Normalized MIDI commands ready for pack encoding.
 //!
-//! Extraction keeps its own model because `assets` is optional;
-//! [`super::encode`] maps it to the shared wire schema.
+//! [`super::compile`] emits these; [`super::encode`] maps them onto the
+//! `assets` song schema.
 
 /// One normalized track command.
 #[derive(Debug, Clone, PartialEq, Eq)]
