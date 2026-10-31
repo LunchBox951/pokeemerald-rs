@@ -249,11 +249,15 @@ fn short_smpl_loop_record_is_rejected() {
 }
 
 #[test]
-fn truncated_override_chunk_is_rejected() {
+fn a_lone_short_override_chunk_is_ignored_like_wav2agb() {
+    // wav2agb only assigns agbPitch/agbLoopEnd when chunkLen >= 4
+    // (wav_file.cpp:183-193), so a short chunk is not an error.
     let data = [128u8, 129];
     for id in [b"agbp", b"agbl"] {
         let bytes = build_wav(PCM_U8, 3344, &[(id, &[0u8, 0])], &data);
-        assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
+        let sample = decode(&bytes).unwrap();
+        assert_eq!(sample.base_frequency, 3344 * 1024);
+        assert_eq!(sample.sample_count, 2);
     }
 }
 
@@ -522,4 +526,32 @@ fn each_sample_format_reports_its_encoded_width() {
     assert_eq!(SampleFormat::S32.bytes_per_sample(), 4);
     assert_eq!(SampleFormat::F32.bytes_per_sample(), 4);
     assert_eq!(SampleFormat::F64.bytes_per_sample(), 8);
+}
+
+mod repeated_chunks;
+
+#[test]
+fn agbl_past_the_sampler_end_does_not_pull_in_excluded_samples() {
+    // smpl inclusive end 2 => wav2agb payload is samples 0..3 then zero
+    // alignment padding (converter.cpp:77-90); agbl=4 only changes the header.
+    let data = [128u8, 129, 130, 255, 255, 255];
+    let smpl = smpl_chunk(60, 0, 1, 2);
+    let agbl = u32_chunk(4);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 4);
+    assert_eq!(sample.data, [0, 1, 2, 0, 0]);
+}
+
+#[test]
+fn agbl_beyond_the_alignment_padding_is_zero_filled() {
+    // The payload ends after sample 2 plus one alignment byte; logical
+    // positions up to `agbl` stay zero rather than reading raw samples 4-5.
+    let data = [128u8, 129, 130, 255, 255, 255];
+    let smpl = smpl_chunk(60, 0, 1, 2);
+    let agbl = u32_chunk(6);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 6);
+    assert_eq!(sample.data, [0, 1, 2, 0, 0, 0, 0]);
 }

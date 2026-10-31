@@ -124,6 +124,74 @@ fn every_path_bearing_variant_escapes_control_bytes_and_stays_legible() {
     }
 }
 
+/// The cause an `io::Error` carries is as untrusted as the path beside it:
+/// its message can be whatever the caller (or an OS locale) put there. Every
+/// variant that nests one renders it escaped, and `Error::source` still hands
+/// back the cause whole, so a caller that wants the raw text can reach it.
+#[test]
+fn every_cause_bearing_variant_escapes_a_hostile_io_error_and_keeps_its_source() {
+    const RAW: &str = "one\ntwo\u{1b}[2Kthree";
+    const ESCAPED: &str = r"one\ntwo\u{1b}[2Kthree";
+    let hostile = || std::io::Error::other(RAW);
+    let cases = [
+        ImportRomError::CreateDirFailed {
+            path: PathBuf::from("/data"),
+            source: hostile(),
+        },
+        ImportRomError::OpenDirFailed {
+            path: PathBuf::from("/data"),
+            source: hostile(),
+        },
+        ImportRomError::Import {
+            source: ImportError::ReadFailed {
+                path: PathBuf::from("/roms/emerald.gba"),
+                source: hostile(),
+            },
+            temp_path: None,
+            temp_removed: true,
+        },
+        ImportRomError::TempFileFailed {
+            temp_path: PathBuf::from("/data/temp.tmp"),
+            source: hostile(),
+            temp_removed: true,
+        },
+        ImportRomError::TempFileFailed {
+            temp_path: PathBuf::from("/data/temp.tmp"),
+            source: hostile(),
+            temp_removed: false,
+        },
+        ImportRomError::PublishFailed {
+            temp_path: PathBuf::from("/data/temp.tmp"),
+            pack_path: PathBuf::from("/data/pokeemerald.pack"),
+            source: hostile(),
+            temp_removed: true,
+        },
+        ImportRomError::PublishFailed {
+            temp_path: PathBuf::from("/data/temp.tmp"),
+            pack_path: PathBuf::from("/data/pokeemerald.pack"),
+            source: hostile(),
+            temp_removed: false,
+        },
+    ];
+    for case in cases {
+        let text = case.to_string();
+        assert!(!text.contains('\n'), "{text:?}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(
+            text.contains(ESCAPED),
+            "escaped cause missing from {text:?}"
+        );
+        let source = std::error::Error::source(&case).expect("the cause stays reachable");
+        // `ImportError` wraps the `io::Error` one level further down.
+        let io_cause = if matches!(case, ImportRomError::Import { .. }) {
+            std::error::Error::source(source).expect("the importer's own cause")
+        } else {
+            source
+        };
+        assert_eq!(io_cause.to_string(), RAW, "the source must stay unescaped");
+    }
+}
+
 /// A hostile destination appears exactly once, escaped, in
 /// [`ImportRomError::OpenDirFailed`]'s rendering of
 /// [`not_a_directory_error`].

@@ -11,6 +11,7 @@ use super::OverworldPhase;
 use crate::flow::npc_trainer_battle::start_npc_trainer_battle;
 use crate::flow::save_continue_support::new_game_phase;
 use crate::flow::wild_encounter::SharedRng;
+use crate::party::LoadedLead;
 
 const OWNER_ID: u32 = 0x1234_5678;
 /// `TRAINER_MAY_ROUTE_103_MUDKIP`.
@@ -36,8 +37,12 @@ fn phase_with_lead(ot_id: u32, ot_name: [u8; 7]) -> OverworldPhase {
     record.box_data.set_ot_name(ot_name);
     phase.save1.player_party[0] = record;
     phase.save1.player_party_count = 1;
-    phase.party_lead_slot = 0;
-    phase.party_lead = Some(lead);
+    phase.lead = Some(LoadedLead::backed_for_test(
+        &battle::Dex::new(),
+        0,
+        lead,
+        record,
+    ));
     phase
 }
 
@@ -88,7 +93,13 @@ fn the_same_id_with_a_different_ot_name_is_flagged_and_boosted() {
 #[test]
 fn a_lead_with_no_matching_saved_record_keeps_its_own_classification() {
     let mut phase = phase_with_lead(OWNER_ID, OTHER_NAME);
-    phase.save1.player_party[0] = engine::save::Pokemon::default();
+    let lead = phase.lead_battler().cloned().expect("a lead");
+    phase.lead = Some(LoadedLead::backed_for_test(
+        &battle::Dex::new(),
+        0,
+        lead,
+        engine::save::Pokemon::default(),
+    ));
     assert!(!phase.lead_for_battle().unwrap().is_traded_recipient());
 }
 
@@ -97,9 +108,9 @@ fn a_new_game_starter_healed_into_its_empty_record_stays_domestic() {
     let mut phase = new_game_phase();
     phase.save2.player_trainer_id = OWNER_ID.to_le_bytes();
     phase.save2.player_name = *b"RUSTY\xFF\0\0";
-    phase.party_lead =
-        Some(crate::new_game::provisional_starter().with_original_trainer_id(OWNER_ID));
-    phase.party_lead_slot = 0;
+    phase.install_fresh_lead(
+        crate::new_game::provisional_starter().with_original_trainer_id(OWNER_ID),
+    );
     assert!(!phase.lead_for_battle().unwrap().is_traded_recipient());
     phase.heal_whole_party_and_reselect_lead("test");
     assert!(

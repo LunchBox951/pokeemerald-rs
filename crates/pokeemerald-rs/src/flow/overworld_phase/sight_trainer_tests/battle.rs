@@ -97,7 +97,7 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
         "a concluded battle empties its slot"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the driver writes the player's mon back"
     );
     assert_eq!(
@@ -148,7 +148,7 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
 fn an_undefeated_trainer_in_the_same_cone_does_start_an_approach() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(
@@ -205,7 +205,8 @@ fn the_defeated_flag_survives_a_save_continue_round_trip() {
     let block1 = phase.save1().clone();
     let block2 = phase.save2().clone();
     let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-    let resumed = OverworldPhase::from_saved(scene, ROUTE_103, block1, block2);
+    let resumed =
+        OverworldPhase::from_saved(scene.in_room_for_test(ROUTE_103), ROUTE_103, block1, block2);
 
     assert_eq!(
         resumed
@@ -250,8 +251,7 @@ fn losing_heals_halves_money_and_leaves_the_defeated_flag_clear() {
     );
     assert_eq!(phase.save1().money, 1000, "2001 / 2 == 1000");
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the driver writes the player's mon back, and white_out heals it in place");
     assert!(
         !lead.is_fainted(),
@@ -294,4 +294,13 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
         "the trainer id must be cleared on an abort too -- an id retained past the point the \
          battle slot emptied is stale the instant a fresh cone entry reuses the field"
     );
+    assert!(
+        phase.lead_for_test().is_some(),
+        "an abort hands the lead back"
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase
+        .take_lead_battler()
+        .expect("the abort closed the loan");
+    phase.restore_lead_battler(lent);
 }

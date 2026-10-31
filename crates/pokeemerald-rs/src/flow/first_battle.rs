@@ -19,6 +19,7 @@ use engine::rng::Rng;
 
 use super::battle_finalize::finalize_battle_turn;
 use super::first_usable_move::take_first_usable_move_turn;
+use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
@@ -49,7 +50,7 @@ pub fn start_first_battle(
     player_trainer_id: u32,
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
-    battle::ensure_participant_admissible(&player_lead)?;
+    ensure_lead_can_battle(&player_lead)?;
     let player_lead = super::wild_encounter::classify_traded_lead(player_lead, player_trainer_id);
     let dex = Dex::new();
     let opponent_moves =

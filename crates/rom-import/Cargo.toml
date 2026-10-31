@@ -13,16 +13,11 @@ publish.workspace = true
 assets = { path = "../assets" }
 pack-format = { path = "../pack-format" }
 
-# The one external crate this package names (`minimal-deps`; S-4, issue
-# #1132): closes `classify_partial_file`'s Windows handle-bound cleanup
-# delete (see `WindowsFileIdentity` in `src/lib.rs`). Approval trail, exact
-# version, and feature boundary are recorded in the dependency ledger
-# (`README.md`).
+# Windows handle identity and handle-bound delete for `classify_partial_file`'s
+# cleanup (see `src/lib.rs`). In-workspace, not a new external dependency;
+# `win-fs` owns the one `windows-sys` use (dependency ledger, `README.md`).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", default-features = false, features = [
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-] }
+win-fs = { path = "../win-fs" }
 
 [lints]
 workspace = true

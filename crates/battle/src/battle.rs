@@ -22,17 +22,25 @@ use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
+use crate::status1::{
+    burn_residual_damage, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
+    tick_sleep, SleepTick, Status1,
+};
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
 pub(crate) mod admission;
+pub mod battler_state;
 mod events;
 mod execute;
+pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
+#[cfg(test)]
+mod switch_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
 
+pub use battler_state::{BattlerSide, BattlerState, LastLandedMove, PerishSongTurns};
 pub use events::{BattleEvent, TurnError};
 
 use opponent_ai::{
@@ -110,6 +118,9 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
+    /// Move history and Perish Song state per battler, `[player, enemy]`,
+    /// reset whenever a battler leaves or enters the field.
+    battler_states: [BattlerState; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -255,10 +266,11 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
-    /// or holds Truant, Intimidate, Speed Boost, Color Change, Trace, Effect
-    /// Spore, Flame Body, Cute Charm, Drizzle, Drought or Sand Stream fails
-    /// with [`BattleError::UnportedAbilityInteraction`].
+    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
+    /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
+    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
+    /// Drizzle, Drought or Sand Stream fails with
+    /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
@@ -308,6 +320,13 @@ impl Battle {
                     .filter(|reserve| !reserve.is_fainted()),
             ),
         )?;
+        held_item::ensure_participants_hold_playable_items(
+            [&player, &enemy].into_iter().chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ),
+        )?;
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
@@ -328,6 +347,7 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         })
     }
 
@@ -383,6 +403,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        held_item::ensure_trainer_bag_unused(&data.items)?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -413,6 +434,16 @@ impl Battle {
         }
 
         admission::ensure_participants_admissible(
+            std::iter::once(&player)
+                .chain(party.iter().filter(|mon| !mon.is_fainted()))
+                .chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ),
+        )?;
+
+        held_item::ensure_participants_hold_playable_items(
             std::iter::once(&player)
                 .chain(party.iter().filter(|mon| !mon.is_fainted()))
                 .chain(
@@ -460,6 +491,7 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         })
     }
 
@@ -470,6 +502,12 @@ impl Battle {
             BattleKind::Trainer(context) => Some(context),
             BattleKind::Wild | BattleKind::FirstBattle => None,
         }
+    }
+
+    /// Returns a battler's move history and Perish Song state.
+    #[must_use]
+    pub const fn battler_state(&self, side: BattlerSide) -> &BattlerState {
+        &self.battler_states[side.index()]
     }
 
     const fn is_first_battle(&self) -> bool {
@@ -678,7 +716,29 @@ impl Battle {
         }
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
+        self.resolve_selected_actions(player_action, enemy_action, rng, events)
+    }
 
+    /// Resolves the turn's two selected actions, then the end-of-turn pass.
+    fn resolve_selected_actions(
+        &mut self,
+        player_action: ValidatedPlayerAction,
+        enemy_action: EnemyAction,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        if let (ValidatedPlayerAction::UseMove { move_id, .. }, EnemyAction::Switch(slot)) =
+            (player_action, enemy_action)
+        {
+            // The player's move was admitted against the outgoing defender.
+            let incoming = match &self.kind {
+                BattleKind::Trainer(context) => context.switch_target(slot)?,
+                BattleKind::Wild | BattleKind::FirstBattle => {
+                    return Err(BattleError::InvalidTrainerSwitch(slot));
+                }
+            };
+            secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+        }
         let chosen = ChosenMoves {
             player: match player_action {
                 ValidatedPlayerAction::UseMove {
@@ -690,7 +750,7 @@ impl Battle {
             enemy: match enemy_action {
                 EnemyAction::Move(slot) => Selection::Slot(slot),
                 EnemyAction::Struggle => Selection::Struggle,
-                EnemyAction::Flee => Selection::NoMove,
+                EnemyAction::Flee | EnemyAction::Switch(_) => Selection::NoMove,
             },
         };
         if let Selection::Slot(slot) = chosen.player {
@@ -863,6 +923,14 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // `SetActionsAndBattlersTurnOrder` queues switch actions ahead of
+        // every move action, so a switch consumes no order comparison
+        // (`pokeemerald/src/battle_main.c:4817`-`:4847`).
+        if matches!(enemy_action, EnemyAction::Switch(_)) {
+            self.resolve_enemy_action(enemy_action, rng, events)?;
+            self.act(true, player_move, player_slot, rng, events)?;
+            return Ok(());
+        }
         let order = resolve_order(
             priorities.player,
             priorities.enemy,
@@ -937,8 +1005,8 @@ impl Battle {
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
         // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
-        // ENDTURN_POISON before ENDTURN_CHARGE
-        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
+        // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
+        // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -951,6 +1019,7 @@ impl Battle {
             }
             self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_poison_residual(is_player, events);
+            self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
             } else {
@@ -1028,6 +1097,28 @@ impl Battle {
         let dealt = damage.min(target.current_hp());
         target.apply_damage(dealt);
         events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
+    /// `ENDTURN_BURN`: a living burned battler loses an eighth of its max HP,
+    /// at least one, with no RNG draw (`pokeemerald/src/battle_util.c:1550`-
+    /// `:1560`).
+    fn apply_burn_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || !battler.status1().is_burned() {
+            return;
+        }
+        let damage = burn_residual_damage(battler.stats().max_hp);
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByBurn {
             by_player: is_player,
             damage: dealt,
         });
@@ -1121,6 +1212,14 @@ impl Battle {
         };
         self.player_reserves.insert(fainted_index, fainted);
         self.player_slot = replacement_slot;
+        // `SwitchInClearSetData` for the incoming battler
+        // (`pokeemerald/src/battle_main.c:3152`-`:3261`), which zeroes
+        // `gCurrentMove` too: after a double faint the player's send-out runs
+        // first, so the trainer's replacement scores against `MOVE_NONE`
+        // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
+        self.player.clear_battle_scratch();
+        self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
+        self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::PlayerSentOut {
             species: self.player.species(),
             reserves_remaining: self.usable_player_reserves(),
@@ -1175,26 +1274,84 @@ impl Battle {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return Ok(());
         }
-        let BattleKind::Trainer(context) = &mut self.kind else {
-            self.finish(events, BattleOutcome::PlayerWon);
-            return Ok(());
+        let (replacement, money) = match &self.kind {
+            BattleKind::Trainer(context) => (
+                context.select_replacement(
+                    &self.dex,
+                    &self.enemy,
+                    self.last_move_used,
+                    &self.player,
+                )?,
+                context.money(),
+            ),
+            BattleKind::Wild | BattleKind::FirstBattle => {
+                self.finish(events, BattleOutcome::PlayerWon);
+                return Ok(());
+            }
         };
-        if let Some(next) =
-            context.send_out_next(&self.dex, &self.enemy, self.last_move_used, &self.player)?
-        {
-            let species = next.species();
-            let bench_remaining = context.bench_len();
-            self.enemy = next;
-            events.push(BattleEvent::TrainerSentOut {
-                species,
-                bench_remaining,
-            });
-            return Ok(());
+        if let Some(slot) = replacement {
+            return self.switch_enemy_to(slot, events);
         }
-        let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
         Ok(())
+    }
+
+    /// Makes original party slot `slot` the active enemy: the outgoing
+    /// member returns to its own slot and the incoming one enters with
+    /// `SwitchInClearSetData`'s reset (`pokeemerald/src/battle_main.c:3152`-
+    /// `:3261`). A prechosen voluntary switch and a forced post-faint
+    /// replacement both land here; neither draws from `rng`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidTrainerSwitch`] when this is not a
+    /// trainer battle or `slot` is not a healthy non-active member; nothing
+    /// changes then.
+    fn switch_enemy_to(
+        &mut self,
+        slot: usize,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let BattleKind::Trainer(context) = &mut self.kind else {
+            return Err(BattleError::InvalidTrainerSwitch(slot));
+        };
+        context.switch_target(slot)?;
+        // `Cmd_switchoutabilities` cures the leaving member before it returns
+        // to its party record (`battle_script_commands.c:9590`-`:9603`). A
+        // fainted member leaving for a forced replacement is already healthy.
+        if self.enemy.ability() == AbilityId::NATURAL_CURE {
+            self.enemy.set_status1(Status1::Healthy);
+        }
+        self.enemy.clear_battle_scratch();
+        context.switch_active(&mut self.enemy, slot)?;
+        self.enemy.clear_battle_scratch();
+        self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
+        // `SwitchInClearSetData` zeroes `gCurrentMove` (`battle_main.c:3257`).
+        self.last_move_used = MOVE_NONE;
+        events.push(BattleEvent::TrainerSentOut {
+            species: self.enemy.species(),
+            bench_remaining: context.bench_len(),
+        });
+        Ok(())
+    }
+
+    /// Runs one battler's turn-order slot, then closes the action as
+    /// `HandleAction_ActionFinished` does: the acting battler's own
+    /// last-landed move returns to none (`pokeemerald/src/battle_util.c:671`).
+    /// Its last hitter and the move it landed on its target remain.
+    fn act(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let result = self.run_action(player_is_attacker, move_id, slot, rng, events);
+        self.battler_states[BattlerSide::from_is_player(player_is_attacker).index()]
+            .clear_last_landed_move();
+        result
     }
 
     /// Runs one battler's turn-order slot: the confusion decrement, the
@@ -1203,7 +1360,7 @@ impl Battle {
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
     /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
-    fn act(
+    fn run_action(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
@@ -1216,6 +1373,32 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        // `CANCELER_ASLEEP` decrements sleep ahead of every other modelled
+        // canceller (`src/battle_util.c:2015`-`:2057`): a duration that
+        // survives cancels the move, expiry lets it proceed.
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match tick_sleep(attacker.status1(), attacker.ability()) {
+            SleepTick::NotAsleep => {}
+            SleepTick::StillAsleep(status) => {
+                attacker.set_status1(status);
+                events.push(BattleEvent::FastAsleep {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                self.record_cancelled_move(player_is_attacker, move_id)?;
+                return Ok(());
+            }
+            SleepTick::WokeUp => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::WokeUp {
+                    by_player: player_is_attacker,
+                });
+            }
+        }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
         // A duration that survives the decrement draws once more before the
@@ -1234,7 +1417,8 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
-                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
+                self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
             }
         }
@@ -1248,6 +1432,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
@@ -1269,6 +1454,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
         if let Some(slot) = slot {
@@ -1286,6 +1472,7 @@ impl Battle {
                         by_player: player_is_attacker,
                         move_id,
                     });
+                    self.record_cancelled_move(player_is_attacker, move_id)?;
                     return Ok(());
                 }
             } else if player_is_attacker {
@@ -1336,6 +1523,7 @@ impl Battle {
             // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
             // `:1139`, `:100`-`:104`).
             EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
+            EnemyAction::Switch(slot) => self.switch_enemy_to(slot, events),
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
@@ -1427,6 +1615,7 @@ mod tests {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         };
         (battle, player_max_hp, player_move_max_pp)
     }

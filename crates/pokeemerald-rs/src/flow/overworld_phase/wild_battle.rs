@@ -3,7 +3,9 @@
 //! at a time. The turn engine and the RNG adapter it shares with the overworld
 //! live in [`crate::flow::wild_encounter`].
 
+use crate::flow::lead_screen::ensure_lead_can_battle;
 use crate::flow::wild_encounter;
+use battle::Dex;
 
 use super::{ActiveBattle, OverworldPhase};
 
@@ -23,13 +25,12 @@ impl OverworldPhase {
         }
     }
 
-    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead
-    /// only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
+    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead, or one
+    /// holding an item with a battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
         let refusal = self
-            .party_lead
-            .as_ref()
-            .and_then(|lead| battle::ensure_participant_admissible(lead).err());
+            .lead_battler()
+            .and_then(|lead| ensure_lead_can_battle(lead).err());
         if let Some(error) = refusal {
             if self.wild_lead_refusal != Some(error) {
                 eprintln!(
@@ -43,8 +44,9 @@ impl OverworldPhase {
 
     /// Advances a wild battle taken out of [`OverworldPhase::active_battle`] by
     /// one frame. Returns the battle while it continues, `None` once it has
-    /// ended or aborted. The turn and the write-back of the battle's mon into
-    /// the party lead are [`wild_encounter::advance_wild_battle`]'s.
+    /// ended or aborted. The turn is [`wild_encounter::advance_wild_battle`]'s;
+    /// the battle's mon returns to the lead owner through
+    /// [`OverworldPhase::restore_lead_battler`] before any white-out runs.
     ///
     /// A [`battle::BattleOutcome::PlayerLost`] outcome runs
     /// [`OverworldPhase::white_out`] in the same frame, so no frame observes a
@@ -55,9 +57,13 @@ impl OverworldPhase {
         battle: battle::Battle,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        if let Some(outcome) =
-            wild_encounter::advance_wild_battle(&mut slot, &mut self.party_lead, &mut self.rng)
-        {
+        let mut returned_lead = None;
+        let outcome =
+            wild_encounter::advance_wild_battle(&mut slot, &mut returned_lead, &mut self.rng);
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
+        if let Some(outcome) = outcome {
             eprintln!("wild battle: ended -- {outcome:?}");
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
@@ -94,17 +100,41 @@ impl OverworldPhase {
             "wild encounter: slot {} -- species {:?} at level {}",
             encounter.slot, encounter.species, encounter.level
         );
-        let Some(lead) = self.lead_for_battle() else {
+        let Some(lead) = self.take_lead_for_battle() else {
             eprintln!("wild encounter: no party mon yet -- no battle to start");
             return;
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        match wild_encounter::start_wild_battle(lead, encounter, player_trainer_id, &mut self.rng) {
-            Ok(battle) => {
-                self.party_lead = None;
-                self.active_battle = Some(ActiveBattle::Wild(battle));
+        // `CreateWildMon` consults party slot 0, which is not the battle lead when it is
+        // fainted; an unsaved party (count 0) has the live lead as its whole party.
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        let dex = Dex::new();
+        let (synchronize_nature, cute_charm_gender) = if stored == 0 {
+            (
+                (lead.ability() == assets::AbilityId::SYNCHRONIZE).then(|| lead.nature()),
+                crate::party::live_lead_cute_charm_wild_gender(&dex, &lead),
+            )
+        } else {
+            let saved_party = &self.save1.player_party[..stored];
+            (
+                crate::party::slot_zero_synchronize_nature(&dex, saved_party),
+                crate::party::slot_zero_cute_charm_wild_gender(&dex, saved_party),
+            )
+        };
+        // The start consumes its copy; the lent original returns on rejection.
+        match wild_encounter::start_wild_battle_with_lead_effects(
+            lead.clone(),
+            synchronize_nature,
+            cute_charm_gender,
+            encounter,
+            player_trainer_id,
+            &mut self.rng,
+        ) {
+            Ok(battle) => self.active_battle = Some(ActiveBattle::Wild(battle)),
+            Err(error) => {
+                eprintln!("wild encounter: can't start a battle ({error:?})");
+                self.restore_lead_battler(lead);
             }
-            Err(error) => eprintln!("wild encounter: can't start a battle ({error:?})"),
         }
     }
 

@@ -8,6 +8,7 @@ use engine::event_data::EventData;
 use engine::overworld::MapRuntime;
 
 use crate::flow::first_battle;
+use crate::flow::lead_screen::ensure_lead_can_battle;
 
 use super::{ActiveBattle, OverworldPhase};
 
@@ -94,13 +95,10 @@ impl OverworldPhase {
     }
 
     /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`);
-    /// only a lead the turn engine refuses leaves it armed, with nothing drawn.
+    /// only a lead the turn engine refuses (an inadmissible battler, or a saved held item
+    /// whose effect it does not model) leaves it armed, with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
-        if let Some(Err(error)) = self
-            .party_lead
-            .as_ref()
-            .map(battle::ensure_participant_admissible)
-        {
+        if let Some(Err(error)) = self.lead_battler().map(ensure_lead_can_battle) {
             eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
             return;
         }
@@ -119,20 +117,23 @@ impl OverworldPhase {
                  may re-fire"
             );
         }
-        let Some(lead) = self.lead_for_battle() else {
+        let Some(lead) = self.take_lead_for_battle() else {
             eprintln!("first battle: no party mon yet -- no battle to start");
             return;
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        match first_battle::start_first_battle(lead, player_trainer_id, &mut self.rng) {
+        // The start consumes its copy; the lent original returns on rejection.
+        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
-                self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
                 self.wild.restart_immunity_steps();
             }
-            Err(error) => eprintln!("first battle: can't start ({error:?})"),
+            Err(error) => {
+                eprintln!("first battle: can't start ({error:?})");
+                self.restore_lead_battler(lead);
+            }
         }
     }
 
@@ -141,9 +142,13 @@ impl OverworldPhase {
         battle: battle::Battle,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        if let Some(outcome) =
-            first_battle::advance_first_battle(&mut slot, &mut self.party_lead, &mut self.rng)
-        {
+        let mut returned_lead = None;
+        let outcome =
+            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng);
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
+        if let Some(outcome) = outcome {
             eprintln!("first battle: ended -- {outcome:?}");
             self.first_battle_outcome = Some(outcome);
             self.conclude_first_battle();
