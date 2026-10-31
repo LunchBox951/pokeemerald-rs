@@ -1,4 +1,4 @@
-//! Locating the starters' static battler art (`src/data/pokemon_graphics`).
+//! Locating the static battler art of every species in [`BATTLERS`] (`src/data/pokemon_graphics`).
 //!
 //! The pack's `pokemon/<species>/{front,back}` images and
 //! `palette/{normal,shiny}` palettes are the expectation. The ROM stores all
@@ -72,7 +72,7 @@ impl Row {
     }
 }
 
-/// Locate every starter's images, palettes, and the four tables.
+/// Locate every species' images, palettes, and the four tables.
 ///
 /// # Errors
 ///
@@ -158,7 +158,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
 }
 
 /// Pin the front, back, normal-palette, and shiny-palette tables, in that
-/// order, through the art their starter rows point at.
+/// order, through the art their species rows point at.
 fn locate_tables(
     ctx: &Context<'_>,
     images: &[ImagePlan],
@@ -276,7 +276,7 @@ fn find_table(
         ReportLine::unique(name, base, TABLE_ROWS * RECORD_BYTES)
             .with(Resolution::StructDerived)
             .symbol(name)
-            .note("anchored by the pointers from its starter rows"),
+            .note("anchored by the pointers from its species rows"),
     );
     Ok(base)
 }
@@ -297,7 +297,8 @@ mod tests {
     const BACK_TABLE: u32 = 0x11_0000;
     const PALETTE_TABLE: u32 = 0x12_0000;
     const SHINY_TABLE: u32 = 0x13_0000;
-    /// Each species' four streams sit `0x4000` apart from here, `0x1000` per slot.
+    /// Each species' four streams sit `0x1_0000` apart from here, `0x4000` per
+    /// slot: Poochyena's all-literal 64x256 front alone takes `0x2404` bytes.
     const ART: u32 = 0x20_0000;
     /// An unreferenced second copy of a palette.
     const STRAY: u32 = 0x18_0000;
@@ -313,12 +314,12 @@ mod tests {
     }
 
     fn art_at(index: usize, slot: u32) -> u32 {
-        ART + u32::try_from(index).unwrap() * 0x4000 + slot * 0x1000
+        ART + u32::try_from(index).unwrap() * 0x1_0000 + slot * 0x4000
     }
 
-    /// 64 tiles that differ per image.
-    fn tiles(seed: usize) -> Vec<u8> {
-        (0..64 * 32)
+    /// `count` tiles that differ per image.
+    fn tiles(seed: usize, count: usize) -> Vec<u8> {
+        (0..count * 32)
             .map(|index| u8::try_from((index * 37 + seed * 11 + 5) % 251).unwrap())
             .collect()
     }
@@ -333,6 +334,20 @@ mod tests {
         colors(seed).iter().flat_map(|c| c.to_le_bytes()).collect()
     }
 
+    /// Rows of the image in `slot` (0 front, 1 back) of the species at `index`.
+    fn image_height(index: usize, slot: usize) -> u32 {
+        if slot == 0 {
+            BATTLERS[index].front_height()
+        } else {
+            64
+        }
+    }
+
+    /// Tiles in a 64-pixel-wide 4bpp image of `height` rows.
+    fn tile_count(height: u32) -> usize {
+        8 * usize::try_from(height / 8).unwrap()
+    }
+
     fn entries() -> Vec<PackEntry> {
         let mut entries = Vec::new();
         for (index, battler) in BATTLERS.iter().enumerate() {
@@ -340,9 +355,17 @@ mod tests {
                 .into_iter()
                 .enumerate()
             {
+                let height = image_height(index, slot);
                 entries.push(
-                    image_entry_from_tiles(id, &tiles(index * 4 + slot), 4, 64, 64, None)
-                        .expect("image"),
+                    image_entry_from_tiles(
+                        id,
+                        &tiles(index * 4 + slot, tile_count(height)),
+                        4,
+                        64,
+                        height,
+                        None,
+                    )
+                    .expect("image"),
                 );
             }
             for (slot, id) in [battler.normal_id(), battler.shiny_id()]
@@ -395,10 +418,13 @@ mod tests {
                         species + SHINY_TAG + shiny_tag_bias,
                     ),
                 )
-                .write(art_at(index, 0) as usize, &lz77_literals(&tiles(index * 4)))
+                .write(
+                    art_at(index, 0) as usize,
+                    &lz77_literals(&tiles(index * 4, tile_count(image_height(index, 0)))),
+                )
                 .write(
                     art_at(index, 1) as usize,
-                    &lz77_literals(&tiles(index * 4 + 1)),
+                    &lz77_literals(&tiles(index * 4 + 1, tile_count(64))),
                 )
                 .write(
                     art_at(index, 2) as usize,
@@ -413,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn every_starter_and_table_is_found_from_the_art() {
+    fn every_species_and_table_is_found_from_the_art() {
         let rom = rom(0);
         with_context("battlers", &rom, entries(), |ctx| {
             let mut report = Vec::new();
@@ -422,7 +448,7 @@ mod tests {
             assert_eq!(plan.back_table, 0x0800_0000 + BACK_TABLE);
             assert_eq!(plan.palette_table, 0x0800_0000 + PALETTE_TABLE);
             assert_eq!(plan.shiny_palette_table, 0x0800_0000 + SHINY_TABLE);
-            assert_eq!(plan.species.len(), 3);
+            assert_eq!(plan.species.len(), BATTLERS.len());
             for (index, battler) in plan.species.iter().enumerate() {
                 assert_eq!(battler.species, BATTLERS[index].species.index());
                 assert_eq!(battler.front.addr, 0x0800_0000 + art_at(index, 0));
@@ -432,9 +458,11 @@ mod tests {
                 assert_eq!(battler.front.encoding, Encoding::Lz77);
                 assert_eq!(battler.normal.encoding, Encoding::Lz77);
                 assert_eq!(battler.normal.color_count, 16);
+                assert_eq!(battler.front.height, BATTLERS[index].front_height());
+                assert_eq!(battler.back.height, 64);
             }
-            // 12 art roots and four tables.
-            assert_eq!(report.len(), 16);
+            // Four art roots per species and four tables.
+            assert_eq!(report.len(), BATTLERS.len() * 4 + 4);
         });
     }
 
@@ -472,6 +500,36 @@ mod tests {
     }
 
     #[test]
+    fn a_front_sheet_the_pack_holds_cropped_is_not_found() {
+        let poochyena = BATTLERS
+            .iter()
+            .position(|b| b.front_height() > 64)
+            .expect("one sheet is taller than its picture");
+        let id = BATTLERS[poochyena].front_id();
+        let mut pack = entries();
+        pack.retain(|entry| entry.id != id);
+        pack.push(
+            image_entry_from_tiles(
+                id.clone(),
+                &tiles(poochyena * 4, tile_count(64)),
+                4,
+                64,
+                64,
+                None,
+            )
+            .expect("image"),
+        );
+        let rom = rom(0);
+        with_context("battlers-cropped-sheet", &rom, pack, |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::NotFound { id: missing } if *missing == id),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
     fn a_palette_the_rom_lacks_is_not_found() {
         let mut bytes = rom(0);
         let at = art_at(1, 3) as usize;
@@ -486,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pack_without_a_starter_entry_is_refused_up_front() {
+    fn a_pack_without_a_battler_entry_is_refused_up_front() {
         let mut pack = entries();
         pack.retain(|entry| entry.id != BATTLERS[2].back_id());
         let rom = rom(0);

@@ -85,7 +85,7 @@ pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError>
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter battler image and palette is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every battler image and palette is present.
 pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
     BATTLERS
         .iter()

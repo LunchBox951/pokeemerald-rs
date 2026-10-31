@@ -568,7 +568,7 @@ pub struct ProfilePlan {
     pub opening_scene: OpeningScenePlan,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfacePlan,
-    /// The starters' static battler art.
+    /// The static battler art.
     pub battlers: BattlerPlan,
 }
 

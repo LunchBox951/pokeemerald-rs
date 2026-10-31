@@ -596,7 +596,7 @@ pub struct Roots {
     pub opening_scene: OpeningSceneRoots,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfaceRoots,
-    /// The starters' static battler images and palettes.
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
 }
 
