@@ -419,7 +419,13 @@ impl<H: OutputHost> Transport<H> {
             } else {
                 // A refused pause (a backend without hardware pause) is a
                 // deliberate stop, not a failure: re-attach a stopped stream
-                // at once without spending the retry budget.
+                // at once without spending the retry budget. A stream that
+                // never read still owes its first-read discard, bounded by
+                // the stop that landed; reclaiming the consumer drops that
+                // discard, so the stopped re-attach applies it at the mark.
+                if self.producer.owes_first_read_discard() {
+                    self.stale_queue = true;
+                }
                 self.retire(TransportFailure::StreamLost);
                 self.next_attempt = self.finished(now);
             }

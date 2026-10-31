@@ -186,6 +186,12 @@ impl Producer {
         );
     }
 
+    /// Whether a [`Consumer::discard_queued_at_first_read`] is still owed:
+    /// the consumer has not read since it was requested. Lock-free.
+    pub(crate) fn owes_first_read_discard(&self) -> bool {
+        self.shared.pending_discard.load(Ordering::Acquire) != NO_DISCARD
+    }
+
     /// Total samples this ring holds, fixed when it was created.
     ///
     /// Distinct from [`Self::available_space`], which is this minus whatever
