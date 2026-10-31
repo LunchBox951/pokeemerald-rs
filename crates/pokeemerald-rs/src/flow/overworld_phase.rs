@@ -1004,6 +1004,8 @@ mod oldale_reposition_tests;
 #[cfg(test)]
 mod opponent_ot_id_tests;
 #[cfg(test)]
+mod palette_stage_tests;
+#[cfg(test)]
 mod pre_movement_arrow_elevation_tests;
 #[cfg(test)]
 mod route103_rival_driver_tests;
