@@ -7,12 +7,12 @@ use assets::{MapId, MoveId, SpeciesId};
 use battle::{BattlePokemon, Dex, Ivs, Status1};
 use engine::overworld::{Direction, PlayerState};
 use engine::save::Pokemon;
-use platform::ButtonState;
+use platform::{ButtonState, Buttons};
 
 use crate::flow::save_continue_support::save_from_the_start_menu;
 use crate::flow::tests::TempSave;
 
-use super::test_support::{synthetic_phase, walk_one_tile_east, ONE_F};
+use super::test_support::{synthetic_phase, turn_and_walk_one_tile, walk_one_tile_east, ONE_F};
 use super::OverworldPhase;
 
 /// `VAR_POISON_STEP_COUNTER` (`pokeemerald/include/constants/vars.h:61`).
@@ -449,4 +449,48 @@ fn the_poison_cycle_and_the_status_resume_across_save_and_continue() {
     complete_step(&mut resumed);
 
     assert_eq!((counter(&resumed), hp(&resumed, 0)), (0, start - 1));
+}
+
+/// A slide's landing on ordinary ground still has
+/// `PLAYER_AVATAR_FLAG_FORCED_MOVE` set when `ProcessPlayerFieldInput`
+/// runs, so `TryStartStepCountScript` skips `UpdatePoisonStepCounter`
+/// (`field_control_avatar.c:547-553`, `field_player_avatar.c:429-448`).
+#[test]
+fn a_forced_slides_landing_on_ordinary_ground_leaves_the_poison_counter() {
+    let mut phase = super::test_support::phase_on_a_perpendicular_slides_landing_frame();
+    set_counter(&mut phase, 1);
+    for _ in 0..4 {
+        phase.step(ButtonState::default());
+    }
+    assert_eq!(counter(&phase), 1, "a forced landing is not a poison step");
+}
+
+/// The same landing with the counter on its fourth-step edge: it neither
+/// wraps nor drains the poisoned lead.
+#[test]
+fn a_forced_slides_landing_does_not_drain_a_poisoned_lead() {
+    let record = member(1, Status1::Poisoned, 5);
+    let start = record.hp;
+    let mut phase = super::test_support::phase_on_a_perpendicular_slides_landing_frame();
+    phase.save1.player_party[0] = record;
+    phase.save1.player_party_count = 1;
+    phase.load_lead_from_save();
+    set_counter(&mut phase, 3);
+    for _ in 0..4 {
+        phase.step(ButtonState::default());
+    }
+    assert_eq!((counter(&phase), hp(&phase, 0)), (3, start));
+}
+
+/// The exclusion is the landing frame's alone: the flag clears at the first
+/// poll, so the next ordinary step counts again.
+#[test]
+fn the_step_after_a_forced_slides_landing_counts_again() {
+    let mut phase = super::test_support::phase_on_a_perpendicular_slides_landing_frame();
+    set_counter(&mut phase, 1);
+    phase.step(ButtonState::default());
+    assert_eq!(counter(&phase), 1, "the landing call is excluded");
+
+    turn_and_walk_one_tile(&mut phase, Buttons::RIGHT);
+    assert_eq!(counter(&phase), 2, "an ordinary step counts");
 }

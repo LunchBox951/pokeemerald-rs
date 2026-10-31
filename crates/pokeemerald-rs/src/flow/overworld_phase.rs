@@ -10,6 +10,10 @@
 //! -- and delegates each per-frame concern to a focused sibling module,
 //! each contributing its own `impl OverworldPhase` block: [`step`] (input
 //! -> movement -> warp/interaction/encounter, [`OverworldPhase::step`]),
+//! [`pre_movement`] (its at-rest arrow/interaction/animated-door/`START`
+//! decisions), [`step_events`] (the warp/interaction/battle precedence for
+//! a frame's decided events), [`field_dialog`] (the interaction message box
+//! and its text speed),
 //! [`connections`] (warp and map-edge crossing,
 //! [`OverworldPhase::warp_to`]/[`OverworldPhase::cross_connection`]),
 //! [`wild_battle`] (an in-progress wild battle,
@@ -42,6 +46,7 @@ use crate::start_menu::StartMenu;
 
 mod animated_door;
 mod connections;
+mod field_dialog;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -50,11 +55,13 @@ mod input;
 mod interaction;
 mod lead_owner;
 mod placement;
+mod pre_movement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
 mod step;
+mod step_events;
 mod white_out;
 mod wild_battle;
 

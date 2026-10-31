@@ -178,11 +178,31 @@ pub struct PlayerState {
     /// when the crossing finishes. Stale at rest.
     landing_elevation: u8,
     forced_movement_armed: bool,
-    forced_input_tile_center: bool,
+    forced_landing: ForcedLanding,
     rest_pose: RestPose,
     /// The current walk-cycle phase (`sAnim_Go*` alternate cells,
     /// `object_event_anims.h:202-272`).
     leading_foot: LeadingFoot,
+}
+
+/// The two facts a forced crossing leaves for its landing frame, each with
+/// its own clearing point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForcedLanding {
+    /// The destination is a forced-movement input tile; cleared by the first
+    /// whole frame the landing spends at rest.
+    input_tile_center: bool,
+    /// `PLAYER_AVATAR_FLAG_FORCED_MOVE`: set by a dispatched forced
+    /// crossing, held through its landing frame, and cleared by the first
+    /// poll that no longer dispatches (`ForcedMovement_None`).
+    move_flag: bool,
+}
+
+impl ForcedLanding {
+    const NONE: Self = Self {
+        input_tile_center: false,
+        move_flag: false,
+    };
 }
 
 /// The result of one directional-input poll.
@@ -280,7 +300,7 @@ impl PlayerState {
             transit_direction: None,
             landing_elevation: elevation,
             forced_movement_armed: false,
-            forced_input_tile_center: false,
+            forced_landing: ForcedLanding::NONE,
             rest_pose: RestPose::Standing,
             leading_foot: LeadingFoot::Fresh,
         }
@@ -393,7 +413,19 @@ impl PlayerState {
     /// `T_NOT_MOVING` arm admits input (`field_control_avatar.c:93-113`).
     #[must_use]
     pub const fn field_input_suppressed(&self) -> bool {
-        self.forced_input_tile_center
+        self.forced_landing.input_tile_center
+    }
+
+    /// Returns whether `PLAYER_AVATAR_FLAG_FORCED_MOVE` is set: a dispatched
+    /// forced crossing sets it, and it stays set through the landing's
+    /// `ProcessPlayerFieldInput` -- even on ordinary ground -- until the next
+    /// poll's `ForcedMovement_None` clears it
+    /// (`field_player_avatar.c:429-440, 443-470`; `overworld.c:1442-1455`).
+    /// `TryStartStepCountScript` skips its poison counter while it is set
+    /// (`field_control_avatar.c:547-553`).
+    #[must_use]
+    pub const fn forced_move_flag(&self) -> bool {
+        self.forced_landing.move_flag
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -570,7 +602,7 @@ impl PlayerState {
         // The landing's tile-center frame is the first whole frame it spends
         // at rest; from the next one upstream reads `T_NOT_MOVING`.
         if !crossing {
-            self.forced_input_tile_center = false;
+            self.forced_landing.input_tile_center = false;
         }
         self.turn_frames_remaining = self.turn_frames_remaining.saturating_sub(1);
         self.bump_frames_remaining = self.bump_frames_remaining.saturating_sub(1);
@@ -697,10 +729,12 @@ impl PlayerState {
         }
 
         // `ForcedMovement_None`, reached off a forced tile or through a
-        // blocked `DoForcedMovement`, clears a slide's facing lock and
-        // resets `movementDirection` to the locked facing
-        // (`field_player_avatar.c:429-440, 449-451`). A no-op unless a slide
-        // left the two apart; deferred armed tiles keep theirs.
+        // blocked `DoForcedMovement`, clears the forced-move flag, a slide's
+        // facing lock, and resets `movementDirection` to the locked facing
+        // (`field_player_avatar.c:429-440, 449-451`). The facing reset is a
+        // no-op unless a slide left the two apart; deferred armed tiles keep
+        // theirs.
+        self.forced_landing.move_flag = false;
         if !self.forced_movement_armed || supported_mover.is_some() {
             self.movement_direction = self.facing;
         }
@@ -991,7 +1025,8 @@ impl PlayerState {
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
-        self.forced_input_tile_center = is_forced_movement_input_tile(landing.destination_behavior);
+        self.forced_landing.input_tile_center =
+            is_forced_movement_input_tile(landing.destination_behavior);
         Ok(())
     }
 
@@ -1024,6 +1059,7 @@ impl PlayerState {
         )
         .ok()?;
         self.advance_step_parity(keep_foot);
+        self.forced_landing.move_flag = true;
 
         self.movement_streak_active = true;
         self.movement_direction = direction;
