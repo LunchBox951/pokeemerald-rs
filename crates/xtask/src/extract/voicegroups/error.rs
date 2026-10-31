@@ -99,6 +99,12 @@ pub(crate) enum VoiceGroupError {
         id_len: usize,
     },
     UnindexedLinkOrderFile(String),
+    /// `assets` rejected a resolved slot as outside the pack schema's domain
+    /// when the group was encoded.
+    InvalidAssetSchema {
+        group: String,
+        source: assets::AudioError,
+    },
 }
 
 impl fmt::Display for VoiceGroupError {
@@ -273,6 +279,10 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "sound/voice_groups.inc links `sound/voicegroups/{path}`, but no parsed \
                  voicegroup declares that file (directory walk vs. linker order mismatch)"
+            ),
+            Self::InvalidAssetSchema { group, source } => write!(
+                f,
+                "voicegroup `{group}`: the asset pack schema rejected the resolved group: {source}"
             ),
         }
     }

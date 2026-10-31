@@ -20,6 +20,7 @@ enum MultiHitConclusion {
     HitLimitReached,
     AttackerFaintedSkipHitCount,
     TargetFaintedReportHitCount,
+    AttackerAsleepReportHitCount,
     TargetImmune,
     TargetLevitateBlocked,
     TargetWonderGuardBlocked,
@@ -29,7 +30,9 @@ impl MultiHitConclusion {
     const fn reports_hit_count(self) -> bool {
         matches!(
             self,
-            Self::HitLimitReached | Self::TargetFaintedReportHitCount
+            Self::HitLimitReached
+                | Self::TargetFaintedReportHitCount
+                | Self::AttackerAsleepReportHitCount
         )
     }
 
@@ -303,6 +306,15 @@ impl Battle {
                 return Ok(MultiHitResult {
                     hits_landed,
                     conclusion: MultiHitConclusion::TargetFaintedReportHitCount,
+                });
+            }
+            // A strike's contact ability can put the attacker to sleep; the
+            // loop then stops without waking or printing the sleep message
+            // (`data/battle_scripts_1.s:612`-`:616`).
+            if attacker.status1().is_asleep() {
+                return Ok(MultiHitResult {
+                    hits_landed,
+                    conclusion: MultiHitConclusion::AttackerAsleepReportHitCount,
                 });
             }
             let raw_damage = damage_before_roll(

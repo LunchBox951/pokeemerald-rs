@@ -61,6 +61,7 @@ fn stat_change_buffer(rose: bool, magnitude: u8) -> BattleBuffer {
 fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     match status {
         Status1::Poisoned => Ok(BattleBuffer::Status(StatusName::Poison)),
+        Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
         Status1::Healthy => Err(NarrationError::MissingContext("cured status")),

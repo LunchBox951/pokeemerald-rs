@@ -36,7 +36,7 @@ struct Boot {
 /// entry of `held`, starting at F.
 fn boot_menu(f: &mut Fixture, held: &[Buttons]) -> Boot {
     let mut buttons = ButtonState::new();
-    let (mut scene, handoff) = title_to_main_menu(&f.pack_source, &mut f.slot)
+    let (mut scene, handoff) = title_to_main_menu(&f.pack_source, &mut f.slot, &mut None)
         .expect("the synthetic pack builds the main menu");
     assert_eq!(phase(&scene), "fade-in");
     let mut oracle = NormalPaletteFade::begin_in(PaletteFadeTarget::White);
@@ -150,7 +150,7 @@ fn an_a_held_since_the_setup_is_not_a_fresh_press_on_the_fifth_frame() {
 fn a_fresh_a_27_frames_after_the_title_handoff_confirms() {
     let mut f = Fixture::new("boot-a-27");
     let mut buttons = ButtonState::new();
-    let (mut scene, _) = title_to_main_menu(&f.pack_source, &mut f.slot)
+    let (mut scene, _) = title_to_main_menu(&f.pack_source, &mut f.slot, &mut None)
         .expect("the synthetic pack builds the main menu");
     for _ in 0..26 {
         scene = f.step(scene, &mut buttons, NONE);
