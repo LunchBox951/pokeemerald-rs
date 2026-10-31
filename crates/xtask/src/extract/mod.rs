@@ -21,6 +21,7 @@
 //! - every player and NPC PNG, the `brendan` and `may` palettes, the four
 //!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
 //!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
+//! - the tall-grass field-effect sheet and its `general_1` palette;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
@@ -61,6 +62,7 @@
 //!   `tileset/<name>/palette/<NN>`
 //! - `title/{image,palette,raw}/<name>`
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
+//! - `field-effect/{image,palette}/<name>`
 //! - `layout/<name>/{map,border}`
 //! - `font/<name>/glyphs`
 //! - `text-window/{image,palette}/<stem>`
@@ -99,6 +101,7 @@ mod bundled_inventory_tests;
 mod checkpoint_maps_tests;
 pub(crate) mod cry;
 mod error;
+mod field_effect;
 mod field_message;
 mod fonts;
 pub mod inflate;
@@ -186,6 +189,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
+    field_effect::extract_field_effects(&upstream, &mut writer)?;
     trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;

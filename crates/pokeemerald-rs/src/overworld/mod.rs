@@ -39,6 +39,13 @@
 //!
 //! BG0 effects are not composed.
 //!
+//! # Field effects
+//!
+//! The scene owns the player's tall-grass effects ([`grass`]): the phase starts
+//! them as the player steps onto or is placed on tall grass and advances them
+//! once a frame ([`OverworldScene::advance_tall_grass`]); composing only draws
+//! them, as OBJs beside the player and the object events.
+//!
 //! # Border fallback
 //!
 //! Cells outside the current layout and its visible connections repeat the
@@ -71,6 +78,7 @@ pub use engine::overworld::WALK_FRAMES_PER_TILE;
 
 mod avatar;
 pub(crate) mod dialog;
+mod grass;
 mod npc;
 pub(crate) mod npc_scripts;
 pub(crate) mod oldale_town_npc_reposition;
@@ -420,6 +428,9 @@ pub struct OverworldScene {
     blank_tile_index: u16,
     tile_anims: tileset_anims::AnimatedTileset,
     sprites: sprites::SceneSprites,
+    /// The player's tall-grass effects, simulated by
+    /// [`Self::advance_tall_grass`] and only read by composition.
+    grass: grass::TallGrassEffects,
     /// The events `from_pack` received, fixed for the visit. Their owner is
     /// the one [`MapEventsTable::resolve`] reports for `map_id`; their
     /// contents may differ from the generated table's, as Oldale Town's
@@ -523,6 +534,7 @@ impl OverworldScene {
             blank_tile_index,
             tile_anims,
             sprites,
+            grass: grass::TallGrassEffects::new(),
             events: *events,
         })
     }
@@ -564,8 +576,18 @@ impl OverworldScene {
     /// validates those bytes, and tile animation only patches existing byte ranges.
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
-        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        let player_first_oam_entries = self.sprite_entries(player, event_data);
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
+    }
+
+    /// The depth-ordered OAM entries of the player, the visible object events,
+    /// and the tall-grass effects.
+    pub(crate) fn sprite_entries(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> Vec<rendering::OamEntry> {
+        self.sprites.entries(player, event_data, &self.grass)
     }
 
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
@@ -579,7 +601,9 @@ impl OverworldScene {
         tick: u32,
         objects: &engine::overworld::object_event::ObjectEventCollection,
     ) -> Framebuffer {
-        let player_first_oam_entries = self.sprites.live_entries(objects, player, event_data);
+        let player_first_oam_entries =
+            self.sprites
+                .live_entries(objects, player, event_data, &self.grass);
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
     }
 
@@ -705,7 +729,7 @@ impl OverworldScene {
         event_data: &EventData,
     ) -> (Vec<rendering::OamEntry>, (u16, u16)) {
         let viewport = self.frame_viewport(player);
-        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        let player_first_oam_entries = self.sprite_entries(player, event_data);
         let background_scroll = (viewport.scroll_x, viewport.scroll_y);
         (player_first_oam_entries, background_scroll)
     }

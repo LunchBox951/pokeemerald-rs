@@ -541,3 +541,25 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
         );
     }
 }
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_holds_the_tall_grass_sheet_and_its_palette() {
+    const TALL_GRASS_WIDTH: u32 = 80;
+    const TALL_GRASS_HEIGHT: u32 = 16;
+
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let sheet = pack
+        .field_effect_image("tall_grass")
+        .expect("tall_grass sheet");
+    assert_eq!(
+        (sheet.width, sheet.height),
+        (TALL_GRASS_WIDTH, TALL_GRASS_HEIGHT)
+    );
+    let palette = pack
+        .field_effect_palette("general_1")
+        .expect("general_1 palette");
+    assert_eq!(palette.color_count, EXPECTED_PALETTE_COLOR_COUNT);
+    // `graphics/field_effects/palettes/general_1.pal`: colour 1 is (180, 255, 131).
+    assert_eq!(palette.colors().nth(1), Some(0x43F6));
+}

@@ -63,6 +63,8 @@ impl OverworldPhase {
 
         // Step does not run on frames the menu owns.
         self.advance_tileset_anim_tick();
+        self.scene.seed_tall_grass_placement(&self.player);
+        self.scene.advance_tall_grass(&self.player);
 
         let mut target = PhaseSaveTarget {
             phase: RefCell::new(self),
