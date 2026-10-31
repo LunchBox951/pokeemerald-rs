@@ -299,7 +299,8 @@ pub(super) fn evictor_track(key: u8) -> Vec<SongEvent> {
 }
 
 /// A symlink or an occupied file planted at `write_pack`'s predictable path
-/// must be replaced, never written through or truncated.
+/// must be refused and left intact, never written through, truncated, or
+/// unlinked.
 #[test]
 fn write_pack_never_writes_through_a_planted_entry() {
     let test_name = "planted-entry-probe";
