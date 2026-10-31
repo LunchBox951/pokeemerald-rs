@@ -198,9 +198,8 @@ impl TrackState {
         }
     }
 
-    /// `ply_xwait` (`m4a.c:1615`..`:1636`): until the timer reaches `len`,
-    /// count a tick, rewind onto this command, and wait one tick; then clear
-    /// the timer and fall through to the next command on the same tick.
+    /// `ply_xwait` (`m4a.c:1615`..`:1636`): the command re-executes once per
+    /// tick for `len` ticks, then the next command runs on that same tick.
     fn xwait(&mut self, len: u16) {
         if self.xwait_timer < len {
             self.xwait_timer += 1;
