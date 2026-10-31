@@ -9,15 +9,17 @@
 //! the sheets are `.4bpp.lz` and the tilemaps `.lz`, both LZ77 streams, while
 //! the palettes are raw `.gbapal` runs. The chooser tiles are 4-bit in the
 //! ROM and in the pack, so the located depth needs no split.
-
-use rom_import::Encoding;
+//!
+//! Linkage is read from the same file. A linker map lists only global
+//! symbols, so a root upstream declares `static` is marked
+//! [`SymbolExpectation::Local`] ([`local_symbol`]) and the rest keep the
+//! any-symbol check.
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::exactly_one;
+use super::lz77_blobs::{locate_lz77_blobs, unnamed};
 use super::palettes::locate_unique;
 use super::plan::{BlobPlan, ReportLine, StarterChooserPlan, SymbolExpectation};
-use super::tilesets::len32;
 use super::Context;
 
 const IMAGE_PREFIX: &str = "starter-chooser/image/";
@@ -32,6 +34,22 @@ fn ids_under(prefix: &str) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// The upstream name of a chooser root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
+///
+/// `starter_choose.c:55-56` makes the pokeball-selection and starter-circle
+/// palettes `static`, and `:61` makes the starter-circle sheet `static`. The
+/// bag/grass palette and sheet (`:54,59`), the pokeball-selection sheet
+/// (`:60`) and both tilemaps (`:57-58`) are global.
+fn local_symbol(id: &str) -> Option<&'static str> {
+    match id {
+        "starter-chooser/palette/pokeball_selection" => Some("sPokeballSelection_Pal"),
+        "starter-chooser/palette/starter_circle" => Some("sStarterCircle_Pal"),
+        "starter-chooser/image/starter_circle" => Some("sStarterCircle_Gfx"),
+        _ => None,
+    }
 }
 
 /// Locate every starter-chooser root the checkout expects.
@@ -53,11 +71,14 @@ pub fn locate(
         .into_iter()
         .map(ImageQuery::lz77)
         .collect();
-    Ok(StarterChooserPlan {
+    let first = report.len();
+    let plan = StarterChooserPlan {
         images: locate_images(ctx, &queries, report)?,
         palettes: locate_palettes(ctx, report)?,
         tilemaps: locate_tilemaps(ctx, report)?,
-    })
+    };
+    super::mark_local_roots(&mut report[first..], &local_symbol);
+    Ok(plan)
 }
 
 /// Locate each palette as the raw `.gbapal` run it is.
@@ -80,26 +101,7 @@ fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let ids = ids_under(TILEMAP_PREFIX);
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        report.push(ReportLine::unique(id, addr, len));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(ctx, &ids_under(TILEMAP_PREFIX), &unnamed, report)
 }
 
 #[cfg(test)]

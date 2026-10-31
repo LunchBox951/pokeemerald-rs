@@ -180,39 +180,26 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
 
 #[test]
 fn the_audited_row_set_is_exact() {
-    const ABSORB: u8 = 3;
-    const POISON_HIT: u8 = 2;
-    const ALWAYS_HIT: u8 = 17;
-    const MULTI_HIT: u8 = 29;
-    const DRAGON_RAGE: u8 = 41;
-    const HIGH_CRITICAL: u8 = 43;
-    const SPEED_DOWN_HIT: u8 = 70;
-    const EVASION_DOWN_HIT: u8 = 74;
-    const CONFUSE_HIT: u8 = 76;
-    const VITAL_THROW: u8 = 78;
-    const SPLASH: u8 = 85;
-    const QUICK_ATTACK: u8 = 103;
-    const CHARGE: u8 = 174;
-    const SLEEP: u8 = 1;
-    const BURN_HIT: u8 = 4;
     let effects = [
-        ABSORB,
-        POISON_HIT,
-        ALWAYS_HIT,
-        MULTI_HIT,
-        DRAGON_RAGE,
-        HIGH_CRITICAL,
-        SPEED_DOWN_HIT,
-        EVASION_DOWN_HIT,
-        CONFUSE_HIT,
-        VITAL_THROW,
-        SPLASH,
-        QUICK_ATTACK,
-        CHARGE,
-    ]
-    .map(MoveEffect);
+        MoveEffect::ABSORB,
+        MoveEffect::POISON_HIT,
+        MoveEffect::ALWAYS_HIT,
+        MoveEffect::MULTI_HIT,
+        MoveEffect::DRAGON_RAGE,
+        MoveEffect::HIGH_CRITICAL,
+        MoveEffect::SPEED_DOWN_HIT,
+        MoveEffect::EVASION_DOWN_HIT,
+        MoveEffect::CONFUSE_HIT,
+        MoveEffect::VITAL_THROW,
+        MoveEffect::SPLASH,
+        MoveEffect::QUICK_ATTACK,
+        MoveEffect::CHARGE,
+    ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
-    let mut expected = UNCHANGED_AFTER_PROLOGUE_EFFECTS.to_vec();
+    let mut expected: Vec<u8> = UNCHANGED_AFTER_PROLOGUE_EFFECTS
+        .iter()
+        .map(|effect| effect.0)
+        .collect();
     expected.sort_unstable();
     let mut actual = raw.clone();
     actual.sort_unstable();
@@ -223,8 +210,8 @@ fn the_audited_row_set_is_exact() {
             Some(ScoreableEffect::UnchangedAfterPrologue(effect))
         );
     }
-    assert_eq!(ScoreableEffect::from_raw(MoveEffect(SLEEP)), None);
-    assert_eq!(ScoreableEffect::from_raw(MoveEffect(BURN_HIT)), None);
+    assert_eq!(ScoreableEffect::from_raw(MoveEffect::SLEEP), None);
+    assert_eq!(ScoreableEffect::from_raw(MoveEffect::BURN_HIT), None);
 }
 
 #[test]
@@ -329,7 +316,10 @@ fn confuse_hit_keeps_the_bad_move_score_and_draw_budget() {
         MoveId::SIGNAL_BEAM,
         MoveId::WATER_PULSE,
     ] {
-        assert_eq!(dex.move_data(move_id).unwrap().effect, MoveEffect(76));
+        assert_eq!(
+            dex.move_data(move_id).unwrap().effect,
+            MoveEffect::CONFUSE_HIT
+        );
         assert_eq!(bad_move_score(move_id, &target), FULL, "{move_id:?}");
         let enemy = mon(TREECKO, &[move_id]);
         for flags in [AiFlags::CHECK_BAD_MOVE, all_scripts] {
@@ -633,6 +623,44 @@ fn status_handler_admission_is_flag_aware_and_exact() {
             ensure_scoreable(&dex, move_id, cbm),
             Err(BattleError::UnscoreableMoveEffect(move_id)),
             "{move_id:?}"
+        );
+    }
+}
+
+#[test]
+fn sonic_boom_runs_the_high_risk_handler_even_though_its_power_skips_the_prologue_checks() {
+    let gastly = mon(GASTLY, &[MoveId::POUND]);
+    let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
+    let mudkip = mon(MUDKIP, &[MoveId::POUND]);
+    assert_eq!(
+        prologue(MoveId::SONIC_BOOM, &gastly),
+        (false, FULL),
+        "power 1 skips the prologue's chart check"
+    );
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &gastly), MINUS_10);
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &shedinja), MINUS_10);
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &mudkip), FULL);
+}
+
+#[test]
+fn sonic_boom_is_admitted_for_check_bad_move_alone() {
+    let dex = Dex::new();
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::SONIC_BOOM, AiFlags::CHECK_BAD_MOVE),
+        Ok(())
+    );
+    for extra in [
+        AiFlags::TRY_TO_FAINT,
+        AiFlags::CHECK_VIABILITY,
+        AiFlags::SETUP_FIRST_TURN,
+    ] {
+        assert_eq!(
+            ensure_scoreable(
+                &dex,
+                MoveId::SONIC_BOOM,
+                AiFlags::CHECK_BAD_MOVE.union(extra)
+            ),
+            Err(BattleError::UnscoreableMoveEffect(MoveId::SONIC_BOOM)),
         );
     }
 }

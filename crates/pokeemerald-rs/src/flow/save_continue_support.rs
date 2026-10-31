@@ -81,7 +81,7 @@ pub(super) fn new_game_phase() -> OverworldPhase {
 
 /// Everything the round trip asserts on, read out of a phase.
 ///
-/// `lead` is the *battle-facing* mon (`OverworldPhase::party_lead`), not
+/// `lead` is the *battle-facing* mon (`OverworldPhase::lead`), not
 /// the save block's bytes: that is the value a continued session actually
 /// fights with, and re-deriving it from
 /// [`new_game::provisional_starter`] is exactly the stand-in issue #232
@@ -121,7 +121,7 @@ pub(super) fn snapshot(phase: &OverworldPhase) -> Snapshot {
         running_shoes: flags.flag_get(FLAG_RECEIVED_RUNNING_SHOES).unwrap(),
         repel_steps: flags.var_get(VAR_REPEL_STEP_COUNT).unwrap(),
         party_count: phase.save1.player_party_count,
-        lead: phase.party_lead.clone(),
+        lead: phase.lead_for_test().cloned(),
         player_name: phase.save2.player_name,
         trainer_id: phase.save2.player_trainer_id,
         encryption_key: phase.save2.encryption_key,
@@ -187,7 +187,7 @@ pub(super) fn play_a_bit(phase: &mut OverworldPhase) {
 
     phase.save2.encryption_key = 0x0BAD_F00D;
     phase.save1.money = 1_234;
-    phase.party_lead = Some(a_damaged_lead());
+    phase.set_fresh_lead_for_test(a_damaged_lead());
 }
 
 /// The provisional starter after a fight it did not walk away from
