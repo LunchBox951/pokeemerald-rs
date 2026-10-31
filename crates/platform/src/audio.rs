@@ -478,6 +478,15 @@ impl AudioOutput {
         self.producer.underruns()
     }
 
+    /// The part of [`Self::underruns`] that interrupted the stream: silence
+    /// followed by a sample queued after it. Excludes the silence a finished
+    /// producer leaves behind once the device drains the ring. See
+    /// [`crate::ring::Producer::midstream_underruns`].
+    #[must_use]
+    pub fn midstream_underruns(&self) -> u64 {
+        self.producer.midstream_underruns()
+    }
+
     /// Count of asynchronous `cpal` stream errors reported since the stream
     /// was built (device disconnect, driver failure, …).
     ///

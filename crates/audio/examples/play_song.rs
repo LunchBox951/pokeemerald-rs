@@ -6,6 +6,11 @@
 //! cleanly. The helper tests (`play_song/tests/`) do run under `cargo test`; see this
 //! crate's `Cargo.toml`.
 //!
+//! A smoke run fails if the device played any of the song's own samples as
+//! silence (ring-buffer underrun) while it was still being rendered. Silence
+//! after the last frame is queued -- the drain and device-tail waits -- is
+//! expected and is not checked.
+//!
 //! Run with: `cargo run -p audio --example play_song`.
 
 use std::process::ExitCode;
@@ -15,6 +20,10 @@ use std::time::{Duration, Instant};
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
 use platform::audio::{PlaybackProgress, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
+
+#[path = "play_song/health.rs"]
+mod health;
+use health::check_underruns;
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -82,6 +91,9 @@ fn main() -> ExitCode {
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
+    // Midstream-underrun snapshot before playback begins; the prefill is queued before the device
+    // starts, so any increase after this point is a real dropout.
+    let underrun_baseline = output.midstream_underruns();
     match prefill_then_start(
         &mut seq,
         &producer,
@@ -114,6 +126,13 @@ fn main() -> ExitCode {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }
+        // `midstream_underruns` counts only silence that a later-queued
+        // sample followed, so this sees every dropout so far (the count only
+        // grows) yet ignores the end-of-song padding even if the device
+        // drains the ring before this line runs.
+        if !playback_is_gapless(underrun_baseline, &output) {
+            return ExitCode::FAILURE;
+        }
         wait_for_frame_deadline(
             &mut next_deadline,
             frame_period,
@@ -132,6 +151,12 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
+    // A pad recorded while the final frame was being stored can slip past the
+    // check that followed that push; it is settled once the device has
+    // delivered those samples, which the drain above has just waited for.
+    if !playback_is_gapless(underrun_baseline, &output) {
+        return ExitCode::FAILURE;
+    }
     // Prefer the device's own measured playback position when it has one
     // (see `platform::AudioOutput::playback_progress`); the derived
     // `device_tail_wait` bound below is only the fallback for a host that
@@ -146,7 +171,7 @@ fn main() -> ExitCode {
         )
     });
     let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
-    let tail_result = wait_for_device_tail_or_measured(
+    if let Err(err) = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
         output.device_sample_rate(),
@@ -155,12 +180,22 @@ fn main() -> ExitCode {
         || output.stream_errors(),
         Instant::now,
         std::thread::sleep,
-    );
-    if let Err(err) = tail_result {
+    ) {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// Report a dropout since `baseline` on stderr; `false` means the run failed.
+fn playback_is_gapless(baseline: u64, output: &AudioOutput) -> bool {
+    match check_underruns(baseline, output.midstream_underruns()) {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("audio playback stopped: {}", err.describe());
+            false
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,7 +255,8 @@ fn prefill(
 }
 
 /// The first device callback may run immediately; starting with an empty
-/// ring risks an underrun.
+/// ring risks an underrun. `main` snapshots the underrun counter before this
+/// call, so a callback that still outruns the prefill counts as a dropout.
 fn prefill_then_start(
     seq: &mut Sequencer,
     producer: &Producer,
