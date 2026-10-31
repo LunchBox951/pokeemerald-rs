@@ -58,11 +58,18 @@ impl Sheet {
         self.tiles_across() * usize::try_from(self.size.1 / 8).expect("small")
     }
 
-    /// 4bpp tiles where ROM tile `n` is uniformly colour `n % 16`.
+    /// The colour ROM tile `n` is filled with. `n % 16` alone would alias
+    /// tiles 32 apart, which is exactly how far an 8x8 and an 8x4 cut of the
+    /// player frame disagree, so the 32-tile block is folded in as well.
+    fn colour(tile: usize) -> usize {
+        (tile + tile / 32) % 16
+    }
+
+    /// 4bpp tiles where ROM tile `n` is uniformly colour `Sheet::colour(n)`.
     fn tiles(&self) -> Vec<u8> {
         (0..self.tile_count())
             .flat_map(|tile| {
-                let colour = u8::try_from(tile % 16).expect("a nibble");
+                let colour = u8::try_from(Sheet::colour(tile)).expect("a nibble");
                 [colour | colour << 4; 32]
             })
             .collect()
@@ -182,20 +189,25 @@ fn each_frame_lands_in_the_raster_its_own_metatile_cut_implies() {
             let tile = sheet.rom_tile(x / 8, y / 8);
             assert_eq!(
                 usize::from(pixel),
-                tile % 16,
+                Sheet::colour(tile),
                 "{} pixel ({x}, {y})",
                 sheet.id
             );
         }
     }
-    // The two frames are cut differently: swapping the cuts changes the raster.
+    // The two frames are cut differently: swapping the cuts changes the
+    // decoded colours, not just the tile indices.
     let swapped = Sheet {
         metatile: (8, 4),
         ..PLAYER
     };
     assert_ne!(
-        (0..8).map(|ty| PLAYER.rom_tile(9, ty)).collect::<Vec<_>>(),
-        (0..8).map(|ty| swapped.rom_tile(9, ty)).collect::<Vec<_>>()
+        (0..8)
+            .map(|ty| Sheet::colour(PLAYER.rom_tile(9, ty)))
+            .collect::<Vec<_>>(),
+        (0..8)
+            .map(|ty| Sheet::colour(swapped.rom_tile(9, ty)))
+            .collect::<Vec<_>>()
     );
 }
 
