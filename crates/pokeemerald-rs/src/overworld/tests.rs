@@ -2362,24 +2362,11 @@ fn layout_pack_writers_refuse_a_planted_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
-    let path = regression_pack_path("planted-symlink-replaced");
-    let bytes = b"fresh scratch pack".to_vec();
-    let mut completed = false;
+fn scratch_writer_refuses_a_planted_symlink_and_keeps_the_link() {
+    let path = regression_pack_path("planted-symlink-kept");
     super::test_support::assert_planted_symlink_untouched(&path, || {
-        super::test_support::write_scratch_exclusive(&path, &bytes);
-        let meta = std::fs::symlink_metadata(&path).unwrap();
-        assert!(
-            meta.file_type().is_file(),
-            "the stale link is replaced by a regular file"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        completed = true;
+        super::test_support::write_scratch_exclusive(&path, b"fresh scratch pack");
     });
-    assert!(
-        completed,
-        "the writer completed instead of rejecting the stale entry"
-    );
 }
 
 /// The inputs of a room that is internally coherent: Route 122's header and
