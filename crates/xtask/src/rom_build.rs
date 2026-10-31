@@ -520,22 +520,48 @@ const O_NONBLOCK: Option<i32> = if cfg!(all(
 /// opening (a FIFO with no writer would block the open, a device would never
 /// end) and again on the opened handle, so a path swapped in between is
 /// refused rather than read.
+///
+/// The opened handle is compared with the object the pre-open check saw: by
+/// device and inode on Unix, and on Windows by the volume and file ID of a
+/// witness handle opened (asking for no access, not following a final
+/// symlink) as the pre-open check itself, before the real open.
 fn open_output(tree: &Path, name: &'static str) -> Result<std::fs::File, RomBuildError> {
+    open_output_between(tree, name, || {})
+}
+
+/// [`open_output`], running `between` after the pre-open check and before the
+/// open, where a concurrent writer can swap the path. Tests use it to land
+/// that swap deterministically.
+fn open_output_between(
+    tree: &Path,
+    name: &'static str,
+    between: impl FnOnce(),
+) -> Result<std::fs::File, RomBuildError> {
     let invalid = |reason: String| RomBuildError::InvalidOutput { file: name, reason };
     let path = tree.join(name);
-    let before = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(RomBuildError::MissingOutput(name.to_owned()));
+    let unreadable = |err: std::io::Error| {
+        if err.kind() == ErrorKind::NotFound {
+            RomBuildError::MissingOutput(name.to_owned())
+        } else {
+            invalid(err.to_string())
         }
-        Err(err) => return Err(invalid(err.to_string())),
     };
+    // Windows has no inode on the metadata, so the pre-open check is itself
+    // made on a witness handle: the object it refers to is pinned from the
+    // first look, and every later replacement is compared against it.
+    #[cfg(windows)]
+    let witness = open_without_access(&path).map_err(unreadable)?;
+    #[cfg(windows)]
+    let before = witness.metadata().map_err(|err| invalid(err.to_string()))?;
+    #[cfg(not(windows))]
+    let before = std::fs::symlink_metadata(&path).map_err(unreadable)?;
     if !before.file_type().is_file() {
         return Err(invalid(format!(
             "not a regular file ({:?})",
             before.file_type()
         )));
     }
+    between();
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -551,12 +577,38 @@ fn open_output(tree: &Path, name: &'static str) -> Result<std::fs::File, RomBuil
         use std::os::unix::fs::MetadataExt;
         after.dev() == before.dev() && after.ino() == before.ino()
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let same = {
+        use win_fs::WindowsFileIdentity;
+        WindowsFileIdentity::of(&witness).map_err(|err| invalid(err.to_string()))?
+            == WindowsFileIdentity::of(&file).map_err(|err| invalid(err.to_string()))?
+    };
+    // No identity to read back on another target; only the type check applies.
+    #[cfg(not(any(unix, windows)))]
     let same = true;
     if !after.is_file() || !same {
         return Err(invalid("replaced while it was being opened".to_owned()));
     }
     Ok(file)
+}
+
+/// Opens `path` asking for no access and sharing everything, without
+/// following a final symlink, so the handle neither blocks nor is blocked by
+/// the build's own handles and still names the object the path held when it
+/// was opened.
+#[cfg(windows)]
+fn open_without_access(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
 }
 
 /// Reads the built image, refusing one larger than a cartridge without
