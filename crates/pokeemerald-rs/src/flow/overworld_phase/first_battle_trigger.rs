@@ -125,6 +125,7 @@ impl OverworldPhase {
         // The start consumes its copy; the lent original returns on rejection.
         match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
