@@ -228,6 +228,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections,
         }
     }
@@ -250,7 +251,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::Normal,
             trainer_sight_or_berry_tree_id: range,
-            script: "TestTrainer_Script",
+            script: Some(assets::ScriptRef::new("TestTrainer_Script")),
             flag: "0",
         }
     }
@@ -386,7 +387,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
+            script: None,
             flag: "0",
         }]));
         let events = MapEvents {
@@ -418,7 +419,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
+            script: None,
             flag: "FLAG_HIDE_LITTLEROOT_TOWN_BIRCH",
         }]));
         let events = MapEvents {

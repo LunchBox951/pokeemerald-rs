@@ -145,7 +145,7 @@ fn a_forced_landing_suppresses_the_same_frame_interaction_until_the_next_call() 
         "fixture precondition: Mom stands at (2, 6)"
     );
     assert_ne!(
-        mom.script, "0x0",
+        mom.script, None,
         "fixture precondition: Mom's script is a real one, so A interacts"
     );
 

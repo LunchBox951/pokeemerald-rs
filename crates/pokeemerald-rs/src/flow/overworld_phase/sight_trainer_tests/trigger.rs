@@ -395,7 +395,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         .map_events()
         .object_events
         .iter()
-        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event");
     assert!(
         engine::overworld::trainer_can_see_player(
