@@ -61,6 +61,35 @@ pub enum BattleEvent {
         /// Whether the player's battler woke.
         by_player: bool,
     },
+    /// A frozen battler's canceller draw kept it frozen and its chosen move
+    /// is not a thaw-hit move, so the move was cancelled before any PP was
+    /// spent (`BattleScript_MoveUsedIsFrozen`,
+    /// `src/battle_util.c:2059`-`:2083`).
+    ///
+    /// This follows the sleep canceller and precedes the confusion and
+    /// paralysis cancellers, which do not run for the action.
+    FrozenSolid {
+        /// Whether the player's battler is frozen.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A frozen battler thawed on its canceller draw
+    /// (`BattleScript_MoveUsedUnfroze`, `src/battle_util.c:2073`-`:2079`),
+    /// and its chosen move proceeds through the remaining cancellers.
+    Thawed {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+    },
+    /// A frozen battler's thaw-hit move thawed it after the confusion and
+    /// paralysis cancellers let the move proceed, without a second draw
+    /// (`CANCELER_THAW`, `src/battle_util.c:2250`-`:2262`).
+    ThawedByMove {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+        /// The thaw-hit move that thawed it.
+        move_id: MoveId,
+    },
     /// A confused battler's duration reached zero this action, ending
     /// confusion before the paralysis draw and PP handling run
     /// (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).

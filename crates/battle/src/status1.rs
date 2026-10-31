@@ -1,5 +1,5 @@
-//! Primary status ([`Status1`]), the full-paralysis gate, poison's and burn's
-//! end-turn damage, and Shed Skin's end-turn cure draw.
+//! Primary status ([`Status1`]), the frozen and full-paralysis gates, poison's
+//! and burn's end-turn damage, and Shed Skin's end-turn cure draw.
 //!
 //! `status1` persists across a switch, unlike the volatile bits in
 //! [`crate::volatile::Volatiles`]. Confusion belongs to those volatile bits
@@ -17,6 +17,10 @@
 use assets::AbilityId;
 
 use crate::damage::BattleRng;
+
+mod freeze;
+
+pub use freeze::{draw_freeze_canceller, FreezeCanceller};
 
 /// One battler's primary status condition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -37,6 +41,11 @@ pub enum Status1 {
     /// the attacker's physical damage is halved unless it has Guts
     /// ([`crate::ability::burn_halves_damage`]).
     Burned,
+    /// Frozen: [`draw_freeze_canceller`] runs after the sleep canceller and
+    /// before the confusion and paralysis cancellers
+    /// (`CANCELER_FROZEN`, `pokeemerald/src/battle_util.c:2059`-`:2083`).
+    /// Freeze has no end-turn residual and no duration.
+    Frozen,
     /// Asleep with `turns` actions left before waking: the canceller
     /// ([`tick_sleep`]) decrements it ahead of every chosen move
     /// (`CANCELER_ASLEEP`, `pokeemerald/src/battle_util.c:2015`-`:2057`).
@@ -67,6 +76,12 @@ impl Status1 {
     #[must_use]
     pub const fn is_burned(self) -> bool {
         matches!(self, Self::Burned)
+    }
+
+    /// Whether this status is [`Status1::Frozen`].
+    #[must_use]
+    pub const fn is_frozen(self) -> bool {
+        matches!(self, Self::Frozen)
     }
 
     /// Whether this status is [`Status1::Asleep`] with at least one turn left;
@@ -297,17 +312,26 @@ mod tests {
 
     #[test]
     fn each_variant_answers_exactly_its_own_predicates() {
-        for (status, healthy, paralysed, poisoned, burned) in [
-            (Status1::Healthy, true, false, false, false),
-            (Status1::Paralysed, false, true, false, false),
-            (Status1::Poisoned, false, false, true, false),
-            (Status1::Burned, false, false, false, true),
-            (Status1::Asleep { turns: 3 }, false, false, false, false),
+        for (status, healthy, paralysed, poisoned, burned, frozen) in [
+            (Status1::Healthy, true, false, false, false, false),
+            (Status1::Paralysed, false, true, false, false, false),
+            (Status1::Poisoned, false, false, true, false, false),
+            (Status1::Burned, false, false, false, true, false),
+            (Status1::Frozen, false, false, false, false, true),
+            (
+                Status1::Asleep { turns: 3 },
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
         ] {
             assert_eq!(status.is_healthy(), healthy, "{status:?}");
             assert_eq!(status.is_paralysed(), paralysed, "{status:?}");
             assert_eq!(status.is_poisoned(), poisoned, "{status:?}");
             assert_eq!(status.is_burned(), burned, "{status:?}");
+            assert_eq!(status.is_frozen(), frozen, "{status:?}");
             assert_eq!(
                 status.is_asleep(),
                 matches!(status, Status1::Asleep { .. }),
@@ -376,6 +400,7 @@ mod tests {
             Status1::Paralysed,
             Status1::Poisoned,
             Status1::Burned,
+            Status1::Frozen,
         ] {
             assert_eq!(
                 tick_sleep(status, AbilityId::EARLY_BIRD),
@@ -400,6 +425,7 @@ mod tests {
             (Status1::Paralysed, AbilityId::NONE),
             (Status1::Poisoned, AbilityId::NONE),
             (Status1::Burned, AbilityId::NONE),
+            (Status1::Frozen, AbilityId::NONE),
             (Status1::Asleep { turns: 2 }, AbilityId::NONE),
             (Status1::Healthy, AbilityId::VITAL_SPIRIT),
             (Status1::Healthy, AbilityId::INSOMNIA),
@@ -436,7 +462,12 @@ mod tests {
 
     #[test]
     fn one_in_three_values_cure_a_statused_shed_skin_holder() {
-        for status in [Status1::Paralysed, Status1::Poisoned, Status1::Burned] {
+        for status in [
+            Status1::Paralysed,
+            Status1::Poisoned,
+            Status1::Burned,
+            Status1::Frozen,
+        ] {
             assert!(draws_shed_skin_cure(status, &mut FixedRng(0)), "{status:?}");
             assert!(draws_shed_skin_cure(status, &mut FixedRng(3)), "{status:?}");
             assert!(

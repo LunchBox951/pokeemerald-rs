@@ -186,8 +186,10 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
 /// turn's start, before move order is decided, and a sleeping defender can
 /// wake on its own earlier action the same turn
 /// ([`crate::status1::tick_sleep`], including Early Bird's two-turn
-/// decrement) before this attacker's move executes. Only a sleeper's status
-/// is skipped here, because no other primary status can clear mid-turn.
+/// decrement) before this attacker's move executes, and a frozen defender can
+/// thaw on its own canceller draw ([`crate::status1::draw_freeze_canceller`])
+/// the same way. Only a sleeper's or a frozen defender's status is skipped
+/// here, because no other primary status can clear mid-turn.
 #[must_use]
 fn poison_can_land_ignoring_status(move_type: Type, defender: &BattlePokemon) -> bool {
     let types = defender.types();
@@ -302,7 +304,7 @@ pub fn ensure_admissible(
             .move_type
             .battle_type()
             .ok_or(BattleError::UnsupportedMoveType(move_id))?;
-        let status_can_clear = defender.status1().is_asleep();
+        let status_can_clear = defender.status1().is_asleep() || defender.status1().is_frozen();
         let could_land = if status_can_clear {
             poison_can_land_ignoring_status(move_type, defender)
         } else {
