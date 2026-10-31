@@ -6,6 +6,12 @@ use assets::MoveId;
 use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
+/// Draws each fixture below consumes, counting the constructor's. Revisit a
+/// count only when an engine change is meant to move it.
+const DIRECT_HIT_KO_DRAWS: usize = 11;
+const LAST_MON_RESIDUAL_DRAWS: usize = 10;
+const LEVEL_UP_PROMPT_DRAWS: usize = 23;
+
 /// `HandleFaintedMonActions`' `BattleScript_GiveExp`
 /// (`src/battle_util.c:1912`-`:1923`) runs at the end of the killing move's
 /// own script, while `DoBattlerEndTurnEffects` waits for `BattleTurnPassed`
@@ -24,7 +30,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
     // No draw in this turn decides anything the assertions below read.
-    let mut rng = SequenceRng::new([0; 40]);
+    let mut rng = SequenceRng::new([0; DIRECT_HIT_KO_DRAWS]);
     let mut battle = Battle::new_trainer(
         dex,
         player,
@@ -36,6 +42,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     let exp_index = events
         .iter()
@@ -117,12 +124,13 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
     );
 
     // No draw in this turn decides anything the assertions below read.
-    let mut rng = SequenceRng::new([0; 40]);
+    let mut rng = SequenceRng::new([0; LAST_MON_RESIDUAL_DRAWS]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::HurtByPoison {
@@ -184,7 +192,7 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut rng = SequenceRng::new([u16::MAX; LEVEL_UP_PROMPT_DRAWS]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -228,6 +236,7 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
         ],
         "the answer releases the replacement, then the deferred tick"
     );
+    rng.assert_exhausted();
     assert_eq!(battle.player().current_hp(), hp_before - expected);
     assert_eq!(battle.outcome(), None, "the battle plays on");
 }
