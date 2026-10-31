@@ -288,6 +288,58 @@ fn a_statused_guts_attackers_estimated_damage_matches_the_real_damage_step() {
     );
 }
 
+/// The estimate passes the same burn flag the real damage step does, so a
+/// burned attacker's estimate is halved, and a burned Guts holder's is not
+/// (`pokemon.c:3262-3264`).
+#[test]
+fn a_burned_attackers_estimated_damage_matches_the_real_damage_step() {
+    let dex = Dex::new();
+    let defender = pokemon(MILOTIC, vec![TACKLE]);
+    for ability_slot in [0, GUTS_ABILITY_SLOT] {
+        let build = |status| {
+            let mut attacker = BattlePokemon::new(
+                &dex,
+                MAKUHITA,
+                ROUTE_103_LEVEL,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                vec![TACKLE],
+            )
+            .unwrap()
+            .with_ability_slot(ability_slot);
+            attacker.set_status1(status);
+            attacker
+        };
+        let burned = build(crate::status1::Status1::Burned);
+        let healthy = build(crate::status1::Status1::Healthy);
+
+        let mut no_draws = SequenceRng::new([]);
+        let damage_before_roll =
+            crate::hit::damage_before_roll(&dex, TACKLE, &burned, &defender, true, &mut no_draws)
+                .unwrap();
+        let mut best_damage_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+        let real_damage =
+            crate::damage::apply_damage_roll(damage_before_roll.damage, &mut best_damage_roll);
+        let burned_estimate =
+            estimated_damage(&dex, TACKLE, &burned, &defender, PERCENT_SCALE).unwrap();
+        let healthy_estimate =
+            estimated_damage(&dex, TACKLE, &healthy, &defender, PERCENT_SCALE).unwrap();
+
+        assert_eq!(burned_estimate, real_damage, "slot {ability_slot}");
+        if burned.ability() == crate::ability::GUTS {
+            assert!(
+                burned_estimate > healthy_estimate,
+                "burn does not halve a Guts holder's boosted Attack"
+            );
+        } else {
+            assert!(
+                burned_estimate < healthy_estimate,
+                "burn halves a non-Guts attacker's estimate"
+            );
+        }
+    }
+}
+
 fn estimated_damage_of_a_healthy_attacker(
     dex: &Dex,
     defender: &BattlePokemon,

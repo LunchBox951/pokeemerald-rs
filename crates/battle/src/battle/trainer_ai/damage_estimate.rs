@@ -75,7 +75,7 @@ pub(super) fn estimated_damage(
         attack_stage,
         defense_stat,
         defense_stage,
-        attacker_burned: false,
+        attacker_burned: crate::ability::burn_halves_damage(attacker.ability(), attacker.status1()),
         reflect: false,
         light_screen: false,
         weather: Weather::None,

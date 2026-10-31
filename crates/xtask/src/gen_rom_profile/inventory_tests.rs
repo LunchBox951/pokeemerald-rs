@@ -7,8 +7,9 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, fonts, inventory, layouts,
-    locate_profile, opening_scene, sprites, starter_chooser, text_window, tilesets, title,
+    bag, battle_anims, battle_interface, battle_messages, battlers, field_messages, fonts,
+    inventory, layouts, locate_profile, opening_scene, sprites, starter_chooser, text_window,
+    tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
@@ -34,6 +35,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
+            rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
@@ -84,6 +86,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_anims::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
             battle_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "field_messages" {
+            field_messages::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -271,6 +275,12 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
         id,
         "battle_messages",
     );
+}
+
+#[test]
+fn a_pack_missing_the_field_message_table_is_refused() {
+    let id = rom_import::FIELD_MESSAGE_PACK_ID;
+    assert_refused("no-field-message-table", without(id), id, "field_messages");
 }
 
 #[test]
