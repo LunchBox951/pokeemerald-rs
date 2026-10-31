@@ -1,7 +1,9 @@
 //! Decodes and composes the title screen's settled idle state.
 //!
 //! Frame zero starts after the version banner has settled and the background
-//! layers have appeared. The boot transitions, OBJ-window logo shine,
+//! layers have appeared. `CB2_InitTitleScreen`'s setup frames and white
+//! fade-in run over this screen before frame zero (`crate::flow`'s
+//! `title_init` docs); the Phase 1/2 transitions, OBJ-window logo shine,
 //! legendary-marking palette pulse, and per-scanline cloud wave are not
 //! simulated. The shine belongs to the pre-idle lighten effect; combining it
 //! with the idle cloud blend would create a frame the original never displays.
