@@ -146,6 +146,14 @@ mod tests {
         assert_eq!(calculate_pp_with_bonus(5, ups(MAX_PP_UPS), 0), 8);
     }
 
+    /// Upstream `CalculatePPWithBonus` (src/pokemon.c:4653) multiplies by the Up count before its single `/ 100`.
+    #[test]
+    fn fractional_per_up_increase_is_truncated_after_multiplying_by_up_count() {
+        let ups = |count: u8| PpBonuses::from_bits(count);
+        // 7 * 20% = 1.4 per Up; three Ups add 4.2 -> 4, not 3 * 1 = 3.
+        assert_eq!(calculate_pp_with_bonus(7, ups(MAX_PP_UPS), 0), 11);
+    }
+
     #[test]
     fn calculate_pp_with_bonus_reads_the_slots_own_field() {
         let bonuses = PpBonuses::from_bits(0b00_11_00_00);
