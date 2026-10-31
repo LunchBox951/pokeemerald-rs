@@ -80,7 +80,7 @@ impl SavedGame {
     /// them from, whether because the medium was never consulted
     /// ([`SaveSlot::none`]'s `Empty`) or is unusable
     /// ([`SaveSlot::disabled`]/a read failure's `NoFlash`).
-    fn defaulted(status: SaveFileStatus) -> Self {
+    pub(crate) fn defaulted(status: SaveFileStatus) -> Self {
         Self {
             status,
             block1: SaveBlock1::default(),

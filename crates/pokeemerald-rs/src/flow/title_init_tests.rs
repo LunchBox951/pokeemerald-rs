@@ -75,7 +75,10 @@ impl Session {
             Entry::Boot => {
                 let pack = f.pack_source.load().expect("the synthetic pack loads");
                 let title = TitleScene::from_pack(&pack).expect("the synthetic title decodes");
-                let (init, frame) = TitleInit::new(title, None);
+                // The boot load's save, carrying `mode` (I-6).
+                let mut saved = f.slot.load();
+                saved.block2.options_button_mode = mode;
+                let (init, frame) = TitleInit::new(title, saved);
                 (AppScene::TitleInit(Box::new(init)), frame)
             }
             Entry::Return(menu_type) => {
@@ -324,26 +327,28 @@ fn a_press_held_through_the_initializer_is_not_fresh_on_the_first_main_cb2_frame
     }
 }
 
-/// The retained save's L=A reaches the settled title through the
+/// The carried save's L=A (the boot load's, or the live one a B return
+/// kept) reaches the settled title through the
 /// initializer, and does not fire early.
 #[test]
-fn the_retained_l_equals_a_applies_from_the_first_main_cb2_frame() {
-    let entry = Entry::Return(MainMenuType::NoSavedGame);
-    let (mut session, _) = Session::new("l-equals-a-early", entry, ButtonMode::LEqualsA);
-    let mut held = nothing(FIRST_INPUT_FRAME);
-    held[INSTALL_FRAME] = Buttons::L;
-    assert!(session
-        .play(&held)
-        .iter()
-        .all(|(kind, _)| *kind != Kind::FadeWait));
-    session.step(Buttons::NONE);
-    let (kind, _) = session.step(Buttons::L);
-    assert_eq!(kind, Kind::FadeWait);
+fn the_carried_l_equals_a_applies_from_the_first_main_cb2_frame() {
+    for entry in ENTRIES {
+        let (mut session, _) = Session::new("l-equals-a-early", entry, ButtonMode::LEqualsA);
+        let mut held = nothing(FIRST_INPUT_FRAME);
+        held[INSTALL_FRAME] = Buttons::L;
+        assert!(session
+            .play(&held)
+            .iter()
+            .all(|(kind, _)| *kind != Kind::FadeWait));
+        session.step(Buttons::NONE);
+        let (kind, _) = session.step(Buttons::L);
+        assert_eq!(kind, Kind::FadeWait);
 
-    let (mut session, _) = Session::new("l-equals-a-first", entry, ButtonMode::LEqualsA);
-    session.play(&nothing(FIRST_INPUT_FRAME));
-    let (kind, _) = session.step(Buttons::L);
-    assert_eq!(kind, Kind::FadeWait, "a fresh L on S35 under L=A");
+        let (mut session, _) = Session::new("l-equals-a-first", entry, ButtonMode::LEqualsA);
+        session.play(&nothing(FIRST_INPUT_FRAME));
+        let (kind, _) = session.step(Buttons::L);
+        assert_eq!(kind, Kind::FadeWait, "a fresh L on S35 under L=A");
+    }
 }
 
 /// The return keeps the session save the menu carried: the settled title
@@ -351,11 +356,11 @@ fn the_retained_l_equals_a_applies_from_the_first_main_cb2_frame() {
 #[test]
 fn the_returned_title_keeps_the_session_save() {
     let entry = Entry::Return(MainMenuType::NoSavedGame);
-    let (mut session, _) = Session::new("retained-save", entry, ButtonMode::Normal);
+    let (mut session, _) = Session::new("retained-save", entry, ButtonMode::Lr);
     session.play(&nothing(FIRST_INPUT_FRAME));
     let AppScene::Title(title) = session.scene.as_ref().unwrap() else {
         panic!("the title is settled by S35");
     };
-    assert!(title.retained_save.is_some());
+    assert_eq!(title.saved.block2.options_button_mode, ButtonMode::Lr);
     assert_eq!((title.tick, title.presented), (0, false));
 }

@@ -6,7 +6,7 @@
 //! frame whose update reports done and P22 is the first the task observes it.
 
 use super::tests::{held, pressed, TempSave};
-use super::{advance_scene, AppScene, MainMenuState};
+use super::{advance_scene, AnimatedTitle, AppScene, MainMenuState};
 use crate::main_menu::{synthetic_scene, MainMenuItem, MainMenuType};
 use crate::pack_source::{pack_loads_on_this_thread, PackSource};
 use platform::{ButtonState, Buttons, Frame};
@@ -174,21 +174,21 @@ fn back_wait_ignores_input_and_loads_the_title_once_on_the_frame_after_done() {
 }
 
 /// The session save survives the round trip: a failed menu rebuild keeps
-/// the title's retained save for the next attempt (pack-free), and a
+/// the title's carried save for the next attempt (pack-free), and a
 /// successful one reuses it instead of re-reading the disk.
 #[test]
 fn a_failed_menu_rebuild_keeps_the_retained_save() {
     let temp = TempSave::new("b-retained-failure");
     let mut slot = temp.slot();
-    let mut retained = Some(Box::new(slot.load()));
-    if let Some(saved) = retained.as_mut() {
-        saved.block2.options_window_frame_type = 5;
-    }
-    let result = super::title_to_main_menu(&missing_pack(), &mut slot, &mut retained);
-    assert!(result.is_none());
+    let mut saved = slot.load();
+    saved.block2.options_window_frame_type = 5;
+    let title = Box::new(AnimatedTitle::new(crate::title::TitleScene::blank(), saved));
+    let result = super::title_to_main_menu(&missing_pack(), title);
+    let Err(title) = result else {
+        panic!("the missing pack must fail the menu rebuild");
+    };
     assert_eq!(
-        retained.map(|saved| saved.block2.options_window_frame_type),
-        Some(5),
+        title.saved.block2.options_window_frame_type, 5,
         "a failed rebuild must hand the live save back to the title"
     );
 }
