@@ -265,6 +265,43 @@ impl CgbVoice {
         )
     }
 
+    /// The square channel `MPlayExtender` leaves triggered at frequency 0 with
+    /// its DAC on before any note (`pokeemerald/src/m4a.c:268-273`). It is
+    /// idle-slot hardware only: its duty index free-runs while the slot is
+    /// empty, and the first note on the slot inherits it
+    /// (`mgba/src/gb/audio.c:162-171,493-510`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is [`CgbChannelNumber::Wave`] or `Noise`.
+    #[must_use]
+    pub(crate) fn initialized_square_hardware(channel: CgbChannelNumber) -> Self {
+        assert!(
+            matches!(
+                channel,
+                CgbChannelNumber::Square1 | CgbChannelNumber::Square2
+            ),
+            "square hardware requires Square1 or Square2, got {channel:?}"
+        );
+        let mut hardware = Self::new(
+            channel,
+            Oscillator::Square(SquareChannel::new(0, 0, None)),
+            CgbAdsr::flat(),
+            DacCorrection::None,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        hardware.initial_trigger = InitialTrigger::Committed;
+        hardware
+    }
+
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
     /// `fixed_rate` applies the 8-bit DAC correction at note-on and retunes.
     ///
@@ -701,6 +738,14 @@ impl CgbVoice {
 
 #[cfg(test)]
 impl CgbVoice {
+    /// Writes `freq_reg` through `NR13`/`NR14` to a square voice's hardware.
+    pub(crate) fn with_square_frequency_register(mut self, freq_reg: u16) -> Self {
+        if let Oscillator::Square(square) = &mut self.oscillator {
+            square.set_frequency(freq_reg);
+        }
+        self
+    }
+
     fn noise_is_narrow(&self) -> Option<bool> {
         match &self.oscillator {
             Oscillator::Noise(n) => Some(n.is_narrow()),

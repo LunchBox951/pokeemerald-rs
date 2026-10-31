@@ -28,8 +28,10 @@ pub const FRAC_BITS: u32 = 23;
 /// One source sample in fixed-point phase units.
 pub const FRAC_ONE: u32 = 1 << FRAC_BITS;
 
-/// Mask for the fractional part of a source-sample phase position.
-pub const FRAC_MASK: u32 = FRAC_ONE - 1;
+/// Phase bits 23..29, the only bits `SoundMainRAM` clears once it has counted
+/// the whole samples crossed (`bic r9, r9, 0x3F800000`, `m4a_1.s:415`).
+/// Bits 30..31 stay in the phase word.
+pub const WHOLE_SAMPLE_MASK: u32 = 0x3F80_0000;
 
 /// Fixed-point phase units per hertz at [`MIXER_RATE`].
 pub const DIV_FREQ: u32 = (GBA_CPU_FREQUENCY_HZ / MIXER_RATE).div_ceil(2);

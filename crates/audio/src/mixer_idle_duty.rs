@@ -544,3 +544,83 @@ fn a_pitch_write_on_the_retiring_frame_never_reaches_the_retained_noise_latch() 
         );
     }
 }
+
+/// `MPlayExtender` writes `NR12`/`NR22` = 0x08 and `NR14`/`NR24` = 0x80
+/// (`pokeemerald/src/m4a.c:268-273`), triggering both squares at frequency 0
+/// before any note; their duty index then free-runs, and the first note's
+/// register write catches it up (`mgba/src/gb/audio.c:162-171,493-510`).
+const SILENT_LEAD_IN_FRAMES: usize = 3;
+
+fn first_square_frame_after_lead_in(channel: CgbChannelNumber, lead_in: usize) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for _ in 0..lead_in {
+        mixer.mix_frame(&mut out);
+        assert!(out.iter().all(|&sample| sample == 0.0));
+    }
+    assert!(mixer.add_cgb_voice(cgb_square_voice(channel, TRACK, KEY, None)));
+    mixer.mix_frame(&mut out);
+    out
+}
+
+/// The initialized-hardware oracle: the same square channel explicitly triggered
+/// at frequency 0 on the slot, committed, then idled for `lead_in` frames.
+fn first_square_frame_after_explicit_init(channel: CgbChannelNumber, lead_in: usize) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let init = CgbVoice::square(
+        channel,
+        0,
+        None,
+        CgbAdsr::flat(),
+        0,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        0,
+        TRACK,
+        0,
+        0,
+        0,
+    )
+    .with_square_frequency_register(0);
+    mixer.idle_cgb_hardware[channel.slot()] = Some(committed_voice(init));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for _ in 0..lead_in {
+        mixer.mix_frame(&mut out);
+    }
+    assert!(mixer.add_cgb_voice(cgb_square_voice(channel, TRACK, KEY, None)));
+    mixer.mix_frame(&mut out);
+    out
+}
+
+#[test]
+fn a_first_square_note_after_silent_frames_inherits_the_elapsed_idle_duty_phase() {
+    for channel in [CgbChannelNumber::Square1, CgbChannelNumber::Square2] {
+        assert_ne!(
+            first_square_frame_after_lead_in(channel, SILENT_LEAD_IN_FRAMES),
+            first_square_frame_after_lead_in(channel, 0),
+            "{channel:?}: the silent lead-in must advance the initialized duty index",
+        );
+    }
+}
+
+#[test]
+fn a_first_square_note_matches_an_explicitly_initialized_hardware_oracle() {
+    for channel in [CgbChannelNumber::Square1, CgbChannelNumber::Square2] {
+        for lead_in in [0, 1, SILENT_LEAD_IN_FRAMES] {
+            assert_eq!(
+                first_square_frame_after_lead_in(channel, lead_in),
+                first_square_frame_after_explicit_init(channel, lead_in),
+                "{channel:?} after {lead_in} silent frames",
+            );
+        }
+    }
+}

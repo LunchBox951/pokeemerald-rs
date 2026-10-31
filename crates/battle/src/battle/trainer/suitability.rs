@@ -5,7 +5,8 @@
 use assets::{AbilityId, Effectiveness, MoveId, Type, TypeChart};
 
 use crate::ability::{
-    huge_power_attack, pinch_boosts_power, plus_minus_special_attack, thick_fat_special_attack,
+    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
+    thick_fat_special_attack,
 };
 use crate::damage::{
     apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
@@ -201,7 +202,7 @@ fn stale_base_damage(
         attack_stage,
         defense_stat,
         defense_stage,
-        attacker_burned: false,
+        attacker_burned: burn_halves_damage(fainted.ability(), fainted.status1()),
         reflect: false,
         light_screen: false,
         weather: Weather::None,
@@ -280,6 +281,7 @@ mod tests {
     use crate::battle::trainer::{fixed_ivs, trainer_data};
     use crate::dex::Dex;
     use crate::pokemon::BattlePokemon;
+    use crate::status1::Status1;
     use assets::trainers::TrainerId;
     use assets::{AbilityId, MoveId, SpeciesId};
 
@@ -429,6 +431,41 @@ mod tests {
             "a Hustle fainted attacker's stale base damage must carry the boost: \
              {hustle_base} vs {control_base}"
         );
+    }
+
+    /// The shared base figure carries a burned fainted attacker's halving
+    /// (`pokemon.c:3262-3264`) unless it has Guts, whose boost it keeps.
+    #[test]
+    fn stale_base_damage_halves_a_burned_fainted_attacker_unless_it_has_guts() {
+        const MAKUHITA: SpeciesId = SpeciesId(335);
+        const SQUIRTLE: SpeciesId = SpeciesId(7);
+        const TACKLE: MoveId = MoveId::TACKLE;
+
+        let dex = Dex::new();
+        let player = BattlePokemon::new(&dex, SQUIRTLE, 20, fixed_ivs(255), 0, vec![TACKLE])
+            .expect("dex-resident");
+        let base_for = |slot, status| {
+            let mut fainted =
+                BattlePokemon::new(&dex, MAKUHITA, 20, fixed_ivs(255), 0, vec![TACKLE])
+                    .expect("dex-resident")
+                    .with_ability_slot(slot);
+            fainted.set_status1(status);
+            let ability = fainted.ability();
+            let base = super::stale_base_damage(&dex, TACKLE, &fainted, &player)
+                .unwrap()
+                .unwrap();
+            (ability, base)
+        };
+
+        let (thick_fat, healthy) = base_for(0, Status1::Healthy);
+        let (_, burned) = base_for(0, Status1::Burned);
+        assert_ne!(thick_fat, AbilityId::GUTS);
+        assert!(burned < healthy, "burned {burned} vs healthy {healthy}");
+
+        let (guts, paralysed) = base_for(1, Status1::Paralysed);
+        let (_, burned_guts) = base_for(1, Status1::Burned);
+        assert_eq!(guts, AbilityId::GUTS);
+        assert_eq!(burned_guts, paralysed, "Guts is exempt from the halving");
     }
 
     /// Upstream's `CalculateBaseDamage` halves raw Special Attack for a Fire or
