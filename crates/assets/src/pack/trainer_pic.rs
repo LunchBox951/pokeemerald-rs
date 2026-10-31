@@ -5,8 +5,7 @@
 //! identities the pack carries resolve; every lookup re-validates shapes,
 //! since a hand-built or corrupt pack can bypass extraction.
 
-use super::starter_chooser::PalettedImage;
-use super::{AssetPack, PackError};
+use super::{AssetPack, PackError, PalettedImage};
 use crate::TrainerPicId;
 
 /// Width and height of a trainer front picture (`TRAINER_PIC_WIDTH`, size 8 tiles).

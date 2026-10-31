@@ -2,6 +2,7 @@
 
 use assets::audio::{DirectSoundSample, ProgrammableWave, Sample};
 
+use crate::extract::cry::SAMPLE_ID_PREFIX as CRY_SAMPLE_PREFIX;
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::locate::{exactly_one, u16_at_addr, u32_at_addr};
 use crate::gen_rom_profile::plan::{ReportLine, SamplePlan};
@@ -12,12 +13,17 @@ use super::{
     PROGRAMMABLE_WAVE_SYMBOL, WAVE_HEADER_BYTES, WAVE_STATUS_LOOP, WAVE_TABLE_BYTES,
 };
 
-/// Locate every `DirectSound` sample by its PCM, then check its header.
+/// Locate every instrument `DirectSound` sample by its PCM, then check its header.
+///
+/// Cry samples under [`CRY_SAMPLE_PREFIX`] are not instruments: the ROM stores
+/// them DPCM-compressed (`wav2agb -c`, a nonzero `WaveData` type), so their
+/// expanded PCM never occurs in the ROM and this uncompressed locator cannot
+/// place them. They are left to a dedicated cry locator.
 pub(super) fn locate_direct_sound(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<SamplePlan>, GenRomProfileError> {
-    let ids = ctx.pack.ids_with_prefix(DIRECT_SOUND_PREFIX);
+    let ids = instrument_ids(ctx);
     let mut samples = Vec::with_capacity(ids.len());
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
@@ -61,6 +67,13 @@ pub(super) fn locate_direct_sound(
         });
     }
     Ok(plans)
+}
+
+/// The pack's `DirectSound` ids, without the cry samples.
+fn instrument_ids(ctx: &Context<'_>) -> Vec<String> {
+    let mut ids = ctx.pack.ids_with_prefix(DIRECT_SOUND_PREFIX);
+    ids.retain(|id| !id.starts_with(CRY_SAMPLE_PREFIX));
+    ids
 }
 
 /// Decode and validate a `DirectSound` pack entry through the canonical
@@ -316,6 +329,38 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    /// A cry sample's expanded PCM is absent from the ROM, which stores it
+    /// DPCM-compressed, so the instrument locator must not search for it.
+    #[test]
+    fn cry_samples_are_left_out_of_the_instrument_locator() {
+        let data = pcm();
+        let freq = 1 << 20;
+        let size = u32::try_from(data.len()).expect("a sample fits in u32");
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x10_0000, &wave_header(0, 0, freq, 0, size))
+            .write(0x10_0010, &with_guard(&data))
+            .finish();
+        let absent: Vec<u8> = data.iter().rev().map(|byte| byte ^ 0x5A).collect();
+        let entries = vec![
+            pack_format::raw_entry(
+                "audio/sample/direct-sound/test".to_owned(),
+                direct_sound_payload(freq, None, &data),
+            ),
+            pack_format::raw_entry(
+                "audio/sample/direct-sound/cry/groudon".to_owned(),
+                direct_sound_payload(freq, None, &absent),
+            ),
+        ];
+        let plans = with_context("cry-sample-excluded", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            locate_direct_sound(ctx, &mut report)
+        })
+        .expect("the instrument locates and the cry is not searched for");
+        let ids: Vec<&str> = plans.iter().map(|plan| plan.id.as_str()).collect();
+        assert_eq!(ids, ["audio/sample/direct-sound/test"]);
     }
 
     #[test]
