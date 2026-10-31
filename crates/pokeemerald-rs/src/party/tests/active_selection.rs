@@ -120,13 +120,13 @@ fn select_active_battler_surfaces_slot_0s_decode_error_when_nothing_is_usable() 
 #[test]
 fn an_unmodelled_status_slot_is_skipped_for_a_later_healthy_slot_and_left_untouched() {
     let dex = Dex::new();
-    let mut burned = to_save_pokemon(&dex, &treecko_fixture());
-    burned.status = 0x10;
+    let mut frozen = to_save_pokemon(&dex, &treecko_fixture());
+    frozen.status = 0x20;
     let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
-    let party = [burned, healthy];
+    let party = [frozen, healthy];
 
     let lead = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
 
     assert_eq!(lead.slot(), 1);
-    assert_eq!(party[0].status, 0x10);
+    assert_eq!(party[0].status, 0x20);
 }

@@ -98,7 +98,8 @@ fn resolve_cries(tables_text: &str, sources_text: &str) -> Result<Vec<ResolvedCr
 ///
 /// [`ExtractError::CrySource`] for a table or definition the parsers refuse, a table that is not
 /// the schema's 388 entries, an unresolved symbol, or two symbols sharing a sample;
-/// [`ExtractError::ReadFailed`] or [`ExtractError::Wav`] for an unreadable or invalid sample.
+/// [`ExtractError::ReadFailed`], [`ExtractError::Wav`], or
+/// [`ExtractError::InvalidSampleSchema`] for an unreadable, invalid, or schema-rejected sample.
 pub(super) fn extract_cries(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let tables_text = read_text(&upstream.join(CRY_TABLES_PATH))?;
     let sources_text = read_text(&upstream.join(CRY_SOURCES_PATH))?;
