@@ -3,8 +3,8 @@
 //! this crate's own and its tests pin it; upstream only defines the `Wnn`
 //! wait vocabulary (`pokeemerald/sound/MPlayDef.s:1-49`).
 //!
-//! The xtask MIDI compiler mirrors this by hand in
-//! `crates/xtask/src/extract/midi/compile/canonical.rs`; change both together.
+//! The xtask MIDI extractor does not keep a copy: it builds a [`super::Song`] and lets
+//! [`super::Song::new`] apply this rewrite.
 
 use std::collections::BTreeSet;
 

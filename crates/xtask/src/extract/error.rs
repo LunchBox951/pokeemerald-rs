@@ -287,6 +287,14 @@ pub enum ExtractError {
         /// Actual byte length.
         actual: usize,
     },
+    /// `assets` rejected a decoded direct-sound sample as outside the pack
+    /// schema's domain when it was encoded.
+    InvalidSampleSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
     /// A voicegroup or key-split source violates its extraction grammar.
     VoiceGroupFile(
         /// Source path.
@@ -319,9 +327,17 @@ pub enum ExtractError {
     Midi(
         /// Source path.
         PathBuf,
-        /// Compilation or encoding failure.
+        /// Compilation failure.
         MidiError,
     ),
+    /// `assets` rejected a compiled MIDI song as outside the pack schema's
+    /// domain when it was encoded.
+    InvalidSongSchema {
+        /// Source path.
+        path: PathBuf,
+        /// Schema failure.
+        source: assets::AudioError,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -485,6 +501,11 @@ impl fmt::Display for ExtractError {
                 "programmable-wave source `{}` is {actual} bytes: expected exactly 16",
                 path.display()
             ),
+            Self::InvalidSampleSchema { path, source } => write!(
+                f,
+                "direct-sound sample `{}`: the asset pack schema rejected the decoded sample: {source}",
+                path.display()
+            ),
             Self::VoiceGroupFile(path, error) => {
                 write!(f, "voicegroup source `{}`: {error}", path.display())
             }
@@ -505,6 +526,11 @@ impl fmt::Display for ExtractError {
             Self::Midi(path, error) => {
                 write!(f, "compiling `{}` failed: {error}", path.display())
             }
+            Self::InvalidSongSchema { path, source } => write!(
+                f,
+                "MIDI song `{}`: the asset pack schema rejected the compiled song: {source}",
+                path.display()
+            ),
         }
     }
 }
