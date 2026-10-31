@@ -89,6 +89,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Poké Ball entry differs from the upstream graphic's shape.
+    MalformedPokeBallAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler entry differs from the upstream graphic's shape.
     MalformedBattlerAsset {
         /// Asset id.
@@ -273,6 +280,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedPokeBallAsset { id, detail } => {
+                write!(f, "asset pack: poke-ball entry `{id}` {detail}")
+            }
             Self::MalformedBattlerAsset { id, detail } => {
                 write!(f, "asset pack: battler entry `{id}` {detail}")
             }
@@ -362,6 +372,7 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedPokeBallAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }

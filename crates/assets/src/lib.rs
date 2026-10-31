@@ -126,7 +126,7 @@ pub use items::{
 pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind, ImageRef,
-    PackError, PaletteRef, PaletteVariant, PalettedImage, PokedexGraphicsHandle,
+    PackError, PaletteRef, PaletteVariant, PalettedImage, PokeBallHandle, PokedexGraphicsHandle,
     StarterChooserHandle, StarterPreviewHandle, StarterSpecies, TilesetHandle, TrainerPicHandle,
     WallClockHandle,
 };

@@ -14,6 +14,7 @@ use super::battle_interface::healthbox_frame_pack_ids;
 use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
+use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
 use super::ExtractError;
@@ -631,6 +632,12 @@ pub(crate) fn starter_chooser_ids() -> Vec<String> {
 /// palettes, and three tilemaps.
 pub(crate) fn opening_scene_ids() -> Vec<String> {
     opening_scene_pack_ids()
+}
+
+/// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its
+/// palette, and the opened-ball sheet.
+pub(crate) fn poke_ball_ids() -> Vec<String> {
+    poke_ball_pack_ids()
 }
 
 /// Where the naming screen's sources live, relative to the checkout.

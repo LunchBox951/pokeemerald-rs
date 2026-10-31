@@ -13,6 +13,7 @@ mod field_message;
 mod layout;
 mod naming_screen;
 mod opening_scene;
+mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;

@@ -17,6 +17,7 @@ mod handles;
 mod naming_screen;
 mod opening_scene;
 mod paletted_image;
+mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
 mod text_tokens;
@@ -50,6 +51,7 @@ pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
+pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 

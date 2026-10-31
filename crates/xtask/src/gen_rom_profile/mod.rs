@@ -41,6 +41,7 @@ mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
+mod poke_ball;
 mod search;
 mod sprites;
 mod starter_chooser;
@@ -174,6 +175,7 @@ fn locate_profile(
         opening_scene: opening_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
+        poke_ball: poke_ball::locate(ctx, lines)?,
     })
 }
 
