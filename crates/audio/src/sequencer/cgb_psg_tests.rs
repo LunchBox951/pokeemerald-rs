@@ -231,3 +231,53 @@ fn a_new_note_on_the_same_cgb_channel_replaces_the_old_one() {
     seq.render_frame(&mut out);
     assert_eq!(seq.voice_count(), 1);
 }
+
+/// `ply_note` stores `0x08` in the channel's sweep register when the
+/// instrument byte has bit 7 set or no bit of `0x70` set
+/// (`m4a_1.s:1773-1783`), so those operands must sound exactly like an
+/// explicit `0x08` through the sequencer. Sweep `0x01` (period 0, upward
+/// shift 1) would otherwise overflow at trigger and mute the note.
+#[test]
+fn a_square1_sweep_byte_is_normalized_to_0x08_at_note_admission() {
+    let tone = |sweep| {
+        Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })
+    };
+    let reference = rendered_cgb_frames(tone(0x08), 8);
+    assert!(
+        reference.iter().any(|&s| s != 0.0),
+        "the 0x08 reference voice must sound"
+    );
+    // Zero period with a non-zero upward shift, bit 7 set with live period
+    // and shift fields, and bit 7 set alone.
+    for raw in [0x01, 0x07, 0x81, 0x91, 0xF7, 0x80] {
+        assert!(
+            rendered_cgb_frames(tone(raw), 8) == reference,
+            "sweep {raw:#04x} must be admitted as 0x08"
+        );
+    }
+}
+
+/// A byte with a non-zero period field and bit 7 clear reaches the hardware
+/// unchanged, so it must not be flattened to the disabled `0x08` sweep.
+#[test]
+fn a_square1_sweep_byte_with_a_live_period_is_not_normalized() {
+    let tone = |sweep| {
+        Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })
+    };
+    // Period 1, downward shift 1: the frequency slides, so the render
+    // diverges from the disabled-sweep reference.
+    assert!(
+        rendered_cgb_frames(tone(0x19), 8) != rendered_cgb_frames(tone(0x08), 8),
+        "a live sweep period must reach the hardware unchanged"
+    );
+}
