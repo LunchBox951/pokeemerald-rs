@@ -570,22 +570,22 @@ fn temp_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
-/// Owns a temporary pack file: the path it exclusively claimed and the open
-/// handle that claim returned. Drop removes the path, so a fallible load or a
-/// failed assertion that unwinds still cleans up the scratch file. Cleanup is
-/// installed only once the claim succeeded, so a failed claim never removes
-/// an entry this guard does not own.
+/// Owns a temporary pack file through a [`crate::pack_test_support::ScratchClaim`]:
+/// the path it exclusively claimed and the open handle that claim returned.
+/// Drop removes the path only while it still names the claimed file, so a
+/// fallible load or a failed assertion that unwinds still cleans up the
+/// scratch file, and a failed claim or a replaced entry is never removed.
 struct TempPackGuard {
-    path: std::path::PathBuf,
-    file: std::fs::File,
+    claim: crate::pack_test_support::ScratchClaim,
 }
 
 impl TempPackGuard {
     /// Exclusively claims `path` (never following a planted symlink or
     /// truncating an occupant) and writes `entries` through the owned handle.
     fn create(path: std::path::PathBuf, entries: Vec<PackEntry>) -> Self {
-        let file = crate::pack_test_support::claim_scratch_exclusive(&path);
-        let mut guard = Self { path, file };
+        let mut guard = Self {
+            claim: crate::pack_test_support::ScratchClaim::claim(path),
+        };
         guard.regenerate(entries);
         guard
     }
@@ -594,21 +594,15 @@ impl TempPackGuard {
     /// the shared pathname.
     fn regenerate(&mut self, entries: Vec<PackEntry>) {
         use std::io::{Seek as _, Write as _};
-        self.file.set_len(0).unwrap();
-        self.file.rewind().unwrap();
-        self.file
-            .write_all(&crate::pack_test_support::pack_bytes_with_fonts(entries))
+        let file = self.claim.file_mut();
+        file.set_len(0).unwrap();
+        file.rewind().unwrap();
+        file.write_all(&crate::pack_test_support::pack_bytes_with_fonts(entries))
             .unwrap();
     }
 
     fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-impl Drop for TempPackGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        self.claim.path()
     }
 }
 
@@ -838,6 +832,8 @@ fn regenerating_a_pack_writes_through_the_owned_handle_not_the_pathname() {
 
     let after = std::fs::read(&victim).unwrap();
     drop(temp_pack);
+    // The guard leaves the planted link alone, so the test removes it.
+    let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&victim);
     assert_eq!(
         after, b"victim must survive",
