@@ -1,0 +1,4 @@
+# Keep GitHub's default query suite and add the project-specific unsafe review
+# inventory. Alerts are triaged; this configuration does not fail pull requests.
+queries:
+  - uses: ./.github/codeql/queries

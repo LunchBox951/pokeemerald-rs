@@ -1,0 +1,1733 @@
+//! Unit tests for [`super::advance_scene`]'s scene transitions and the pure
+//! decisions it acts on.
+//!
+//! The I-6 save/exit/reload round trip lives in its sibling
+//! [`super::save_continue_round_trip_tests`] instead -- see that module's own docs.
+
+use super::{
+    advance_scene, main_menu_load_failure_message, menu_action, new_game_options_for,
+    should_retry_overworld_load, title_advance_pressed, window_frame_for, AnimatedTitle, AppScene,
+    MainMenuAction, MainMenuState,
+};
+use crate::game_save::{SaveSlot, SavedGame};
+use crate::intro::{self, IntroStatus};
+use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
+use crate::new_game::{self, NewGameOptions};
+use assets::pack::PackError;
+use platform::{ButtonState, Buttons, Frame};
+
+/// Generously above the 22-call trace [`rendering::NormalPaletteFade`]'s own
+/// tests pin (`crates/rendering/src/palette_fade.rs`), so a regression that
+/// never drives the fade to [`rendering::PaletteFadeStatus::Done`] fails
+/// [`drive_through_fade_wait`] loudly instead of hanging the test.
+const MAX_FADE_WAIT_FRAMES: usize = 40;
+
+/// Drives a fade-wait `scene` with no input until it leaves, returning the
+/// destination, the frames presented while waiting, and the destination's
+/// first frame.
+///
+/// # Panics
+///
+/// If `scene` is not already waiting, or the wait does not reach
+/// [`rendering::PaletteFadeStatus::Done`] within [`MAX_FADE_WAIT_FRAMES`].
+pub(super) fn drive_through_fade_wait(
+    mut scene: AppScene,
+    save_slot: &mut SaveSlot,
+    pack_source: &crate::pack_source::PackSource,
+) -> (AppScene, Vec<Box<Frame>>, Box<Frame>) {
+    let mut wait_frames = Vec::new();
+    for _ in 0..MAX_FADE_WAIT_FRAMES {
+        assert!(
+            matches!(
+                scene,
+                AppScene::TitleFadeWait(_) | AppScene::MainMenuFadeWait(_)
+            ),
+            "drive_through_fade_wait called on a scene that was not already waiting"
+        );
+        let (next, frame) =
+            advance_scene(scene, ButtonState::new(), save_slot, pack_source.clone());
+        if matches!(
+            next,
+            AppScene::TitleFadeWait(_) | AppScene::MainMenuFadeWait(_)
+        ) {
+            wait_frames.push(frame);
+            scene = next;
+        } else {
+            return (next, wait_frames, frame);
+        }
+    }
+    panic!("fade wait did not reach `Done` within {MAX_FADE_WAIT_FRAMES} frames");
+}
+
+/// Steps the fresh boot's menu setup after the title fade's done frame
+/// (`scene`, the [`AppScene::MainMenuFadeIn`] handed off on it) with no input
+/// until the menu is ready to read input: the white fade-in, then the save
+/// check (F), the battery check, the windows, and the highlight (F+3), the last
+/// frame before the first input poll (`InitMainMenu(FALSE)`,
+/// `main_menu.c:583-608`). Returns the menu and that frame.
+/// `boot_setup_frames_tests` pins the frame counts.
+///
+/// # Panics
+///
+/// If `scene` is not the setup handoff or the menu is not reached within
+/// [`MAX_FADE_WAIT_FRAMES`].
+pub(super) fn drive_through_menu_setup(
+    mut scene: AppScene,
+    save_slot: &mut SaveSlot,
+    pack_source: &crate::pack_source::PackSource,
+) -> (AppScene, Box<Frame>) {
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeIn(_)),
+        "the title fade must hand off to the menu's fade-in and setup frames"
+    );
+    for _ in 0..MAX_FADE_WAIT_FRAMES {
+        let (next, frame) =
+            advance_scene(scene, ButtonState::new(), save_slot, pack_source.clone());
+        if matches!(next, AppScene::MainMenu(_)) {
+            return (next, frame);
+        }
+        scene = next;
+    }
+    panic!("the menu did not take input within {MAX_FADE_WAIT_FRAMES} frames");
+}
+
+pub(super) fn pressed(button: Buttons) -> ButtonState {
+    let mut state = ButtonState::new();
+    state.update(button);
+    state
+}
+
+/// A scratch save file for one test, removed on drop (including on
+/// unwind). Every test gets its own path: `SaveSlot` is passed by
+/// reference precisely so no test has to touch the process-wide
+/// environment that decides the real one.
+pub(super) struct TempSave {
+    dir: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
+
+impl TempSave {
+    /// A save in a directory of its own.
+    ///
+    /// [`engine::save::SaveFile::lock`] takes one lock per save *directory*,
+    /// so scratch saves sharing one directory would serialise on a single
+    /// lock -- and a test that removed it would strip the exclusion the
+    /// others were relying on.
+    pub(super) fn new(label: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-flow-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
+        let path = dir.join("pokeemerald.sav");
+        Self { dir, path }
+    }
+
+    pub(super) fn slot(&self) -> SaveSlot {
+        SaveSlot::at(engine::save::SaveFile::at(self.path.clone()))
+    }
+
+    /// The scratch path itself, for the one test that has to damage the
+    /// file behind the slot's back.
+    pub(super) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempSave {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.dir));
+    }
+}
+
+/// A save slot pointing at a scratch path with no file at it -- the
+/// "never saved" medium every scene-transition test below wants, so none
+/// of them can be perturbed by (or perturb) a real local save.
+fn empty_slot(label: &str) -> (TempSave, SaveSlot) {
+    let temp = TempSave::new(label);
+    let slot = temp.slot();
+    (temp, slot)
+}
+
+pub(super) fn held(button: Buttons) -> ButtonState {
+    // Two updates: the first makes it newly-pressed, the second makes
+    // it merely held (matching a real multi-frame hold).
+    let mut state = ButtonState::new();
+    state.update(button);
+    state.update(button);
+    state
+}
+
+/// Finding 3 regression: `AppScene::OverworldLoadFailed` must retry
+/// `OverworldPhase::load` only on a fresh confirm/skip edge, not
+/// merely because a frame elapsed -- an ordinary held button (already
+/// pressed on a previous frame) must not count.
+#[test]
+fn should_retry_overworld_load_only_on_a_fresh_confirm_or_skip_edge() {
+    assert!(!should_retry_overworld_load(ButtonState::new()));
+    assert!(should_retry_overworld_load(pressed(Buttons::A)));
+    assert!(should_retry_overworld_load(pressed(Buttons::B)));
+    assert!(
+        !should_retry_overworld_load(held(Buttons::A)),
+        "an already-held A (not a fresh edge) must not trigger a retry"
+    );
+    assert!(!should_retry_overworld_load(pressed(Buttons::START)));
+}
+
+/// Finding 3 regression: a failed `Intro` -> `Overworld` transition must
+/// leave `AppScene::Intro` for the explicit `AppScene::OverworldLoadFailed`
+/// waiting state after exactly one attempt -- not loop retrying (and
+/// re-logging) from inside `AppScene::Intro` every frame, which is what
+/// happens if the transition is only ever gated on
+/// `IntroStatus::Finished` (sticky forever once reached).
+///
+/// No local pack is ever present in this crate's own `cargo test`
+/// environment (`assets-pack/` isn't written by anything in this repo --
+/// see `crate::title::pack_palette_tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
+/// for the identical guard/rationale), so `OverworldPhase::load`
+/// reliably fails here, exercising the real failure path without
+/// `#[ignore]`. If a local pack *is* present, this test steps aside
+/// entirely rather than asserting the wrong thing.
+#[test]
+fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
+    if assets::pack::AssetPack::default_path().is_file() {
+        return;
+    }
+
+    let (_temp, mut save_slot) = empty_slot("failed-overworld-load");
+    let scene = AppScene::Intro(Box::new(intro::synthetic_finished_scene()));
+
+    let (after_first, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    assert!(
+        matches!(after_first, AppScene::OverworldLoadFailed(_)),
+        "a failed load must leave `Intro` for the explicit waiting state"
+    );
+
+    // No input edge across further frames -> stay waiting, not attempt
+    // the load again (nor bounce back to `Intro`).
+    let (after_second, _frame) = advance_scene(
+        after_first,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    assert!(matches!(after_second, AppScene::OverworldLoadFailed(_)));
+
+    // A fresh confirm edge retries the load -- still fails (no pack),
+    // but must land back in the same waiting state, not panic.
+    let (after_retry, _frame) = advance_scene(
+        after_second,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
+}
+
+/// Finding 3 regression: the title screen advances on a freshly pressed
+/// A *or* Start -- `Task_TitleScreenPhase3`'s own
+/// `JOY_NEW(A_BUTTON) || JOY_NEW(START_BUTTON)`
+/// (`pokeemerald/src/title_screen.c:782`), not Start alone -- and on
+/// neither of them while merely held, nor on any other button.
+#[test]
+fn title_advances_on_a_freshly_pressed_a_or_start_only() {
+    assert!(title_advance_pressed(pressed(Buttons::START)));
+    assert!(
+        title_advance_pressed(pressed(Buttons::A)),
+        "upstream's idle title task accepts A as well as Start"
+    );
+    assert!(!title_advance_pressed(ButtonState::new()));
+    assert!(
+        !title_advance_pressed(held(Buttons::A)),
+        "JOY_NEW means a fresh edge -- an already-held A must not advance"
+    );
+    assert!(!title_advance_pressed(held(Buttons::START)));
+    assert!(!title_advance_pressed(pressed(Buttons::B)));
+    assert!(!title_advance_pressed(pressed(Buttons::SELECT)));
+}
+
+/// I-3 scene-flow test: title screen, A or Start newly pressed -> main
+/// menu. Needs the real pack (both `TitleScene` and
+/// `main_menu::load_default` read from it).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn title_a_or_start_button_transitions_to_main_menu() {
+    let (_temp, mut save_slot) = empty_slot("title-to-main-menu");
+    for button in [Buttons::START, Buttons::A] {
+        let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+        let scene = AppScene::Title(Box::new(AnimatedTitle {
+            scene: title_scene,
+            tick: 0,
+            presented: false,
+            retained_save: None,
+        }));
+
+        // I-3, issue #1329: the press must land in the white fade-wait
+        // state first, not swap straight to the main menu.
+        let (waiting, press_frame) = advance_scene(
+            scene,
+            pressed(button),
+            &mut save_slot,
+            crate::pack_source::PackSource::Repo,
+        );
+        assert!(
+            matches!(waiting, AppScene::TitleFadeWait(_)),
+            "{button:?} on the title screen must first enter the white fade-wait state"
+        );
+
+        let (next, wait_frames, done_frame) = drive_through_fade_wait(
+            waiting,
+            &mut save_slot,
+            &crate::pack_source::PackSource::Repo,
+        );
+        assert!(
+            wait_frames.iter().any(|frame| **frame != *press_frame),
+            "the retained title frame must visibly fade toward white while waiting"
+        );
+
+        // The menu fades in from white and runs its setup tasks; the first A
+        // it honours is the frame after that (`boot_setup_frames_tests`).
+        let (menu, _settled_frame) =
+            drive_through_menu_setup(next, &mut save_slot, &crate::pack_source::PackSource::Repo);
+        let AppScene::MainMenu(state) = &menu else {
+            panic!("{button:?} on the title screen must transition to the main menu once the fade completes");
+        };
+        // With no save file at the scratch path, the boot load is
+        // `SAVE_STATUS_EMPTY`, so upstream's `Task_MainMenuCheckSaveFile`
+        // picks `HAS_NO_SAVED_GAME` (`main_menu.c:661-665`).
+        assert_eq!(state.scene.menu_type(), MainMenuType::NoSavedGame);
+
+        // The handoff frame is still the title's white, and the first A
+        // honoured after the setup frames confirms NEW GAME.
+        assert!(
+            done_frame.iter().all(|&pixel| pixel == 0x00FF_FFFF),
+            "{button:?}: the title fade's handoff frame stays white"
+        );
+        let (confirmed, _frame) = advance_scene(
+            menu,
+            pressed(Buttons::A),
+            &mut save_slot,
+            crate::pack_source::PackSource::Repo,
+        );
+        assert!(
+            matches!(confirmed, AppScene::MainMenuFadeWait(_)),
+            "{button:?}: A once the setup frames are over confirms NEW GAME"
+        );
+    }
+}
+
+/// Issue #902 regression: pins [`main_menu_load_failure_message`]'s exact
+/// output so a reintroduced `main menu: ` prefix (see its own doc comment)
+/// fails loudly instead of rendering as `main menu: main menu: ...`.
+#[test]
+fn main_menu_load_failure_names_its_subsystem_once() {
+    let err = MainMenuSceneError::Pack(PackError::UnknownAsset(
+        "interface/palette/main_menu_bg".into(),
+    ));
+    let message = main_menu_load_failure_message(&err);
+    assert_eq!(
+        message,
+        "main menu: asset pack: no entry with id `interface/palette/main_menu_bg` -- staying \
+         on the title screen; a pack built before this screen existed is missing its entries: \
+         players rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon Emerald \
+         (US) ROM>`, developers with `cargo xtask extract`"
+    );
+    assert_eq!(
+        message.matches("main menu:").count(),
+        1,
+        "the recovery log must name its subsystem once, not once per error layer: {message}"
+    );
+}
+
+/// Set only on the child process re-executed below -- see
+/// `app::tests::subprocess_harness::START_TITLE_MUSIC_BOUNDARY_CHILD` for why this must not be
+/// an `#[ignore]`d test picked up on its own by CI's blanket `cargo test -p
+/// pokeemerald-rs -- --ignored` real-pack sweep.
+const MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD: &str =
+    "POKEEMERALD_RS_923_MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD";
+
+/// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
+/// follows a symlink at `path`, so a planted link cannot redirect the write
+/// onto its target. A stale occupant is unlinked (the entry itself, never
+/// what it points to) and the claim retried once.
+pub(super) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    use std::io::Write as _;
+    let mut file = None;
+    for _ in 0..2 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(f) => {
+                file = Some(f);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(path).expect("a stale scratch entry is removable");
+            }
+            Err(e) => panic!("the scratch directory is writable: {e}"),
+        }
+    }
+    file.expect("the scratch path is exclusively creatable")
+        .write_all(bytes.as_ref())
+        .expect("the scratch pack is writable");
+}
+
+/// Plants a symlink at `path` pointing at a fresh victim file holding a
+/// sentinel, runs `write`, and asserts the victim is untouched and the
+/// writer replaced the link with a regular file holding `expected`. `write`
+/// returns whatever guard keeps its file alive (a fixture whose `Drop`
+/// removes it, or the path itself); the guard is dropped only after the
+/// replacement is checked, so a writer that silently skips the write fails.
+/// The victim is claimed through [`write_scratch_exclusive`], so a link
+/// planted at its own predictable name is never followed either. Removes
+/// the planted entry and the victim afterwards.
+#[cfg(unix)]
+pub(super) fn assert_planted_symlink_untouched<G>(
+    path: &std::path::Path,
+    expected: &[u8],
+    write: impl FnOnce() -> G,
+) {
+    let victim = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-symlink-victim-{}-{:?}-{}",
+        std::process::id(),
+        std::thread::current().id(),
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let sentinel = b"victim must survive";
+    write_scratch_exclusive(&victim, sentinel);
+    let _ = std::fs::remove_file(path);
+    std::os::unix::fs::symlink(&victim, path).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
+    let replaced = std::fs::symlink_metadata(path).map(|m| m.file_type().is_file());
+    let written = std::fs::read(path);
+    let completed = outcome.is_ok();
+    drop(outcome);
+    let after = std::fs::read(&victim).unwrap();
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&victim);
+    assert_eq!(
+        after, sentinel,
+        "a planted symlink's target was overwritten"
+    );
+    assert!(
+        completed,
+        "the writer must replace a planted symlink, not panic on it"
+    );
+    assert!(
+        matches!(replaced, Ok(true)),
+        "the writer must leave a regular file where the symlink was, got {replaced:?}"
+    );
+    assert_eq!(
+        written.ok().as_deref(),
+        Some(expected),
+        "the writer must write its bytes to the replaced path"
+    );
+}
+
+/// A scratch, valid but entryless asset pack -- see
+/// `app::tests::subprocess_harness::write_empty_scratch_pack` for the rationale; duplicated
+/// because the two boundary tests live in sibling modules with no shared
+/// test-only module to hold it.
+fn scratch_pack_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-flow-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
+    let path = scratch_pack_path(label);
+    let bytes = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    write_scratch_exclusive(&path, bytes);
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn the_empty_scratch_pack_writer_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    let expected = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    assert_planted_symlink_untouched(&scratch_pack_path(label), &expected, || {
+        write_empty_scratch_pack(label)
+    });
+}
+
+/// Re-executes this test binary as a child against [`empty_slot`] and a
+/// scratch entryless pack, because only a subprocess can read back what
+/// [`title_to_main_menu`]'s own `eprintln!` wrote.
+#[test]
+fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
+    if std::env::var_os(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD).is_some() {
+        let (_temp, mut save_slot) = empty_slot("main-menu-load-failure-boundary-child");
+        let transitioned = super::title_to_main_menu(
+            &crate::pack_source::PackSource::Runtime,
+            &mut save_slot,
+            &mut None,
+        );
+        assert!(
+            transitioned.is_none(),
+            "an entryless pack must fail the main menu load, not build one"
+        );
+        return;
+    }
+
+    let pack_path = write_empty_scratch_pack("main-menu-load-failure-boundary");
+    let exe = std::env::current_exe().expect("the running test binary has a path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "--nocapture",
+            "flow::tests::title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary",
+        ])
+        .env(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD, "1")
+        .env(pack_format::PACK_PATH_ENV, &pack_path)
+        .output()
+        .expect("re-running this test binary must succeed");
+    drop(std::fs::remove_file(&pack_path));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("staying on the title screen"),
+        "the child never reached the boundary; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("main menu:").count(),
+        1,
+        "the eprintln! boundary must name its subsystem once across all of stderr, not once per prefix layer:\n{stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "the child test must pass: status {:?}\nstderr:\n{stderr}",
+        output.status
+    );
+}
+
+/// Issue #795: `advance_scene`'s own `Title` -> `MainMenu` transition --
+/// not a hand-called construction helper -- must border the menu with a
+/// continued save's own `optionsWindowFrameType`
+/// (`gSaveBlock2Ptr->optionsWindowFrameType`, read by
+/// `GetWindowFrameTilesPal` for every main-menu box,
+/// `main_menu.c:2191-2193`), not a hardcoded default. Closes the loop
+/// [`crate::flow::save_continue_window_frame_tests::a_saved_games_own_window_frame_choice_borders_its_main_menu`]
+/// cannot without a real pack: that test proves the construction API and
+/// the real save round trip separately, against a synthetic pack; this one
+/// drives the actual production call site end to end, against a real pack
+/// (both `TitleScene` and `main_menu::load_default_with_window_frame` read
+/// from it).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame() {
+    use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
+
+    const SAVED_WINDOW_FRAME: u8 = 5;
+
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let temp = TempSave::new("real-pack-window-frame");
+    let mut save_slot = temp.slot();
+    let mut phase = new_game_phase();
+    // A mid-game options change, mirroring
+    // `save_continue_support`' own fixture: not the zeroed fresh-save
+    // default `new_game::init_save_blocks` starts every session with.
+    phase.save2.options_window_frame_type = SAVED_WINDOW_FRAME;
+    save_from_the_start_menu(&mut phase, &mut save_slot);
+
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene: title_scene,
+        tick: 0,
+        presented: false,
+        retained_save: None,
+    }));
+
+    let (waiting, _press_frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+    assert!(
+        matches!(waiting, AppScene::TitleFadeWait(_)),
+        "A on the title screen must first enter the white fade-wait state"
+    );
+    let (next, _wait_frames, _done_frame) = drive_through_fade_wait(
+        waiting,
+        &mut save_slot,
+        &crate::pack_source::PackSource::Repo,
+    );
+    let (menu, frame) =
+        drive_through_menu_setup(next, &mut save_slot, &crate::pack_source::PackSource::Repo);
+    let AppScene::MainMenu(state) = menu else {
+        panic!("A on the title screen must transition to the main menu once the fade completes");
+    };
+    assert_eq!(
+        state.scene.menu_type(),
+        MainMenuType::SavedGame,
+        "a save just written must be offerable as CONTINUE"
+    );
+
+    let expected = MainMenuScene::from_pack_with_window_frame(
+        &pack,
+        MainMenuType::SavedGame,
+        SAVED_WINDOW_FRAME,
+    )
+    .expect("run `cargo xtask extract` first")
+    .compose_frame();
+
+    assert_eq!(
+        *frame, *expected,
+        "advance_scene's own Title -> MainMenu transition must border the \
+         menu with the save's own optionsWindowFrameType, not a hardcoded \
+         default"
+    );
+}
+
+/// I-3 scene-flow test: title screen, no advance press -> stays on title
+/// and keeps animating (the pre-I-3 animated-title behaviour must
+/// survive the state-machine refactor unchanged).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn title_without_start_stays_on_title_and_keeps_animating() {
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene: title_scene,
+        tick: 0,
+        presented: true, // as if this were the second frame onward.
+        retained_save: None,
+    }));
+
+    let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
+    let (next, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+
+    let AppScene::Title(title) = next else {
+        panic!("expected to stay on the title screen");
+    };
+    assert_eq!(title.tick, 1, "the tick must still advance every frame");
+}
+
+/// I-3 scene-flow test: main menu, `NEW GAME` selected (the default,
+/// per `crate::main_menu`'s module docs) and A newly pressed -> intro, only
+/// once the I-3 (issue #1329) black fade-wait state reports done.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn main_menu_confirm_on_new_game_transitions_to_intro() {
+    let (_temp, mut save_slot) = empty_slot("confirm-new-game");
+    let menu = MainMenuScene::from_pack(
+        &assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"),
+        MainMenuType::NoSavedGame,
+    )
+    .expect("the checkout pack builds the main menu");
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    let (waiting, press_frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+    assert!(
+        matches!(waiting, AppScene::MainMenuFadeWait(_)),
+        "A on NEW GAME must first enter the black fade-wait state"
+    );
+
+    let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
+        waiting,
+        &mut save_slot,
+        &crate::pack_source::PackSource::Repo,
+    );
+    assert!(
+        wait_frames.iter().any(|frame| **frame != *press_frame),
+        "the retained menu frame must visibly fade toward black while waiting"
+    );
+
+    assert!(
+        matches!(next, AppScene::Intro(_)),
+        "A on NEW GAME must transition to the intro once the fade completes"
+    );
+}
+
+/// A on `OPTION` is `ACTION_OPTION` (`main_menu.c:1070-1073`),
+/// so it fades out like the other items, never launches the intro, and --
+/// when the Options screen cannot load -- falls back to the retained menu on
+/// `OPTION` once the fade finishes. The entryless scratch pack makes the load
+/// fail without a local pack.
+#[test]
+fn main_menu_confirm_on_option_fades_then_falls_back_when_the_screen_cannot_load() {
+    let (_temp, mut save_slot) = empty_slot("confirm-option");
+    let mut menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    menu.move_down();
+    assert_eq!(menu.selected(), MainMenuItem::Option);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+    let pack_path = write_empty_scratch_pack("confirm-option");
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+
+    let (scene, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "A on OPTION must begin the black fade like the other items"
+    );
+
+    let (next, _, _) = drive_through_fade_wait(scene, &mut save_slot, &pack_source);
+    drop(std::fs::remove_file(&pack_path));
+    let AppScene::MainMenu(state) = next else {
+        panic!("a failed Options load must fall back to the main menu");
+    };
+    assert_eq!(state.scene.selected(), MainMenuItem::Option);
+}
+
+/// I-3 regression (issue #1329): a fresh A on `NEW GAME` must enter
+/// `AppScene::MainMenuFadeWait` and ignore every button until the fade
+/// reports done, only then dispatching `intro::load`. Pack-free via
+/// `PackSource::Test` pointed at an entryless scratch pack, so the deferred
+/// dispatch still runs (and fails, falling back to the retained menu)
+/// without needing a real one.
+#[test]
+fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
+    let (_temp, mut save_slot) = empty_slot("new-game-fade-wait");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    assert_eq!(menu.selected(), MainMenuItem::NewGame);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    let pack_path = write_empty_scratch_pack("new-game-fade-wait");
+    // `PackSource::Test` needs a `'static` path -- leaked once, reclaimed
+    // only when the test process exits, matching
+    // `overworld_phase::step_tests`' identical `PackSource::Test` fixture.
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+
+    let (mut scene, press_frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "A on NEW GAME must enter the fade-wait state on the press frame, not dispatch immediately"
+    );
+
+    // The press frame runs both of upstream's updates at coefficient 0, so
+    // the very next frame already blends at coefficient 2.
+    let (next, first_wait_frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    assert_ne!(
+        *first_wait_frame, *press_frame,
+        "the frame after the press must already show the first fade step, not a second \
+         coefficient-0 frame"
+    );
+    scene = next;
+
+    // 19 further frames, all still `Active`, with deliberately distracting
+    // input every frame -- none of it may resume the selection or retrigger
+    // the dispatch while waiting.
+    for buttons in [
+        pressed(Buttons::UP),
+        pressed(Buttons::DOWN),
+        pressed(Buttons::A),
+        ButtonState::new(),
+    ]
+    .into_iter()
+    .cycle()
+    .take(19)
+    {
+        let (next, _frame) = advance_scene(scene, buttons, &mut save_slot, pack_source.clone());
+        assert!(
+            matches!(next, AppScene::MainMenuFadeWait(_)),
+            "must keep waiting until the fade reports done, ignoring input meanwhile"
+        );
+        scene = next;
+    }
+
+    // The 21st frame after the press is the one whose update reports done:
+    // it still presents the fully black retained menu rather than the
+    // destination, as upstream's task only observes the finished fade on
+    // the next frame.
+    let (done, done_frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    assert!(
+        matches!(done, AppScene::MainMenuFadeWait(_)),
+        "the frame the fade reports done must still present the retained frame, not dispatch"
+    );
+    assert!(
+        done_frame.iter().all(|&pixel| pixel == 0),
+        "the done frame must present the fully black fade"
+    );
+    scene = done;
+
+    // The next frame dispatches exactly once, fails against the entryless
+    // pack, and falls back to the retained menu -- still selecting
+    // `NEW GAME`, proving the UP/DOWN presses above were ignored, not
+    // merely unobserved.
+    let (after, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    drop(std::fs::remove_file(&pack_path));
+    let AppScene::MainMenu(state) = after else {
+        panic!("a failed dispatch must fall back to the retained main menu, not stay waiting");
+    };
+    assert_eq!(
+        state.scene.selected(),
+        MainMenuItem::NewGame,
+        "input pressed while waiting must not have moved the selection"
+    );
+}
+
+/// The first fade-wait frame composes the menu from palettes already faded
+/// toward black, so the highlight darkening acts on the faded colours: fading
+/// the already darkened pixel would land elsewhere.
+#[test]
+fn main_menu_fade_wait_frame_fades_palettes_before_the_highlight_darkening() {
+    let (_temp, mut save_slot) = empty_slot("menu-fade-wait-recompose");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+    let pack_path = write_empty_scratch_pack("menu-fade-wait-recompose");
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+
+    let (scene, _press) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    let (_scene, frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    drop(std::fs::remove_file(&pack_path));
+
+    // Coefficient 2 of the 5-bit black blend: white 31 -> 31 + (-31 * 2 >> 4)
+    // = 27, expanded to 222.
+    let faded_white: u8 = 222;
+    let pixel = |x: usize, y: usize| frame[y * 240 + x];
+    assert_eq!(
+        pixel(18, 10),
+        u32::from_be_bytes([0, faded_white, faded_white, faded_white]),
+        "selected header window"
+    );
+    let darkened = rendering::darken(
+        rendering::Rgb888 {
+            r: faded_white,
+            g: faded_white,
+            b: faded_white,
+        },
+        7,
+    );
+    assert_eq!(
+        pixel(18, 42),
+        u32::from_be_bytes([0, darkened.r, darkened.g, darkened.b]),
+        "unselected header window darkens the faded colour"
+    );
+}
+
+/// Issue #216 regression, the half the scene-level test above cannot
+/// see: with no pack, a failed `intro::load_default`, a failed
+/// `OverworldPhase::continue_saved_game`, and an Options screen that fails to load
+/// all land back on the main menu, so the item -> action mapping itself
+/// is pinned here on the pure decision function instead (`menu_action`'s
+/// own doc comment).
+#[test]
+fn menu_action_maps_each_item_to_its_upstream_action() {
+    assert_eq!(
+        menu_action(MainMenuItem::NewGame),
+        MainMenuAction::NewGame,
+        "A on NEW GAME is upstream's ACTION_NEW_GAME (main_menu.c:1055-1063)"
+    );
+    assert_eq!(
+        menu_action(MainMenuItem::Continue),
+        MainMenuAction::Continue,
+        "A on CONTINUE is upstream's ACTION_CONTINUE (main_menu.c:1064-1069)"
+    );
+    assert_eq!(
+        menu_action(MainMenuItem::Option),
+        MainMenuAction::Options,
+        "A on OPTION is upstream's ACTION_OPTION (main_menu.c:1070-1073)"
+    );
+}
+
+/// Issue #795: `advance_scene`'s `Title` -> `MainMenu` transition threads
+/// `window_frame_for(&saved)` into main-menu construction, so which border
+/// a given boot verdict produces is pinned here on the pure decision
+/// function too -- the same pack-less treatment [`menu_type_for`]'s own doc
+/// comment already gives the menu-type half of that same call.
+#[test]
+fn window_frame_for_reads_the_saved_blocks_own_option() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let fresh = SavedGame {
+        status: SaveFileStatus::Empty,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2::default(),
+    };
+    assert_eq!(
+        window_frame_for(&fresh),
+        0,
+        "a zeroed, fresh save block's own optionsWindowFrameType is 0 \
+         (WINDOW_FRAME_TYPE_0)"
+    );
+
+    let saved = SavedGame {
+        status: SaveFileStatus::Ok,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_window_frame_type: 12,
+            ..SaveBlock2::default()
+        },
+    };
+    assert_eq!(
+        window_frame_for(&saved),
+        12,
+        "a continued save's own recovered optionsWindowFrameType must not \
+         be discarded for a hardcoded default"
+    );
+}
+
+/// Pins [`new_game_options_for`]'s status split (issue #1125) -- see that
+/// function's own doc comment for the contract this pins, not a copy of it
+/// here.
+#[test]
+fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{BattleStyle, ButtonMode, SaveBlock1, SaveBlock2, SoundMode};
+
+    let recovered = |status: SaveFileStatus| SavedGame {
+        status,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_text_speed: 2,
+            options_window_frame_type: 12,
+            options_button_mode: ButtonMode::LEqualsA,
+            options_sound: SoundMode::Stereo,
+            options_battle_style: BattleStyle::Set,
+            options_battle_scene_off: true,
+            ..SaveBlock2::default()
+        },
+    };
+
+    for status in [
+        SaveFileStatus::Ok,
+        SaveFileStatus::Error,
+        SaveFileStatus::NoFlash,
+    ] {
+        let saved = recovered(status);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions {
+                text_speed: 2,
+                window_frame_type: 12,
+                button_mode: ButtonMode::LEqualsA,
+                sound: SoundMode::Stereo,
+                battle_style: BattleStyle::Set,
+                battle_scene_off: true,
+            },
+            "a {status:?} save's recovered options must survive into NEW GAME"
+        );
+    }
+
+    for status in [SaveFileStatus::Empty, SaveFileStatus::Corrupt] {
+        let mut saved = recovered(status);
+        super::apply_boot_defaults(&mut saved);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions::DEFAULT,
+            "a {status:?} boot verdict must still default NEW GAME's options"
+        );
+    }
+}
+
+/// Upstream `Task_HandleMainMenuInput` reads A before the D-pad
+/// (`main_menu.c:888` before `903`/`915` -- an if/else-if chain), so a
+/// same-frame A + direction press acts on A and never moves the
+/// selection. Pinned on OPTION with UP alongside: the A must still win,
+/// beginning the fade with the selection exactly where it was.
+#[test]
+fn main_menu_a_wins_over_a_same_frame_direction_press() {
+    let (_temp, mut save_slot) = empty_slot("a-wins");
+    let mut menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    menu.move_down();
+    assert_eq!(menu.selected(), MainMenuItem::Option);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    let (next, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::A | Buttons::UP),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+
+    let AppScene::MainMenuFadeWait(wait) = next else {
+        panic!("A on OPTION must begin its fade, not move the selection");
+    };
+    assert_eq!(
+        wait.state.scene.selected(),
+        MainMenuItem::Option,
+        "A must win over a same-frame UP press (upstream's else-if chain)"
+    );
+}
+
+/// Issue #216 regression: `DPAD_UP`/`DPAD_DOWN`, newly pressed, move the
+/// main menu's selection -- no pack needed (module docs on the test
+/// above).
+#[test]
+fn main_menu_up_and_down_move_the_selection() {
+    let (_temp, mut save_slot) = empty_slot("menu-updown");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    let (after_down, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::DOWN),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    let after_down = settle_highlight(after_down, &mut save_slot);
+    let AppScene::MainMenu(state) = after_down else {
+        panic!("expected to stay on the main menu");
+    };
+    assert_eq!(state.scene.selected(), MainMenuItem::Option);
+
+    let scene = AppScene::MainMenu(state);
+    let (after_up, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::UP),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    let after_up = settle_highlight(after_up, &mut save_slot);
+    let AppScene::MainMenu(state) = after_up else {
+        panic!("expected to stay on the main menu");
+    };
+    assert_eq!(state.scene.selected(), MainMenuItem::NewGame);
+}
+
+/// I-6, issue #214: with a save present the menu grows a third item and
+/// `CONTINUE` is what a fresh boot has selected, so the *first* thing an
+/// A press does is resume -- upstream's `HAS_SAVED_GAME` `tCurrItem == 0`
+/// arm (`main_menu.c:972-975`). Pack-free: only the selection order is
+/// under test here, not the transition (which needs a room to load).
+#[test]
+fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
+    let (_temp, mut save_slot) = empty_slot("saved-menu-order");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::SavedGame);
+    let mut scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    for expected in [
+        MainMenuItem::Continue,
+        MainMenuItem::NewGame,
+        MainMenuItem::Option,
+        // A fourth DOWN must not wrap (`tCurrItem < tItemCount - 1`).
+        MainMenuItem::Option,
+    ] {
+        let AppScene::MainMenu(state) = &scene else {
+            panic!("expected to stay on the main menu");
+        };
+        assert_eq!(state.scene.selected(), expected);
+        let (next, _frame) = advance_scene(
+            scene,
+            pressed(Buttons::DOWN),
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
+        // The fourth DOWN is blocked, so it schedules no highlight step.
+        scene = if matches!(next, AppScene::MainMenuHighlight(_)) {
+            settle_highlight(next, &mut save_slot)
+        } else {
+            next
+        };
+    }
+}
+
+/// I-6, issues #214/#232: only the overworld can write the save, and only
+/// through the start menu. Every pre-overworld scene must leave the file
+/// alone no matter what is pressed -- writing a not-yet-started game's
+/// blocks from the title screen would overwrite a real save with a blank
+/// one, and `START` on the title screen means "go to the main menu", not
+/// "open a start menu".
+#[test]
+fn no_scene_outside_the_overworld_writes_the_save() {
+    let (temp, mut save_slot) = empty_slot("no-save-outside-overworld");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    let saved = save_slot.load();
+    let mut scenes: Vec<(AppScene, &[Buttons])> = vec![
+        (
+            AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved })),
+            // A can enter the intro when a pack exists, so it runs last.
+            &[
+                Buttons::START,
+                Buttons::B,
+                Buttons::DOWN,
+                Buttons::UP,
+                Buttons::A,
+            ],
+        ),
+        (
+            AppScene::OverworldLoadFailed(Box::new(intro::synthetic_finished_scene())),
+            // A and B intentionally retry the asset-pack-dependent handoff.
+            &[Buttons::START, Buttons::DOWN],
+        ),
+    ];
+    if let Ok(scene) = intro::load_default() {
+        // A fresh real intro cannot finish in these three frames -- issue
+        // #393 deleted the whole-intro B-skip that used to reach the
+        // asset-pack-dependent handoff immediately, so nothing here can.
+        scenes.push((
+            AppScene::Intro(Box::new(scene)),
+            &[Buttons::START, Buttons::A, Buttons::DOWN],
+        ));
+    } else if !assets::pack::AssetPack::default_path().is_file() {
+        // With no pack on disk, a finished intro can exercise the failed
+        // handoff without any possibility of entering the overworld.
+        scenes.push((
+            AppScene::Intro(Box::new(intro::synthetic_finished_scene())),
+            &[Buttons::START, Buttons::DOWN],
+        ));
+    }
+    for (scene, buttons) in scenes {
+        // Use only frames that are guaranteed to remain pre-overworld, with
+        // or without an extracted asset pack.
+        let mut scene = scene;
+        for &button in buttons {
+            let (next, _frame) = advance_scene(
+                scene,
+                pressed(button),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
+            assert!(
+                !matches!(next, AppScene::Overworld(_)),
+                "the fixture must exercise only pre-overworld frames"
+            );
+            scene = next;
+        }
+    }
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "nothing must have been written to the save file"
+    );
+}
+
+/// I-3 scene-flow test: the intro's own paged advance-on-confirm (issue
+/// #393 deleted the old pre-1.0 whole-intro B-skip this used to take a
+/// shortcut through -- `crate::intro`'s own module docs' "Advance"
+/// section) reaches the overworld once every page is read, with the
+/// player placed at the upstream spawn tile (`crate::new_game::SPAWN_POSITION`),
+/// not left at `(0, 0)` or wherever the intro's own defaults would
+/// otherwise leave it. Confirms every tick with A; `IntroScene`'s own
+/// headless tests (`crate::intro::tests`) already cover the finer
+/// per-page timing, including B's identical advance and the `{PAUSE 96}`
+/// control code.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
+    let mut intro_scene = crate::intro::load(
+        &crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
+    let confirm_a = engine::text::render::PrinterInput {
+        a_pressed: true,
+        b_pressed: false,
+        a_held: false,
+        b_held: false,
+    };
+    let mut status = IntroStatus::Continue;
+    for _ in 0..20_000 {
+        status = intro_scene.tick(confirm_a);
+        if status == IntroStatus::Finished {
+            break;
+        }
+    }
+    assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
+
+    let (_temp, mut save_slot) = empty_slot("intro-paged");
+    let scene = AppScene::Intro(Box::new(intro_scene));
+    let (next, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+
+    let AppScene::Overworld(phase) = next else {
+        panic!("expected the finished intro to hand off to the overworld");
+    };
+    assert_eq!(phase.player.position(), new_game::SPAWN_POSITION);
+    assert_eq!(phase.player.elevation(), new_game::SPAWN_ELEVATION);
+    assert_eq!(phase.player.facing(), new_game::SPAWN_FACING);
+    assert_eq!(phase.map_id, new_game::SPAWN_MAP_ID);
+
+    // Finding 1: the transition must actually call
+    // `new_game::init_save_blocks_for_new_game` and retain its result,
+    // not just the player's in-memory position -- pin the same
+    // `NewGameInitData` effects `crate::new_game`'s own tests already
+    // check against `init_save_blocks` directly.
+    assert_eq!(phase.save1.money, new_game::STARTING_MONEY);
+    assert_eq!(phase.save1.player_party_count, 0);
+    assert_eq!(phase.save1.bag, engine::save::Bag::default());
+    assert_eq!(phase.save1.location.map_group, new_game::SPAWN_MAP_GROUP);
+    assert_eq!(phase.save1.location.map_num, new_game::SPAWN_MAP_NUM);
+    assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
+    assert_eq!(phase.save2.encryption_key, 0);
+}
+
+/// A selected female identity with a custom name survives the intro-to-overworld
+/// handoff and lands in May's room. Upstream keeps the chosen `SaveBlock2`
+/// name/gender through `NewGameInitData` (`pokeemerald/src/new_game.c:149-164`);
+/// the port's bedroom arrival (a shortcut past upstream's `WarpToTruck`,
+/// `new_game.c:195`) is chosen by gender (`new_game::bedroom_arrival`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_selected_female_identity_hands_off_into_mays_room() {
+    let selected =
+        new_game::NewGameIdentity::new("LEAF", engine::save::PlayerGender::Female).unwrap();
+    let mut intro_scene = crate::intro::load(
+        &crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first")
+    .with_identity(selected);
+    let confirm_a = engine::text::render::PrinterInput {
+        a_pressed: true,
+        b_pressed: false,
+        a_held: false,
+        b_held: false,
+    };
+    let mut status = IntroStatus::Continue;
+    for _ in 0..20_000 {
+        status = intro_scene.tick(confirm_a);
+        if status == IntroStatus::Finished {
+            break;
+        }
+    }
+    assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
+
+    let (_temp, mut save_slot) = empty_slot("intro-female");
+    let scene = AppScene::Intro(Box::new(intro_scene));
+    let (next, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+
+    let AppScene::Overworld(phase) = next else {
+        panic!("expected the finished intro to hand off to the overworld");
+    };
+    let arrival = new_game::bedroom_arrival(engine::save::PlayerGender::Female);
+    assert_eq!(phase.map_id, arrival.map_id);
+    assert_eq!(phase.player.position(), arrival.position);
+    assert_eq!(
+        phase.save2.player_gender,
+        engine::save::PlayerGender::Female
+    );
+    assert_eq!(
+        engine::text::decode_to_string(&phase.save2.player_name).unwrap(),
+        "LEAF"
+    );
+}
+
+/// Upstream re-clears the save blocks after a corrupt verdict:
+/// `CB2_InitCopyrightScreenAfterBootup` calls `Sav2_ClearSetDefault()` when
+/// `gSaveFileStatus` is `SAVE_STATUS_EMPTY`/`SAVE_STATUS_CORRUPT`
+/// (`intro.c:1154-1156`), and `SetDefaultOptions` puts
+/// `optionsWindowFrameType` back to 0 (`new_game.c:91-98`). A corrupt boot
+/// still recovers a checksum-valid `SaveBlock2` here, so the no-save main
+/// menu must not wear that save's border. `SAVE_STATUS_ERROR` is not cleared
+/// upstream -- one slot loaded intact -- so its recovered border survives.
+#[test]
+fn a_corrupt_boot_falls_back_to_the_default_window_frame() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let recovered = SaveBlock2 {
+        options_window_frame_type: 5,
+        ..SaveBlock2::default()
+    };
+
+    let mut corrupt = SavedGame {
+        status: SaveFileStatus::Corrupt,
+        block1: SaveBlock1::default(),
+        block2: recovered.clone(),
+    };
+    super::apply_boot_defaults(&mut corrupt);
+    assert_eq!(
+        window_frame_for(&corrupt),
+        0,
+        "a corrupt boot clears SaveBlock2 and re-defaults the option \
+         (intro.c:1154-1156 -> new_game.c:91-98)"
+    );
+
+    let one_bad_slot = SavedGame {
+        status: SaveFileStatus::Error,
+        block1: SaveBlock1::default(),
+        block2: recovered,
+    };
+    assert_eq!(
+        window_frame_for(&one_bad_slot),
+        5,
+        "SAVE_STATUS_ERROR loaded an intact slot and is never cleared"
+    );
+}
+
+/// Upstream guards `DPAD_UP` with `tCurrItem > 0` and `DPAD_DOWN` with the
+/// last-item bound (`main_menu.c:903`, `:915`), so a blocked direction falls
+/// through to the other when both are newly pressed together: UP+DOWN at the
+/// top row moves down, and at the bottom row moves up (issue #1960).
+#[test]
+fn main_menu_simultaneous_up_down_falls_through_at_boundaries() {
+    for (menu_type, start_downs, expected) in [
+        (MainMenuType::NoSavedGame, 0, MainMenuItem::Option),
+        (MainMenuType::NoSavedGame, 1, MainMenuItem::NewGame),
+        (MainMenuType::SavedGame, 0, MainMenuItem::NewGame),
+        (MainMenuType::SavedGame, 2, MainMenuItem::NewGame),
+    ] {
+        let (_temp, mut save_slot) = empty_slot("up-down-fallthrough");
+        let mut menu = crate::main_menu::synthetic_scene(menu_type);
+        for _ in 0..start_downs {
+            menu.move_down();
+        }
+        let scene = AppScene::MainMenu(Box::new(MainMenuState {
+            scene: menu,
+            saved: save_slot.load(),
+        }));
+        let (next, _frame) = advance_scene(
+            scene,
+            pressed(Buttons::UP | Buttons::DOWN),
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
+        assert!(
+            matches!(next, AppScene::MainMenuHighlight(_)),
+            "{menu_type:?} after {start_downs} downs"
+        );
+        let AppScene::MainMenu(state) = settle_highlight(next, &mut save_slot) else {
+            panic!("expected to stay on the main menu");
+        };
+        assert_eq!(
+            state.scene.selected(),
+            expected,
+            "{menu_type:?} after {start_downs} downs"
+        );
+    }
+}
+
+/// `NewGameInitData` never touches `optionsButtonMode`, `optionsSound`,
+/// `optionsBattleStyle`, or `optionsBattleSceneOff` (`pokeemerald/src/new_game.c:149-207`);
+/// only `SetDefaultOptions` via `Sav2_ClearSetDefault` for Empty/Corrupt does.
+#[test]
+fn new_game_over_an_intact_save_keeps_its_menu_owned_options() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{BattleStyle, ButtonMode, SaveBlock1, SaveBlock2, SoundMode};
+
+    for status in [SaveFileStatus::Ok, SaveFileStatus::Error] {
+        let saved = SavedGame {
+            status,
+            block1: SaveBlock1::default(),
+            block2: SaveBlock2 {
+                options_button_mode: ButtonMode::Lr,
+                options_sound: SoundMode::Stereo,
+                options_battle_style: BattleStyle::Set,
+                options_battle_scene_off: true,
+                ..SaveBlock2::default()
+            },
+        };
+        let mut rng = engine::rng::Rng::new(0);
+        let (_, block2) =
+            new_game::init_save_blocks_with_options(&mut rng, new_game_options_for(&saved));
+        assert_eq!(block2.options_button_mode, ButtonMode::Lr, "{status:?}");
+        assert_eq!(block2.options_sound, SoundMode::Stereo, "{status:?}");
+        assert_eq!(block2.options_battle_style, BattleStyle::Set, "{status:?}");
+        assert!(block2.options_battle_scene_off, "{status:?}");
+    }
+}
+
+/// Advances `scene` one frame with `held` as the raw held set, through a
+/// persistent `buttons` so edges match a real multi-frame hold.
+fn step(
+    scene: AppScene,
+    buttons: &mut ButtonState,
+    held: Buttons,
+    save_slot: &mut SaveSlot,
+) -> (AppScene, Box<Frame>) {
+    buttons.update(held);
+    advance_scene(
+        scene,
+        *buttons,
+        save_slot,
+        crate::pack_source::PackSource::Runtime,
+    )
+}
+
+fn pack_free_menu(menu_type: MainMenuType, save_slot: &mut SaveSlot) -> AppScene {
+    AppScene::MainMenu(Box::new(MainMenuState {
+        scene: crate::main_menu::synthetic_scene(menu_type),
+        saved: save_slot.load(),
+    }))
+}
+
+/// Runs the highlight-only step a successful navigation hands off to, with
+/// no input, so a test can read the settled menu.
+fn settle_highlight(scene: AppScene, save_slot: &mut SaveSlot) -> AppScene {
+    assert!(matches!(scene, AppScene::MainMenuHighlight(_)));
+    advance_scene(
+        scene,
+        ButtonState::new(),
+        save_slot,
+        crate::pack_source::PackSource::Runtime,
+    )
+    .0
+}
+
+fn selected_of(scene: &AppScene) -> MainMenuItem {
+    match scene {
+        AppScene::MainMenu(state) | AppScene::MainMenuHighlight(state) => state.scene.selected(),
+        _ => panic!("expected a main menu scene"),
+    }
+}
+
+/// Upstream's navigation task only schedules `Task_MainMenuMain`'s highlight
+/// callback after moving (`main_menu.c:930-933`); that callback redraws and
+/// reinstalls input without polling (`main_menu.c:878-881`,
+/// `task.c:118-120`). So the move frame shows the prior highlight, the next
+/// frame shows the new one and ignores input, and input resumes after.
+#[test]
+fn main_menu_navigation_presents_prior_then_new_highlight_and_ignores_input_between() {
+    for (menu_type, downs, direction) in [
+        (MainMenuType::NoSavedGame, 0, Buttons::DOWN),
+        (MainMenuType::SavedGame, 0, Buttons::DOWN),
+        (MainMenuType::SavedGame, 1, Buttons::UP),
+        (MainMenuType::NoSavedGame, 1, Buttons::UP),
+    ] {
+        let (_temp, mut slot) = empty_slot("highlight-frames");
+        let mut before_scene = crate::main_menu::synthetic_scene(menu_type);
+        let mut after_scene = crate::main_menu::synthetic_scene(menu_type);
+        for _ in 0..downs {
+            before_scene.move_down();
+            after_scene.move_down();
+        }
+        let before = before_scene.compose_frame();
+        if direction == Buttons::DOWN {
+            after_scene.move_down();
+        } else {
+            after_scene.move_up();
+        }
+        let after = after_scene.compose_frame();
+        assert_ne!(
+            *before, *after,
+            "{menu_type:?}: the highlight must be visible"
+        );
+
+        let mut scene = AppScene::MainMenu(Box::new(MainMenuState {
+            scene: before_scene,
+            saved: slot.load(),
+        }));
+        let mut buttons = ButtonState::new();
+        let (next, frame) = step(scene, &mut buttons, direction, &mut slot);
+        assert!(
+            matches!(next, AppScene::MainMenuHighlight(_)),
+            "{menu_type:?}"
+        );
+        assert_eq!(
+            *frame, *before,
+            "{menu_type:?}: frame N keeps the prior highlight"
+        );
+        scene = next;
+
+        // A and the opposite direction pressed fresh on the highlight-only frame.
+        let (next, frame) = step(
+            scene,
+            &mut buttons,
+            Buttons::A | Buttons::UP | Buttons::DOWN,
+            &mut slot,
+        );
+        assert!(matches!(next, AppScene::MainMenu(_)), "{menu_type:?}");
+        assert_eq!(
+            *frame, *after,
+            "{menu_type:?}: frame N+1 shows the new highlight"
+        );
+        let (next, frame) = step(next, &mut buttons, Buttons::NONE, &mut slot);
+        assert!(matches!(next, AppScene::MainMenu(_)), "{menu_type:?}");
+        assert_eq!(
+            *frame, *after,
+            "{menu_type:?}: frame N+2 idles on the new highlight"
+        );
+    }
+}
+
+/// DOWN then an immediate fresh A: the A lands on the highlight-only frame
+/// and must not confirm, nor be buffered into a later confirmation.
+#[test]
+fn main_menu_a_on_the_highlight_frame_after_down_is_ignored() {
+    let (_temp, mut slot) = empty_slot("down-then-a");
+    let mut buttons = ButtonState::new();
+    let scene = pack_free_menu(MainMenuType::SavedGame, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::DOWN, &mut slot);
+    assert_eq!(selected_of(&scene), MainMenuItem::NewGame);
+    let (scene, _) = step(scene, &mut buttons, Buttons::A, &mut slot);
+    assert!(
+        matches!(scene, AppScene::MainMenu(_)),
+        "early A must not start the fade"
+    );
+    // Holding A is not a fresh edge on the first input-capable frame.
+    let (scene, _) = step(scene, &mut buttons, Buttons::A, &mut slot);
+    assert!(
+        matches!(scene, AppScene::MainMenu(_)),
+        "held A must not confirm"
+    );
+    let (scene, _) = step(scene, &mut buttons, Buttons::NONE, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::A, &mut slot);
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "a fresh A confirms"
+    );
+}
+
+/// The first frame after the highlight-only step accepts a fresh A.
+#[test]
+fn main_menu_a_after_the_highlight_frame_confirms_immediately() {
+    let (_temp, mut slot) = empty_slot("down-idle-a");
+    let mut buttons = ButtonState::new();
+    let scene = pack_free_menu(MainMenuType::SavedGame, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::DOWN, &mut slot);
+    assert!(matches!(scene, AppScene::MainMenuHighlight(_)));
+    let (scene, _) = step(scene, &mut buttons, Buttons::NONE, &mut slot);
+    assert!(matches!(scene, AppScene::MainMenu(_)));
+    let (scene, _) = step(scene, &mut buttons, Buttons::A, &mut slot);
+    assert!(matches!(scene, AppScene::MainMenuFadeWait(_)));
+}
+
+/// DOWN then an immediate fresh UP: ignored on the highlight-only frame.
+#[test]
+fn main_menu_up_on_the_highlight_frame_after_down_is_ignored() {
+    let (_temp, mut slot) = empty_slot("down-then-up");
+    let mut buttons = ButtonState::new();
+    let scene = pack_free_menu(MainMenuType::NoSavedGame, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::DOWN, &mut slot);
+    assert_eq!(selected_of(&scene), MainMenuItem::Option);
+    let (scene, _) = step(scene, &mut buttons, Buttons::UP, &mut slot);
+    assert_eq!(
+        selected_of(&scene),
+        MainMenuItem::Option,
+        "early UP ignored"
+    );
+    // UP is still held, so not a fresh edge: nothing moves.
+    let (scene, _) = step(scene, &mut buttons, Buttons::UP, &mut slot);
+    assert_eq!(selected_of(&scene), MainMenuItem::Option);
+    let (scene, _) = step(scene, &mut buttons, Buttons::NONE, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::UP, &mut slot);
+    assert_eq!(
+        selected_of(&scene),
+        MainMenuItem::NewGame,
+        "movement resumes"
+    );
+}
+
+/// The first input-capable frame accepts a fresh UP.
+#[test]
+fn main_menu_up_after_the_highlight_frame_moves_immediately() {
+    let (_temp, mut slot) = empty_slot("down-idle-up");
+    let mut buttons = ButtonState::new();
+    let scene = pack_free_menu(MainMenuType::NoSavedGame, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::DOWN, &mut slot);
+    assert!(matches!(scene, AppScene::MainMenuHighlight(_)));
+    let (scene, _) = step(scene, &mut buttons, Buttons::NONE, &mut slot);
+    assert!(matches!(scene, AppScene::MainMenu(_)));
+    let (scene, _) = step(scene, &mut buttons, Buttons::UP, &mut slot);
+    assert_eq!(selected_of(&scene), MainMenuItem::NewGame);
+}
+
+/// A blocked direction moves nothing, so it schedules no highlight step.
+#[test]
+fn main_menu_blocked_navigation_adds_no_highlight_step() {
+    let (_temp, mut slot) = empty_slot("blocked-nav");
+    let mut buttons = ButtonState::new();
+    let scene = pack_free_menu(MainMenuType::NoSavedGame, &mut slot);
+    let (scene, _) = step(scene, &mut buttons, Buttons::UP, &mut slot);
+    assert!(
+        matches!(scene, AppScene::MainMenu(_)),
+        "blocked UP at the top"
+    );
+}
+
+/// Pack-free: the confirming frame's cloud clock sits one step behind the sprite clock
+/// (`pokeemerald/src/title_screen.c:675-681,782-787,805-814`), including the wrap for a press
+/// on the very first presented frame.
+#[test]
+fn title_confirm_background_clock_trails_the_sprite_clock_by_one() {
+    use super::fade_wait::confirm_background_tick;
+    assert_eq!(confirm_background_tick(14), 13);
+    assert_eq!(confirm_background_tick(2), 1);
+    assert_eq!(confirm_background_tick(1), 0);
+    assert_eq!(confirm_background_tick(0), u32::MAX);
+}
+
+/// First pixel row of the Press Start sprites: `CreatePressStartBanner(START_BANNER_X, 108)`
+/// centres them at y = 108, 8 pixels tall (`title_screen.c:752`).
+const PRESS_START_BAND_TOP_ROW: usize = 104;
+
+fn rows(frame: &Frame, rows: std::ops::Range<usize>) -> &[u32] {
+    let width = platform::GBA_WIDTH as usize;
+    &frame[rows.start * width..rows.end * width]
+}
+
+/// Upstream's confirming `Task_TitleScreenPhase3` frame skips `++tCounter` /
+/// `tBg1Y` / `gBattle_BG1_Y` (`pokeemerald/src/title_screen.c:782-787,805-814`) but `MainCB2`
+/// still runs `AnimateSprites` on it (`:675-681`). Idle ticks 0..=13 are presented, then A is
+/// pressed: the sprite clock steps to 14 (Press Start becomes visible, `(14 + 2) & 16`) while
+/// both the cloud scroll (3 at tick 13, 4 at tick 14) and every retained fade frame keep the
+/// tick-13 clouds.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn title_confirm_freezes_clouds_but_not_sprites_on_the_press_frame() {
+    use rendering::{NormalPaletteFade, PaletteFadeTarget};
+
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let tick13 = crate::frame::to_platform_frame(&title_scene.compose(13));
+    let tick14 = crate::frame::to_platform_frame(&title_scene.compose(14));
+    let cloud_rows = 0..PRESS_START_BAND_TOP_ROW - 8;
+    assert_ne!(
+        rows(&tick13, cloud_rows.clone()),
+        rows(&tick14, cloud_rows.clone()),
+        "the clouds must scroll between ticks 13 and 14 for this test to pin anything"
+    );
+    let band = PRESS_START_BAND_TOP_ROW..PRESS_START_BAND_TOP_ROW + 8;
+
+    let (_temp, mut save_slot) = empty_slot("title-confirm-clouds");
+    let mut scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene: title_scene,
+        tick: 0,
+        presented: false,
+        retained_save: None,
+    }));
+    for _ in 0..14 {
+        let (next, _frame) = advance_scene(
+            scene,
+            ButtonState::new(),
+            &mut save_slot,
+            crate::pack_source::PackSource::Repo,
+        );
+        scene = next;
+    }
+    let (waiting, press_frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+    assert!(
+        matches!(waiting, AppScene::TitleFadeWait(_)),
+        "A on the title screen must enter the white fade-wait state"
+    );
+
+    assert_eq!(
+        rows(&press_frame, cloud_rows.clone()),
+        rows(&tick13, cloud_rows.clone()),
+        "the press frame keeps the previous frame's cloud scroll"
+    );
+    assert_ne!(
+        rows(&press_frame, band.clone()),
+        rows(&tick13, band.clone()),
+        "the press frame still animates the sprites: Press Start turns visible at tick 14"
+    );
+    assert_ne!(
+        *press_frame, *tick14,
+        "clouds must not take tick 14's offset"
+    );
+
+    // The retained fade frames recompose the same clouds from the fade's palettes.
+    let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+    fade.update(); // the press frame's own update (`begin_on_press_frame`).
+    let scene13 = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let (_next, wait_frames, _destination) = drive_through_fade_wait(
+        waiting,
+        &mut save_slot,
+        &crate::pack_source::PackSource::Repo,
+    );
+    assert!(!wait_frames.is_empty());
+    for frame in &wait_frames {
+        fade.update();
+        let expected = crate::frame::to_platform_frame(&scene13.compose_split_with_palette(
+            13,
+            14,
+            fade.palette_stage(),
+        ));
+        assert_eq!(
+            rows(frame, cloud_rows.clone()),
+            rows(&expected, cloud_rows.clone()),
+            "every retained fade frame keeps the tick-13 clouds"
+        );
+    }
+}
+
+/// `Task_HandleMainMenuInput` checks B ahead of the D-pad
+/// (`main_menu.c:895-902`): B, alone or with Down, begins the white fade
+/// back to the title on either boot-menu type, never staying or navigating.
+#[test]
+fn main_menu_b_leaves_the_menu_on_both_types() {
+    for menu_type in [MainMenuType::NoSavedGame, MainMenuType::SavedGame] {
+        for keys in [Buttons::B, Buttons::B | Buttons::DOWN] {
+            let (_temp, mut save_slot) = empty_slot("b-cancel");
+            let scene = pack_free_menu(menu_type, &mut save_slot);
+            let (next, _) = advance_scene(
+                scene,
+                pressed(keys),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
+            assert!(
+                !matches!(next, AppScene::MainMenu(_) | AppScene::MainMenuHighlight(_)),
+                "{menu_type:?} with {keys:?} must take the B cancel path"
+            );
+        }
+    }
+}

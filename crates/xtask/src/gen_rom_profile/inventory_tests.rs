@@ -1,0 +1,702 @@
+//! Deleting any fixed root from a complete synthetic pack is refused before
+//! a report line is written.
+
+use pack_format::{raw_entry, PackEntry};
+use rom_import::fixture::RomFixture;
+
+use super::error::GenRomProfileError;
+use super::tests::{synthetic_bag_ids, with_context};
+use super::{
+    bag, battle_anims, battle_interface, battle_messages, battlers, field_messages, fonts,
+    inventory, layouts, locate_profile, opening_scene, sprites, starter_chooser, text_window,
+    tilesets, title,
+};
+use crate::extract::scope::{
+    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
+    healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+};
+
+/// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
+fn complete_inventory() -> Vec<PackEntry> {
+    TILESETS
+        .iter()
+        .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name))
+        .chain(tileset_animation_ids())
+        .chain(title_ids())
+        .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
+        .chain(layout_ids())
+        .chain(text_window_ids())
+        .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
+        .chain(sprite_sheet_ids())
+        // Sprite palettes stay, so deleting a sheet removes only that sheet.
+        .chain(sprite_palette_ids())
+        .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
+        .chain([
+            rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
+            rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
+            rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
+        ])
+        .chain(synthetic_bag_ids())
+        .chain(starter_chooser_ids())
+        .chain(opening_scene_ids())
+        .chain(battle_interface_ids())
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+        .map(|id| raw_entry(id, vec![0]))
+        .collect()
+}
+
+/// Assert `entries` are refused with `MissingPackEntry(missing)` by both `locate_profile` and the `domain` locator, and neither writes a report line.
+fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &str) {
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context(label, &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let Err(err) = locate_profile(ctx, &mut report) else {
+            panic!("{missing} is missing; the aggregate must refuse");
+        };
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+
+        let err = if domain == "tilesets" {
+            tilesets::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "fonts" {
+            fonts::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "layouts" {
+            layouts::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "sprites" {
+            sprites::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "text_window" {
+            text_window::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "bag" {
+            bag::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "starter_chooser" {
+            starter_chooser::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "opening_scene" {
+            opening_scene::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_interface" {
+            battle_interface::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battlers" {
+            battlers::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_anims" {
+            battle_anims::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_messages" {
+            battle_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "field_messages" {
+            field_messages::locate(ctx, &mut report).map(|_| ())
+        } else {
+            title::locate(ctx, &mut report).map(|_| ())
+        }
+        .expect_err("the domain locator must refuse too");
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+fn without(id: &str) -> Vec<PackEntry> {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| entry.id != id);
+    entries
+}
+
+#[test]
+fn the_fixed_inventory_holds_the_committed_profile_counts() {
+    assert_eq!(TILESETS.len(), 9);
+    assert_eq!(FONTS.len(), 5);
+    let ids = title_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(count("title/image/"), 6);
+    assert_eq!(count("title/raw/"), 3);
+    assert_eq!(count("title/palette/"), 5);
+    assert_eq!(LAYOUTS.len(), 16);
+    assert_eq!(layout_ids().len(), 32);
+    let windows = text_window_ids();
+    let count = |prefix: &str| windows.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(count("text-window/image/"), TEXT_WINDOW_IMAGE_STEMS.len());
+    assert_eq!(count("text-window/image/"), 21);
+    assert_eq!(
+        count("text-window/palette/"),
+        TEXT_WINDOW_IMAGE_STEMS.len() + TEXT_WINDOW_PALETTE_STEMS.len()
+    );
+    assert_eq!(count("text-window/palette/"), 25);
+}
+
+#[test]
+fn the_fixed_inventory_ids_are_unique() {
+    for ids in [
+        layout_ids(),
+        text_window_ids(),
+        title_ids(),
+        starter_chooser_ids(),
+        opening_scene_ids(),
+        battle_interface_ids(),
+    ] {
+        let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_tileset_is_refused() {
+    for tileset in TILESETS {
+        let id = tileset.tiles_id();
+        assert_refused(
+            &format!("no-tileset-{}", tileset.name),
+            without(&id),
+            &id,
+            "tilesets",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_any_tileset_payload_root_is_refused() {
+    for tileset in TILESETS {
+        for id in inventory::tileset_payload_ids(tileset.name) {
+            assert_refused(
+                &format!("no-payload-{}", id.replace('/', "-")),
+                without(&id),
+                &id,
+                "tilesets",
+            );
+        }
+    }
+}
+
+#[test]
+fn the_tileset_payload_roots_are_the_tiles_metatiles_attributes_and_sixteen_palettes() {
+    let ids = inventory::tileset_payload_ids("general");
+    assert_eq!(ids.len(), 3 + 16);
+    for want in [
+        "tileset/general/tiles",
+        "tileset/general/metatiles",
+        "tileset/general/metatile-attributes",
+        "tileset/general/palette/00",
+        "tileset/general/palette/15",
+    ] {
+        assert!(ids.iter().any(|id| id == want), "{want} in {ids:?}");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_title_image_is_refused() {
+    for id in title_ids()
+        .iter()
+        .filter(|id| id.starts_with("title/image/"))
+    {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "title");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_title_tilemap_is_refused() {
+    for id in title_ids().iter().filter(|id| id.starts_with("title/raw/")) {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "title");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_title_palette_is_refused() {
+    for id in title_ids()
+        .iter()
+        .filter(|id| id.starts_with("title/palette/"))
+    {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "title");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_font_sheet_is_refused() {
+    for font in FONTS {
+        let label = format!("no-{}", font.pack_id.replace('/', "-"));
+        assert_refused(&label, without(font.pack_id), font.pack_id, "fonts");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_layout_map_or_border_is_refused() {
+    for id in layout_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "layouts");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_whole_layout_is_refused_by_id() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.starts_with("layout/route103/"));
+    assert_refused("no-route103", entries, "layout/route103/map", "layouts");
+}
+
+#[test]
+fn a_pack_missing_a_text_window_root_is_refused() {
+    for id in text_window_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "text_window");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.ends_with("/20") && !entry.id.contains("/20/"));
+    assert_refused(
+        "no-frame-20",
+        entries,
+        "text-window/image/20",
+        "text_window",
+    );
+}
+
+#[test]
+fn a_pack_missing_a_starter_battler_root_is_refused() {
+    for id in BATTLERS.iter().flat_map(|battler| battler.ids()) {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "battlers");
+    }
+}
+
+#[test]
+fn a_pack_missing_the_battle_message_table_is_refused() {
+    let id = rom_import::BATTLE_MESSAGE_PACK_ID;
+    assert_refused(
+        "no-battle-message-table",
+        without(id),
+        id,
+        "battle_messages",
+    );
+}
+
+#[test]
+fn a_pack_missing_the_field_message_table_is_refused() {
+    let id = rom_import::FIELD_MESSAGE_PACK_ID;
+    assert_refused("no-field-message-table", without(id), id, "field_messages");
+}
+
+#[test]
+fn a_pack_missing_the_battle_animation_catalog_is_refused() {
+    let id = rom_import::BATTLE_ANIM_PACK_ID;
+    assert_refused("no-battle-anim-catalog", without(id), id, "battle_anims");
+}
+
+#[test]
+fn a_pack_missing_any_expected_bag_entry_is_refused() {
+    for id in synthetic_bag_ids() {
+        assert_refused(
+            &format!("no-{}", id.replace('/', "-")),
+            without(&id),
+            &id,
+            "bag",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.starts_with("bag/"));
+    assert_refused("no-bag", entries, &synthetic_bag_ids()[0], "bag");
+}
+
+#[test]
+fn a_pack_missing_a_starter_chooser_entry_is_refused() {
+    for id in starter_chooser_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "starter_chooser");
+    }
+}
+
+#[test]
+fn a_surplus_starter_chooser_entry_is_refused_by_id() {
+    let surplus = "starter-chooser/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-starter-chooser", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = starter_chooser::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_opening_scene_inventory_is_five_sheets_eight_palettes_and_three_tilemaps() {
+    let ids = opening_scene_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 16);
+    assert_eq!(count("opening-scene/image/"), 5);
+    assert_eq!(count("opening-scene/palette/"), 8);
+    assert_eq!(count("opening-scene/raw/"), 3);
+}
+
+#[test]
+fn a_pack_missing_an_opening_scene_entry_is_refused() {
+    for id in opening_scene_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "opening_scene");
+    }
+}
+
+#[test]
+fn a_surplus_opening_scene_entry_is_refused_by_id() {
+    let surplus = "opening-scene/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-opening-scene", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = opening_scene::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn a_pack_missing_a_battle_interface_entry_is_refused() {
+    for id in battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+    {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "battle_interface");
+    }
+}
+
+#[test]
+fn a_surplus_battle_interface_entry_is_refused_by_id() {
+    let surplus = "battle-interface/raw/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-battle-interface", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = battle_interface::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_health_box_element_records_are_part_of_the_required_inventory() {
+    let elements = healthbox_element_ids();
+    assert_eq!(elements.len(), 14, "{elements:?}");
+    // Thirteen table rows in table order, then the battle bar.
+    assert_eq!(&elements[..13], healthbox_table_ids());
+    assert_eq!(elements[13], healthbox_battle_bar_id());
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox ids.
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("health-box-required", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
+    });
+}
+
+#[test]
+fn the_health_box_frame_records_are_part_of_the_required_inventory() {
+    let frames = healthbox_frame_ids();
+    assert_eq!(
+        frames,
+        [
+            "battle-interface/image/healthbox_singles_player",
+            "battle-interface/image/healthbox_singles_opponent",
+            "battle-interface/image/enemy_mon_shadow",
+            "battle-interface/palette/ball_status_bar",
+            "battle-interface/palette/ball_display",
+        ]
+    );
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox and element ids.
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("health-box-frames", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
+    });
+}
+
+#[test]
+fn a_surplus_bag_entry_is_refused_by_id() {
+    let surplus = "bag/item-icon/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-bag", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = bag::locate(ctx, &mut report).map(|_| ()).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn an_empty_bag_expectation_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("empty-bag", &rom, complete_inventory(), |ctx| {
+        let err = inventory::require_bag(ctx.pack, &[]).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "bag/*"),
+            "{err:?}"
+        );
+    });
+}
+
+#[test]
+fn a_complete_fixed_inventory_passes_preflight() {
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("complete", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("a complete inventory passes");
+    });
+}
+
+#[test]
+fn the_animation_inventory_matches_the_committed_profile() {
+    let mut expected: Vec<String> = rom_import::EMERALD_US_REV0
+        .roots
+        .tilesets
+        .iter()
+        .flat_map(|t| t.anims.iter())
+        .flat_map(|a| a.frames.iter().map(|frame| frame.id.to_owned()))
+        .collect();
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
+    expected.sort();
+    let mut actual = tileset_animation_ids();
+    actual.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 28);
+}
+
+#[test]
+fn a_pack_missing_the_last_water_frame_is_refused() {
+    let id = "tileset/general/anim/water/7";
+    assert_refused("no-water-7", without(id), id, "tilesets");
+}
+
+#[test]
+fn a_pack_missing_any_one_animation_frame_is_refused() {
+    for id in tileset_animation_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "tilesets");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_whole_animation_is_refused() {
+    for (set, anim) in [
+        ("general", "flower"),
+        ("general", "land_water_edge"),
+        ("general", "sand_water_edge"),
+        ("general", "water"),
+        ("general", "waterfall"),
+        ("building", "tv_turned_on"),
+    ] {
+        let prefix = format!("tileset/{set}/anim/{anim}/");
+        let mut entries = complete_inventory();
+        entries.retain(|e| !e.id.starts_with(&prefix));
+        assert_refused(
+            &format!("no-{set}-{anim}"),
+            entries,
+            &format!("{prefix}0"),
+            "tilesets",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_animation_domain_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|e| !e.id.contains("/anim/"));
+    assert_refused(
+        "no-animations",
+        entries,
+        "tileset/general/anim/flower/0",
+        "tilesets",
+    );
+}
+
+#[test]
+fn the_sprite_sheet_inventory_matches_the_committed_profile() {
+    let mut expected: Vec<String> = rom_import::EMERALD_US_REV0
+        .roots
+        .sprites
+        .sheets
+        .iter()
+        .map(|sheet| sheet.id.to_owned())
+        .collect();
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
+    expected.sort();
+    let mut actual = sprite_sheet_ids();
+    actual.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 146);
+}
+
+#[test]
+fn a_pack_missing_any_one_sprite_sheet_is_refused() {
+    for id in sprite_sheet_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "sprites");
+    }
+}
+
+#[test]
+fn a_pack_missing_any_one_sprite_palette_is_refused() {
+    for id in sprite_palette_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "sprites");
+    }
+}
+
+#[test]
+fn the_sprite_palette_inventory_holds_all_ten_fixed_banks() {
+    assert_eq!(
+        sprite_palette_ids(),
+        [
+            "brendan",
+            "may",
+            "npc_1",
+            "npc_2",
+            "npc_3",
+            "npc_4",
+            "enemy_zigzagoon",
+            "moving_box",
+            "truck",
+            "vigoroth",
+        ]
+        .map(|name| format!("sprite/palette/{name}"))
+        .to_vec()
+    );
+}
+
+#[test]
+fn a_pack_missing_a_player_sheet_is_refused() {
+    for id in [
+        "sprite/brendan/walking",
+        "sprite/may/walking",
+        "sprite/brendan/running",
+        "sprite/may/running",
+    ] {
+        assert_refused(
+            &format!("no-{}", id.replace('/', "-")),
+            without(id),
+            id,
+            "sprites",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_sprite_sheet_domain_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|e| !e.id.starts_with("sprite/") || e.id.starts_with("sprite/palette/"));
+    assert_refused("no-sprites", entries, &sprite_sheet_ids()[0], "sprites");
+}
+
+type Shape = fn(&str) -> bool;
+
+#[test]
+fn a_refused_generation_leaves_the_previous_module_untouched() {
+    let rom = RomFixture::new().emerald_header().finish();
+    let shapes: [(&str, Shape); 5] = [
+        ("walk", |id| id == "sprite/brendan/walking"),
+        ("sheets", |id| {
+            id.starts_with("sprite/") && !id.contains("palette")
+        }),
+        ("one", |id| id == "tileset/general/anim/water/7"),
+        ("anim", |id| id.starts_with("tileset/general/anim/water/")),
+        ("all", |id| id.contains("/anim/")),
+    ];
+    for (label, drop) in shapes {
+        let mut entries = complete_inventory();
+        entries.retain(|e| !drop(&e.id));
+        with_context(&format!("keep-{label}"), &rom, entries, |ctx| {
+            let dir = std::env::temp_dir()
+                .join(format!("rom-profile-keep-{label}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let out = dir.join("module.rs");
+            std::fs::write(&out, b"previous module").expect("seed");
+            let options = super::Options {
+                rom: dir.join("rom.gba"),
+                out: Some(out.clone()),
+                map: None,
+            };
+            let err = super::generate(ctx, "sha", &options, out.clone()).expect_err("refused");
+            assert!(
+                matches!(err, GenRomProfileError::MissingPackEntry(_)),
+                "{err:?}"
+            );
+            assert_eq!(std::fs::read(&out).expect("read"), b"previous module");
+            assert_eq!(std::fs::read_dir(&dir).expect("ls").count(), 1);
+            std::fs::remove_dir_all(&dir).expect("cleanup");
+        });
+    }
+}
+
+#[test]
+fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| entry.id != "interface/palette/main_menu_bg");
+    entries.push(raw_entry("interface/palette/other".to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("no-main-menu-bg", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "interface/palette/main_menu_bg"),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = super::locate_interface_palettes(ctx, &mut report).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "interface/palette/main_menu_bg"),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}

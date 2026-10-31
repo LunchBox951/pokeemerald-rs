@@ -1,0 +1,564 @@
+//! Locating the bundled tilesets.
+//!
+//! A tileset's `struct Tileset` is small, so it is found through its metatile
+//! table, a large blob that identifies itself. The locator
+//! matches `metatiles.bin` and `metatile_attributes.bin`, asks the pointer
+//! index what references the first, and accepts the one candidate whose
+//! fields agree with `pokeemerald/include/global.fieldmap.h`.
+//!
+//! The rest of the tileset follows that struct's pointers, except animation
+//! frames: `src/tileset_anims.c` stores them uncompressed, out of frame
+//! order and padded, with no pointer from the struct, so each frame is
+//! matched on its own bytes.
+//!
+//! A pack missing any root of [`crate::extract::scope::TILESETS`], or any
+//! frame of their pinned animations, is refused.
+
+use std::collections::BTreeMap;
+
+use rom_import::{lz77_decompress, Encoding};
+
+use super::error::GenRomProfileError;
+use super::locate::{
+    camel_case, exactly_one, only_one_matching, slice_at_addr, tile_count_of_prefix, u32_at_addr,
+    u8_at_addr,
+};
+use super::pack_source::image_tiles;
+use super::plan::{
+    BlobPlan, ImagePlan, PalettePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
+};
+use super::Context;
+
+/// Offset of the `isCompressed` flag inside `struct Tileset`.
+const FIELD_IS_COMPRESSED: u32 = 0x00;
+/// Offset of the `isSecondary` flag.
+const FIELD_IS_SECONDARY: u32 = 0x01;
+/// Offset of the `tiles` field.
+const FIELD_TILES: u32 = 0x04;
+/// Offset of the `palettes` field.
+const FIELD_PALETTES: u32 = 0x08;
+/// Offset of the `metatiles` field.
+const FIELD_METATILES: u32 = 0x0C;
+/// Offset of the `metatileAttributes` field.
+const FIELD_METATILE_ATTRIBUTES: u32 = 0x10;
+/// Offset of the `callback` field.
+const FIELD_CALLBACK: u32 = 0x14;
+/// Size of `struct Tileset`.
+const TILESET_STRUCT_BYTES: u32 = 0x18;
+
+/// Colours in one palette bank; the importer requires exactly this many.
+const BANK_COLORS: u16 = 16;
+/// Palette banks per tileset.
+pub(super) const PALETTE_BANKS: u32 = 16;
+/// Bytes in one 16-colour BGR555 bank.
+const BANK_BYTES: u32 = 32;
+/// Bytes in one 4bpp tile.
+const TILE_BYTES: usize = 32;
+
+/// Locate every tileset the pack holds.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] if the pack lacks a fixed
+/// tileset root, or any other [`GenRomProfileError`] a
+/// locator raises: a missing pack entry, a root that matches nothing or
+/// matches twice, or a struct whose fields do not agree with the tables
+/// they should point at.
+pub fn locate(
+    ctx: &Context<'_>,
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<TilesetPlan>, GenRomProfileError> {
+    super::inventory::require_tilesets(ctx.pack)?;
+    let mut plans = Vec::new();
+    for name in tileset_names(ctx) {
+        plans.push(locate_one(ctx, &name, report)?);
+    }
+    Ok(plans)
+}
+
+/// Every tileset name in the pack, ascending.
+fn tileset_names(ctx: &Context<'_>) -> Vec<String> {
+    ctx.pack
+        .ids_with_prefix("tileset/")
+        .into_iter()
+        .filter_map(|id| id.strip_suffix("/tiles").map(str::to_owned))
+        .filter_map(|id| id.strip_prefix("tileset/").map(str::to_owned))
+        .collect()
+}
+
+fn locate_one(
+    ctx: &Context<'_>,
+    name: &str,
+    report: &mut Vec<ReportLine>,
+) -> Result<TilesetPlan, GenRomProfileError> {
+    let metatiles_id = format!("tileset/{name}/metatiles");
+    let attributes_id = format!("tileset/{name}/metatile-attributes");
+    let tiles_id = format!("tileset/{name}/tiles");
+
+    let anim_ids = anim_frame_ids(ctx, name);
+    let mut needles = vec![
+        ctx.pack.raw_payload(&metatiles_id)?.to_vec(),
+        ctx.pack.raw_payload(&attributes_id)?.to_vec(),
+    ];
+    let mut anim_shapes = Vec::new();
+    for (_, frames) in &anim_ids {
+        for id in frames {
+            let asset = ctx.pack.get(id)?;
+            let (width, height, _) = asset.image_shape(id)?;
+            anim_shapes.push((width, height));
+            needles.push(image_tiles(ctx.pack, id, 4, (1, 1))?);
+        }
+    }
+    let hits = ctx.raw.find_all(&needles);
+
+    let metatiles_addr = exactly_one(&metatiles_id, &hits[0])?;
+    let attributes_addr = exactly_one(&attributes_id, &hits[1])?;
+
+    let struct_addr = only_one_matching(
+        name,
+        "the `struct Tileset` layout",
+        ctx.pointers
+            .refs_to(metatiles_addr)
+            .iter()
+            .filter_map(|at| at.checked_sub(FIELD_METATILES)),
+        |&base| is_tileset_struct(ctx, base, metatiles_addr, attributes_addr),
+    )?;
+
+    let is_compressed = u8_at_addr(ctx.rom, struct_addr + FIELD_IS_COMPRESSED) == Some(1);
+    let is_secondary = u8_at_addr(ctx.rom, struct_addr + FIELD_IS_SECONDARY) == Some(1);
+    let tiles_addr = field(ctx, struct_addr, FIELD_TILES, name)?;
+    let palettes_addr = field(ctx, struct_addr, FIELD_PALETTES, name)?;
+    let callback = u32_at_addr(ctx.rom, struct_addr + FIELD_CALLBACK).ok_or_else(|| {
+        GenRomProfileError::StructMismatch {
+            id: name.to_owned(),
+            reason: format!("field +{FIELD_CALLBACK:#04x} is not fully inside the ROM"),
+        }
+    })?;
+
+    let upstream = camel_case(name);
+    report.push(
+        ReportLine::unique(format!("tileset/{name}"), struct_addr, TILESET_STRUCT_BYTES)
+            .with(Resolution::StructDerived)
+            .symbol(format!("gTileset_{upstream}"))
+            .note("found through its metatile table"),
+    );
+    report.push(
+        ReportLine::unique(
+            &metatiles_id,
+            metatiles_addr,
+            len32(ctx.pack.raw_payload(&metatiles_id)?),
+        )
+        .symbol(format!("gMetatiles_{upstream}")),
+    );
+    report.push(
+        ReportLine::unique(
+            &attributes_id,
+            attributes_addr,
+            len32(ctx.pack.raw_payload(&attributes_id)?),
+        )
+        .symbol(format!("gMetatileAttributes_{upstream}")),
+    );
+
+    let tiles = locate_tiles(ctx, &tiles_id, tiles_addr, is_compressed)?;
+    report.push(
+        ReportLine::unique(&tiles_id, tiles_addr, tiles.tile_count * 32)
+            .with(Resolution::PointerWalk)
+            .symbol(format!("gTilesetTiles_{upstream}"))
+            .note(format!("{} tiles stored", tiles.tile_count)),
+    );
+
+    let palettes = locate_palettes(ctx, name, palettes_addr, report)?;
+    let anims = build_anims(ctx, &anim_ids, &anim_shapes, &hits[2..], report)?;
+
+    Ok(TilesetPlan {
+        name: name.to_owned(),
+        struct_addr,
+        is_compressed,
+        is_secondary,
+        tiles,
+        palettes,
+        metatiles: BlobPlan {
+            id: metatiles_id.clone(),
+            addr: metatiles_addr,
+            encoding: Encoding::Raw,
+            len: len32(ctx.pack.raw_payload(&metatiles_id)?),
+        },
+        metatile_attributes: BlobPlan {
+            id: attributes_id.clone(),
+            addr: attributes_addr,
+            encoding: Encoding::Raw,
+            len: len32(ctx.pack.raw_payload(&attributes_id)?),
+        },
+        callback,
+        anims,
+    })
+}
+
+/// Whether the bytes at `base` read as a `struct Tileset` for these tables.
+fn is_tileset_struct(ctx: &Context<'_>, base: u32, metatiles: u32, attributes: u32) -> bool {
+    let flag_ok = |at: u32| matches!(u8_at_addr(ctx.rom, at), Some(0 | 1));
+    let ptr_ok = |at: u32| {
+        u32_at_addr(ctx.rom, base + at)
+            .is_some_and(|value| super::locate::to_offset(value).is_some())
+    };
+    // The callback is a code pointer, so any value is allowed, but the whole
+    // word must be readable: a struct cut off at the ROM tail is not one.
+    let callback_readable = u32_at_addr(ctx.rom, base + FIELD_CALLBACK).is_some();
+    flag_ok(base + FIELD_IS_COMPRESSED)
+        && flag_ok(base + FIELD_IS_SECONDARY)
+        && ptr_ok(FIELD_TILES)
+        && ptr_ok(FIELD_PALETTES)
+        && callback_readable
+        && u32_at_addr(ctx.rom, base + FIELD_METATILES) == Some(metatiles)
+        && u32_at_addr(ctx.rom, base + FIELD_METATILE_ATTRIBUTES) == Some(attributes)
+}
+
+/// Read a pointer field, failing if it is not a cartridge address.
+fn field(
+    ctx: &Context<'_>,
+    struct_addr: u32,
+    offset: u32,
+    name: &str,
+) -> Result<u32, GenRomProfileError> {
+    u32_at_addr(ctx.rom, struct_addr + offset)
+        .filter(|value| super::locate::to_offset(*value).is_some())
+        .ok_or_else(|| GenRomProfileError::StructMismatch {
+            id: name.to_owned(),
+            reason: format!("field +{offset:#04x} is not a cartridge address"),
+        })
+}
+
+/// Check the ROM's tile data against the pack's raster and describe it.
+fn locate_tiles(
+    ctx: &Context<'_>,
+    id: &str,
+    addr: u32,
+    is_compressed: bool,
+) -> Result<ImagePlan, GenRomProfileError> {
+    let asset = ctx.pack.get(id)?;
+    let (width, height, pack_bit_depth) = asset.image_shape(id)?;
+    let expected = image_tiles(ctx.pack, id, 4, (1, 1))?;
+
+    let offset =
+        super::locate::to_offset(addr).ok_or_else(|| GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: "the tiles pointer is not a cartridge address".to_owned(),
+        })?;
+    let rom_tiles = if is_compressed {
+        // A cartridge-window pointer can still lie past this ROM image.
+        let stream = ctx
+            .rom
+            .get(offset..)
+            .ok_or_else(|| GenRomProfileError::StructMismatch {
+                id: id.to_owned(),
+                reason: "the tiles pointer is past the end of the ROM".to_owned(),
+            })?;
+        lz77_decompress(stream, None).map_err(|fault| GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: format!("the tiles stream does not decompress: {fault}"),
+        })?
+    } else {
+        slice_at_addr(ctx.rom, addr, expected.len())
+            .ok_or_else(|| GenRomProfileError::StructMismatch {
+                id: id.to_owned(),
+                reason: "the tiles run past the end of the ROM".to_owned(),
+            })?
+            .to_vec()
+    };
+    let tile_count = tile_count_of_prefix(id, &rom_tiles, &expected, TILE_BYTES)?;
+
+    Ok(ImagePlan {
+        id: id.to_owned(),
+        addr,
+        encoding: if is_compressed {
+            Encoding::Lz77
+        } else {
+            Encoding::Raw
+        },
+        rom_bit_depth: 4,
+        pack_bit_depth,
+        width,
+        height,
+        metatile_width: 1,
+        metatile_height: 1,
+        tile_count,
+    })
+}
+
+/// Check every palette bank against the block the struct points at.
+fn locate_palettes(
+    ctx: &Context<'_>,
+    name: &str,
+    base: u32,
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<PalettePlan>, GenRomProfileError> {
+    let mut plans = Vec::new();
+    for bank in 0..PALETTE_BANKS {
+        let id = format!("tileset/{name}/palette/{bank:02}");
+        let asset = ctx.pack.get(&id)?;
+        let color_count = asset.palette_colors(&id)?;
+        // The importer requires exactly one full 16-colour bank per root, and
+        // the ROM comparison below is only as long as the pack payload, so a
+        // shorter matching prefix would otherwise be emitted as-is.
+        if color_count != BANK_COLORS || asset.payload.len() != BANK_BYTES as usize {
+            return Err(GenRomProfileError::StructMismatch {
+                id,
+                reason: format!(
+                    "bank {bank} must hold exactly {BANK_COLORS} colours ({BANK_BYTES} bytes), \
+                     found {color_count} colours ({} bytes)",
+                    asset.payload.len()
+                ),
+            });
+        }
+        let addr = base + bank * BANK_BYTES;
+        let rom_bank = slice_at_addr(ctx.rom, addr, asset.payload.len());
+        if rom_bank != Some(asset.payload.as_slice()) {
+            return Err(GenRomProfileError::StructMismatch {
+                id,
+                reason: format!("bank {bank} of the palette block at {base:08X} differs"),
+            });
+        }
+        // Only the block's first bank carries the symbol; the rest are
+        // interior addresses.
+        let mut line =
+            ReportLine::unique(&id, addr, len32(&asset.payload)).with(Resolution::PointerWalk);
+        line = if bank == 0 {
+            line.symbol(format!("gTilesetPalettes_{}", camel_case(name)))
+        } else {
+            line.interior()
+        };
+        report.push(line);
+        plans.push(PalettePlan {
+            id,
+            addr,
+            color_count,
+            encoding: Encoding::Raw,
+        });
+    }
+    Ok(plans)
+}
+
+/// Every animation's frame ids, grouped by animation name.
+fn anim_frame_ids(ctx: &Context<'_>, name: &str) -> Vec<(String, Vec<String>)> {
+    let prefix = format!("tileset/{name}/anim/");
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for id in ctx.pack.ids_with_prefix(&prefix) {
+        let rest = &id[prefix.len()..];
+        let Some((anim, _frame)) = rest.split_once('/') else {
+            continue;
+        };
+        grouped.entry(anim.to_owned()).or_default().push(id.clone());
+    }
+    for frames in grouped.values_mut() {
+        frames.sort_by_key(|id| frame_number(id));
+    }
+    grouped.into_iter().collect()
+}
+
+/// The trailing frame number of an animation frame id, for ordering.
+fn frame_number(id: &str) -> u32 {
+    id.rsplit('/')
+        .next()
+        .and_then(|tail| tail.parse().ok())
+        .unwrap_or(u32::MAX)
+}
+
+/// Build plans from the animation frames' search hits, which are in `anim_ids` order.
+fn build_anims(
+    ctx: &Context<'_>,
+    anim_ids: &[(String, Vec<String>)],
+    shapes: &[(u32, u32)],
+    hits: &[Vec<u32>],
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<TileAnimPlan>, GenRomProfileError> {
+    let mut plans = Vec::new();
+    let mut cursor = 0usize;
+    for (anim, frame_ids) in anim_ids {
+        let mut frames = Vec::new();
+        for id in frame_ids {
+            let (width, height) = shapes[cursor];
+            let addr = exactly_one(id, &hits[cursor])?;
+            let pack_bit_depth = ctx.pack.get(id)?.image_shape(id)?.2;
+            let tile_count = (width / 8) * (height / 8);
+            report.push(
+                ReportLine::unique(id, addr, tile_count * 32).symbol_contains(["gTilesetAnims_"]),
+            );
+            frames.push(ImagePlan {
+                id: id.clone(),
+                addr,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth,
+                width,
+                height,
+                metatile_width: 1,
+                metatile_height: 1,
+                tile_count,
+            });
+            cursor += 1;
+        }
+        plans.push(TileAnimPlan {
+            name: anim.clone(),
+            frames,
+        });
+    }
+    Ok(plans)
+}
+
+/// A payload length as the `u32` the profile records.
+pub fn len32(payload: &[u8]) -> u32 {
+    u32::try_from(payload.len()).expect("a pack payload fits in u32")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{frame_number, locate_one, locate_palettes, TILESET_STRUCT_BYTES};
+    use crate::gen_rom_profile::error::GenRomProfileError;
+    use crate::gen_rom_profile::tests::image_twin;
+    use crate::gen_rom_profile::tests::with_context;
+    use pack_format::{palette_entry, raw_entry};
+    use rom_import::fixture::RomFixture;
+
+    /// Sixteen contiguous 16-colour banks in a ROM; bank `short` (if any) is
+    /// packed as a matching `short_len`-colour prefix.
+    fn locate(name: &str, short: Option<(usize, usize)>) -> Result<Vec<u16>, GenRomProfileError> {
+        let colors: Vec<u16> = (0..256u16)
+            .map(|i| i.wrapping_mul(0x0123) & 0x7FFF)
+            .collect();
+        let bytes: Vec<u8> = colors.iter().flat_map(|c| c.to_le_bytes()).collect();
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x50_0000, &bytes)
+            .finish();
+        let entries = (0..16usize)
+            .map(|bank| {
+                let full = &colors[bank * 16..bank * 16 + 16];
+                let used = match short {
+                    Some((b, len)) if b == bank => &full[..len],
+                    _ => full,
+                };
+                palette_entry(format!("tileset/general/palette/{bank:02}"), used).expect("entry")
+            })
+            .collect();
+        with_context(name, &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            locate_palettes(ctx, "general", 0x0850_0000, &mut report)
+                .map(|plans| plans.iter().map(|p| p.color_count).collect())
+        })
+    }
+
+    #[test]
+    fn complete_sixteen_colour_banks_are_accepted() {
+        assert_eq!(
+            locate("tileset-bank-full", None).expect("full"),
+            vec![16; 16]
+        );
+    }
+
+    #[test]
+    fn a_tileset_bank_narrower_than_sixteen_colours_is_refused() {
+        for (i, len) in [(1usize, 8usize), (0, 15)] {
+            let err = locate(&format!("tileset-bank-short-{i}"), Some((i, len)))
+                .expect_err("a short bank must be refused");
+            match err {
+                GenRomProfileError::StructMismatch { id, .. } => {
+                    assert_eq!(id, format!("tileset/general/palette/{i:02}"));
+                }
+                other => panic!("unexpected error {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn frames_order_numerically_not_lexically() {
+        assert_eq!(frame_number("tileset/general/anim/water/7"), 7);
+        assert_eq!(frame_number("tileset/general/anim/water/10"), 10);
+        assert!(frame_number("tileset/general/anim/water/2") < frame_number("a/10"));
+        // A frame that is not a number sorts last rather than panicking.
+        assert_eq!(frame_number("a/b"), u32::MAX);
+    }
+
+    #[test]
+    fn tileset_metatiles_and_attributes_of_the_wrong_kind_are_refused() {
+        let bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let metatiles = "tileset/demo/metatiles";
+        let attributes = "tileset/demo/metatile-attributes";
+        for (wrong, right) in [(metatiles, attributes), (attributes, metatiles)] {
+            let entries = vec![
+                image_twin(wrong, &bytes),
+                raw_entry(right.to_owned(), bytes.to_vec()),
+            ];
+            let err = with_context("tileset-wrong-kind", &bytes, entries, |ctx| {
+                locate_one(ctx, "demo", &mut Vec::new())
+            })
+            .expect_err("a non-raw metatile entry is refused");
+            assert!(
+                matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == wrong),
+                "{err:?}"
+            );
+        }
+    }
+
+    /// A demo tileset whose `struct Tileset` sits at `STRUCT_OFFSET` and whose
+    /// ROM image ends `rom_len` bytes into it.
+    fn locate_struct_cut_at(name: &str, rom_len: u32) -> Result<(), GenRomProfileError> {
+        const STRUCT_OFFSET: usize = 0x20_0000;
+        let metatiles = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let attributes = [9u8, 10, 11, 12, 13, 14, 15, 16];
+        let bus = |offset: usize| {
+            u32::try_from(offset).expect("offset fits in u32") + rom_import::ROM_BASE
+        };
+        let mut tileset = Vec::new();
+        tileset.extend_from_slice(&[0, 0, 0, 0]);
+        tileset.extend_from_slice(&bus(0x12_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x13_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x10_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x11_0000).to_le_bytes());
+        tileset.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tileset.len(), TILESET_STRUCT_BYTES as usize);
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x10_0000, &metatiles)
+            .write(0x11_0000, &attributes)
+            .write(STRUCT_OFFSET, &tileset)
+            .truncate(STRUCT_OFFSET + rom_len as usize)
+            .finish();
+        let entries = vec![
+            raw_entry("tileset/demo/metatiles".to_owned(), metatiles.to_vec()),
+            raw_entry(
+                "tileset/demo/metatile-attributes".to_owned(),
+                attributes.to_vec(),
+            ),
+        ];
+        with_context(name, &rom, entries, |ctx| {
+            locate_one(ctx, "demo", &mut Vec::new()).map(|_| ())
+        })
+    }
+
+    #[test]
+    fn a_tileset_struct_cut_off_inside_its_callback_is_not_accepted() {
+        // The metatile table points at a struct whose callback word is only
+        // half in the ROM: no candidate is a `struct Tileset`.
+        let err = locate_struct_cut_at("tileset-callback-cut", 0x16)
+            .expect_err("a struct truncated at the ROM tail is refused");
+        match err {
+            GenRomProfileError::StructMismatch { id, reason } => {
+                assert_eq!(id, "demo");
+                assert!(reason.contains("0 candidates"), "{reason}");
+            }
+            other => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tileset_struct_with_its_whole_callback_passes_the_layout_check() {
+        // The same ROM with the final word present clears the layout check and
+        // fails later, on the tiles the synthetic pack does not hold.
+        let err = locate_struct_cut_at("tileset-callback-whole", TILESET_STRUCT_BYTES)
+            .expect_err("the pack holds no tiles entry");
+        assert!(
+            !matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "demo"),
+            "{err:?}"
+        );
+    }
+}
