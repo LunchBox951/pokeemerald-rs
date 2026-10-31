@@ -50,6 +50,9 @@ const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
 /// `MOVE_ICICLE_SPEAR` -- `EFFECT_MULTI_HIT`, Ice; its loop reaches Thick Fat
 /// through [`damage_before_roll`] alone.
 const ICICLE_SPEAR: MoveId = MoveId::ICICLE_SPEAR;
+/// `MOVE_ICE_BEAM` -- Special Ice, power 95; its power keeps a one-point
+/// Special Attack difference visible in the Thick Fat ordering regression.
+const ICE_BEAM: MoveId = MoveId::ICE_BEAM;
 const GROWL: MoveId = MoveId::GROWL;
 const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
@@ -1359,45 +1362,72 @@ fn classifying_a_failed_roll_rejects_an_unknown_move_and_draws_nothing() {
 
 /// Upstream halves the raw (odd-truncated) Special Attack for Thick Fat before
 /// stage scaling (`pokemon.c:3202-3204`), so a +1 stage scales the halved stat.
+///
+/// A level-16 Abra has raw Special Attack 43, which is `4k + 3`: halving first
+/// gives `floor(floor(43 / 2) * 3 / 2) = 31`, while scaling first gives
+/// `floor(floor(43 * 3 / 2) / 2) = 32`. Every other residue modulo 4 gives the
+/// same value both ways, so only this stat can tell the two orders apart. Ice
+/// Beam's power keeps the one-point gap visible in the final damage.
 #[test]
 fn thick_fat_halves_raw_special_attack_before_stage_scaling_in_the_raw_damage_input() {
     let dex = Dex::new();
-    let mut attacker = mon(&dex, ABRA, 15, vec![ICICLE_SPEAR]);
+    let mut attacker = mon(&dex, ABRA, 16, vec![ICE_BEAM]);
     attacker.stages_mut().sp_attack = StatStage::new(1).unwrap();
     let raw_special_attack = attacker.stats().sp_attack;
     assert_eq!(
-        raw_special_attack % 2,
-        1,
-        "the stat must be odd to pin truncation"
+        raw_special_attack, 43,
+        "the stat must be 4k + 3 for the truncation orders to differ"
     );
     let thick_fat = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![TACKLE])
         .unwrap()
         .with_ability_slot(0);
     assert_eq!(thick_fat.ability(), THICK_FAT);
     let (defense, defense_stage) = thick_fat.defending_stat(MoveCategory::Special);
-    let expected_base = base_damage(&DamageInput {
-        attacker_level: attacker.level(),
-        power: 10,
-        move_type: Type::Ice,
-        attack_stat: raw_special_attack / 2,
-        attack_stage: StatStage::new(1).unwrap(),
-        defense_stat: defense,
-        defense_stage,
-        attacker_burned: false,
-        reflect: false,
-        light_screen: false,
-        weather: Weather::None,
-        is_solar_beam: false,
-        attacker_pinch_boost: false,
-    });
+    let base_with_attack = |attack_stat: u32, attack_stage: StatStage| {
+        base_damage(&DamageInput {
+            attacker_level: attacker.level(),
+            power: 95,
+            move_type: Type::Ice,
+            attack_stat,
+            attack_stage,
+            defense_stat: defense,
+            defense_stage,
+            attacker_burned: false,
+            reflect: false,
+            light_screen: false,
+            weather: Weather::None,
+            is_solar_beam: false,
+            attacker_pinch_boost: false,
+        })
+    };
+    // Correct order: halve the raw stat, then let the damage formula apply +1.
+    let halve_then_scale = base_with_attack(raw_special_attack / 2, StatStage::new(1).unwrap());
+    // Reversed order: scale by +1 first, then halve; the formula sees neutral.
+    let scale_then_halve = base_with_attack(
+        StatStage::new(1).unwrap().apply(raw_special_attack) / 2,
+        StatStage::NEUTRAL,
+    );
+    assert_eq!(
+        (halve_then_scale, scale_then_halve),
+        (44, 46),
+        "the fixture must separate the two truncation orders"
+    );
     let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW]);
 
-    let raw =
-        damage_before_roll(&dex, ICICLE_SPEAR, &attacker, &thick_fat, false, &mut rng).unwrap();
+    let raw = damage_before_roll(&dex, ICE_BEAM, &attacker, &thick_fat, false, &mut rng).unwrap();
 
     assert_eq!(
         raw.damage,
-        apply_dual_type_effectiveness(expected_base, Type::Ice, thick_fat.types())
+        apply_dual_type_effectiveness(halve_then_scale, Type::Ice, thick_fat.types())
+    );
+    assert_eq!(
+        raw.damage, 22,
+        "correct order, after Ice into Marill's Water"
+    );
+    assert_ne!(
+        raw.damage,
+        apply_dual_type_effectiveness(scale_then_halve, Type::Ice, thick_fat.types()),
+        "the reversed order would produce 23"
     );
     assert_eq!(rng.draws(), 1, "Thick Fat spends no extra draw");
 }
