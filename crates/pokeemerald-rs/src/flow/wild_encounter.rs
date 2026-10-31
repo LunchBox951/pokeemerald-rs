@@ -41,6 +41,7 @@ use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
 use super::battle_finalize::finalize_battle_turn;
+use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
 
 pub(super) struct SharedRng<'a>(&'a mut Rng);
@@ -185,7 +186,7 @@ pub(super) fn start_wild_battle_with_lead_effects(
     player_trainer_id: u32,
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
-    battle::ensure_participant_admissible(&player_lead)?;
+    ensure_lead_can_battle(&player_lead)?;
     let dex = Dex::new();
     let wild_moves = battle::initial_moveset(encounter.species, encounter.level);
     let wild_opponent = battle::build_wild_pokemon(

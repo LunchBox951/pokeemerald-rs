@@ -1,77 +1,54 @@
-//! The lead-owner compatibility boundary over `OverworldPhase`'s
-//! `party_lead`, `party_lead_slot`, and `lead_hp_hidden_by_load` triad.
+//! The lead owner: `OverworldPhase`'s one [`party::LoadedLead`], behind the
+//! interface every flow adopter uses.
 //!
-//! The three fields are one fact -- the battle-facing lead, the saved slot it
-//! was decoded from, and the HP the load clamp hid from it -- and upstream
+//! The battle-facing lead, the saved slot it was decoded from, the backing
+//! record, and the HP the load clamp hid from it are one fact, and upstream
 //! never synchronises them as unrelated values
-//! (`pokeemerald/src/pokemon.c:2823-2895`). This interface is the only
-//! surface adopters should touch: it returns the battler, never the slot or
-//! the offset, and every operation that moves one field moves the others with
-//! it. It carries the existing behaviour unchanged, so the storage can later
-//! become a single aggregate without changing any caller.
+//! (`pokeemerald/src/pokemon.c:2823-2895`). [`party::LoadedLead`] owns all of
+//! them, so none can move without the others. The phase files the owned record
+//! into the save only at [`party::LoadedLead::slot`]; the interface returns
+//! the battler, never the slot or the offset.
 
 use battle::{BattleError, BattlePokemon, Dex};
 
 use super::OverworldPhase;
-use crate::party;
+use crate::party::{self, LoadedLead};
 
-/// Whether an absent lead is out on loan to a battle
-/// ([`OverworldPhase::take_lead_battler`]) or was simply never loaded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LeadLoan {
-    NotLent,
-    /// Lent, remembering the lent mon's identity so only that mon returns.
-    Lent {
-        personality: u32,
-        ot_id: u32,
-    },
-}
-
-/// The slot a lead-less phase reports; never read while no lead is present.
-const NO_LEAD_SLOT: usize = 0;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "compatibility boundary awaiting its remaining flow adopters"
-    )
-)]
 impl OverworldPhase {
+    /// The lead whose battler is home: absent when no lead is loaded or a
+    /// battle has the battler out on loan.
+    fn resident_lead(&self) -> Option<&LoadedLead> {
+        self.lead.as_ref().filter(|lead| !lead.is_lent())
+    }
+
+    fn resident_lead_mut(&mut self) -> Option<&mut LoadedLead> {
+        self.lead.as_mut().filter(|lead| !lead.is_lent())
+    }
+
     /// Battler observation: the lead in battle-ready form, if any.
     pub(super) fn lead_battler(&self) -> Option<&BattlePokemon> {
-        self.party_lead.as_ref()
+        self.resident_lead().map(LoadedLead::battler)
     }
 
-    /// Battler mutation. Exposes the battler only, so the slot and hidden-HP
-    /// offset cannot be edited independently of it.
+    /// Battler mutation. Exposes the battler only, so the slot, record, and
+    /// hidden-HP offset cannot be edited independently of it.
     pub(super) fn lead_battler_mut(&mut self) -> Option<&mut BattlePokemon> {
-        self.party_lead.as_mut()
+        self.resident_lead_mut().map(LoadedLead::battler_mut)
     }
 
-    /// Lend: moves the battler out for a battle. The selected slot and the
-    /// hidden-HP offset stay with the owner, so [`Self::restore_lead_battler`]
-    /// merges back into the same record. `None` when no lead is loaded.
+    /// Lend: moves the battler out for a battle. The lead keeps its slot,
+    /// record, and hidden-HP offset, so [`Self::restore_lead_battler`] merges
+    /// back into the same record. `None` when no lead is loaded.
     ///
     /// # Panics
     ///
     /// As [`party::LoadedLead::take_battler`] does: panics if the battler is
     /// already lent out.
     pub(super) fn take_lead_battler(&mut self) -> Option<BattlePokemon> {
-        assert!(
-            self.lead_loan == LeadLoan::NotLent,
-            "the loaded lead's battler is lent out to a battle"
-        );
-        let lent = self.party_lead.take()?;
-        self.lead_loan = LeadLoan::Lent {
-            personality: lent.personality(),
-            ot_id: lent.original_trainer_id(),
-        };
-        Some(lent)
+        self.lead.as_mut().map(LoadedLead::take_battler)
     }
 
-    /// Restore: returns the battler a battle borrowed, keeping the retained
-    /// slot and offset.
+    /// Restore: returns the battler a battle borrowed to the lead that lent it.
     ///
     /// # Panics
     ///
@@ -79,56 +56,42 @@ impl OverworldPhase {
     /// was not lent out by [`Self::take_lead_battler`] (an absent lead that
     /// was never loaded, such as a zero-count or undecodable save, does not
     /// count), or if `battler` is not the mon that was lent (personality and
-    /// original trainer id, recorded at the lend whether or not a saved
-    /// record backs the lead).
+    /// original trainer id of the owned record).
     pub(super) fn restore_lead_battler(&mut self, battler: BattlePokemon) {
-        let LeadLoan::Lent { personality, ot_id } = self.lead_loan else {
+        let Some(lead) = self.lead.as_mut() else {
             panic!("the loaded lead's battler was never lent out");
         };
-        assert!(
-            self.party_lead.is_none(),
-            "the loaded lead's battler was never lent out"
-        );
-        assert!(
-            battler.personality() == personality && battler.original_trainer_id() == ot_id,
-            "a different party member cannot take the loaded lead's place"
-        );
-        self.party_lead = Some(battler);
-        self.lead_loan = LeadLoan::NotLent;
+        lead.restore_battler(battler);
     }
 
     /// Installs a lead with no saved backing: slot 0, no hidden HP, and no
-    /// retained-undecodable diagnostic. Writes nothing to the save.
+    /// retained-undecodable diagnostic. Its backing record is the fresh
+    /// `to_save_pokemon` encoding of the battler, held by the lead and filed
+    /// only by [`Self::flush_lead_to_save`]; the save is untouched here.
     pub(super) fn install_fresh_lead(&mut self, battler: BattlePokemon) {
-        self.party_lead = Some(battler);
-        self.party_lead_slot = NO_LEAD_SLOT;
-        self.lead_hp_hidden_by_load = 0;
+        let dex = Dex::new();
+        let record = party::to_save_pokemon(&dex, &battler);
+        self.lead = Some(LoadedLead::created(&dex, battler, record));
         self.undecodable_lead_retained = false;
-        self.lead_loan = LeadLoan::NotLent;
     }
 
     /// Save flush: merges the live battler into its selected slot (the party
     /// half of `SavePlayerParty`). Without a battler, the party records and
     /// count are untouched; a zero count with a battler becomes one.
     pub(super) fn flush_lead_to_save(&mut self) {
-        let slot = self.party_lead_slot;
-        if let Some(lead) = &self.party_lead {
-            self.save1.player_party[slot] = party::merge_into_save_pokemon(
-                &Dex::new(),
-                lead,
-                &self.save1.player_party[slot],
-                &mut self.lead_hp_hidden_by_load,
-            );
-            if self.save1.player_party_count == 0 {
-                self.save1.player_party_count = 1;
-            }
+        let Some(lead) = self.lead.as_mut().filter(|lead| !lead.is_lent()) else {
+            return;
+        };
+        self.save1.player_party[lead.slot()] = lead.merge_and_save(&Dex::new());
+        if self.save1.player_party_count == 0 {
+            self.save1.player_party_count = 1;
         }
     }
 
     /// Load and selection (the party half of `CopyPartyAndObjectsFromSave`,
     /// `LoadPlayerParty`, `src/load_save.c:160-205`): rebuilds the lead from
-    /// the saved party using [`party::select_active_battler`], measuring what
-    /// the load hid. Reads the saved party and count; writes no saved bytes.
+    /// the saved party through [`party::LoadedLead::load`], measuring what the
+    /// load hid. Reads the saved party and count; writes no saved bytes.
     ///
     /// The lead is empty when the stored party count is zero (the port's
     /// deliberate difference from `SetBattlePartyIds`'s count-blind scan in
@@ -140,19 +103,14 @@ impl OverworldPhase {
     /// because the player's facing must be known before the player state is
     /// built.
     pub(super) fn load_lead_from_save(&mut self) {
-        self.lead_loan = LeadLoan::NotLent;
         if self.save1.player_party_count == 0 {
             self.set_no_party_lead(false);
             return;
         }
-        let dex = Dex::new();
         // `SetBattlePartyIds` scans every party slot, not only the stored count.
-        match party::select_active_battler(&dex, &self.save1.player_party) {
-            Ok((slot, lead)) => {
-                self.lead_hp_hidden_by_load =
-                    party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);
-                self.party_lead = Some(lead);
-                self.party_lead_slot = slot;
+        match LoadedLead::load(&Dex::new(), &self.save1.player_party) {
+            Ok(lead) => {
+                self.lead = Some(lead);
                 self.undecodable_lead_retained = false;
             }
             Err(err) => {
@@ -168,38 +126,23 @@ impl OverworldPhase {
     }
 
     fn set_no_party_lead(&mut self, undecodable_lead_retained: bool) {
-        self.party_lead = None;
-        self.party_lead_slot = NO_LEAD_SLOT;
-        self.lead_hp_hidden_by_load = 0;
+        self.lead = None;
         self.undecodable_lead_retained = undecodable_lead_retained;
     }
 
-    /// Whole-lead healing (`HealPlayerParty`, `script_pokemon_util.c:30-58`):
-    /// clears the selected record's status, fills its HP, heals the battler,
-    /// re-measures the offset, and merges. A lead beyond a nonzero stored
-    /// count is merged without healing. On a PP-heal error the saved
-    /// plaintext repair stays and nothing is merged. No battler is a no-op.
+    /// Whole-lead healing (`HealPlayerParty`, `script_pokemon_util.c:30-58`)
+    /// through [`party::LoadedLead::heal_whole_lead`], filing the owned record
+    /// at its slot. A lead beyond a nonzero stored count is merged without
+    /// healing. On a PP-heal error the record keeps its status and HP repair
+    /// and is filed without a merge. No battler is a no-op.
     pub(super) fn heal_whole_lead(&mut self, dex: &Dex) -> Result<(), BattleError> {
-        let stored_count =
-            usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
-        let slot = self.party_lead_slot;
-        let Some(lead) = self.party_lead.as_mut() else {
+        let player_party_count = self.save1.player_party_count;
+        let Some(lead) = self.lead.as_mut().filter(|lead| !lead.is_lent()) else {
             return Ok(());
         };
-        if stored_count == 0 || slot < stored_count {
-            self.save1.player_party[slot].status = 0;
-            self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
-            lead.heal(dex)?;
-        }
-        self.lead_hp_hidden_by_load =
-            party::hp_hidden_by_load(dex, &self.save1.player_party[slot], lead);
-        self.save1.player_party[slot] = party::merge_into_save_pokemon(
-            dex,
-            lead,
-            &self.save1.player_party[slot],
-            &mut self.lead_hp_hidden_by_load,
-        );
-        Ok(())
+        let healed = lead.heal_whole_lead(dex, player_party_count);
+        self.save1.player_party[lead.slot()] = *lead.record();
+        healed
     }
 
     /// Reselection: re-scans the saved party for the active battler. Skipped
@@ -209,15 +152,14 @@ impl OverworldPhase {
         if self.save1.player_party_count == 0 {
             return;
         }
-        match party::select_active_battler(dex, &self.save1.player_party) {
-            Ok((slot, mon)) => {
-                if slot != self.party_lead_slot || self.party_lead.is_none() {
-                    self.lead_hp_hidden_by_load =
-                        party::hp_hidden_by_load(dex, &self.save1.player_party[slot], &mon);
-                    self.party_lead = Some(mon);
-                    self.party_lead_slot = slot;
+        match LoadedLead::load(dex, &self.save1.player_party) {
+            Ok(selected) => {
+                let kept = self
+                    .resident_lead()
+                    .is_some_and(|lead| lead.slot() == selected.slot());
+                if !kept {
+                    self.lead = Some(selected);
                     self.undecodable_lead_retained = false;
-                    self.lead_loan = LeadLoan::NotLent;
                 }
             }
             Err(err) => {
@@ -230,6 +172,6 @@ impl OverworldPhase {
     /// the coupled form of "battler present and slot matches", for skipping
     /// the live lead while dormant slots are walked.
     pub(super) fn owns_lead_slot(&self, slot: usize) -> bool {
-        self.party_lead.is_some() && self.party_lead_slot == slot
+        self.resident_lead().is_some_and(|lead| lead.slot() == slot)
     }
 }

@@ -7,8 +7,10 @@ use rom_import::Encoding;
 use super::locate;
 use crate::extract::scope::opening_scene_ids;
 use crate::gen_rom_profile::error::GenRomProfileError;
-use crate::gen_rom_profile::plan::Resolution;
-use crate::gen_rom_profile::tests::{distinctive_tiles, lz77_literals, with_context};
+use crate::gen_rom_profile::plan::{Resolution, SymbolExpectation};
+use crate::gen_rom_profile::tests::{
+    cross_check_ld_map, distinctive_tiles, lz77_literals, with_context,
+};
 
 const IMAGE_IDS: [&str; 5] = [
     "opening-scene/image/birch",
@@ -265,4 +267,75 @@ fn a_wrong_kind_scene_entry_is_refused() {
             "{err}"
         );
     });
+}
+
+/// The scene roots upstream declares `static`, with their symbols. `bg0` and
+/// `bg1` are the two rows of one `sBirchSpeechBgPals` (`main_menu.c:250-253`).
+const STATIC_ROOTS: [(&str, &str); 8] = [
+    ("opening-scene/image/shadow", "sBirchSpeechShadowGfx"), // main_menu.c:255
+    ("opening-scene/image/birch", "sNewGameBirch_Gfx"),      // field_effect.c:245
+    ("opening-scene/image/clock_hand", "sHand_Gfx"),         // wallclock.c:74
+    ("opening-scene/palette/bg0", "sBirchSpeechBgPals"),     // main_menu.c:250
+    ("opening-scene/palette/bg1", "sBirchSpeechBgPals"),     // main_menu.c:250
+    ("opening-scene/palette/bg2", "sBirchSpeechBgGradientPal"), // main_menu.c:257
+    ("opening-scene/palette/birch", "sNewGameBirch_Pal"),    // field_effect.c:247
+    ("opening-scene/raw/birch_speech_map", "sBirchSpeechBgMap"), // main_menu.c:256
+];
+
+/// Every other scene root is global: `gMonStillFrontPic_Lotad` and
+/// `gMonPalette_Lotad` (`pokemon.h:1888-1889`), `gWallClock_Gfx`,
+/// `gWallClock{Male,Female}_Pal` and the two `gWallClock*_Tilemap`
+/// (`graphics.c:1350-1354`). `sTextPrompt_Pal` is static (`wallclock.c:75`).
+const GLOBAL_ROOTS: [&str; 7] = [
+    "opening-scene/image/lotad",
+    "opening-scene/image/wall_clock",
+    "opening-scene/palette/clock_female",
+    "opening-scene/palette/clock_male",
+    "opening-scene/palette/lotad",
+    "opening-scene/raw/clock_start",
+    "opening-scene/raw/clock_view",
+];
+
+#[test]
+fn static_scene_roots_survive_a_real_ld_map() {
+    let (rom, entries) = fixture();
+    with_context("scene-static-map", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        locate(ctx, &mut report).expect("located");
+        assert_eq!(report.len(), 16);
+        let mut statics = STATIC_ROOTS.to_vec();
+        statics.push(("opening-scene/palette/clock_text_prompt", "sTextPrompt_Pal"));
+        for (id, symbol) in &statics {
+            let line = report.iter().find(|line| line.id == *id).expect(id);
+            assert_eq!(
+                line.symbol,
+                SymbolExpectation::Local((*symbol).to_owned()),
+                "{id}"
+            );
+        }
+        for id in GLOBAL_ROOTS {
+            let line = report.iter().find(|line| line.id == id).expect(id);
+            assert_eq!(line.symbol, SymbolExpectation::Unnamed, "{id}");
+        }
+        let check = cross_check_ld_map("scene-static-map", &mut report, &[])
+            .expect("a correct ROM and an ordinary ld map must pass");
+        assert_eq!((check.local, check.confirmed), (9, 7));
+    });
+}
+
+#[test]
+fn a_global_scene_root_still_needs_its_map_symbol() {
+    for id in GLOBAL_ROOTS {
+        let (rom, entries) = fixture();
+        with_context("scene-global-map", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            locate(ctx, &mut report).expect("located");
+            let err = cross_check_ld_map("scene-global-map", &mut report, &[id])
+                .expect_err("a global root missing from the map is a mismatch");
+            assert!(
+                matches!(&err, GenRomProfileError::MapMismatch { id: bad, .. } if bad == id),
+                "{id}: {err}"
+            );
+        });
+    }
 }
