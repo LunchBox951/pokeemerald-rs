@@ -16,6 +16,9 @@ const HIGHLIGHT_SHADOW_PADDING_PX: i32 = 1;
 const UNSELECTED_DARKEN_AMOUNT: u8 = 7;
 /// An empty highlight rectangle: nothing is spared from the darkening.
 const NO_HIGHLIGHT: (i32, i32, i32, i32) = (0, 0, 0, 0);
+/// `WIN0` over the whole `DISPLAY_WIDTH` x `DISPLAY_HEIGHT` screen
+/// (`pokeemerald/src/main_menu.c:898-900`): nothing is darkened.
+const FULL_SCREEN_WINDOW: (i32, i32, i32, i32) = (0, 0, 240, 160);
 const LABEL_TOP_OFFSET_PX: i32 = 1;
 
 const TILE_SIZE_PX: i32 = 8;
@@ -209,6 +212,16 @@ impl MainMenuScene {
     pub(crate) fn compose_with_palette(&self, palette: PaletteStage<'_>) -> Framebuffer {
         let highlight = highlight_rect(self.rendered_items[self.selected_index].window);
         self.compose_darkened_outside(palette, highlight)
+    }
+
+    /// [`Self::compose_with_palette`] with `WIN0` opened over the whole screen,
+    /// as the B press does (`SetGpuReg(REG_OFFSET_WIN0H/V, ...)`,
+    /// `pokeemerald/src/main_menu.c:898-900`): the BG0 darkening is a colour
+    /// effect disabled inside `WIN0` (`:747-753`), so every window shows
+    /// undarkened while the white fade runs.
+    #[must_use]
+    pub(crate) fn compose_with_open_window(&self, palette: PaletteStage<'_>) -> Framebuffer {
+        self.compose_darkened_outside(palette, FULL_SCREEN_WINDOW)
     }
 
     /// Composes the windows with every one darkened: `Task_DisplayMainMenu`

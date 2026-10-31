@@ -28,9 +28,8 @@
 //! into a flat, time-ordered event list; [`compile`] is the semantic
 //! translation (tick/velocity scaling, note-off pairing, tie-splitting,
 //! sort order, controller mapping) into [`event::SongEvent`]; [`encode`]
-//! serializes that to the schema's exact wire bytes, duplicated rather than
-//! shared — see [`encode`]'s module docs, mirroring
-//! `xtask::extract::voicegroups::encode`'s documented rationale. [`mod@cfg`]
+//! maps that onto `assets`' song schema, which canonicalizes the waits and
+//! writes the wire bytes. [`mod@cfg`]
 //! resolves `midi.cfg`'s per-song compile flags this pipeline needs
 //! (voicegroup label, priority, reverb, master volume, `-E`/`-X`).
 //!
@@ -126,7 +125,10 @@ impl SongSources {
         if defaulted_group && !song.tracks.is_empty() {
             return Err(in_midi(MidiError::DefaultVoiceGroupOnPlayableSong));
         }
-        encode::encode_song(&song, player).map_err(in_midi)
+        encode::encode_song(&song, player).map_err(|source| ExtractError::InvalidSongSchema {
+            path: midi_path.clone(),
+            source,
+        })
     }
 }
 
@@ -140,8 +142,9 @@ impl SongSources {
 /// missing; [`ExtractError::MidiCfg`] if a song's `midi.cfg` entry is absent, duplicated, or
 /// malformed; [`ExtractError::Midi`] if the manifest is malformed, a song's song-table row is
 /// absent, duplicated, malformed, or assigns a different music player than the manifest
-/// expects, compiling the `.mid` source itself fails, or the compiled song carries more
-/// tracks than the wire format's `u8` count can describe (see [`error::MidiError`]'s variants).
+/// expects, or compiling the `.mid` source itself fails (see [`error::MidiError`]'s variants);
+/// [`ExtractError::InvalidSongSchema`] if `assets` rejects a compiled song as outside the pack
+/// schema's domain.
 pub(super) fn extract_songs(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     extract_listed_songs(upstream, writer, &CHECKPOINT_SONGS)
 }

@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
 use assets::{CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
+use rom_import::FIELD_MESSAGE_PACK_ID;
 
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
@@ -74,6 +75,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "audio/voicegroup/",
     "audio/sample/",
     "battle-message/",
+    "field-message/",
     "battle-anim/",
     "bag/",
     "starter-chooser/",
@@ -237,6 +239,14 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
+/// `field-message/table` as both backends must write it: schema header, then
+/// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
+/// through `charmap.txt`.
+const FIELD_MESSAGE_TABLE: [u8; 28] = [
+    b'F', b'M', b'S', b'G', 1, 0, 1, 0, 0, 0, 14, 0, 0, 0, 0xFD, 0x02, 0x00, 0xDA, 0xD5, 0xDD,
+    0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -244,6 +254,14 @@ fn checkpoint_payload_ids() -> Vec<String> {
 /// reason that survives review, not a convenient way to make this test
 /// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
+
+/// A difference line for each of `ids` the ROM backend did not write.
+fn missing_imported<V>(ids: &[&str], imported: &BTreeMap<String, V>) -> Vec<String> {
+    ids.iter()
+        .filter(|id| !imported.contains_key(**id))
+        .map(|id| format!("{id}: the ROM backend wrote no such entry"))
+        .collect()
+}
 
 #[test]
 fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
@@ -332,11 +350,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    for id in ROM_IMPORTED_SONG_IDS {
-        if !imported.contains_key(id) {
-            differences.push(format!("{id}: the ROM backend wrote no such entry"));
-        }
-    }
+    // `audio/song/` is not a complete prefix, so the imported songs are
+    // pinned by id too (`ROM_IMPORTED_SONG_IDS`).
+    differences.extend(missing_imported(&ROM_IMPORTED_SONG_IDS, &imported));
 
     // `pokemon/` is not a complete prefix while only the starters exist, so
     // their entries are pinned by id: a dropped root fails here.
@@ -365,6 +381,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
             }
         }
     }
+
+    differences.extend(field_message_differences(
+        (&rom_bytes, &imported),
+        (&checkout_bytes, &checkout),
+    ));
 
     for difference in &differences {
         eprintln!("difference: {difference}");
@@ -612,6 +633,33 @@ fn rom_path() -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(value))
+}
+
+/// The `field-message/table` pin applied to each backend's pack, given as
+/// `(bytes, index)` pairs: named by id and bytes so a message both backends
+/// drop or misencode together still fails.
+fn field_message_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for (what, (bytes, entries)) in [
+        ("the ROM backend", imported),
+        ("the checkout pack", checkout),
+    ] {
+        let Some(entry) = entries.get(FIELD_MESSAGE_PACK_ID) else {
+            differences.push(format!(
+                "{FIELD_MESSAGE_PACK_ID}: {what} wrote no such entry"
+            ));
+            continue;
+        };
+        if bytes[entry.offset..entry.offset + entry.length] != FIELD_MESSAGE_TABLE {
+            differences.push(format!(
+                "{FIELD_MESSAGE_PACK_ID}: {what} wrote a payload other than gText_PkmnFainted_FldPsn"
+            ));
+        }
+    }
+    differences
 }
 
 /// Parse a pack's directory into an id-keyed map.
