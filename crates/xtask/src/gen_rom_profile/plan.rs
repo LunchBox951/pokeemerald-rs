@@ -404,6 +404,22 @@ pub struct BattleMessagePlan {
     pub specials: Vec<SpecialMessagePlan>,
 }
 
+/// One field message's root, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessageRootPlan {
+    /// The upstream symbol, as `FieldMessage::symbol` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the message's token stream.
+    pub addr: u32,
+}
+
+/// The field-message roots, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessagePlan {
+    /// Every field message, in `FieldMessage::ALL` order.
+    pub messages: Vec<FieldMessageRootPlan>,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -542,6 +558,8 @@ pub struct ProfilePlan {
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,
+    /// The field-message token table.
+    pub field_messages: FieldMessagePlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.

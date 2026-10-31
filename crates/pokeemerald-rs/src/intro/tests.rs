@@ -843,8 +843,8 @@ fn planted_probe_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Every intro pack path is as predictable as its name and the process id, so
-/// a symlink or an occupied file planted there must be replaced, never
-/// written through or truncated in place.
+/// a symlink or an occupied file planted there must be refused and left
+/// intact, never written through, truncated in place, or unlinked.
 #[test]
 fn the_intro_scratch_packs_never_write_through_a_planted_entry() {
     for name in LIVE_SCRATCH_NAMES {

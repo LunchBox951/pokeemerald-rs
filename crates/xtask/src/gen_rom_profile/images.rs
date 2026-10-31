@@ -25,6 +25,7 @@ use super::error::GenRomProfileError;
 use super::locate::to_addr;
 use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
+use super::search::MATCH_LIMIT;
 use super::Context;
 
 /// One image to locate.
@@ -217,8 +218,9 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Validates the dimensions against the payload before they drive packing.
-        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
+        // Validates the dimensions against the payload, and that they hold a whole
+        // tile, before they drive packing: a raster with no tile has no candidates.
+        let (_, width, height, pack_bit_depth) = asset.tiled_image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
@@ -261,8 +263,12 @@ pub fn locate_images(
         }
     }
 
-    let raw_hits = ctx.raw.find_all(&raw_needles);
-    let lz_hits = ctx.lz77.find_all(&lz_needles);
+    // `assign` gives each id sharing art its own copy, so every copy up to
+    // one per query must survive the search; the ordinary cap would reject
+    // more identical-art ids than it. No more ids than queries can share.
+    let hit_limit = queries.len().max(MATCH_LIMIT);
+    let raw_hits = ctx.raw.find_all_up_to(&raw_needles, hit_limit);
+    let lz_hits = ctx.lz77.find_all_up_to(&lz_needles, hit_limit);
 
     // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
