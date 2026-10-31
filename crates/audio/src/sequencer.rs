@@ -927,7 +927,7 @@ impl Sequencer {
                 CgbVoice::square_with_fixed_rate(
                     CgbChannelNumber::Square1,
                     sq.duty,
-                    Some(sq.sweep),
+                    Some(admitted_sweep_byte(sq.sweep)),
                     sq.adsr,
                     sq.fixed_rate,
                     note_key,
@@ -1017,6 +1017,18 @@ impl Sequencer {
     /// clamps before storing the byte (`m4a_1.s:1628`..`:1633`).
     fn note_priority(song: &Song, track: &TrackState) -> u8 {
         song.priority().saturating_add(track.priority)
+    }
+}
+
+/// The sweep byte `ply_note` stores into `CgbChannel::sweep` for a Square1
+/// note: bit 7 set, or none of the `0x70` period bits set, is replaced by
+/// `0x08` (shift 0, decreasing, no effect); any other byte passes through
+/// (`m4a_1.s:1773`..`:1783`).
+const fn admitted_sweep_byte(raw: u8) -> u8 {
+    if raw & 0x80 != 0 || raw & 0x70 == 0 {
+        0x08
+    } else {
+        raw
     }
 }
 
