@@ -21,7 +21,7 @@ const HIT_COUNT_OFFSET_MASK: u16 = 0b11;
 const HIT_COUNT_REDRAW_THRESHOLD: u8 = 2;
 
 /// The effect ID resolved by the variable-count multi-hit pipeline.
-pub const EFFECT_MULTI_HIT: MoveEffect = MoveEffect(29);
+pub const EFFECT_MULTI_HIT: MoveEffect = MoveEffect::MULTI_HIT;
 
 /// The fewest hits a variable-count multi-hit move can attempt.
 pub const MIN_HITS: u8 = 2;

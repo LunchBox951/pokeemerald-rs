@@ -61,7 +61,7 @@ fn an_extended_command_selector_discards_a_fixed_point_gap() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -97,7 +97,7 @@ fn an_extended_command_selector_keeps_an_off_grid_remainder() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -133,7 +133,7 @@ fn an_extended_command_selector_gap_stops_at_the_timing_grid() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -168,7 +168,7 @@ fn an_extended_command_selector_near_a_grid_line_preserves_later_ticks() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -205,7 +205,7 @@ fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
     let compiled_with_silent_note_end =
         compile(&midi_with_note_end(note_on(0, 60, 0)), &cfg()).unwrap();
     assert_eq!(
-        compiled_with_silent_note_end.tracks[0],
+        canonical_waits(&compiled_with_silent_note_end.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -228,7 +228,7 @@ fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
     let compiled_with_explicit_note_off =
         compile(&midi_with_note_end(note_off(0, 60)), &cfg()).unwrap();
     assert_eq!(
-        compiled_with_explicit_note_off.tracks[0],
+        canonical_waits(&compiled_with_explicit_note_off.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -269,7 +269,7 @@ fn a_time_signature_rephases_the_extended_command_timing_grid() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -305,7 +305,7 @@ fn a_silent_controller_after_an_extended_command_selector_keeps_its_wait() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -347,7 +347,7 @@ fn waits_not_adjacent_to_an_extended_command_selector_are_unaffected() {
 
     let compiled = compile(&midi, &cfg()).unwrap();
     assert_eq!(
-        compiled.tracks[0],
+        canonical_waits(&compiled.tracks[0]),
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),

@@ -3,7 +3,7 @@
 use crate::damage::BattleRng;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
-use crate::status1::{draws_shed_skin_cure, poison_residual_damage, Status1};
+use crate::status1::{burn_residual_damage, draws_shed_skin_cure, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
 use assets::AbilityId;
 
@@ -34,8 +34,8 @@ impl Battle {
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
         // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
-        // ENDTURN_POISON before ENDTURN_CHARGE
-        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
+        // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
+        // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -48,6 +48,7 @@ impl Battle {
             }
             self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_poison_residual(is_player, events);
+            self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
             } else {
@@ -125,6 +126,28 @@ impl Battle {
         let dealt = damage.min(target.current_hp());
         target.apply_damage(dealt);
         events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
+    /// `ENDTURN_BURN`: a living burned battler loses an eighth of its max HP,
+    /// at least one, with no RNG draw (`pokeemerald/src/battle_util.c:1550`-
+    /// `:1560`).
+    fn apply_burn_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || !battler.status1().is_burned() {
+            return;
+        }
+        let damage = burn_residual_damage(battler.stats().max_hp);
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByBurn {
             by_player: is_player,
             damage: dealt,
         });

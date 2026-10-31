@@ -47,23 +47,24 @@ impl Battle {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return Ok(());
         }
-        let BattleKind::Trainer(context) = &mut self.kind else {
-            self.finish(events, BattleOutcome::PlayerWon);
-            return Ok(());
+        let (replacement, money) = match &self.kind {
+            BattleKind::Trainer(context) => (
+                context.select_replacement(
+                    &self.dex,
+                    &self.enemy,
+                    self.last_move_used,
+                    &self.player,
+                )?,
+                context.money(),
+            ),
+            BattleKind::Wild | BattleKind::FirstBattle => {
+                self.finish(events, BattleOutcome::PlayerWon);
+                return Ok(());
+            }
         };
-        if let Some(next) =
-            context.send_out_next(&self.dex, &self.enemy, self.last_move_used, &self.player)?
-        {
-            let species = next.species();
-            let bench_remaining = context.bench_len();
-            self.enemy = next;
-            events.push(BattleEvent::TrainerSentOut {
-                species,
-                bench_remaining,
-            });
-            return Ok(());
+        if let Some(slot) = replacement {
+            return self.switch_enemy_to(slot, events);
         }
-        let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
         Ok(())

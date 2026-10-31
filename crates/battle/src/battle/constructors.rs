@@ -10,7 +10,10 @@ use assets::trainers::TrainerId;
 
 use super::opponent_ai::all_known_moves_are_spent;
 use super::trainer::{self, TrainerContext};
-use super::{admission, ensure_executable, trainer_ai, Battle, BattleKind, NO_MOVE_PRIORITY};
+use super::{
+    admission, ensure_executable, held_item, trainer_ai, Battle, BattleKind, BattlerState,
+    NO_MOVE_PRIORITY,
+};
 
 fn initialize_turn_rng_state(
     player: &BattlePokemon,
@@ -103,10 +106,11 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
-    /// or holds Truant, Intimidate, Speed Boost, Color Change, Trace, Effect
-    /// Spore, Flame Body, Cute Charm, Drizzle, Drought or Sand Stream fails
-    /// with [`BattleError::UnportedAbilityInteraction`].
+    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
+    /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
+    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
+    /// Drizzle, Drought or Sand Stream fails with
+    /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
@@ -156,6 +160,13 @@ impl Battle {
                     .filter(|reserve| !reserve.is_fainted()),
             ),
         )?;
+        held_item::ensure_participants_hold_playable_items(
+            [&player, &enemy].into_iter().chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ),
+        )?;
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
@@ -176,6 +187,7 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         })
     }
 
@@ -231,6 +243,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        held_item::ensure_trainer_bag_unused(&data.items)?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -261,6 +274,16 @@ impl Battle {
         }
 
         admission::ensure_participants_admissible(
+            std::iter::once(&player)
+                .chain(party.iter().filter(|mon| !mon.is_fainted()))
+                .chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ),
+        )?;
+
+        held_item::ensure_participants_hold_playable_items(
             std::iter::once(&player)
                 .chain(party.iter().filter(|mon| !mon.is_fainted()))
                 .chain(
@@ -308,6 +331,7 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         })
     }
 }

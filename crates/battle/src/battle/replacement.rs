@@ -1,8 +1,11 @@
-//! Fainted-party disposition and the player's ordered reserve replacement.
+//! Fainted-party disposition, the player's ordered reserve replacement, and the trainer's active-member switch.
 
 use crate::error::BattleError;
+use crate::pokemon::MOVE_NONE;
+use crate::status1::Status1;
+use assets::AbilityId;
 
-use super::{Battle, BattleEvent, BattleKind, BattleOutcome};
+use super::{Battle, BattleEvent, BattleKind, BattleOutcome, BattlerSide, BattlerState};
 
 impl Battle {
     pub(super) fn handle_fainted_mons(
@@ -68,7 +71,7 @@ impl Battle {
     ///
     /// Returns `false`, leaving `self.player` untouched, once every reserve
     /// is fainted too.
-    fn send_out_next_player_reserve(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+    pub(super) fn send_out_next_player_reserve(&mut self, events: &mut Vec<BattleEvent>) -> bool {
         let Some(index) = self
             .player_reserves
             .iter()
@@ -96,11 +99,58 @@ impl Battle {
         };
         self.player_reserves.insert(fainted_index, fainted);
         self.player_slot = replacement_slot;
+        // `SwitchInClearSetData` for the incoming battler
+        // (`pokeemerald/src/battle_main.c:3152`-`:3261`), which zeroes
+        // `gCurrentMove` too: after a double faint the player's send-out runs
+        // first, so the trainer's replacement scores against `MOVE_NONE`
+        // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
+        self.player.clear_battle_scratch();
+        self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
+        self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::PlayerSentOut {
             species: self.player.species(),
             reserves_remaining: self.usable_player_reserves(),
         });
         true
+    }
+
+    /// Makes original party slot `slot` the active enemy: the outgoing
+    /// member returns to its own slot and the incoming one enters with
+    /// `SwitchInClearSetData`'s reset (`pokeemerald/src/battle_main.c:3152`-
+    /// `:3261`). A prechosen voluntary switch and a forced post-faint
+    /// replacement both land here; neither draws from `rng`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidTrainerSwitch`] when this is not a
+    /// trainer battle or `slot` is not a healthy non-active member; nothing
+    /// changes then.
+    pub(super) fn switch_enemy_to(
+        &mut self,
+        slot: usize,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let BattleKind::Trainer(context) = &mut self.kind else {
+            return Err(BattleError::InvalidTrainerSwitch(slot));
+        };
+        context.switch_target(slot)?;
+        // `Cmd_switchoutabilities` cures the leaving member before it returns
+        // to its party record (`battle_script_commands.c:9590`-`:9603`). A
+        // fainted member leaving for a forced replacement is already healthy.
+        if self.enemy.ability() == AbilityId::NATURAL_CURE {
+            self.enemy.set_status1(Status1::Healthy);
+        }
+        self.enemy.clear_battle_scratch();
+        context.switch_active(&mut self.enemy, slot)?;
+        self.enemy.clear_battle_scratch();
+        self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
+        // `SwitchInClearSetData` zeroes `gCurrentMove` (`battle_main.c:3257`).
+        self.last_move_used = MOVE_NONE;
+        events.push(BattleEvent::TrainerSentOut {
+            species: self.enemy.species(),
+            bench_remaining: context.bench_len(),
+        });
+        Ok(())
     }
 
     /// The number of player-side reserves that have not fainted.

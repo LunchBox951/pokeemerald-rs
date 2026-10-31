@@ -29,16 +29,21 @@ use crate::secondary;
 
 mod actions;
 pub(crate) mod admission;
+pub mod battler_state;
 mod constructors;
 mod events;
 mod execute;
+pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 mod replacement;
 mod residual;
 mod rewards;
+#[cfg(test)]
+mod switch_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
 
+pub use battler_state::{BattlerSide, BattlerState, LastLandedMove, PerishSongTurns};
 pub use events::{BattleEvent, TurnError};
 
 use opponent_ai::{
@@ -116,6 +121,9 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
+    /// Move history and Perish Song state per battler, `[player, enemy]`,
+    /// reset whenever a battler leaves or enters the field.
+    battler_states: [BattlerState; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +186,12 @@ impl Battle {
             BattleKind::Trainer(context) => Some(context),
             BattleKind::Wild | BattleKind::FirstBattle => None,
         }
+    }
+
+    /// Returns a battler's move history and Perish Song state.
+    #[must_use]
+    pub const fn battler_state(&self, side: BattlerSide) -> &BattlerState {
+        &self.battler_states[side.index()]
     }
 
     const fn is_first_battle(&self) -> bool {
@@ -386,7 +400,29 @@ impl Battle {
         }
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
+        self.resolve_selected_actions(player_action, enemy_action, rng, events)
+    }
 
+    /// Resolves the turn's two selected actions, then the end-of-turn pass.
+    fn resolve_selected_actions(
+        &mut self,
+        player_action: ValidatedPlayerAction,
+        enemy_action: EnemyAction,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        if let (ValidatedPlayerAction::UseMove { move_id, .. }, EnemyAction::Switch(slot)) =
+            (player_action, enemy_action)
+        {
+            // The player's move was admitted against the outgoing defender.
+            let incoming = match &self.kind {
+                BattleKind::Trainer(context) => context.switch_target(slot)?,
+                BattleKind::Wild | BattleKind::FirstBattle => {
+                    return Err(BattleError::InvalidTrainerSwitch(slot));
+                }
+            };
+            secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+        }
         let chosen = ChosenMoves {
             player: match player_action {
                 ValidatedPlayerAction::UseMove {
@@ -398,7 +434,7 @@ impl Battle {
             enemy: match enemy_action {
                 EnemyAction::Move(slot) => Selection::Slot(slot),
                 EnemyAction::Struggle => Selection::Struggle,
-                EnemyAction::Flee => Selection::NoMove,
+                EnemyAction::Flee | EnemyAction::Switch(_) => Selection::NoMove,
             },
         };
         if let Selection::Slot(slot) = chosen.player {
@@ -633,6 +669,7 @@ mod tests {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            battler_states: [BattlerState::default(); 2],
         };
         (battle, player_max_hp, player_move_max_pp)
     }

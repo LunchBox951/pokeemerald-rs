@@ -4,13 +4,13 @@ use crate::damage::{BattleRng, STRUGGLE};
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
 use crate::stat_change;
-use crate::status1::draws_full_paralysis;
+use crate::status1::{draws_full_paralysis, tick_sleep, SleepTick, Status1};
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 use assets::{AbilityId, MoveId, MoveTarget};
 
 use super::opponent_ai::EnemyAction;
-use super::{Battle, BattleEvent, BattleOutcome, ResidualPriorities};
+use super::{Battle, BattleEvent, BattleOutcome, BattlerSide, ResidualPriorities};
 
 impl Battle {
     pub(super) fn resolve_run_attempt(
@@ -55,6 +55,14 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // `SetActionsAndBattlersTurnOrder` queues switch actions ahead of
+        // every move action, so a switch consumes no order comparison
+        // (`pokeemerald/src/battle_main.c:4817`-`:4847`).
+        if matches!(enemy_action, EnemyAction::Switch(_)) {
+            self.resolve_enemy_action(enemy_action, rng, events)?;
+            self.act(true, player_move, player_slot, rng, events)?;
+            return Ok(());
+        }
         let order = resolve_order(
             priorities.player,
             priorities.enemy,
@@ -84,13 +92,31 @@ impl Battle {
         self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted()
     }
 
+    /// Runs one battler's turn-order slot, then closes the action as
+    /// `HandleAction_ActionFinished` does: the acting battler's own
+    /// last-landed move returns to none (`pokeemerald/src/battle_util.c:671`).
+    /// Its last hitter and the move it landed on its target remain.
+    pub(super) fn act(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let result = self.run_action(player_is_attacker, move_id, slot, rng, events);
+        self.battler_states[BattlerSide::from_is_player(player_is_attacker).index()]
+            .clear_last_landed_move();
+        result
+    }
+
     /// Runs one battler's turn-order slot: the confusion decrement, the
     /// full-paralysis draw, the Soundproof block, PP handling, then
     /// execution.
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
     /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
-    fn act(
+    pub(super) fn run_action(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
@@ -103,6 +129,32 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        // `CANCELER_ASLEEP` decrements sleep ahead of every other modelled
+        // canceller (`src/battle_util.c:2015`-`:2057`): a duration that
+        // survives cancels the move, expiry lets it proceed.
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match tick_sleep(attacker.status1(), attacker.ability()) {
+            SleepTick::NotAsleep => {}
+            SleepTick::StillAsleep(status) => {
+                attacker.set_status1(status);
+                events.push(BattleEvent::FastAsleep {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                self.record_cancelled_move(player_is_attacker, move_id)?;
+                return Ok(());
+            }
+            SleepTick::WokeUp => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::WokeUp {
+                    by_player: player_is_attacker,
+                });
+            }
+        }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
         // A duration that survives the decrement draws once more before the
@@ -121,7 +173,8 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
-                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
+                self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
             }
         }
@@ -135,6 +188,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
@@ -156,6 +210,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
         if let Some(slot) = slot {
@@ -173,6 +228,7 @@ impl Battle {
                         by_player: player_is_attacker,
                         move_id,
                     });
+                    self.record_cancelled_move(player_is_attacker, move_id)?;
                     return Ok(());
                 }
             } else if player_is_attacker {
@@ -223,6 +279,7 @@ impl Battle {
             // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
             // `:1139`, `:100`-`:104`).
             EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
+            EnemyAction::Switch(slot) => self.switch_enemy_to(slot, events),
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
