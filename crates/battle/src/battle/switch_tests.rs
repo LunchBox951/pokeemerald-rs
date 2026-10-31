@@ -828,3 +828,32 @@ fn a_fainted_holder_neither_boosts_nor_announces() {
         assert_eq!(holder.stages().speed, StatStage::NEUTRAL);
     }
 }
+
+#[test]
+fn a_residual_faint_that_decides_the_battle_still_runs_the_end_turn_cleanup() {
+    let dex = Dex::new();
+    let mut player = mon(&dex, MEOWTH, 5, &[MoveId::SPLASH]);
+    player.set_status1(Status1::Poisoned);
+    player.apply_damage(player.stats().max_hp - 1);
+    let mut battle = battle_with_party(vec![mon(&dex, TREECKO, 50, &[MoveId::SPLASH])], player);
+    let mut rng = ScriptedRng::new(&[]);
+    for side in [BattlerSide::Player, BattlerSide::Enemy] {
+        assert_eq!(battle.battler_state(side).first_turn(), 1);
+    }
+
+    let events = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
+
+    assert_eq!(
+        battle.outcome(),
+        Some(super::BattleOutcome::PlayerLost),
+        "{events:?}"
+    );
+    // The fainted player was reset to 2 by `FaintClearSetData` and then aged
+    // once; the surviving enemy lead went from 1 to 0.
+    assert_eq!(battle.battler_state(BattlerSide::Player).first_turn(), 1);
+    assert_eq!(
+        battle.battler_state(BattlerSide::Enemy).first_turn(),
+        0,
+        "BattleTurnPassed's TurnValuesCleanUp(FALSE) runs behind a decided outcome"
+    );
+}

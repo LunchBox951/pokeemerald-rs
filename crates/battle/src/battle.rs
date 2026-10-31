@@ -998,15 +998,16 @@ impl Battle {
     /// (`pokeemerald/src/battle_main.c:3960`-`:3974`, `:4875`-`:4876`). A
     /// replacement sent out behind the residual pass is therefore already past
     /// its suppressed turn, while one sent out earlier this turn is not.
-    /// Waits while a move-learn prompt holds the replacement back.
+    /// Runs even when the faint handling decided the battle, and waits while a
+    /// move-learn prompt holds the replacement back.
     fn finish_end_turn_cleanup(&mut self) {
         if !self.end_turn_cleanup_pending {
             return;
         }
-        if self.outcome.is_some() {
-            self.end_turn_cleanup_pending = false;
-            return;
-        }
+        // The cleanup is unconditional once the end-turn pass ran, a decided
+        // battle included: `BattleTurnPassed` reaches it after
+        // `HandleFaintedMonActions` whatever `gBattleOutcome` says
+        // (`pokeemerald/src/battle_main.c:3968`-`:3974`).
         if self.player.pending_move_learn().is_some() {
             return;
         }

@@ -103,6 +103,12 @@ impl BattlerState {
         self.first_turn == FRESH_FIRST_TURN
     }
 
+    /// The raw `isFirstTurn` value, for tests that pin the cleanup itself.
+    #[cfg(test)]
+    pub(super) const fn first_turn(self) -> u8 {
+        self.first_turn
+    }
+
     /// `TurnValuesCleanUp(FALSE)`'s `isFirstTurn--` when nonzero
     /// (`battle_main.c:4875`-`:4876`).
     pub(super) fn tick_first_turn(&mut self) {
