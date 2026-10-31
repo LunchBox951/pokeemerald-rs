@@ -5,22 +5,23 @@ use super::common::{
 };
 use battle::Dex;
 
+/// A fresh record files the battler's own primary status
+/// (`pokeemerald/src/battle_controller_player.c:1983-1987`,
+/// `pokeemerald/include/constants/battle.h:114-121`): `CreateMon`'s healthy
+/// default for a healthy battler, otherwise the matching `STATUS1_*` word.
 #[test]
-fn a_fresh_battler_never_writes_an_in_battle_primary_status_into_a_new_record() {
+fn a_fresh_record_files_the_battlers_primary_status_word() {
     let dex = Dex::new();
-    let mut lead = treecko_fixture();
-    lead.set_status1(battle::Status1::Poisoned);
-
-    let record = to_save_pokemon(&dex, &lead);
-
-    // With no backing record to retain a status from, `to_save_pokemon`
-    // falls back to `CreateMon`'s default whatever the in-battle status is.
-    let healthy_lead = treecko_fixture();
-    let healthy_record = to_save_pokemon(&dex, &healthy_lead);
-    assert_eq!(
-        record.status, healthy_record.status,
-        "a poisoned battler must not write a different status word than a healthy one"
-    );
+    for (status, word) in [
+        (battle::Status1::Healthy, 0),
+        (battle::Status1::Poisoned, 8),
+        (battle::Status1::Paralysed, 64),
+        (battle::Status1::Asleep { turns: 5 }, 5),
+    ] {
+        let mut lead = treecko_fixture();
+        lead.set_status1(status);
+        assert_eq!(to_save_pokemon(&dex, &lead).status, word, "{status:?}");
+    }
 }
 
 /// `CreateBoxMon` (`pokeemerald/src/pokemon.c:2250-2263`) stamps every
