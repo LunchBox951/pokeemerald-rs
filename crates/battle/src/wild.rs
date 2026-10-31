@@ -1,12 +1,14 @@
-//! Wild Pokémon construction with the upstream RNG order: nature (with the
-//! party lead's Synchronize coin flip), matching personality, then packed IVs
-//! (`pokeemerald/src/wild_encounter.c:367-379`; `src/pokemon.c:2205-2309`).
+//! Wild Pokémon construction with the upstream RNG order: the party lead's
+//! Cute Charm gender roll, nature (with the lead's Synchronize coin flip),
+//! matching personality, then packed IVs
+//! (`pokeemerald/src/wild_encounter.c:367-415`; `src/pokemon.c:2205-2346`).
 
-use assets::{LevelUpLearnsets, MoveId, SpeciesId};
+use assets::{GenderRatio, LevelUpLearnsets, MoveId, SpeciesId};
 
 use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::Nature;
 use crate::pokemon::{BattlePokemon, Ivs, MAX_IV, MAX_MON_MOVES};
 
@@ -77,12 +79,54 @@ pub fn roll_nature(rng: &mut impl BattleRng) -> Nature {
 /// Draws personalities until one has the requested nature.
 #[must_use]
 pub fn roll_personality_for_nature(nature: Nature, rng: &mut impl BattleRng) -> u32 {
+    roll_personality_where(rng, |personality| {
+        Nature::from_personality(personality) == nature
+    })
+}
+
+/// Draws personalities until one has the requested nature and gender, as the
+/// non-Unown arm of `CreateMonWithGenderNatureLetter` does
+/// (`pokeemerald/src/pokemon.c:2335-2343`).
+///
+/// `gender` must be reachable under `ratio`, or this never returns.
+fn roll_personality_for_nature_and_gender(
+    nature: Nature,
+    ratio: GenderRatio,
+    gender: Gender,
+    rng: &mut impl BattleRng,
+) -> u32 {
+    roll_personality_where(rng, |personality| {
+        Nature::from_personality(personality) == nature
+            && Gender::of_personality(ratio, personality) == gender
+    })
+}
+
+fn roll_personality_where(rng: &mut impl BattleRng, is_accepted: impl Fn(u32) -> bool) -> u32 {
     loop {
         let personality = rng.next_u32();
-        if Nature::from_personality(personality) == nature {
+        if is_accepted(personality) {
             return personality;
         }
     }
+}
+
+/// Decides whether a Cute Charm lead forces the wild Pokémon's gender, as
+/// `CreateWildMon` does (`pokeemerald/src/wild_encounter.c:386-398`).
+///
+/// `cute_charm_gender` is the gender the lead hands the wild Pokémon. The
+/// activation draw (`Random() % 3`) is spent only when it names male or female
+/// and `ratio` permits both genders; two of its three outcomes force the
+/// gender, and the third leaves the ordinary personality roll.
+fn roll_cute_charm_gender(
+    cute_charm_gender: Option<Gender>,
+    ratio: GenderRatio,
+    rng: &mut impl BattleRng,
+) -> Option<Gender> {
+    let forced_gender = cute_charm_gender.filter(|gender| *gender != Gender::Genderless)?;
+    if !ratio.permits_both_genders() {
+        return None;
+    }
+    (!rng.next_u16().is_multiple_of(3)).then_some(forced_gender)
 }
 
 const IV_BITS_PER_STAT: u32 = 5;
@@ -112,10 +156,15 @@ pub fn roll_ivs(rng: &mut impl BattleRng) -> Ivs {
 }
 
 /// Builds a wild Pokémon after validating every input without consuming RNG.
-/// Draws its nature, matching personality, and IVs in that order.
+/// Draws the Cute Charm gender roll, then its nature, matching personality,
+/// and IVs in that order.
 ///
 /// `synchronize_nature` is the lead's nature when the party's first Pokémon
 /// has Synchronize and is not an egg, else `None`; see [`pick_wild_nature`].
+/// `cute_charm_gender` is the gender the party's first Pokémon hands the wild
+/// Pokémon when it is a non-egg Cute Charm holder (the opposite of its own,
+/// see [`Gender::cute_charm_wild_gender`]), else `None`; a `Genderless` value
+/// has no effect.
 ///
 /// # Errors
 ///
@@ -126,11 +175,19 @@ pub fn build_wild_pokemon(
     level: u8,
     moves: Vec<MoveId>,
     synchronize_nature: Option<Nature>,
+    cute_charm_gender: Option<Gender>,
     rng: &mut impl BattleRng,
 ) -> Result<BattlePokemon, BattleError> {
     BattlePokemon::validate(dex, species, level, &moves)?;
+    let ratio = dex.species(species)?.gender_ratio;
+    let forced_gender = roll_cute_charm_gender(cute_charm_gender, ratio, rng);
     let requested_nature = pick_wild_nature(synchronize_nature, rng);
-    let personality = roll_personality_for_nature(requested_nature, rng);
+    let personality = match forced_gender {
+        Some(gender) => {
+            roll_personality_for_nature_and_gender(requested_nature, ratio, gender, rng)
+        }
+        None => roll_personality_for_nature(requested_nature, rng),
+    };
     let ivs = roll_ivs(rng);
     BattlePokemon::new(dex, species, level, ivs, personality, moves)
 }

@@ -1,11 +1,18 @@
 //! The asset inventories extraction fixes and `gen-rom-profile` requires.
 //!
-//! One list per domain, read by both the extractor and the profile generator
-//! so a pack missing a root is refused rather than half-described.
+//! One list per domain, read by the extractor and, for each domain the ROM
+//! profile covers, by the profile generator so a pack missing a root is
+//! refused rather than half-described. The naming-screen inventory is
+//! extraction-only until the generator gains that family.
 
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_interface::healthbox_battle_bar_pack_id;
+use super::battle_interface::healthbox_element_pack_ids;
+use super::battle_interface::healthbox_frame_pack_ids;
+use super::battle_interface::healthbox_table_pack_ids;
+use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
@@ -631,4 +638,129 @@ pub(crate) fn opening_scene_ids() -> Vec<String> {
 /// palettes, and two tilemaps.
 pub(crate) fn evolution_scene_ids() -> Vec<String> {
     evolution_scene_pack_ids()
+}
+
+/// Where the naming screen's sources live, relative to the checkout.
+pub(crate) const NAMING_SCREEN_DIRECTORY: &str = "graphics/naming_screen";
+
+/// One naming-screen sheet: its file stem, its PNG's size, and how many of its
+/// leading 8x8 tiles upstream's build keeps (`None` keeps the whole sheet).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NamingScreenSheet {
+    pub(crate) stem: &'static str,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kept_tiles: Option<u32>,
+}
+
+const fn whole_sheet(stem: &'static str, width: u32, height: u32) -> NamingScreenSheet {
+    NamingScreenSheet {
+        stem,
+        width,
+        height,
+        kept_tiles: None,
+    }
+}
+
+/// The cursor sheets are built with `-num_tiles 5` (`graphics.c:1410-1412`).
+const fn cursor_sheet(stem: &'static str) -> NamingScreenSheet {
+    NamingScreenSheet {
+        stem,
+        width: 16,
+        height: 24,
+        kept_tiles: Some(5),
+    }
+}
+
+/// Naming-screen sheets as `naming-screen/image/<stem>`: `graphics.c:1403-1414`
+/// plus the two PC icons `naming_screen.c:185-186` declares locally. The
+/// walking sheets the player icon shows are the sprite manifest's.
+pub(crate) const NAMING_SCREEN_SHEETS: [NamingScreenSheet; 15] = [
+    whole_sheet("menu", 24, 128),
+    whole_sheet("page_swap_frame", 40, 32),
+    whole_sheet("back_button", 40, 24),
+    whole_sheet("ok_button", 40, 24),
+    whole_sheet("page_swap_upper", 40, 8),
+    whole_sheet("page_swap_lower", 40, 8),
+    whole_sheet("page_swap_others", 40, 8),
+    cursor_sheet("cursor"),
+    cursor_sheet("cursor_squished"),
+    cursor_sheet("cursor_filled"),
+    whole_sheet("page_swap_button", 32, 16),
+    whole_sheet("input_arrow", 8, 8),
+    whole_sheet("underscore", 8, 8),
+    whole_sheet("pc_icon_off", 16, 24),
+    whole_sheet("pc_icon_on", 16, 24),
+];
+
+/// Naming-screen palettes as `naming-screen/palette/<stem>`: the six rows of
+/// `gNamingScreenMenu_Pal` (`graphics.c:1394-1402`), then `sKeyboard_Pal`
+/// (`naming_screen.c:187`). `rival.pal` is unused upstream (`:188`).
+pub(crate) const NAMING_SCREEN_PALETTES: [&str; 7] = [
+    "menu",
+    "page_swap_upper",
+    "page_swap_lower",
+    "page_swap_others",
+    "buttons",
+    "cursor",
+    "keyboard",
+];
+
+/// Naming-screen tilemaps as `naming-screen/raw/<stem>` (`graphics.c:1416-1419`).
+pub(crate) const NAMING_SCREEN_TILEMAPS: [&str; 4] = [
+    "background",
+    "keyboard_upper",
+    "keyboard_lower",
+    "keyboard_symbols",
+];
+
+/// A 32x20 tilemap of 2-byte entries.
+pub(crate) const NAMING_SCREEN_TILEMAP_BYTES: usize = 32 * 20 * 2;
+
+/// Every `naming-screen/` pack id extraction emits: sheets, then palettes,
+/// then tilemaps.
+pub(crate) fn naming_screen_ids() -> Vec<String> {
+    let images = NAMING_SCREEN_SHEETS
+        .iter()
+        .map(|sheet| format!("naming-screen/image/{}", sheet.stem));
+    let palettes = NAMING_SCREEN_PALETTES
+        .iter()
+        .map(|stem| format!("naming-screen/palette/{stem}"));
+    let tilemaps = NAMING_SCREEN_TILEMAPS
+        .iter()
+        .map(|stem| format!("naming-screen/raw/{stem}"));
+    images.chain(palettes).chain(tilemaps).collect()
+}
+
+/// Every `battle-interface/` pack id extraction emits: the textbox sheet,
+/// its three palettes, and the textbox tilemap.
+pub(crate) fn battle_interface_ids() -> Vec<String> {
+    battle_interface_pack_ids()
+}
+
+/// Every `battle-interface/` pack id the health-box extractor emits: the
+/// thirteen health-box elements and the battle bar. ROM import claims all
+/// fourteen; the frames are [`healthbox_frame_ids`].
+pub(crate) fn healthbox_element_ids() -> Vec<String> {
+    healthbox_element_pack_ids()
+}
+
+/// The thirteen constituents of `gHealthboxElementsGfxTable`
+/// (`src/graphics.c:358-370`), in table order.
+pub(crate) fn healthbox_table_ids() -> Vec<String> {
+    healthbox_table_pack_ids()
+}
+
+/// The battle bar's pack id: `gBattleInterfaceGfx_BattleBar`, the
+/// concatenation of `hpbar_anim_unused`, `numbers1`, and `numbers2`.
+pub(crate) fn healthbox_battle_bar_id() -> String {
+    healthbox_battle_bar_pack_id()
+}
+
+/// Every `battle-interface/` pack id the health-box frame extractor emits: the
+/// singles player and opponent frames, the enemy shadow, and the two ball
+/// palettes. ROM import claims all five, so profile generation requires them
+/// beside the textbox and element ids.
+pub(crate) fn healthbox_frame_ids() -> Vec<String> {
+    healthbox_frame_pack_ids()
 }

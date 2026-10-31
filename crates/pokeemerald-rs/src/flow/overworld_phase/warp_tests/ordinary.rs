@@ -321,11 +321,7 @@ fn a_successful_warp_replaces_the_live_object_events_with_the_destinations() {
     phase.warp_to(destination, 2);
 
     assert_eq!(phase.map_id, destination);
-    let templates = phase
-        .scene
-        .map_events(destination)
-        .expect("destination events resolve")
-        .object_events;
+    let templates = phase.scene.map_events().object_events;
     for template in templates {
         let entry = phase
             .object_events

@@ -1,6 +1,6 @@
 //! Draws the field start menu's item and confirmation windows.
 
-use assets::fonts::{FontId, OwnedFontGlyphSheet};
+use assets::fonts::{FontGlyphSheet, FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::AssetPack;
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
@@ -57,7 +57,7 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 /// Assets used to draw every window owned by an open start menu.
 #[derive(Debug)]
 pub(crate) struct StartMenuChrome {
-    font_sheet: OwnedFontGlyphSheet,
+    font_sources: OwnedGlyphSources,
     pub(super) std_frame: FrameAssets,
     pub(super) message_frame: FrameAssets,
 }
@@ -76,7 +76,9 @@ impl StartMenuChrome {
     /// or [`StartMenuError::Font`] when the font sheet does not decode.
     pub(super) fn from_pack(pack: &AssetPack, window_frame: u8) -> Result<Self, StartMenuError> {
         Ok(Self {
-            font_sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
+            font_sources: GlyphSources::try_from_fn(|font| {
+                Ok::<_, StartMenuError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
+            })?,
             std_frame: FrameAssets::from_handle(pack.text_window_frame(window_frame)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
@@ -85,10 +87,22 @@ impl StartMenuChrome {
     /// Creates a field message box with the start menu's loaded assets.
     pub(super) fn message_box(&self, tokens: Vec<Token>, text_speed: TextSpeed) -> NpcDialog {
         NpcDialog::new(
-            self.font_sheet.clone(),
+            self.font_sources.clone(),
             self.message_frame.clone(),
             tokens,
             text_speed,
+        )
+    }
+
+    /// The instant Normal-font printer for `tokens`, carrying every modelled
+    /// Latin source.
+    pub(super) fn label_printer(&self, tokens: Vec<Token>) -> Printer<FontGlyphSheet<'_>> {
+        Printer::with_sources(
+            tokens,
+            self.font_sources.sheets(),
+            FontId::Normal,
+            TextSpeed::Instant,
+            (0, 0),
         )
     }
 
@@ -106,7 +120,7 @@ impl StartMenuChrome {
             .collect();
         tokens.push(Token::End);
         let ticks = tokens.len();
-        let mut printer = Printer::new(tokens, self.font_sheet.sheet(), TextSpeed::Instant, (0, 0));
+        let mut printer = self.label_printer(tokens);
         let mut glyphs = Vec::new();
         for _ in 0..=ticks {
             match printer.tick(PrinterInput::none()) {
@@ -195,10 +209,12 @@ impl StartMenuChrome {
             bit_depth: FONT_SHEET_BIT_DEPTH,
             pixels: &pixels,
         };
-        let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-            .expect("this is the exact real glyph-sheet shape");
+        let font_sources = GlyphSources::try_from_fn(|font| {
+            OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+        })
+        .expect("this is the exact real glyph-sheet shape");
         Self {
-            font_sheet: sheet,
+            font_sources,
             std_frame: synthetic_frame(STANDARD_FRAME_SIZE_TILES),
             message_frame: synthetic_frame(MESSAGE_FRAME_SIZE_TILES),
         }
