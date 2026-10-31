@@ -84,6 +84,44 @@ fn stage_at_first_free_name(
     }))
 }
 
+/// Gives the owner read and write on the staged file through its open handle,
+/// keeping whatever the umask withheld from group and other: a umask such as
+/// 0444 would otherwise leave a pack its owner cannot read back.
+///
+/// The mode is changed only when an owner bit is missing, so the usual umask
+/// asks nothing of a filesystem that creates files but refuses mode changes.
+#[cfg(unix)]
+fn restore_owner_read_write(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode = file.metadata()?.permissions().mode();
+    if let Some(restored) = owner_read_write_restored(mode) {
+        file.set_permissions(std::fs::Permissions::from_mode(restored))?;
+    }
+    Ok(())
+}
+
+/// The permission bits of `mode` with owner read and write added, or `None`
+/// when the owner already has both and nothing needs changing.
+#[cfg(unix)]
+const fn owner_read_write_restored(mode: u32) -> Option<u32> {
+    if mode & 0o600 == 0o600 {
+        None
+    } else {
+        Some((mode & 0o7777) | 0o600)
+    }
+}
+
+/// Nothing to restore where permissions are not mode bits.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for every platform; only the unix arm can fail"
+)]
+fn restore_owner_read_write(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Writes and syncs `bytes` into a `path` `create_new_exclusive` has just
 /// claimed. A failure past that open leaves the entry where it is and says so:
 /// the name may no longer be ours to unlink, and unlinking by pathname cannot
@@ -93,6 +131,7 @@ fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
 
     let file = create_new_exclusive(path)?;
     let result = (|| {
+        restore_owner_read_write(&file)?;
         let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
         writer.flush()?;
@@ -696,6 +735,71 @@ mod tests {
             "post-stage-regular",
             Replacement::UnrelatedRegularFile,
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_read_write_is_restored_only_when_an_owner_bit_is_missing() {
+        use super::owner_read_write_restored;
+
+        assert_eq!(owner_read_write_restored(0o100_644), None);
+        assert_eq!(owner_read_write_restored(0o100_600), None);
+        assert_eq!(owner_read_write_restored(0o100_222), Some(0o622));
+        assert_eq!(owner_read_write_restored(0o100_444), Some(0o644));
+        assert_eq!(owner_read_write_restored(0o100_000), Some(0o600));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_pack_published_under_an_owner_stripping_umask_stays_owner_readable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "POKEEMERALD_EXTRACT_UMASK_CHILD";
+        let name = "extract::publish::tests::\
+                    a_pack_published_under_an_owner_stripping_umask_stays_owner_readable";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "umask 0444 child failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let dir = scratch_dir("umask");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output_path = dir.join("pokeemerald.pack");
+        std::fs::write(&output_path, b"old readable pack").unwrap();
+        std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        let mut writer = pack_format::PackWriter::new();
+        writer.push(pack_format::raw_entry(
+            "test/raw/new".to_owned(),
+            b"new pack".to_vec(),
+        ));
+        let pack = writer.finish().unwrap();
+        let result =
+            write_pack_atomically_with_names(&output_path, &pack, std::iter::once(staging_path));
+        let mode = std::fs::metadata(&output_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777;
+        let loaded = assets::AssetPack::load(&output_path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            mode, 0o622,
+            "published pack mode {mode:o} must be the umask-filtered 0666 (0222) plus owner read/write"
+        );
+        let loaded = loaded.expect("the published pack must load for its owner");
+        assert_eq!(loaded.raw("test/raw/new").unwrap(), b"new pack");
     }
 
     /// A FAT-like volume for [`super::is_same_object_now`]: a file's identity
