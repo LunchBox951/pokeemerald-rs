@@ -286,6 +286,7 @@ mod tests {
         let mut mon = torchic_with_full_moveset(&dex, BEFORE_PECK_LEVEL);
         let award = experience_needed_for_level(&dex, &mon, PECK_LEVEL);
         let pending = mon.apply_experience(&dex, award).unwrap().unwrap();
+        let experience_before = mon.experience();
 
         assert_eq!(
             mon.apply_experience(&dex, ADDITIONAL_EXPERIENCE),
@@ -300,6 +301,11 @@ mod tests {
             mon.level(),
             PECK_LEVEL,
             "no part of the second award landed"
+        );
+        assert_eq!(
+            mon.experience(),
+            experience_before,
+            "the refused award adds no experience"
         );
     }
 
