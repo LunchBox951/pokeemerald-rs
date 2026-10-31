@@ -2,10 +2,10 @@
 //! with. Synthetic packs come from the shared [`crate::pack_test_support`].
 
 use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
-use super::tests::TempSave;
+use super::tests::{write_scratch_exclusive, TempSave};
 use super::{menu_type_for, window_frame_for};
 use crate::main_menu::{MainMenuScene, MainMenuType};
-use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
+use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry_with_color};
 
 /// A minimal pack covering what [`MainMenuScene::from_pack_with_window_frame`]
 /// needs, with two distinguishable selectable window frames -- frame 0
@@ -18,7 +18,7 @@ fn synthetic_two_frame_pack_bytes() -> Vec<u8> {
     let red = rendering::Bgr555::from_channels(31, 0, 0);
     let dark_blue = rendering::Bgr555::from_channels(4, 4, 16);
 
-    pack_bytes(vec![
+    pack_bytes_with_fonts(vec![
         image_entry("text-window/image/1", 24, 24, 4, 1),
         palette_entry_with_color("text-window/palette/1", 16, 1, green),
         image_entry("text-window/image/6", 24, 24, 4, 1),
@@ -41,13 +41,17 @@ struct TempPack {
 }
 
 impl TempPack {
-    fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
+    fn scratch_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
             "pokeemerald-rs-flow-window-frame-pack-{label}-{}-{:?}.pack",
             std::process::id(),
             std::thread::current().id()
-        ));
-        std::fs::write(&path, synthetic_two_frame_pack_bytes()).unwrap();
+        ))
+    }
+
+    fn new(label: &str) -> Self {
+        let path = Self::scratch_path(label);
+        write_scratch_exclusive(&path, synthetic_two_frame_pack_bytes());
         Self { path }
     }
 }
@@ -128,7 +132,7 @@ fn field_start_menu_two_frame_pack_bytes() -> Vec<u8> {
     use crate::pack_test_support::{image_entry, palette_entry, palette_entry_with_color};
     use rendering::Bgr555;
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry("text-window/image/1", 24, 24, 4, 1),
         palette_entry_with_color(
             "text-window/palette/1",
@@ -173,7 +177,7 @@ fn resumed_phase_saved_with_frame(
     assert!(saved.status.menu_shows_continue());
     let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(map),
         map,
         saved.block1,
         saved.block2,
@@ -244,13 +248,8 @@ fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
         return;
     }
 
-    let pack_path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-1180-field-start-menu-frame-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::write(&pack_path, field_start_menu_two_frame_pack_bytes())
-        .expect("the scratch pack path must be writable");
+    let pack_path = field_start_menu_scratch_path();
+    write_scratch_exclusive(&pack_path, field_start_menu_two_frame_pack_bytes());
 
     let exe = std::env::current_exe().expect("the running test binary has a path");
     let output = std::process::Command::new(exe)
@@ -281,5 +280,39 @@ fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
         stdout.contains("1 passed"),
         "the filtered child must report one executed test -- an unmatched \
          filter exits 0 having run nothing\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+fn field_start_menu_scratch_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-1180-field-start-menu-frame-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn the_temp_pack_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    super::tests::assert_planted_symlink_untouched(
+        &TempPack::scratch_path(label),
+        &synthetic_two_frame_pack_bytes(),
+        || TempPack::new(label),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_field_start_menu_frame_pack_refuses_a_planted_symlink() {
+    super::tests::assert_planted_symlink_untouched(
+        &field_start_menu_scratch_path(),
+        &field_start_menu_two_frame_pack_bytes(),
+        || {
+            write_scratch_exclusive(
+                &field_start_menu_scratch_path(),
+                field_start_menu_two_frame_pack_bytes(),
+            );
+        },
     );
 }

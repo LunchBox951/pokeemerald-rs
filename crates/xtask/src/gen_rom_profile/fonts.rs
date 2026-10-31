@@ -1,13 +1,9 @@
-//! Locating the five Latin glyph sheets.
+//! Locates the five Latin glyph sheets.
 //!
-//! A glyph sheet is neither a raster nor a plain tile sheet: `gbagfx`
-//! writes it in its own `.latfont` layout, 64 bytes per 16x16 glyph, and
-//! the ROM stores that verbatim. [`super::pack_source::latin_font_bytes`]
-//! reproduces the layout from the pack's raster, which makes the sheet a
-//! 32 KiB signature -- as unmistakable as a root gets.
-//!
-//! The domain is fixed, not discovered: a pack missing any of the five
-//! shipped sheets is missing part of the domain and is refused.
+//! `gbagfx` writes a glyph sheet in `.latfont` layout (64 bytes per 16x16
+//! glyph), stored verbatim in the ROM.
+//! [`super::pack_source::latin_font_bytes`] rebuilds it from the pack raster
+//! as a 32 KiB needle. All five shipped sheets are required.
 
 use super::error::GenRomProfileError;
 use super::inventory;

@@ -27,13 +27,13 @@ fn a_continued_multi_member_party_preserves_trailing_slots_and_count() {
     let expected_trailing = seed.save1.player_party[1..].to_vec();
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
     );
     assert_eq!(resumed.save1.player_party_count, 4);
-    assert_eq!(resumed.party_lead, Some(lead));
+    assert_eq!(resumed.lead_for_test(), Some(&lead));
 
     save_from_the_start_menu(&mut resumed, &mut slot);
     let saved = slot.load();
@@ -108,14 +108,14 @@ fn a_re_saved_continued_lead_keeps_the_bytes_no_battle_model_carries() {
     seed.save1.player_party[0] = stored;
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
     );
     // Play the session, so the write under test is a real re-save rather
     // than the retained record handed back untouched.
-    let live = resumed.party_lead.as_mut().expect("the fixture has a lead");
+    let live = resumed.lead_mut_for_test().expect("the fixture has a lead");
     live.apply_damage(4);
     live.deduct_pp(0).unwrap();
     let played = live.clone();
@@ -186,15 +186,14 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &traded_lead);
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
     );
     assert_eq!(
         resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .map(battle::BattlePokemon::original_trainer_id),
         Some(TRADED_OT_ID)
     );
@@ -206,15 +205,14 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     assert_eq!(saved.block1.player_party[0].box_data.ot_id(), TRADED_OT_ID);
 
     let reloaded = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         saved.block1,
         saved.block2,
     );
     assert_eq!(
         reloaded
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .map(battle::BattlePokemon::original_trainer_id),
         Some(TRADED_OT_ID)
     );
@@ -226,10 +224,11 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
 #[test]
 fn a_save_with_an_empty_party_resumes_with_no_lead() {
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10)
+            .in_room_for_test(new_game::SPAWN_MAP_ID),
         new_game::SPAWN_MAP_ID,
         SaveBlock1::default(),
         SaveBlock2::default(),
     );
-    assert!(resumed.party_lead.is_none());
+    assert!(resumed.lead_for_test().is_none());
 }

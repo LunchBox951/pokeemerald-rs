@@ -120,18 +120,26 @@ fn synthetic_pack_helpers_leave_no_scratch_file_behind_on_panic() {
     // Every synthetic pack these helpers write must be gone once the test
     // body exits, unwinding included, so the shared temp dir never
     // accumulates leftover fixtures across runs.
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-music-test-{}-unwind-cleanup.pack",
-        std::process::id()
-    ));
+    const DELIBERATE: &str = "deliberate panic to exercise unwind cleanup";
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (_pack, _guard) = pack_with_song("unwind-cleanup", None);
-        assert!(path.exists(), "the scratch pack must exist while in scope");
+    // Setup runs outside the unwind catch so a fixture failure fails the test
+    // instead of being mistaken for the deliberate panic. The expected path
+    // comes from the guard itself, so a naming change cannot pass vacuously.
+    let (pack, guard) = pack_with_song("unwind-cleanup", None);
+    let path = guard.path().to_path_buf();
+    assert!(path.exists(), "the scratch pack must exist while in scope");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let (_pack, _guard) = (pack, guard);
         panic!("deliberate panic to exercise unwind cleanup");
     }));
 
-    assert!(result.is_err(), "the inner closure must have panicked");
+    let payload = result.expect_err("the deliberate panic must be observed");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some(DELIBERATE),
+        "the unwind must come from the deliberate panic"
+    );
     assert!(
         !path.exists(),
         "the guard must remove the scratch pack even when the test panics"

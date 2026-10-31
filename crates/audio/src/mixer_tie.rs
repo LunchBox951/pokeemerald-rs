@@ -12,7 +12,7 @@ fn note_off_track_stops_only_the_newest_matching_voice() {
     const OTHER_KEY: u8 = 64;
 
     let mut mixer = Mixer::default();
-    // Panned apart so the assertions can tell WHICH matching voice stopped.
+    // Panned apart so assertions identify which voice stopped.
     mixer.add_voice(keyed_voice(
         50,
         TRACK,
@@ -163,8 +163,6 @@ fn note_off_releases_newest_match_across_voice_kinds_cgb_then_pcm() {
     assert!(!cgb.is_stopping(), "older CGB voice must keep sounding");
 }
 
-/// A square-channel voice on `channel` with the given envelope and
-/// pseudo-echo tail, on track 0 and key 60 like [`cgb_keyed_voice`].
 fn cgb_endtie_voice(
     channel: CgbChannelNumber,
     adsr: CgbAdsr,
@@ -192,8 +190,7 @@ fn cgb_endtie_voice(
 
 #[test]
 fn end_tie_skips_a_cgb_channel_in_its_automatic_pseudo_echo_tail() {
-    // A zero-sustain CGB envelope completes on its own into the automatic
-    // pseudo-echo tail that `CgbEnvelope::is_end_tie_eligible`'s doc excludes.
+    // A zero-sustain envelope enters the automatic tail on its own.
     const TRACK: usize = 0;
     const KEY: u8 = 60;
 
