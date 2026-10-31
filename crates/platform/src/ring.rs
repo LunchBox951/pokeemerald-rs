@@ -454,9 +454,10 @@ impl Drop for Consumer {
 /// mark behind the consumer is a small negative distance, never a huge
 /// positive one.
 fn stale_before(mark: u64, consumed: u64, queued: usize) -> usize {
-    // Reinterpreting the wrapped difference as signed is the point: a mark
-    // behind `consumed` must read as negative.
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "reinterpreting the wrapped difference as signed is the point: a mark behind `consumed` must read as negative"
+    )]
     let ahead = mark.wrapping_sub(consumed) as i64;
     if ahead <= 0 {
         return 0;

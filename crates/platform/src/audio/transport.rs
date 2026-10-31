@@ -419,8 +419,9 @@ impl<H: OutputHost> Transport<H> {
             } else {
                 // A refused pause (a backend without hardware pause) is a
                 // deliberate stop, not a failure: re-attach a stopped stream
-                // at once without spending the retry budget.
-                self.retire(TransportFailure::StreamLost);
+                // at once without spending the retry budget, and publish no
+                // loss for a stream the stop itself replaces.
+                self.detach();
                 self.next_attempt = self.finished(now);
             }
         }
@@ -584,6 +585,14 @@ impl<H: OutputHost> Transport<H> {
 
     /// Drop the attached stream on this (the driver's) thread and publish why.
     fn retire(&mut self, reason: TransportFailure) {
+        self.detach();
+        self.publish(TransportState::Unavailable(reason));
+    }
+
+    /// Drop the attached stream on this (the driver's) thread without
+    /// publishing: a refused pause replaces the stream at once, and only a
+    /// failed replacement is a transition the application should see.
+    fn detach(&mut self) {
         // Starts so far landed while this stream was attached.
         self.seen_starts = self.shared.starts.load(Ordering::Acquire);
         self.live = None;
@@ -594,7 +603,6 @@ impl<H: OutputHost> Transport<H> {
         if self.shared.running.load(Ordering::Acquire) || self.producer.owes_first_read_discard() {
             self.stale_queue = true;
         }
-        self.publish(TransportState::Unavailable(reason));
     }
 
     /// Schedule the next attempt after a failure: doubling delays, then a

@@ -20,7 +20,12 @@ fn stopping_a_stream_without_hardware_pause_keeps_the_queue_for_the_next_start()
     rig.transport.step(MS(20));
     rig.transport.step(MS(120));
     assert_eq!(with(&w).builds, 2);
-    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+    assert_eq!(
+        rig.events(),
+        [],
+        "a stop the backend cannot pause is replaced in place: no loss, no transition"
+    );
+    assert_eq!(rig.shared.state(), TransportState::Ready);
     assert_eq!(
         rig.producer.available_space(),
         rig.producer.capacity() - 4,
