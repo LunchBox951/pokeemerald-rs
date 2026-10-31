@@ -1,6 +1,7 @@
 //! Object-event collision regressions.
 
 use super::*;
+use crate::overworld::object_event::ObjectEventCollection;
 
 #[test]
 fn a_visible_object_event_blocks_the_step_and_leaves_the_player_facing_it() {
@@ -311,4 +312,45 @@ fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
         "the player must stop on the tile adjacent to Mom"
     );
     assert_eq!(player.facing(), Direction::North);
+}
+
+fn moved_east_runtime() -> MapRuntime<'static> {
+    // Authored at (2, 3); walked east to the live tile (3, 3).
+    let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
+    let mut collection = ObjectEventCollection::from_templates(objects);
+    collection
+        .get_mut(1)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    let collection: &'static ObjectEventCollection = Box::leak(Box::new(collection));
+    runtime_with_objects(objects).with_object_events(collection)
+}
+
+#[test]
+fn a_moved_object_event_no_longer_blocks_its_authored_tile() {
+    let runtime = moved_east_runtime();
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (2, 3),
+        }
+    );
+}
+
+#[test]
+fn a_moved_object_event_blocks_its_live_tile() {
+    let runtime = moved_east_runtime();
+    let mut player = PlayerState::new((3, 2), 3, Direction::South);
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked {
+            direction: Direction::South,
+            collision: super::super::collision::Collision::ObjectEvent,
+        }
+    );
+    assert_eq!(player.position(), (3, 2));
+    assert!(!player.in_transit());
 }
