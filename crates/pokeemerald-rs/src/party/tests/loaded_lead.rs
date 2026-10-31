@@ -24,6 +24,18 @@ fn a_loaded_lead_saves_battle_changes_after_the_battler_is_lent_and_returned() {
 }
 
 #[test]
+fn a_loaded_lead_reports_whether_its_battler_is_lent() {
+    let dex = Dex::new();
+    let stored = stored_record_with_retained_fields();
+    let mut loaded = LoadedLead::load(&dex, std::slice::from_ref(&stored)).unwrap();
+    assert!(!loaded.is_lent());
+    let lent = loaded.take_battler();
+    assert!(loaded.is_lent());
+    loaded.restore_battler(lent);
+    assert!(!loaded.is_lent());
+}
+
+#[test]
 #[should_panic(expected = "lent out")]
 fn a_lent_out_battler_cannot_be_saved_from() {
     let dex = Dex::new();

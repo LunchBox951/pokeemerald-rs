@@ -1,6 +1,9 @@
+use assets::items::ItemId;
 use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction};
 use engine::rng::Rng;
+
+use crate::flow::lead_screen::loaded_holding;
 
 use super::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
@@ -46,6 +49,24 @@ fn max_iv_player_mon(species: SpeciesId, level: u8, moves: Vec<MoveId>) -> Battl
         moves,
     )
     .expect("player mon: species/moves must be in the dex")
+}
+
+#[test]
+fn start_first_battle_refuses_a_loaded_battle_item_before_any_draw() {
+    let mut rng = Rng::new(DEFAULT_RNG_SEED);
+    let treecko = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
+    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+
+    assert_eq!(
+        start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+    );
+    assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());
+
+    let nugget = loaded_holding(&treecko, ItemId::NUGGET);
+    let battle = start_first_battle(nugget, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("an item with no effect is no obstacle");
+    assert_eq!(battle.player().held_item(), ItemId::NUGGET);
 }
 
 #[test]

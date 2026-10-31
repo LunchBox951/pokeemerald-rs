@@ -482,17 +482,33 @@ mod tests {
         );
     }
 
+    fn empty_pack_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "pokeemerald-rs-tileset-anims-test-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_pack_refuses_a_planted_symlink() {
+        crate::overworld::test_support::assert_planted_symlink_untouched(
+            &empty_pack_path(),
+            || {
+                empty_pack();
+            },
+        );
+    }
+
     fn empty_pack() -> AssetPack {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&assets::pack::MAGIC);
         bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
         let directory_entry_count = 0u32;
         bytes.extend_from_slice(&directory_entry_count.to_le_bytes());
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-tileset-anims-test-{}.pack",
-            std::process::id()
-        ));
-        std::fs::write(&path, bytes).unwrap();
+        let path = empty_pack_path();
+        crate::overworld::test_support::write_scratch_exclusive(&path, &bytes);
         let pack = AssetPack::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         pack

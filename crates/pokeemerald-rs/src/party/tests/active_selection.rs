@@ -113,3 +113,20 @@ fn select_active_battler_surfaces_slot_0s_decode_error_when_nothing_is_usable() 
     let err = LoadedLead::load(&dex, &party).expect_err("SPECIES_NONE is not a fightable mon");
     assert!(matches!(err, PartyError::Battler(_)), "{err}");
 }
+
+/// An earlier slot with an unmodelled status fails to decode and is skipped,
+/// the same as any other undecodable earlier slot, when a later slot is a
+/// usable living member; its record is left byte for byte as saved.
+#[test]
+fn an_unmodelled_status_slot_is_skipped_for_a_later_healthy_slot_and_left_untouched() {
+    let dex = Dex::new();
+    let mut frozen = to_save_pokemon(&dex, &treecko_fixture());
+    frozen.status = 0x20;
+    let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
+    let party = [frozen, healthy];
+
+    let lead = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
+
+    assert_eq!(lead.slot(), 1);
+    assert_eq!(party[0].status, 0x20);
+}

@@ -1,4 +1,4 @@
-//! Checking the planned voicegroups against the pack and the ROM, through `rom-import`'s own reader.
+//! Checks the planned voicegroups against the pack.
 
 use assets::audio::VoiceGroup;
 
@@ -8,27 +8,20 @@ use crate::gen_rom_profile::Context;
 
 use super::ADDRESSABLE_SLOTS;
 
-/// Require the pack's voicegroups to be exactly the planned ones, and check
-/// each entry against the group the ROM yields at the planned root.
+/// Requires the pack's voicegroups to be exactly the planned ones, each equal
+/// to what `rom_import::decode_voicegroup_payload` decodes at its planned root.
 ///
-/// A pack group the plan never reaches -- left by a stale or wider
-/// extraction -- is refused like a second song: the importer would never
-/// emit it, so the profile could not reproduce the pack.
-///
-/// The ROM side runs `rom-import`'s own voicegroup reader over the finished
-/// plan, so borrowed slots, biased prefixes, and key-split tails normalize
-/// exactly as the runtime importer does. That reader needs the whole plan, so
-/// this runs once the plan is complete.
+/// A pack voicegroup the plan does not reach is rejected: the importer would
+/// never emit it.
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::StructMismatch`] naming `audio/voicegroup/*` when
-/// the pack holds a group the plan does not;
-/// [`GenRomProfileError::MissingPackEntry`] when a group has no pack entry;
-/// [`GenRomProfileError::WrongPackEntryKind`] when the entry is not raw;
-/// [`GenRomProfileError::EntryShape`] when the entry does not decode as a
-/// voicegroup; [`GenRomProfileError::StructMismatch`] when the ROM group
-/// cannot be read or differs from the pack's.
+/// [`GenRomProfileError::StructMismatch`] naming `audio/voicegroup/*` for an
+/// unreachable pack voicegroup, or for a ROM group that cannot be decoded or
+/// differs from the pack's; [`GenRomProfileError::MissingPackEntry`],
+/// [`GenRomProfileError::WrongPackEntryKind`] or
+/// [`GenRomProfileError::EntryShape`] when a planned group's pack entry is
+/// absent, not raw, or not a voicegroup.
 pub(super) fn check_voicegroups(
     ctx: &Context<'_>,
     plan: &AudioPlan,
@@ -76,10 +69,8 @@ pub(super) fn check_voicegroups(
 
 /// `plan` as the importer's roots, voicegroups in plan order.
 ///
-/// The importer's roots borrow `'static` data, because a profile compiles
-/// them in. This generator is a short-lived process that builds them once per
-/// run, so the strings and slices are leaked rather than threading a lifetime
-/// through `rom-import`.
+/// The roots borrow `'static` data, so the strings and slices are leaked; the
+/// generator builds them once per run.
 fn importer_roots(plan: &AudioPlan) -> Result<rom_import::AudioRoots, GenRomProfileError> {
     fn leak_str(text: &str) -> &'static str {
         Box::leak(text.to_owned().into_boxed_str())

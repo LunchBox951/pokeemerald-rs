@@ -3,18 +3,24 @@
 //! [`Printer`] owns its glyph source and render state. The caller supplies
 //! [`PrinterInput`] and calls [`Printer::tick`] once per frame.
 //!
+//! A template line spacing is set with [`Printer::with_line_spacing`] and is
+//! zero by default.
+//!
 //! # Deliberately out of scope
 //!
 //! Formatting, audio, and window-buffer controls are consumed without applying
-//! effects. Placeholders, dynamic tokens, and keypad icons are skipped because
-//! this renderer has no expansion context or corresponding glyphs. `CLEAR`,
+//! effects. Placeholders and dynamic tokens are skipped because this renderer
+//! has no expansion context. A keypad icon is not skipped: it advances the
+//! cursor by the icon's width and is reported through
+//! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
+//! no icon bitmaps. `CLEAR`,
 //! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
 //! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
 //! `FILL_WINDOW`'s whole-window equivalent through
 //! [`Printer::cleared_window`], both for the caller to erase. Which colour
 //! that erase uses stays out of scope with the rest of formatting.
 
-use assets::fonts::{FontId, Glyph, GlyphSource};
+use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
 use super::Token;
 
@@ -29,6 +35,10 @@ mod ext_ctrl {
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
     pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
 }
+
+mod keypad_icon;
+
+pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
 
@@ -209,7 +219,8 @@ enum PrinterState {
 /// The result of one [`Printer::tick`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TickEvent {
-    /// The frame revealed no glyph: either the reveal delay consumed it, or a
+    /// The frame revealed no glyph: either the reveal delay consumed it, a
+    /// keypad icon was placed ([`Printer::keypad_icon`]), or a
     /// `CLEAR`/`CLEAR_TO` control erased a span. Upstream ends the frame for
     /// both (`RENDER_UPDATE` and `RENDER_PRINT`, `pokeemerald/src/text.c`
     /// `:352-360`). [`Printer::cleared_span`] distinguishes them. At Slow/Mid
@@ -285,12 +296,18 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
 /// A frame-driven printer over decoded text tokens.
 ///
 /// The printer owns its glyph source and emits blit and layout events rather
-/// than writing a pixel buffer.
+/// than writing a pixel buffer. [`Printer::new`] carries that one source;
+/// [`Printer::with_sources`] also carries the other modelled Latin sources,
+/// retrievable through [`Printer::source`], so a later `FONT` control can
+/// select one. Text always renders from the initial source until then.
 #[derive(Debug)]
 pub struct Printer<S> {
     tokens: Vec<Token>,
     next_token_index: usize,
     glyphs: S,
+    /// The modelled sources other than `glyphs`, in [`FontId::ALL`] order.
+    /// Empty for a printer built by [`Printer::new`].
+    alternate_glyphs: Vec<S>,
     speed: TextSpeed,
     reveal_delay_frames_remaining: u8,
     origin: PixelPos,
@@ -299,6 +316,7 @@ pub struct Printer<S> {
     clear_height: i32,
     cleared_span: Option<ClearedSpan>,
     cleared_window: bool,
+    keypad_icon: Option<KeypadIconPlacement>,
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
@@ -317,7 +335,9 @@ impl<S: GlyphSource> Printer<S> {
             clear_height: clear_span_height(glyphs.font()),
             cleared_span: None,
             cleared_window: false,
+            keypad_icon: None,
             glyphs,
+            alternate_glyphs: Vec::new(),
             speed,
             reveal_delay_frames_remaining: 0,
             origin,
@@ -326,6 +346,52 @@ impl<S: GlyphSource> Printer<S> {
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
         }
+    }
+
+    /// Creates a printer at the window-local `origin` that renders from
+    /// `initial`'s source and also carries every other modelled source.
+    ///
+    /// Behaves exactly as [`Self::new`] over `initial`'s source: nothing
+    /// selects an alternate source yet.
+    #[must_use]
+    pub fn with_sources(
+        tokens: Vec<Token>,
+        sources: GlyphSources<S>,
+        initial: FontId,
+        speed: TextSpeed,
+        origin: PixelPos,
+    ) -> Self {
+        let (selected, alternate_glyphs) = sources.split(initial);
+        Self {
+            alternate_glyphs,
+            ..Self::new(tokens, selected, speed, origin)
+        }
+    }
+
+    /// The font the printer currently renders from.
+    #[must_use]
+    pub fn selected_font(&self) -> FontId {
+        self.glyphs.font()
+    }
+
+    /// The source this printer carries for `font`, or `None` if it was built
+    /// without that font ([`Self::new`] carries only its one source).
+    #[must_use]
+    pub fn source(&self, font: FontId) -> Option<&S> {
+        std::iter::once(&self.glyphs)
+            .chain(&self.alternate_glyphs)
+            .find(|source| source.font() == font)
+    }
+
+    /// Sets the template line spacing in pixels (`TextPrinterTemplate.lineSpacing`).
+    ///
+    /// A newline advances the cursor by the font's maximum letter height plus
+    /// this spacing (`pokeemerald/src/text.c:970`), and a scroll prompt scrolls
+    /// the same distance (`text.c:1184`). Printers default to zero spacing.
+    #[must_use]
+    pub fn with_line_spacing(mut self, line_spacing: u8) -> Self {
+        self.line_height = max_letter_height(self.glyphs.font()) + i32::from(line_spacing);
+        self
     }
 
     /// Enables A/B speed-up for this printer.
@@ -352,6 +418,19 @@ impl<S: GlyphSource> Printer<S> {
     #[must_use]
     pub const fn cleared_span(&self) -> Option<ClearedSpan> {
         self.cleared_span
+    }
+
+    /// The keypad icon the most recent [`Self::tick`] placed, if any.
+    ///
+    /// Upstream draws the icon, advances the cursor by its width, and returns
+    /// `RENDER_PRINT`, ending the frame (`pokeemerald/src/text.c:1114-1118`);
+    /// that tick returns [`TickEvent::Idle`]. This printer owns no icon
+    /// bitmaps, so a caller draws the icon at the reported position. The
+    /// printer has no template letter spacing, so the advance is the width
+    /// alone.
+    #[must_use]
+    pub const fn keypad_icon(&self) -> Option<KeypadIconPlacement> {
+        self.keypad_icon
     }
 
     /// Whether the most recent [`Self::tick`] cleared the complete window and
@@ -383,6 +462,7 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.cleared_span = None;
         self.cleared_window = false;
+        self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
     }
@@ -395,6 +475,7 @@ impl<S: GlyphSource> Printer<S> {
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
         self.cleared_window = false;
+        self.keypad_icon = None;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
             PrinterState::HandleChar => self.tick_handle_char(input),
@@ -513,6 +594,14 @@ impl<S: GlyphSource> Printer<S> {
                         None
                     }
                 },
+                Token::KeypadIcon(id) => {
+                    let Some(placement) = keypad_icon::place(id, &mut self.cursor) else {
+                        continue;
+                    };
+                    self.keypad_icon = Some(placement);
+                    // `RENDER_PRINT` ends the frame (`text.c:1118`).
+                    return TickEvent::Idle;
+                }
                 ref other => glyph_id_for_token(other),
             };
 
@@ -627,16 +716,16 @@ mod tests {
     use assets::fonts::{FontGlyphSheet, FontId, FontImageRef, SHEET_HEIGHT, SHEET_WIDTH};
     use assets::pack::ImageRef;
 
-    const ENCODED_A: u8 = 0xBB;
+    pub(super) const ENCODED_A: u8 = 0xBB;
     const NORMAL_A_ADVANCE_WIDTH: u8 = 6;
     const BARD_DELIMITER_ADVANCE_WIDTH: u8 = 3;
     const PAUSE_DURATION: u8 = 96;
 
-    fn blank_sheet_pixels() -> Vec<u8> {
+    pub(super) fn blank_sheet_pixels() -> Vec<u8> {
         vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
     }
 
-    fn synthetic_sheet(pixels: &[u8], font: FontId) -> FontGlyphSheet<'_> {
+    pub(super) fn synthetic_sheet(pixels: &[u8], font: FontId) -> FontGlyphSheet<'_> {
         let image = ImageRef {
             width: SHEET_WIDTH,
             height: SHEET_HEIGHT,
@@ -646,7 +735,7 @@ mod tests {
         FontGlyphSheet::new(FontImageRef::new_for_tests(font, image)).unwrap()
     }
 
-    fn decode_tokens(bytes: &[u8]) -> Vec<Token> {
+    pub(super) fn decode_tokens(bytes: &[u8]) -> Vec<Token> {
         super::super::decode(bytes).unwrap()
     }
 
@@ -831,6 +920,64 @@ mod tests {
             printer.tick(PrinterInput::none()),
             TickEvent::Glyph(_)
         ));
+    }
+
+    #[test]
+    fn line_spacing_extends_the_newline_advance() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::CHAR_NEWLINE,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer =
+            Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1)).with_line_spacing(1);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph after the newline")
+        };
+        assert_eq!((g.x, g.y), (0, 1 + 16 + 1));
+    }
+
+    #[test]
+    fn line_spacing_extends_the_scroll_distance() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::CHAR_PROMPT_SCROLL,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 1)).with_line_spacing(1);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
+        assert_eq!(printer.tick(press_a()), TickEvent::ScrollStarted);
+        let mut total = 0;
+        let mut frames = 0;
+        loop {
+            match printer.tick(PrinterInput::none()) {
+                TickEvent::Scrolling { dy } => {
+                    total += dy;
+                    frames += 1;
+                }
+                TickEvent::ScrollFinished => break,
+                other => panic!("unexpected event {other:?}"),
+            }
+        }
+        // 17 px at the fast speed's 4 px/frame: 4, 4, 4, 4, 1.
+        assert_eq!((total, frames), (17, 5));
     }
 
     #[test]
@@ -1473,6 +1620,99 @@ mod tests {
         };
         assert_eq!((g.x, g.y), (0, 1));
         assert_eq!(g.glyph.advance_width, NORMAL_A_ADVANCE_WIDTH);
+    }
+
+    /// Per-font pixel pairs, each distinct within the 2-bit depth, so a
+    /// glyph's first two pixels name its source.
+    fn fill_for(font: FontId) -> (u8, u8) {
+        match font {
+            FontId::Small => (1, 0),
+            FontId::Normal => (2, 0),
+            FontId::Short => (3, 0),
+            FontId::Narrow => (0, 1),
+            FontId::SmallNarrow => (1, 1),
+        }
+    }
+
+    /// A sheet alternating `fill_for(font)` across each row, so every glyph
+    /// starts with that pair.
+    fn multi_font_pixels(font: FontId) -> Vec<u8> {
+        let (even, odd) = fill_for(font);
+        (0..SHEET_WIDTH * SHEET_HEIGHT)
+            .map(|index| if index % 2 == 0 { even } else { odd })
+            .collect()
+    }
+
+    fn multi_font_printer(initial: FontId) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
+        let sources = GlyphSources::try_from_fn(|font| {
+            let pixels = multi_font_pixels(font);
+            Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
+        })
+        .unwrap();
+        Printer::with_sources(
+            decode_tokens(&[ENCODED_A, super::super::EOS]),
+            sources,
+            initial,
+            TextSpeed::Instant,
+            (0, 0),
+        )
+    }
+
+    #[test]
+    fn a_multi_source_printer_retains_separately_identified_font_data() {
+        let printer = multi_font_printer(FontId::Normal);
+        assert_eq!(printer.selected_font(), FontId::Normal);
+        for font in FontId::ALL {
+            let source = printer
+                .source(font)
+                .unwrap_or_else(|| panic!("{font:?} source must be carried"));
+            assert_eq!(source.font(), font);
+            let glyph = source.glyph(1).unwrap();
+            assert_eq!(
+                (glyph.pixels[0], glyph.pixels[1]),
+                fill_for(font),
+                "{font:?} pixels"
+            );
+            assert_eq!(glyph.advance_width, font.glyph_width(1).unwrap());
+        }
+        // Normal and an alternate font are different data, not one aliased sheet.
+        let normal = printer.source(FontId::Normal).unwrap().glyph(1).unwrap();
+        let short = printer.source(FontId::Short).unwrap().glyph(1).unwrap();
+        assert_ne!(normal.pixels[0], short.pixels[0]);
+        assert_ne!(normal.advance_width, 0);
+    }
+
+    #[test]
+    fn unchanged_text_renders_from_the_initial_source_not_an_alternate() {
+        for initial in FontId::ALL {
+            let mut printer = multi_font_printer(initial);
+            let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+                panic!("expected a glyph")
+            };
+            assert_eq!(
+                (g.glyph.pixels[0], g.glyph.pixels[1]),
+                fill_for(initial),
+                "{initial:?}"
+            );
+            assert_eq!(
+                g.glyph.advance_width,
+                initial.glyph_width(u16::from(ENCODED_A)).unwrap()
+            );
+            assert_eq!(printer.selected_font(), initial);
+        }
+    }
+
+    #[test]
+    fn a_single_source_printer_carries_only_its_one_source() {
+        let pixels = blank_sheet_pixels();
+        let printer = Printer::new(
+            decode_tokens(&[super::super::EOS]),
+            synthetic_sheet(&pixels, FontId::Normal),
+            TextSpeed::Instant,
+            (0, 0),
+        );
+        assert!(printer.source(FontId::Normal).is_some());
+        assert!(printer.source(FontId::Small).is_none());
     }
 
     #[test]

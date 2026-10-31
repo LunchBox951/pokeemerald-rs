@@ -102,7 +102,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
         "fixture precondition: the doormat's warp event is stored at elevation 3"
     );
 
-    let mut phase = OverworldPhase::for_test(
+    let mut phase = OverworldPhase::for_test_with_source(
         crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
@@ -111,6 +111,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
         CENTER,
         PlayerState::new((7, 7), 3, Direction::South),
         None,
+        crate::pack_source::PackSource::Repo,
     );
 
     // The poll stays shut while the step is outstanding (`arrow_poll_open`),

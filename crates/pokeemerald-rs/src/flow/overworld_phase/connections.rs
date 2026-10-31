@@ -7,7 +7,7 @@
 //! [`run_on_transition_map_script`] applies the supported on-transition
 //! map-script effect.
 
-use assets::{MapEventsTable, MapHeaderTable};
+use assets::MapHeaderTable;
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
@@ -17,7 +17,7 @@ use std::cell::OnceCell;
 
 use crate::overworld;
 
-use super::OverworldPhase;
+use super::{assert_scene_owns_map, OverworldPhase};
 
 /// Resolves map-edge connection-crossing geometry against the real
 /// generated map tables and, once a candidate connection's own bounds
@@ -206,7 +206,7 @@ impl OverworldPhase {
             &event_data,
         )
         .ok()?;
-        let object_events = seed_object_events(&scene, map)?;
+        let object_events = seed_object_events(&scene);
         Some((event_data, scene, object_events))
     }
 
@@ -218,10 +218,8 @@ impl OverworldPhase {
     /// `GetAdjustedInitialDirection`, `src/overworld.c:929-951`).
     ///
     /// `map_id` and `scene` are assigned together, after every fallible
-    /// lookup has already succeeded:
-    /// [`crate::overworld::OverworldScene::runtime`] stamps `map_id` onto a
-    /// [`engine::overworld::MapRuntime`] built from `scene`'s own decoded
-    /// grid, so the two must never disagree.
+    /// lookup has already succeeded, so the phase's map is always the one
+    /// [`crate::overworld::OverworldScene::runtime`] answers for.
     ///
     /// A resolved warp has no fixed destination coordinates, so
     /// `save1.location.x`/`.y` are left at `-1` -- the shape upstream's
@@ -242,17 +240,13 @@ impl OverworldPhase {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
             return;
         };
-        let Ok(events) = MapEventsTable::new().resolve(map) else {
-            eprintln!("warp: no event data for destination map {map:?} -- staying put");
-            return;
-        };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
         let destination = {
-            let runtime = scene.runtime(map, header, events);
+            let runtime = scene.runtime();
             warp_destination_position(&runtime, warp_id).map(|(x, y, elevation)| {
                 // An undecodable attribute can't happen for a cell
                 // `warp_destination_position` just resolved; MB_NORMAL keeps
@@ -275,6 +269,7 @@ impl OverworldPhase {
         // the destination map.
         self.pending_landing = None;
         self.pending_turn = None;
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -331,17 +326,13 @@ impl OverworldPhase {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
             return;
         };
-        let Ok(events) = MapEventsTable::new().resolve(map) else {
-            eprintln!("warp: no event data for destination map {map:?} -- staying put");
-            return;
-        };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
         let (elevation, facing) = {
-            let runtime = scene.runtime(map, header, events);
+            let runtime = scene.runtime();
             let Some(elevation) = runtime.arrival_elevation(i32::from(x), i32::from(y)) else {
                 eprintln!(
                     "warp: destination position ({x}, {y}) is outside map {map:?} -- staying put"
@@ -358,6 +349,7 @@ impl OverworldPhase {
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
         self.pending_turn = None;
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -397,22 +389,15 @@ impl OverworldPhase {
         map: assets::MapId,
         destination: WarpData,
     ) -> bool {
-        let Ok(header) = MapHeaderTable::new().header(map) else {
-            eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return false;
-        };
-        let Ok(events) = MapEventsTable::new().resolve(map) else {
-            eprintln!("warp: no event data for destination map {map:?} -- staying put");
-            return false;
-        };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return false;
         };
-        let Some(landing) = saved_location_landing(&scene, map, header, events, destination) else {
+        let Some(landing) = saved_location_landing(&scene, destination) else {
             return false;
         };
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.commit_saved_location_landing(
             map,
@@ -499,6 +484,7 @@ impl OverworldPhase {
             return false;
         };
 
+        assert_scene_owns_map(&scene, to_map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;
@@ -526,34 +512,25 @@ impl OverworldPhase {
 /// from `scene`'s own resolved events -- the set simulation reads, including
 /// a load-time replacement such as Oldale's ([`OverworldScene::map_events`]).
 /// Upstream initialises them per map load (`event_object_movement.c:1287-1330`)
-/// and replaces them on a map change (`:1645-1673`). `None` if `map` has no
-/// event data.
-pub(super) fn seed_object_events(
-    scene: &overworld::OverworldScene,
-    map: assets::MapId,
-) -> Option<ObjectEventCollection> {
-    Some(ObjectEventCollection::from_templates(
-        scene.map_events(map).ok()?.object_events,
-    ))
+/// and replaces them on a map change (`:1645-1673`).
+pub(super) fn seed_object_events(scene: &overworld::OverworldScene) -> ObjectEventCollection {
+    ObjectEventCollection::from_templates(scene.map_events().object_events)
 }
 
 /// A saved-location landing: position, elevation, and warp-in facing.
 pub(super) type SavedLanding = (i16, i16, u8, engine::overworld::Direction);
 
 /// Resolves where a saved-location warp to `destination` lands inside
-/// `scene` (already loaded for `map`): [`saved_warp_position`], faced the
-/// way the landing tile's metatile behavior dictates ([`warp_in_facing`]).
-/// Logs and returns `None` when `destination` names no position inside
-/// `map`.
+/// `scene`'s own map: [`saved_warp_position`], faced the way the landing
+/// tile's metatile behavior dictates ([`warp_in_facing`]). Logs and returns
+/// `None` when `destination` names no position inside that map.
 pub(super) fn saved_location_landing(
     scene: &overworld::OverworldScene,
-    map: assets::MapId,
-    header: &assets::MapHeader,
-    events: &assets::MapEvents,
     destination: WarpData,
 ) -> Option<SavedLanding> {
-    let runtime = scene.runtime(map, header, events);
-    let landing = saved_warp_position(&runtime, events, destination).map(|(x, y, elevation)| {
+    let map = scene.map_id();
+    let runtime = scene.runtime();
+    let landing = saved_warp_position(&runtime, destination).map(|(x, y, elevation)| {
         let behavior = runtime
             .metatile_behavior(i32::from(x), i32::from(y))
             .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
@@ -580,11 +557,10 @@ pub(super) fn saved_location_landing(
 /// upstream has already committed to the valid-id branch by that point.
 fn saved_warp_position(
     runtime: &engine::overworld::MapRuntime<'_>,
-    events: &assets::MapEvents,
     destination: WarpData,
 ) -> Option<(i16, i16, u8)> {
     if let Ok(warp_id) = u8::try_from(destination.warp_id) {
-        if usize::from(warp_id) < events.warp_events.len() {
+        if usize::from(warp_id) < runtime.events().warp_events.len() {
             return warp_destination_position(runtime, warp_id);
         }
     }
