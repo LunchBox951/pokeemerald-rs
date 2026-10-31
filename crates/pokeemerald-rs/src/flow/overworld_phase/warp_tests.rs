@@ -4,3 +4,4 @@
 mod arrow;
 mod door;
 mod ordinary;
+mod step_completion_aliases;

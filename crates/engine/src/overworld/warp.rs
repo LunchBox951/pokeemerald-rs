@@ -274,6 +274,23 @@ mod tests {
     }
 
     #[test]
+    fn water_door_and_deep_south_warp_trigger_like_non_animated_doors() {
+        // `MetatileBehavior_IsNonAnimDoor` (metatile_behavior.c:262-270) accepts
+        // MB_WATER_DOOR and MB_DEEP_SOUTH_WARP; IsWarpMetatileBehavior uses it.
+        for behavior in [MB_WATER_DOOR, MB_DEEP_SOUTH_WARP] {
+            let runtime = runtime_with_warp_behavior(behavior, sample_warp());
+            assert_eq!(
+                trigger_door_warp(&runtime, 1, 0, 0),
+                Some(WarpTrigger::Resolved {
+                    map: MapId("MAP_DEST"),
+                    warp_id: 2,
+                }),
+                "{behavior:#04x}"
+            );
+        }
+    }
+
+    #[test]
     fn animated_door_triggers_a_resolved_warp() {
         let runtime = runtime_with_warp_behavior(MB_ANIMATED_DOOR, sample_warp());
         assert_eq!(
