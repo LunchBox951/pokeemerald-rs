@@ -1,69 +1,71 @@
 //! Trainer sight-cone geometry: whether a [`TrainerType::Normal`] object
 //! event's facing-direction cone reaches the player.
 //!
-//! The trainer's facing and position are always its spawn-time template
-//! values, and its movement-range fields go unused: this crate has no
-//! per-object movement simulation, so a pacing or rotating trainer is never
-//! read mid-patrol.
+//! The trainer's position, facing, and elevation come from its
+//! [`LiveObjectEvent`] state, and intermediate blockers are the
+//! [`ObjectEventCollection`]'s live entries; the immutable template supplies
+//! only the trainer type, sight range, and hide flag.
 //!
 //! A pure, stateless query over an already-decided player position, facing,
 //! and world snapshot; call-site timing relative to movement is the
 //! caller's concern, not this module's.
 
-use assets::{ObjectEvent, TrainerType};
+use assets::TrainerType;
 
 use super::collision::{directionally_impassable, elevation_mismatch, elevations_compatible};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::MB_NORMAL;
-use super::object_event::{initial_facing_direction, object_event_is_visible};
+use super::object_event::{object_event_is_visible, LiveObjectEvent, ObjectEventCollection};
 use super::player::PlayerState;
 use crate::event_data::EventData;
 
-/// Whether `trainer` -- a [`TrainerType::Normal`] object event on
-/// `runtime`'s map -- currently sees `player`: its own facing-direction
-/// cone, out to its own sight range, reaches `player`'s tile along a clear,
-/// elevation-compatible line.
+/// Whether `trainer` -- a [`TrainerType::Normal`] live object event on
+/// `runtime`'s map -- currently sees `player`: its live facing-direction
+/// cone, out to its template sight range, reaches `player`'s tile along a
+/// clear, elevation-compatible line. `objects` supplies the other live
+/// object events that can stand on the line (`trainer_see.c:301-312`).
 ///
 /// Returns `false` when `trainer`'s hide flag is set, for any other
 /// [`TrainerType`], a sight range of `0`, or an
-/// [`ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
+/// [`assets::ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
 /// a `u8` -- the berry-tree half of that overloaded field reaching this
 /// function is a caller error, not a panic.
 #[must_use]
 pub fn trainer_can_see_player(
-    trainer: &ObjectEvent,
+    trainer: &LiveObjectEvent,
+    objects: &ObjectEventCollection,
     runtime: &MapRuntime<'_>,
     player: &PlayerState,
     event_data: &EventData,
 ) -> bool {
-    if trainer.trainer_type != TrainerType::Normal {
+    let template = trainer.template();
+    let state = trainer.state();
+    if template.trainer_type != TrainerType::Normal {
         return false;
     }
-    if !object_event_is_visible(trainer, event_data) {
+    if !object_event_is_visible(template, event_data) {
         return false;
     }
-    let Some(sight_range) = trainer.trainer_sight_or_berry_tree_id.parse::<u8>().ok() else {
+    let Some(sight_range) = template.trainer_sight_or_berry_tree_id.parse::<u8>().ok() else {
         return false;
     };
     if sight_range == 0 {
         return false;
     }
-    let facing = initial_facing_direction(trainer.movement_type);
-    let trainer_pos = (i32::from(trainer.x), i32::from(trainer.y));
+    let facing = state.facing();
+    let trainer_pos = state.position();
     let Some(distance) = approach_distance(trainer_pos, player.position(), facing, sight_range)
     else {
         return false;
     };
-    sight_line_clear(
-        trainer,
-        trainer_pos,
-        facing,
-        distance,
+    let world = SightWorld {
+        trainer_elevation: state.elevation(),
+        objects,
         runtime,
-        player,
         event_data,
-    )
+    };
+    sight_line_clear(&world, trainer_pos, facing, distance, player)
 }
 
 /// The distance from `trainer_pos` to `player_pos` along `facing`, or
@@ -88,17 +90,31 @@ fn approach_distance(
     u8::try_from(distance).ok()
 }
 
+/// What a sight line reads besides the trainer's own position and facing.
+#[derive(Clone, Copy)]
+struct SightWorld<'a> {
+    /// The trainer's live elevation.
+    trainer_elevation: u8,
+    /// The live object events that can block an intermediate tile.
+    objects: &'a ObjectEventCollection,
+    runtime: &'a MapRuntime<'a>,
+    event_data: &'a EventData,
+}
+
 /// Whether the straight line from `trainer_pos` to the tile `distance`
 /// steps away along `facing` is clear and elevation-compatible.
 fn sight_line_clear(
-    trainer: &ObjectEvent,
+    world: &SightWorld<'_>,
     trainer_pos: (i32, i32),
     facing: Direction,
     distance: u8,
-    runtime: &MapRuntime<'_>,
     player: &PlayerState,
-    event_data: &EventData,
 ) -> bool {
+    let SightWorld {
+        trainer_elevation,
+        runtime,
+        ..
+    } = *world;
     let (dx, dy) = facing.delta();
     let (mut x, mut y) = trainer_pos;
     // The trainer never moves during this query, so its standing-tile
@@ -112,15 +128,7 @@ fn sight_line_clear(
     for _ in 0..intermediate_tiles {
         x += dx;
         y += dy;
-        if tile_blocks_intermediate_sight(
-            trainer,
-            standing_behavior,
-            x,
-            y,
-            facing,
-            runtime,
-            event_data,
-        ) {
+        if tile_blocks_intermediate_sight(world, standing_behavior, x, y, facing) {
             return false;
         }
     }
@@ -143,10 +151,10 @@ fn sight_line_clear(
     if directionally_impassable(standing_behavior, target_behavior, facing) {
         return false;
     }
-    if elevation_mismatch(trainer.elevation, cell.elevation) {
+    if elevation_mismatch(trainer_elevation, cell.elevation) {
         return false;
     }
-    elevations_compatible(trainer.elevation, player.elevation())
+    elevations_compatible(trainer_elevation, player.elevation())
 }
 
 /// Whether intermediate tile `(x, y)` -- one step along `facing`, strictly
@@ -155,14 +163,18 @@ fn sight_line_clear(
 /// currently visible object event occupying it. An undecodable cell fails
 /// closed (`true`).
 fn tile_blocks_intermediate_sight(
-    trainer: &ObjectEvent,
+    world: &SightWorld<'_>,
     standing_behavior: u8,
     x: i32,
     y: i32,
     facing: Direction,
-    runtime: &MapRuntime<'_>,
-    event_data: &EventData,
 ) -> bool {
+    let SightWorld {
+        trainer_elevation,
+        objects,
+        runtime,
+        event_data,
+    } = *world;
     let Some(cell) = runtime.metatile_cell(x, y) else {
         return true;
     };
@@ -173,19 +185,19 @@ fn tile_blocks_intermediate_sight(
     if directionally_impassable(standing_behavior, target_behavior, facing) {
         return true;
     }
-    if elevation_mismatch(trainer.elevation, cell.elevation) {
+    if elevation_mismatch(trainer_elevation, cell.elevation) {
         return true;
     }
-    runtime
-        .object_events_at(x, y, trainer.elevation)
-        .any(|other| object_event_is_visible(other, event_data))
+    objects
+        .object_events_at(x, y, trainer_elevation)
+        .any(|other| object_event_is_visible(other.template(), event_data))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::overworld::collision::ELEVATION_TRANSITION;
-    use assets::{MapConnection, MapEvents, MapHeader, MapId, MovementType};
+    use assets::{MapConnection, MapEvents, MapHeader, MapId, MovementType, ObjectEvent};
 
     fn cell(metatile_id: u16, collision: u8, elevation: u8) -> u16 {
         assets::MetatileCell {
@@ -315,6 +327,26 @@ mod tests {
         PlayerState::new((x, y), elevation, Direction::South)
     }
 
+    /// `trainer` (local ID 1) seeded alongside `others` into a live
+    /// collection, then asked whether it sees `player`.
+    fn can_see(
+        trainer: &ObjectEvent,
+        others: &[ObjectEvent],
+        runtime: &MapRuntime<'_>,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> bool {
+        let templates: &'static [ObjectEvent] = Box::leak(
+            std::iter::once(*trainer)
+                .chain(others.iter().copied())
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let objects = ObjectEventCollection::from_templates(templates);
+        let live = *objects.get(trainer.local_id).unwrap();
+        trainer_can_see_player(&live, &objects, runtime, player, event_data)
+    }
+
     #[test]
     fn a_facing_trainer_within_range_on_open_ground_sees_the_player() {
         let hdr = header(&[]);
@@ -323,7 +355,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 8, 3);
         let event_data = EventData::new();
-        assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -334,7 +366,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 9, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -345,7 +377,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(6, 5, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -356,7 +388,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 2, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -369,7 +401,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 8, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -392,7 +424,7 @@ mod tests {
         let events = MapEvents {
             id: MapId("MAP_TEST"),
             shared_events_map: None,
-            object_events: blocker,
+            object_events: &[],
             warp_events: &[],
             coord_events: &[],
             bg_events: &[],
@@ -401,7 +433,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 8, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, blocker, &runtime, &player, &event_data));
     }
 
     #[test]
@@ -424,7 +456,7 @@ mod tests {
         let events = MapEvents {
             id: MapId("MAP_TEST"),
             shared_events_map: None,
-            object_events: blocker,
+            object_events: &[],
             warp_events: &[],
             coord_events: &[],
             bg_events: &[],
@@ -436,7 +468,7 @@ mod tests {
         let hide_flag =
             assets::object_event_flags::resolve("FLAG_HIDE_LITTLEROOT_TOWN_BIRCH").unwrap();
         event_data.flag_set(hide_flag).unwrap();
-        assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(can_see(&t, blocker, &runtime, &player, &event_data));
     }
 
     #[test]
@@ -450,7 +482,7 @@ mod tests {
         // trips.
         let player = player_at(5, 8, 4);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -461,7 +493,7 @@ mod tests {
         let t = trainer(5, 5, ELEVATION_TRANSITION, MovementType::FaceDown, "3");
         let player = player_at(5, 8, 9);
         let event_data = EventData::new();
-        assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -478,7 +510,7 @@ mod tests {
         ] {
             let mut t = trainer(5, 5, 3, MovementType::FaceDown, "3");
             t.trainer_type = kind;
-            assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+            assert!(!can_see(&t, &[], &runtime, &player, &event_data));
         }
     }
 
@@ -490,7 +522,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "0");
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     /// Adjacent (distance 1) needs no intermediate tiles at all -- the loop
@@ -504,7 +536,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "5");
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
-        assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     /// The final tile takes the whole terrain-then-elevation-then-object
@@ -521,7 +553,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     /// The same chain's directional-wall arm, again at distance 1: the
@@ -543,7 +575,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     /// The final tile's object arm is [`elevations_compatible`], which --
@@ -561,7 +593,7 @@ mod tests {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let player = player_at(5, 6, ELEVATION_MULTI_LEVEL);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     #[test]
@@ -580,7 +612,7 @@ mod tests {
             let t = trainer(10, 10, 3, facing, "5");
             let player = player_at(player_pos.0, player_pos.1, 3);
             assert!(
-                trainer_can_see_player(&t, &runtime, &player, &event_data),
+                can_see(&t, &[], &runtime, &player, &event_data),
                 "{facing:?} must reach {player_pos:?}"
             );
         }
@@ -599,7 +631,7 @@ mod tests {
         let mut event_data = EventData::new();
         let hide_flag = assets::object_event_flags::resolve(t.flag).unwrap();
         event_data.flag_set(hide_flag).unwrap();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
     }
 
     /// A non-numeric sight-range string (the berry-tree half of the
@@ -619,6 +651,76 @@ mod tests {
         );
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
-        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+        assert!(!can_see(&t, &[], &runtime, &player, &event_data));
+    }
+
+    /// Builds a live collection of `templates`, applies `edit` to the entry
+    /// with local ID `local_id`, and asks whether local ID 1 sees `player`.
+    fn live_sees(
+        templates: Vec<ObjectEvent>,
+        edit: impl FnOnce(&mut crate::overworld::object_event::ObjectEventState),
+        local_id: u8,
+        player: &PlayerState,
+    ) -> bool {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 20, 20, cell(0, 0, 3));
+        let templates: &'static [ObjectEvent] = Box::leak(templates.into_boxed_slice());
+        let mut objects = ObjectEventCollection::from_templates(templates);
+        edit(objects.get_mut(local_id).unwrap().state_mut());
+        let live = *objects.get(1).unwrap();
+        trainer_can_see_player(&live, &objects, &runtime, player, &EventData::new())
+    }
+
+    #[test]
+    fn a_trainer_that_walked_off_its_template_tile_sees_from_its_live_tile() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        // Template cone covers (5, 6..=8); the live trainer stands at (8, 5).
+        let walked = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+            s.walk(Direction::East);
+            s.walk(Direction::East);
+            s.face(Direction::South);
+        };
+        assert!(!live_sees(vec![t], walked, 1, &player_at(5, 8, 3)));
+        assert!(live_sees(vec![t], walked, 1, &player_at(8, 8, 3)));
+    }
+
+    #[test]
+    fn a_trainer_that_turned_sees_along_its_live_facing() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let turn = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.face(Direction::East);
+        };
+        assert!(!live_sees(vec![t], turn, 1, &player_at(5, 8, 3)));
+        assert!(live_sees(vec![t], turn, 1, &player_at(8, 5, 3)));
+    }
+
+    #[test]
+    fn a_blocker_that_walked_onto_or_off_the_line_changes_the_sight() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let mut blocker = trainer(9, 9, 3, MovementType::FaceDown, "0");
+        blocker.local_id = 2;
+        blocker.trainer_type = TrainerType::None;
+        let player = player_at(5, 8, 3);
+        // Template blocker at (9, 9) is off the line; walking it to (5, 7) blocks.
+        let onto = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            for _ in 0..4 {
+                s.walk(Direction::West);
+            }
+            for _ in 0..2 {
+                s.walk(Direction::North);
+            }
+        };
+        assert!(live_sees(vec![t, blocker], |_| {}, 2, &player));
+        assert!(!live_sees(vec![t, blocker], onto, 2, &player));
+        // A template blocker on (5, 7) stops blocking once it walks away.
+        blocker.x = 5;
+        blocker.y = 7;
+        assert!(!live_sees(vec![t, blocker], |_| {}, 2, &player));
+        let off = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+        };
+        assert!(live_sees(vec![t, blocker], off, 2, &player));
     }
 }

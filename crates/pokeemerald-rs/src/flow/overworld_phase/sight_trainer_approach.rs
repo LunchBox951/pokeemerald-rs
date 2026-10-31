@@ -162,9 +162,17 @@ enum ApproachStage {
 /// is unaffected either way).
 #[derive(Debug, Clone)]
 pub(super) struct SightApproach {
-    /// The approaching trainer's movable state, spawned from its map
-    /// template. Dropped when the approach ends: nothing else in this port
-    /// can see it ([`ObjectEventState`]'s own docs).
+    /// The local ID of the live collection entry that was selected.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "names the collection entry a walking approach moves; only tests read it today"
+        )
+    )]
+    local_id: u8,
+    /// A copy of the selected entry's live state at selection time, the
+    /// state being walked. Dropped when the approach ends.
     trainer: ObjectEventState,
     /// `InitTrainerApproachTask`'s `range` argument, `approachDistance - 1`
     /// -- how many tiles the trainer walks in total.
@@ -187,6 +195,7 @@ impl SightApproach {
     /// `lockfortrainer` -- [`OverworldPhase`]'s driver holds the countdown
     /// while a step is in flight) and the walk-up begins when it comes down.
     pub(super) const fn new(
+        local_id: u8,
         trainer: ObjectEventState,
         walk_tiles: u8,
         intro: &'static str,
@@ -194,6 +203,7 @@ impl SightApproach {
         trainer_id: TrainerId,
     ) -> Self {
         Self {
+            local_id,
             trainer,
             walk_tiles,
             intro,
@@ -211,6 +221,12 @@ impl SightApproach {
     #[cfg(test)]
     pub(super) const fn trainer(&self) -> &ObjectEventState {
         &self.trainer
+    }
+
+    /// The local ID of the live collection entry this approach is for.
+    #[cfg(test)]
+    pub(super) const fn local_id(&self) -> u8 {
+        self.local_id
     }
 
     /// The already-constructed fight, for tests that pin its party.
@@ -702,6 +718,7 @@ impl OverworldPhase {
             flag: "0",
         };
         self.sight_approach = Some(SightApproach::new(
+            template.local_id,
             ObjectEventState::from_template(&template),
             1,
             "Whoa!",
@@ -887,6 +904,7 @@ mod tests {
             flag: "0",
         };
         let mut approach = SightApproach::new(
+            template.local_id,
             ObjectEventState::from_template(&template),
             walk_tiles,
             "Whoa!",
