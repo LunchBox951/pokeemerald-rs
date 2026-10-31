@@ -2,9 +2,7 @@
 //! back [`SaveFile::lock`](super::SaveFile::lock): the basename, staging,
 //! and aliasing boundaries [`super`] enforces before a lock is granted.
 
-#[cfg(unix)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::save::file::tests::sibling_path;
@@ -186,50 +184,247 @@ fn the_save_lock_excludes_a_second_locker_until_dropped() {
     );
 }
 
-/// A bare relative save-file name, unique to this process and thread, that
-/// removes itself on drop -- never touching the working directory every thread shares.
-struct BareRelativeSave {
-    name: PathBuf,
+/// The marker a claimed scratch directory carries so [`OwnedScratchDir`] can
+/// tell, at cleanup, that the directory is still the one it created.
+const SCRATCH_OWNER_MARKER: &str = ".scratch-owner";
+
+/// A scratch directory this process created exclusively and removes on drop
+/// only while it is still that directory.
+///
+/// Unlike [`TempDir`], which clears and takes over whatever already occupies
+/// its name, a claim never reuses an existing entry: [`std::fs::create_dir`]
+/// fails on one, and the next candidate name is tried.
+struct OwnedScratchDir {
+    path: PathBuf,
+    token: String,
 }
 
-impl BareRelativeSave {
-    fn unique(label: &str) -> Self {
-        Self {
-            name: PathBuf::from(format!(
-                "pokeemerald-rs-save-file-{label}-{}-{:?}.sav",
-                std::process::id(),
-                std::thread::current().id()
-            )),
+impl OwnedScratchDir {
+    /// Claims `name_for(0)`, `name_for(1)`, ... inside `parent`, the first
+    /// that does not exist, leaving every occupied candidate untouched.
+    fn claim_in(parent: &Path, mut name_for: impl FnMut(u32) -> String) -> Self {
+        for attempt in 0..64 {
+            let path = parent.join(name_for(attempt));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    let token = format!(
+                        "{}-{:?}-{attempt}-{:?}",
+                        std::process::id(),
+                        std::thread::current().id(),
+                        std::time::SystemTime::now()
+                    );
+                    std::fs::write(path.join(SCRATCH_OWNER_MARKER), &token).expect(
+                        "the ownership marker must be writable in a directory just created",
+                    );
+                    return Self { path, token };
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => panic!(
+                    "scratch directory {} must be creatable: {err:?}",
+                    path.display()
+                ),
+            }
+        }
+        panic!(
+            "every candidate scratch directory name under {} is taken",
+            parent.display()
+        );
+    }
+
+    /// A claim under the host's temp directory, named for this process.
+    fn new(label: &str) -> Self {
+        Self::claim_in(&std::env::temp_dir(), |attempt| {
+            format!(
+                "pokeemerald-rs-save-lock-{label}-{}-{attempt}",
+                std::process::id()
+            )
+        })
+    }
+
+    /// Whether the directory at `path` is the one this claim created: a real
+    /// directory (not a link) whose marker holds this claim's token.
+    fn is_ours(&self, path: &Path) -> bool {
+        std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+            && std::fs::read_to_string(path.join(SCRATCH_OWNER_MARKER))
+                .is_ok_and(|found| found == self.token)
+    }
+
+    /// A sibling name nobody else can predict, where the claim is checked
+    /// and removed: the token is this claim's alone.
+    fn release_path(&self) -> PathBuf {
+        let parent = self.path.parent().expect("a claim lives inside its parent");
+        let name = self
+            .path
+            .file_name()
+            .expect("a claim has a name")
+            .to_string_lossy();
+        let tag: String = self
+            .token
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        parent.join(format!(".{name}.release-{tag}"))
+    }
+}
+
+impl Drop for OwnedScratchDir {
+    /// Removes the claim only once it stands at a name nobody else knows.
+    ///
+    /// Checking the public name and then deleting it are two operations, and
+    /// a directory swapped in between them would be deleted. So the entry at
+    /// the public name is first moved, atomically, to a private sibling
+    /// name, and the ownership check and the removal both act on that
+    /// private name. A foreign entry caught by the move fails the check and
+    /// is moved back, never deleted.
+    fn drop(&mut self) {
+        if !self.is_ours(&self.path) {
+            return;
+        }
+        let aside = self.release_path();
+        if std::fs::rename(&self.path, &aside).is_err() {
+            return;
+        }
+        if self.is_ours(&aside) {
+            drop(std::fs::remove_dir_all(&aside));
+            return;
+        }
+        // The move caught a replacement. Put it back; a contender that keeps
+        // the public name busy only delays this, so keep trying while it does.
+        for _ in 0..10_000 {
+            if std::fs::rename(&aside, &self.path).is_ok() {
+                return;
+            }
+            std::thread::yield_now();
         }
     }
 }
 
-impl Drop for BareRelativeSave {
-    fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.name));
-    }
-}
-
+/// A claim never takes over an occupied candidate: it moves to the next name
+/// and leaves what it found alone, whether that is a file or a directory.
 #[test]
-fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
-    let bare = BareRelativeSave::unique("write");
-    let file = SaveFile::at(bare.name.clone());
-    let (store, _, _) = saved_store();
+fn a_scratch_claim_skips_an_occupied_candidate_and_leaves_it_intact() {
+    let parent = OwnedScratchDir::new("claim-occupied-parent");
+    let name_for = |attempt: u32| format!("candidate-{attempt}");
+    let occupant_file = parent.path.join(name_for(0));
+    let occupant_dir = parent.path.join(name_for(1));
+    std::fs::write(&occupant_file, b"not the claim's file").unwrap();
+    std::fs::create_dir(&occupant_dir).unwrap();
+    std::fs::write(occupant_dir.join("keep"), b"not the claim's entry").unwrap();
 
-    let synced = std::cell::RefCell::new(Vec::new());
-    file.write_with(
-        &store,
-        |path| synced.borrow_mut().push(path.to_path_buf()),
-        |bytes| staging::StagingArea::beside(file.path()).stage(bytes),
-        |_| {},
-    )
-    .expect("writing a bare relative save path must succeed");
+    let claim = OwnedScratchDir::claim_in(&parent.path, name_for);
+    assert_eq!(claim.path, parent.path.join(name_for(2)));
+    drop(claim);
 
     assert_eq!(
-        synced.into_inner(),
-        vec![PathBuf::from(".")],
-        "a bare relative save path's directory entry lives in the working directory, and \
-         the rename must best-effort sync it exactly once"
+        std::fs::read(&occupant_file).unwrap(),
+        b"not the claim's file"
+    );
+    assert_eq!(
+        std::fs::read(occupant_dir.join("keep")).unwrap(),
+        b"not the claim's entry"
+    );
+    assert!(
+        !parent.path.join(name_for(2)).exists(),
+        "dropping a still-owned claim removes it"
+    );
+}
+
+/// Cleanup removes only the directory the claim created: one that replaced
+/// it before the drop, however it came to stand at the name, survives.
+#[test]
+fn a_scratch_claim_leaves_a_replacement_standing_at_its_path_intact() {
+    let parent = OwnedScratchDir::new("claim-replaced-parent");
+    let claim = OwnedScratchDir::claim_in(&parent.path, |attempt| format!("claimed-{attempt}"));
+    let path = claim.path.clone();
+
+    std::fs::remove_dir_all(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("keep"), b"the replacement's entry").unwrap();
+    drop(claim);
+
+    assert_eq!(
+        std::fs::read(path.join("keep")).unwrap(),
+        b"the replacement's entry",
+        "a directory the claim did not create must not be removed"
+    );
+}
+
+/// A replacement that carries a different owner marker is not ours either.
+#[test]
+fn a_scratch_claim_leaves_a_directory_with_another_owners_marker_intact() {
+    let parent = OwnedScratchDir::new("claim-foreign-parent");
+    let claim = OwnedScratchDir::claim_in(&parent.path, |attempt| format!("claimed-{attempt}"));
+    let path = claim.path.clone();
+
+    std::fs::write(path.join(SCRATCH_OWNER_MARKER), b"another owner").unwrap();
+    std::fs::write(path.join("keep"), b"another owner's entry").unwrap();
+    drop(claim);
+
+    assert_eq!(
+        std::fs::read(path.join("keep")).unwrap(),
+        b"another owner's entry"
+    );
+}
+
+/// Set in the child [`a_bare_relative_save_path_syncs_the_working_directory_after_the_rename`]
+/// re-runs itself as, whose working directory is an [`OwnedScratchDir`].
+const BARE_RELATIVE_CHILD: &str = "POKEEMERALD_RS_SAVE_LOCK_BARE_RELATIVE_CHILD";
+
+/// The bare name the child saves to, relative to its scratch working directory.
+const BARE_RELATIVE_SAVE_NAME: &str = "bare-relative.sav";
+
+/// A bare relative save path has its directory entry in the working
+/// directory, so the test runs in a child process whose working directory is
+/// a scratch directory this test owns; the parent never changes its own.
+#[test]
+fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
+    if std::env::var_os(BARE_RELATIVE_CHILD).is_some() {
+        let file = SaveFile::at(BARE_RELATIVE_SAVE_NAME);
+        let (store, _, _) = saved_store();
+
+        let synced = std::cell::RefCell::new(Vec::new());
+        file.write_with(
+            &store,
+            |path| synced.borrow_mut().push(path.to_path_buf()),
+            |bytes| staging::StagingArea::beside(file.path()).stage(bytes),
+            |_| {},
+        )
+        .expect("writing a bare relative save path must succeed");
+
+        assert_eq!(
+            synced.into_inner(),
+            vec![PathBuf::from(".")],
+            "a bare relative save path's directory entry lives in the working directory, and \
+             the rename must best-effort sync it exactly once"
+        );
+        assert!(
+            Path::new(BARE_RELATIVE_SAVE_NAME).is_file(),
+            "the save lands in the child's working directory"
+        );
+        return;
+    }
+
+    let scratch = OwnedScratchDir::new("bare-relative");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "save::file::lock::tests::a_bare_relative_save_path_syncs_the_working_directory_after_the_rename",
+            "--test-threads=1",
+        ])
+        .env(BARE_RELATIVE_CHILD, "1")
+        .current_dir(&scratch.path)
+        .output()
+        .expect("the child test process must be spawnable");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        scratch.path.join(BARE_RELATIVE_SAVE_NAME).is_file(),
+        "the child's save landed in the owned scratch directory, not the shared working directory"
     );
 }
 
@@ -1165,4 +1360,59 @@ fn a_direct_write_at_an_absent_case_folded_lock_path_is_refused() {
         other => panic!("a write at a case alias of the lock path must be refused, got {other:?}"),
     }
     assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}
+
+/// Cleanup never deletes a directory swapped in between the ownership check
+/// and the removal: the check and the removal act on a private name.
+#[test]
+fn a_scratch_claim_never_deletes_a_directory_swapped_in_during_cleanup() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let parent = OwnedScratchDir::new("claim-race-parent");
+    for round in 0..500u32 {
+        let claim = OwnedScratchDir::claim_in(&parent.path, |a| format!("claimed-{round}-{a}"));
+        let path = claim.path.clone();
+        let aside = parent.path.join(format!("aside-{round}"));
+        let foreign = parent.path.join(format!("foreign-{round}"));
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("keep"), b"foreign").unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (stop, path, aside, foreign) = (
+                Arc::clone(&stop),
+                path.clone(),
+                aside.clone(),
+                foreign.clone(),
+            );
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::rename(&path, &aside);
+                    let _ = std::fs::rename(&foreign, &path);
+                    let _ = std::fs::rename(&path, &foreign);
+                    let _ = std::fs::rename(&aside, &path);
+                }
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        drop(claim);
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+
+        let survived = [&path, &aside, &foreign]
+            .iter()
+            .any(|p| std::fs::read(p.join("keep")).is_ok());
+        let listing: Vec<_> = std::fs::read_dir(&parent.path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            survived,
+            "round {round}: cleanup deleted the swapped-in foreign directory; listing {listing:?}"
+        );
+        for p in [&path, &aside, &foreign] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
 }
