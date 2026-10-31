@@ -1,5 +1,7 @@
-//! Locates the audio plan for `MUS_TITLE` and everything it plays through.
+//! Locates the audio plan for `MUS_TITLE` and everything it plays through,
+//! and the species cries.
 
+mod cry;
 mod samples;
 mod songs;
 mod validation;
@@ -12,6 +14,7 @@ use super::error::GenRomProfileError;
 use super::plan::{AudioPlan, ReportLine, Resolution};
 use super::Context;
 
+use cry::locate_cry;
 use samples::{locate_direct_sound, locate_programmable_wave};
 use songs::locate_song;
 use validation::check_voicegroups;
@@ -98,6 +101,7 @@ pub fn locate(
     voicegroups.extend(child_voicegroups);
 
     let (song, song_table) = locate_song(ctx, SUPPORTED_SONG_ID, label, root, report)?;
+    let cry = locate_cry(ctx, report)?;
 
     keysplits.sort_by(|a, b| a.label.cmp(&b.label));
     voicegroups.sort_by(|a, b| a.label.cmp(&b.label));
@@ -109,6 +113,7 @@ pub fn locate(
         keysplits,
         direct_sound,
         programmable_wave,
+        cry,
     };
     check_voicegroups(ctx, &plan)?;
     Ok(plan)

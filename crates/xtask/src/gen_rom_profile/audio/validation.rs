@@ -3,7 +3,7 @@
 use assets::audio::VoiceGroup;
 
 use crate::gen_rom_profile::error::GenRomProfileError;
-use crate::gen_rom_profile::plan::{AudioPlan, SamplePlan};
+use crate::gen_rom_profile::plan::{AudioPlan, CryPlan, SamplePlan};
 use crate::gen_rom_profile::Context;
 
 use super::ADDRESSABLE_SLOTS;
@@ -67,36 +67,56 @@ pub(super) fn check_voicegroups(
     Ok(())
 }
 
+fn leak_str(text: &str) -> &'static str {
+    Box::leak(text.to_owned().into_boxed_str())
+}
+
+fn leak_slice<T>(items: Vec<T>) -> &'static [T] {
+    Box::leak(items.into_boxed_slice())
+}
+
+fn bus_ptr(id: &str, addr: u32) -> Result<rom_import::GbaPtr, GenRomProfileError> {
+    rom_import::GbaPtr::new(addr).ok_or_else(|| GenRomProfileError::StructMismatch {
+        id: id.to_owned(),
+        reason: format!("{addr:08X} is outside the ROM"),
+    })
+}
+
+fn importer_samples(
+    plans: &[SamplePlan],
+) -> Result<Vec<rom_import::SampleRoot>, GenRomProfileError> {
+    plans
+        .iter()
+        .map(|sample| {
+            Ok(rom_import::SampleRoot {
+                id: leak_str(&sample.id),
+                addr: bus_ptr(&sample.id, sample.addr)?,
+                header_len: sample.header_len,
+                data_len: sample.data_len,
+            })
+        })
+        .collect()
+}
+
+/// `plan` as the importer's cry roots.
+///
+/// The roots borrow `'static` data, so the strings and slices are leaked; the
+/// generator builds them once per run.
+pub(super) fn importer_cry_roots(
+    plan: &CryPlan,
+) -> Result<rom_import::CryRoots, GenRomProfileError> {
+    Ok(rom_import::CryRoots {
+        normal: bus_ptr("gCryTable", plan.normal)?,
+        reverse: bus_ptr("gCryTable_Reverse", plan.reverse)?,
+        samples: leak_slice(importer_samples(&plan.samples)?),
+    })
+}
+
 /// `plan` as the importer's roots, voicegroups in plan order.
 ///
 /// The roots borrow `'static` data, so the strings and slices are leaked; the
 /// generator builds them once per run.
 fn importer_roots(plan: &AudioPlan) -> Result<rom_import::AudioRoots, GenRomProfileError> {
-    fn leak_str(text: &str) -> &'static str {
-        Box::leak(text.to_owned().into_boxed_str())
-    }
-    fn leak_slice<T>(items: Vec<T>) -> &'static [T] {
-        Box::leak(items.into_boxed_slice())
-    }
-    let ptr = |id: &str, addr: u32| {
-        rom_import::GbaPtr::new(addr).ok_or_else(|| GenRomProfileError::StructMismatch {
-            id: id.to_owned(),
-            reason: format!("{addr:08X} is outside the ROM"),
-        })
-    };
-    let samples = |plans: &[SamplePlan]| {
-        plans
-            .iter()
-            .map(|sample| {
-                Ok(rom_import::SampleRoot {
-                    id: leak_str(&sample.id),
-                    addr: ptr(&sample.id, sample.addr)?,
-                    header_len: sample.header_len,
-                    data_len: sample.data_len,
-                })
-            })
-            .collect::<Result<Vec<_>, GenRomProfileError>>()
-    };
     let songs = plan
         .songs
         .iter()
@@ -104,9 +124,9 @@ fn importer_roots(plan: &AudioPlan) -> Result<rom_import::AudioRoots, GenRomProf
             Ok(rom_import::SongRoot {
                 id: leak_str(&song.id),
                 index: song.index,
-                header: ptr(&song.id, song.header)?,
+                header: bus_ptr(&song.id, song.header)?,
                 track_count: song.track_count,
-                voicegroup: ptr(&song.id, song.voicegroup)?,
+                voicegroup: bus_ptr(&song.id, song.voicegroup)?,
             })
         })
         .collect::<Result<Vec<_>, GenRomProfileError>>()?;
@@ -117,7 +137,7 @@ fn importer_roots(plan: &AudioPlan) -> Result<rom_import::AudioRoots, GenRomProf
             Ok(rom_import::VoicegroupRoot {
                 id: leak_str(&group.id),
                 label: leak_str(&group.label),
-                addr: ptr(&group.id, group.addr)?,
+                addr: bus_ptr(&group.id, group.addr)?,
                 starting_note: group.starting_note,
                 declared_slots: group.declared_slots,
                 addressable_slots: ADDRESSABLE_SLOTS,
@@ -130,18 +150,19 @@ fn importer_roots(plan: &AudioPlan) -> Result<rom_import::AudioRoots, GenRomProf
         .map(|table| {
             Ok(rom_import::KeysplitRoot {
                 label: leak_str(&table.label),
-                addr: ptr(&table.label, table.addr)?,
+                addr: bus_ptr(&table.label, table.addr)?,
                 starting_note: table.starting_note,
                 len: table.len,
             })
         })
         .collect::<Result<Vec<_>, GenRomProfileError>>()?;
     Ok(rom_import::AudioRoots {
-        song_table: ptr("gSongTable", plan.song_table)?,
+        song_table: bus_ptr("gSongTable", plan.song_table)?,
         songs: leak_slice(songs),
         voicegroups: leak_slice(voicegroups),
         keysplits: leak_slice(keysplits),
-        direct_sound: leak_slice(samples(&plan.direct_sound)?),
-        programmable_wave: leak_slice(samples(&plan.programmable_wave)?),
+        direct_sound: leak_slice(importer_samples(&plan.direct_sound)?),
+        programmable_wave: leak_slice(importer_samples(&plan.programmable_wave)?),
+        cry: plan.cry.as_ref().map(importer_cry_roots).transpose()?,
     })
 }

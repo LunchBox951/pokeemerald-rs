@@ -236,6 +236,7 @@ fn audio() -> AudioRoots {
         keysplits: &[],
         direct_sound: &[],
         programmable_wave: &[],
+        cry: None,
     }
 }
 

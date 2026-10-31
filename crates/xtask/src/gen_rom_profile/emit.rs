@@ -4,8 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan,
-    ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    CryPlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -69,8 +69,8 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
+    Encoding, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
     OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
@@ -336,7 +336,39 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
         }
         let _ = writeln!(out, "        ],");
     }
+    cry_roots(out, audio.cry.as_ref());
     let _ = writeln!(out, "    }},");
+}
+
+fn cry_roots(out: &mut String, cry: Option<&CryPlan>) {
+    let Some(cry) = cry else {
+        let _ = writeln!(out, "        cry: None,");
+        return;
+    };
+    let _ = writeln!(out, "        cry: Some(CryRoots {{");
+    let _ = writeln!(
+        out,
+        "            normal: {},",
+        gba_ptr_expression(cry.normal)
+    );
+    let _ = writeln!(
+        out,
+        "            reverse: {},",
+        gba_ptr_expression(cry.reverse)
+    );
+    let _ = writeln!(out, "            samples: &[");
+    for sample in &cry.samples {
+        let _ = writeln!(
+            out,
+            "                SampleRoot {{ id: {:?}, addr: {}, header_len: {}, data_len: {} }},",
+            sample.id,
+            gba_ptr_expression(sample.addr),
+            sample.header_len,
+            sample.data_len
+        );
+    }
+    let _ = writeln!(out, "            ],");
+    let _ = writeln!(out, "        }}),");
 }
 
 fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
@@ -1037,6 +1069,7 @@ mod bag_field_tests {
                 keysplits: vec![],
                 direct_sound: vec![],
                 programmable_wave: vec![],
+                cry: None,
             },
             battle_messages: BattleMessagePlan {
                 table: base,
@@ -1082,5 +1115,31 @@ mod bag_field_tests {
             "{module}"
         );
         assert!(!module.contains("BagRoots::NONE"), "{module}");
+    }
+
+    #[test]
+    fn the_cry_roots_are_emitted_whole_or_as_none() {
+        let mut none = String::new();
+        super::cry_roots(&mut none, None);
+        assert_eq!(none, "        cry: None,\n");
+
+        let plan = crate::gen_rom_profile::plan::CryPlan {
+            normal: 0x0869_DCF4,
+            reverse: 0x0869_EF24,
+            samples: vec![crate::gen_rom_profile::plan::SamplePlan {
+                id: "audio/sample/direct-sound/cry/bulbasaur".to_owned(),
+                addr: 0x0874_6704,
+                header_len: 16,
+                data_len: 8183,
+            }],
+        };
+        let mut some = String::new();
+        super::cry_roots(&mut some, Some(&plan));
+        assert!(some.contains("normal: GbaPtr::at(0x0869_DCF4),"), "{some}");
+        assert!(some.contains("reverse: GbaPtr::at(0x0869_EF24),"), "{some}");
+        assert!(
+            some.contains("SampleRoot { id: \"audio/sample/direct-sound/cry/bulbasaur\", addr: GbaPtr::at(0x0874_6704), header_len: 16, data_len: 8183 }"),
+            "{some}"
+        );
     }
 }

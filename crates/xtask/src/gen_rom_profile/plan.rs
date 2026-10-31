@@ -368,6 +368,17 @@ pub struct SamplePlan {
     pub data_len: u32,
 }
 
+/// The species cry tables and their samples, owned.
+#[derive(Debug, Clone)]
+pub struct CryPlan {
+    /// `gCryTable`.
+    pub normal: u32,
+    /// `gCryTable_Reverse`.
+    pub reverse: u32,
+    /// Every cry sample in table order. `data_len` is the decoded count.
+    pub samples: Vec<SamplePlan>,
+}
+
 /// The audio roots, owned.
 #[derive(Debug, Clone)]
 pub struct AudioPlan {
@@ -384,6 +395,8 @@ pub struct AudioPlan {
     pub direct_sound: Vec<SamplePlan>,
     /// Every CGB programmable-wave table.
     pub programmable_wave: Vec<SamplePlan>,
+    /// The species cries, or `None` for a pack that holds none.
+    pub cry: Option<CryPlan>,
 }
 
 /// One special battle-message template's root, owned.
