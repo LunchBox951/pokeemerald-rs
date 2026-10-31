@@ -1,13 +1,12 @@
 //! The lead owner: `OverworldPhase`'s one [`party::LoadedLead`], behind the
 //! interface every flow adopter uses.
 //!
-//! The battle-facing lead, the saved slot it was decoded from, the backing
-//! record, and the HP the load clamp hid from it are one fact, and upstream
-//! never synchronises them as unrelated values
-//! (`pokeemerald/src/pokemon.c:2823-2895`). [`party::LoadedLead`] owns all of
-//! them, so none can move without the others. The phase files the owned record
-//! into the save only at [`party::LoadedLead::slot`]; the interface returns
-//! the battler, never the slot or the offset.
+//! The battle-facing lead, the saved slot it was decoded from, and the backing
+//! record are one fact, and upstream never synchronises them as unrelated
+//! values (`pokeemerald/src/pokemon.c:2823-2895`). [`party::LoadedLead`] owns
+//! all of them, so none can move without the others. The phase files the owned
+//! record into the save only at [`party::LoadedLead::slot`]; the interface
+//! returns the battler, never the slot.
 
 use battle::{BattleError, BattlePokemon, Dex};
 
@@ -30,14 +29,14 @@ impl OverworldPhase {
         self.resident_lead().map(LoadedLead::battler)
     }
 
-    /// Battler mutation. Exposes the battler only, so the slot, record, and
-    /// hidden-HP offset cannot be edited independently of it.
+    /// Battler mutation. Exposes the battler only, so the slot and record
+    /// cannot be edited independently of it.
     pub(super) fn lead_battler_mut(&mut self) -> Option<&mut BattlePokemon> {
         self.resident_lead_mut().map(LoadedLead::battler_mut)
     }
 
-    /// Lend: moves the battler out for a battle. The lead keeps its slot,
-    /// record, and hidden-HP offset, so [`Self::restore_lead_battler`] merges
+    /// Lend: moves the battler out for a battle. The lead keeps its slot
+    /// and record, so [`Self::restore_lead_battler`] merges
     /// back into the same record. `None` when no lead is loaded.
     ///
     /// # Panics
@@ -64,14 +63,14 @@ impl OverworldPhase {
         lead.restore_battler(battler);
     }
 
-    /// Installs a lead with no saved backing: slot 0, no hidden HP, and no
+    /// Installs a lead with no saved backing: slot 0 and no
     /// retained-undecodable diagnostic. Its backing record is the fresh
     /// `to_save_pokemon` encoding of the battler, held by the lead and filed
     /// only by [`Self::flush_lead_to_save`]; the save is untouched here.
     pub(super) fn install_fresh_lead(&mut self, battler: BattlePokemon) {
         let dex = Dex::new();
         let record = party::to_save_pokemon(&dex, &battler);
-        self.lead = Some(LoadedLead::created(&dex, battler, record));
+        self.lead = Some(LoadedLead::created(battler, record));
         self.undecodable_lead_retained = false;
     }
 
@@ -90,8 +89,7 @@ impl OverworldPhase {
 
     /// Load and selection (the party half of `CopyPartyAndObjectsFromSave`,
     /// `LoadPlayerParty`, `src/load_save.c:160-205`): rebuilds the lead from
-    /// the saved party through [`party::LoadedLead::load`], measuring what the
-    /// load hid. Reads the saved party and count; writes no saved bytes.
+    /// the saved party through [`party::LoadedLead::load`]. Reads the saved party and count; writes no saved bytes.
     ///
     /// The lead is empty when the stored party count is zero (the port's
     /// deliberate difference from `SetBattlePartyIds`'s count-blind scan in

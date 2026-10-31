@@ -198,6 +198,27 @@ fn calc_stat(
     nature.modify_stat(stat, scaled_stat + NON_HP_STAT_OFFSET)
 }
 
+/// Current HP after a stat recalculation: `CalculateMonStats`' HP rule
+/// (`src/pokemon.c:2866-2895`) with `BUGFIX` off, so a non-positive result
+/// wraps through the 16-bit HP field rather than clamping to one.
+fn hp_after_recalculation(species: SpeciesId, current_hp: u32, old_max: u32, new_max: u32) -> u32 {
+    if species == SPECIES_SHEDINJA {
+        return if current_hp != 0 || old_max == 0 {
+            SHEDINJA_MAX_HP
+        } else {
+            0
+        };
+    }
+    if current_hp == 0 {
+        return if old_max == 0 { new_max } else { 0 };
+    }
+    let moved = i64::from(current_hp) + i64::from(new_max) - i64::from(old_max);
+    u32::try_from(moved.rem_euclid(HP_FIELD_MODULUS)).unwrap_or(0)
+}
+
+/// The party record's HP field is a `u16` (`struct Pokemon::hp`).
+const HP_FIELD_MODULUS: i64 = 1 << 16;
+
 fn calc_max_hp(
     species: SpeciesId,
     base: u8,
@@ -352,18 +373,17 @@ pub struct BattlePokemon {
     base_stats: BaseStats,
     experience: u32,
     stats: Stats,
+    /// The authoritative stat block as upstream stores it in the party
+    /// record: the last `CalculateMonStats` result (or the loaded block),
+    /// never Deoxys's Speed Forme view. Equal to [`Self::stats`] for every
+    /// other species. A save writes this block back and never recomputes it
+    /// (`src/load_save.c:160-178`); only a level-up replaces it.
+    cached_stats: Stats,
     current_hp: u32,
     /// This mon's effort values -- see the [`evs`] module docs for the full
     /// adoption/gain lifecycle and what carrying them does, and does not,
     /// change.
     evs: Evs,
-    /// [`Self::evs`] as of the last crossed level-up -- the set upstream's
-    /// `CalculateMonStats` cached at that event, which the save-time
-    /// recompute reads instead of the live [`Self::evs`]. [`Evs::default`]
-    /// until a level-up happens.
-    ///
-    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
-    evs_at_last_level_up: Evs,
     moves: Vec<MoveSlot>,
     pp_bonuses: PpBonuses,
     stages: StatStages,
@@ -372,9 +392,8 @@ pub struct BattlePokemon {
     pending_move_learn: Option<PendingMoveLearn>,
 }
 
-// Manual, rather than derived, so `created_at_level` and
-// `evs_at_last_level_up` (their own doc comments) can stay out of it without
-// a wrapper type.
+// Manual, rather than derived, so `created_at_level` (its own doc comment)
+// can stay out of it without a wrapper type.
 impl PartialEq for BattlePokemon {
     fn eq(&self, other: &Self) -> bool {
         let Self {
@@ -391,9 +410,9 @@ impl PartialEq for BattlePokemon {
             base_stats,
             experience,
             stats,
+            cached_stats,
             current_hp,
             evs,
-            evs_at_last_level_up: _,
             moves,
             pp_bonuses,
             stages,
@@ -413,6 +432,7 @@ impl PartialEq for BattlePokemon {
             && *base_stats == other.base_stats
             && *experience == other.experience
             && *stats == other.stats
+            && *cached_stats == other.cached_stats
             && *current_hp == other.current_hp
             && *evs == other.evs
             && *moves == other.moves
@@ -501,6 +521,7 @@ impl BattlePokemon {
             nature,
             ivs,
         );
+        let cached_stats = compute_stats(species, base, level, nature, ivs);
         let mut slots = Vec::with_capacity(moves.len());
         for move_id in moves {
             let pp = dex.move_data(move_id)?.pp;
@@ -520,14 +541,13 @@ impl BattlePokemon {
             base_stats: *base,
             experience,
             stats,
+            cached_stats,
             current_hp: stats.max_hp,
             // `CreateBoxMon` zeroes the box before writing the fields it
             // sets, and the EV bytes are not one of them: a freshly built
             // mon has no effort values. A saved one restores its own bytes
             // through [`BattlePokemon::with_evs`].
             evs: Evs::default(),
-            // No level-up has happened yet -- see the field's own doc.
-            evs_at_last_level_up: Evs::default(),
             moves: slots,
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
@@ -675,6 +695,14 @@ impl BattlePokemon {
     #[must_use]
     pub const fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// The authoritative stat block a save writes back: the loaded or last
+    /// recalculated cache, never Deoxys's Speed Forme view
+    /// ([`BattlePokemon::stats`]), which is the only place the two differ.
+    #[must_use]
+    pub const fn cached_stats(&self) -> Stats {
+        self.cached_stats
     }
 
     /// Current HP (`0` means fainted).
@@ -831,6 +859,21 @@ impl BattlePokemon {
         Ok(self.pending_move_learn)
     }
 
+    /// Adopts a loaded experience total verbatim, without moving the level or
+    /// any stat, and without capping it.
+    ///
+    /// A party record stores level, experience and the stat cache
+    /// independently and load copies all three
+    /// (`src/load_save.c:160-178`), so a total above the level-100 threshold
+    /// survives a re-save unchanged. The cap upstream applies lives in
+    /// `Cmd_getexp`, which [`BattlePokemon::apply_experience`] reproduces, and
+    /// the next award reconciles the level through it.
+    #[must_use]
+    pub const fn with_saved_experience(mut self, total: u32) -> Self {
+        self.experience = total;
+        self
+    }
+
     /// Reconciles saved experience without teaching crossed-level moves.
     ///
     /// Experience is clamped between the current value and the level-100
@@ -842,20 +885,22 @@ impl BattlePokemon {
         self.raise_level_to_experience();
     }
 
-    /// Raises the level (and stats, preserving damage taken) to match the
-    /// current experience total, returning `Some((old_level, new_level))`
-    /// when at least one threshold was crossed. Shared by the in-battle
-    /// award ([`BattlePokemon::apply_experience`], which then teaches the
-    /// crossed learnset moves) and the save decoder
-    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    /// Raises the level to match the current experience total, replaces the
+    /// stat cache from the current EVs, and moves HP by the max-HP delta,
+    /// returning `Some((old_level, new_level))` when at least one threshold
+    /// was crossed. Shared by the in-battle award
+    /// ([`BattlePokemon::apply_experience`], which then teaches the crossed
+    /// learnset moves) and [`BattlePokemon::reconcile_saved_experience`],
+    /// which must not.
     ///
-    /// The stat recompute is [`compute_stats`] at `0` EVs for max HP and
-    /// every non-Deoxys stat; Deoxys's five Speed Forme stats then take the
-    /// current EVs through [`BattlePokemon::apply_speed_forme_evs`]. See the
-    /// [`evs`] module docs for why the rest of [`BattlePokemon::stats`] must
-    /// stay `0`-EV even here. A crossed level
-    /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
-    /// field's own doc for what reads it and why.
+    /// This is `CalculateMonStats` as `Cmd_getexp` runs it after the KO's EV
+    /// award (`src/pokemon.c:2823-2895`,
+    /// `src/battle_script_commands.c:3420,3465-3478`): the whole cache is
+    /// [`compute_stats_with_evs`] at the *current* EVs, and
+    /// [`hp_after_recalculation`] applies the HP rule against the cache's
+    /// previous maximum. Deoxys's live Speed Forme view is then refreshed
+    /// from the same EVs by [`BattlePokemon::apply_speed_forme_evs`]; the
+    /// stored block stays Normal Forme.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -872,30 +917,34 @@ impl BattlePokemon {
         }
 
         let old_level = self.level;
-        let old_max_hp = self.stats.max_hp;
+        let old_max_hp = self.cached_stats.max_hp;
         self.level = new_level;
-        self.stats = compute_stats(
+        self.cached_stats = compute_stats_with_evs(
             self.species,
-            &effective_battle_base_stats(self.species, &self.base_stats),
+            &self.base_stats,
             self.level,
             self.nature,
             self.ivs,
+            self.evs,
         );
+        self.stats = self.cached_stats;
         self.apply_speed_forme_evs();
-        self.current_hp = self
-            .current_hp
-            .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
-        self.evs_at_last_level_up = self.evs;
+        self.current_hp = hp_after_recalculation(
+            self.species,
+            self.current_hp,
+            old_max_hp,
+            self.cached_stats.max_hp,
+        );
         Some((old_level, new_level))
     }
 
     /// Feeds Deoxys's current EVs into its five Speed Forme stats.
     ///
     /// Upstream `GetDeoxysStat` reads each stat's EV byte alongside its IV
-    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware even though
-    /// every other species' live block stays `0`-EV. Max HP is untouched:
-    /// `GetDeoxysStat` never reads it, and the save-side HP bookkeeping in
-    /// [`evs`] relies on that `0`-EV floor.
+    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware, while
+    /// every other species' live block is the stored cache. Max HP is
+    /// untouched: `GetDeoxysStat` never reads it. Only the live view changes;
+    /// [`BattlePokemon::cached_stats`] stays the stored Normal Forme block.
     ///
     /// [`BattlePokemon::gain_evs`] does not call this, so EVs earned in a
     /// battle leave that battle's stats alone; each battle constructor calls
