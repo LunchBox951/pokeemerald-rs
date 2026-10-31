@@ -1,7 +1,7 @@
 //! A-press interaction lookup ([`OverworldPhase::interaction_tokens_this_frame`])
 //! and its [`InteractionOutcome`].
 
-use engine::overworld::{select_interaction_target, InteractionTarget};
+use engine::overworld::{select_interaction_target, Direction, InteractionTarget};
 use platform::{ButtonState, Buttons};
 
 use crate::overworld::npc_scripts;
@@ -71,9 +71,9 @@ impl OverworldPhase {
     /// [`npc_scripts::script_text`] recognizes (that module's own bounded
     /// table), so without this branch it would simply open no dialog on A,
     /// a silent gap rather than the trainer battle it should start. Every
-    /// other object event's script is unaffected -- Mom's own dialog path
-    /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
-    /// method grew a second arm.
+    /// other object event's script is unaffected. Mom's script
+    /// (`OBJ_EVENT_GFX_MOM`'s) additionally carries its `faceplayer` turn
+    /// ([`FacePlayer`]); no other script does.
     ///
     /// Every selected target consumes the frame, as a script start does
     /// upstream (`field_control_avatar.c:172`); a script this port doesn't
@@ -86,7 +86,16 @@ impl OverworldPhase {
                 } else {
                     npc_scripts::script_text(object.script).map_or(
                         InteractionOutcome::Unmodelled(target),
-                        InteractionOutcome::Dialog,
+                        |tokens| {
+                            InteractionOutcome::Dialog(ScriptDialog {
+                                tokens,
+                                face_player: npc_scripts::script_faces_player(object.script)
+                                    .then_some(FacePlayer {
+                                        local_id: object.local_id,
+                                        direction: object.player_facing.opposite(),
+                                    }),
+                            })
+                        },
                     )
                 }
             }
@@ -94,6 +103,46 @@ impl OverworldPhase {
                 InteractionOutcome::Unmodelled(target)
             }
         }
+    }
+}
+
+/// The `faceplayer` half of a supported script: turn the selected live object event toward the
+/// player, as `ObjectEventFaceOppositeDirection(selected, GetPlayerFacingDirection())` does
+/// (`scrcmd.c:1153-1158`, `event_object_movement.c:4975-4978`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FacePlayer {
+    /// The selected object's id within its map (`gSelectedObjectEvent`).
+    local_id: u8,
+    /// The direction the object ends up facing: opposite the player's facing.
+    direction: Direction,
+}
+
+/// A supported script's message, with the object mutation that precedes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ScriptDialog {
+    /// The token stream the [`crate::overworld::NpcDialog`] opens with.
+    tokens: Vec<engine::text::Token>,
+    /// `Some` when the script runs `faceplayer` before its message box.
+    face_player: Option<FacePlayer>,
+}
+
+impl OverworldPhase {
+    /// Runs a script's `faceplayer`, returning the dialog's tokens.
+    ///
+    /// Called as the interaction claims the frame, ahead of the dialog opening and of anything
+    /// reading the object's facing afterwards. Turns the live entry only: the authored template
+    /// is never written, and the object keeps its tile.
+    pub(super) fn start_script_dialog(&mut self, dialog: ScriptDialog) -> Vec<engine::text::Token> {
+        if let Some(FacePlayer {
+            local_id,
+            direction,
+        }) = dialog.face_player
+        {
+            if let Some(entry) = self.object_events.get_mut(local_id) {
+                entry.state_mut().face(direction);
+            }
+        }
+        dialog.tokens
     }
 }
 
@@ -106,8 +155,9 @@ impl OverworldPhase {
 /// than being squeezed into [`Vec<engine::text::Token>`]'s shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InteractionOutcome {
-    /// Open an [`crate::overworld::NpcDialog`] with this token stream.
-    Dialog(Vec<engine::text::Token>),
+    /// Open an [`crate::overworld::NpcDialog`] with this script's message, after the
+    /// script's `faceplayer`, if it has one.
+    Dialog(ScriptDialog),
     /// Start the Route 103 rival battle
     /// ([`OverworldPhase::begin_route103_rival_battle`]).
     RivalBattle,

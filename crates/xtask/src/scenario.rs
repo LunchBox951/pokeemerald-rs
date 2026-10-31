@@ -32,7 +32,15 @@ struct ScenarioSpec {
 /// `Done` and still presents the fully faded title.
 const FADE_WAIT_FRAMES: usize = 21;
 
-/// Press Start, hold through the white title fade-wait
+/// The frames a fresh boot runs `CB2_InitTitleScreen` before the title
+/// reads input (I-2): states 0 to 4 on S0..S4, then state 5 until the white
+/// fade-in, delay 1, reports done on S34, with `MainCB2` first running on
+/// S35 (`pokeemerald/src/title_screen.c:570-680`; `pokeemerald_rs`'s
+/// `flow::title_init_tests`). A press on any of them is ignored, so the
+/// scripts hold nothing for this long and press START on the frame after.
+const TITLE_INIT_FRAMES: usize = 35;
+
+/// Wait out the title's setup frames and white fade-in, press Start, hold through the white title fade-wait
 /// (`pokeemerald_rs::flow::AppScene::TitleFadeWait`, reported as
 /// `AppState::Title` throughout), then confirm the main menu is current and
 /// stays current one frame later.
@@ -40,6 +48,11 @@ fn boot_to_main_menu_frames() -> &'static [ScenarioFrame] {
     static FRAMES: OnceLock<Vec<ScenarioFrame>> = OnceLock::new();
     FRAMES.get_or_init(|| {
         expand_segments(&[
+            Segment {
+                buttons: AppButtons::NONE,
+                count: TITLE_INIT_FRAMES,
+                expected: AppState::Title,
+            },
             Segment {
                 buttons: AppButtons::START,
                 count: 1,
@@ -344,11 +357,13 @@ mod tests {
         /// input or per-frame expectation in the real script fails against
         /// it rather than changing both sides of the comparison.
         ///
-        /// Frame 0 presses START and stays on the title while its white fade
-        /// begins. Frames 1 through 21 are the released fade-wait, still
+        /// Frames 0 through 34 are the title's setup frames and white fade-in
+        /// with nothing held (`CB2_InitTitleScreen`, 35 callback frames, the
+        /// last installing `MainCB2`). Frame 35 presses START and stays on the
+        /// title while its white fade begins. Frames 36 through 56 are the released fade-wait, still
         /// reported as the title: `rendering::palette_fade`'s 22 updates
         /// after `begin`, less the one the press frame runs, the last of
-        /// them the frame the fade reports done. Frames 22 and 23 are the
+        /// them the frame the fade reports done. Frames 57 and 58 are the
         /// main menu.
         fn boot_to_main_menu() -> Self {
             let frame = |expected_buttons, next_state| FakeFrame {
@@ -356,7 +371,11 @@ mod tests {
                 next_state,
                 should_continue: true,
             };
-            let mut frames = VecDeque::from([frame(AppButtons::START, AppState::Title)]);
+            let mut frames = VecDeque::new();
+            frames.extend(
+                std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(35),
+            );
+            frames.push_back(frame(AppButtons::START, AppState::Title));
             frames.extend(
                 std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(21),
             );
@@ -409,7 +428,7 @@ mod tests {
         let report = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect("the proving scenario should pass");
 
-        assert_eq!(report.frames_run, 24);
+        assert_eq!(report.frames_run, 59);
         assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,

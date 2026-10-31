@@ -152,6 +152,22 @@ impl Drop for TempPackGuard {
     }
 }
 
+/// Claims `path` through `claim` and writes `bytes` through the handle it
+/// returns, yielding the guard that removes `path` on drop. The guard is
+/// built only once `claim` has succeeded, so a failed claim never removes an
+/// entry the guard does not own; a write panic after it still cleans up.
+fn claim_pack_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+) -> TempPackGuard {
+    use std::io::Write as _;
+    let mut file = claim(path);
+    let guard = TempPackGuard(path.to_path_buf());
+    file.write_all(bytes).unwrap();
+    guard
+}
+
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
@@ -168,6 +184,21 @@ fn with_palette_at(
     color_count: u16,
     check: impl FnOnce(assets::PaletteRef<'_>),
 ) {
+    with_palette_claimed(
+        path,
+        color_count,
+        crate::pack_test_support::claim_scratch_exclusive,
+        check,
+    );
+}
+
+/// [`with_palette_at`], claiming `path` through `claim`.
+fn with_palette_claimed(
+    path: &std::path::Path,
+    color_count: u16,
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+    check: impl FnOnce(assets::PaletteRef<'_>),
+) {
     let payload: Vec<u8> = (0..color_count)
         .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
         .collect();
@@ -177,8 +208,7 @@ fn with_palette_at(
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let _guard = TempPackGuard(path.to_path_buf());
-    super::test_support::write_scratch_exclusive(path, &bytes);
+    let _guard = claim_pack_with(path, &bytes, claim);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -188,6 +218,32 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
         "pokeemerald-rs-palette-bank-{name}-{}.pack",
         std::process::id()
     ))
+}
+
+#[test]
+fn a_failed_claim_leaves_the_unowned_entry_in_place() {
+    let path = regression_pack_path("failed-claim-unowned");
+    let _ = std::fs::remove_file(&path);
+    let outcome = std::panic::catch_unwind(|| {
+        with_palette_claimed(
+            &path,
+            3,
+            |path| {
+                // Another owner holds `path`, so this claim loses.
+                std::fs::write(path, b"not ours").unwrap();
+                panic!("the claim lost the path");
+            },
+            |_| unreachable!("a lost claim never loads the pack"),
+        );
+    });
+    let survivor = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(outcome.is_err(), "the failed claim must propagate");
+    assert_eq!(
+        survivor.ok().as_deref(),
+        Some(&b"not ours"[..]),
+        "a guard must not remove an entry it never claimed"
+    );
 }
 
 #[test]
@@ -2306,24 +2362,11 @@ fn layout_pack_writers_refuse_a_planted_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
-    let path = regression_pack_path("planted-symlink-replaced");
-    let bytes = b"fresh scratch pack".to_vec();
-    let mut completed = false;
+fn scratch_writer_refuses_a_planted_symlink_and_keeps_the_link() {
+    let path = regression_pack_path("planted-symlink-kept");
     super::test_support::assert_planted_symlink_untouched(&path, || {
-        super::test_support::write_scratch_exclusive(&path, &bytes);
-        let meta = std::fs::symlink_metadata(&path).unwrap();
-        assert!(
-            meta.file_type().is_file(),
-            "the stale link is replaced by a regular file"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        completed = true;
+        super::test_support::write_scratch_exclusive(&path, b"fresh scratch pack");
     });
-    assert!(
-        completed,
-        "the writer completed instead of rejecting the stale entry"
-    );
 }
 
 /// The inputs of a room that is internally coherent: Route 122's header and

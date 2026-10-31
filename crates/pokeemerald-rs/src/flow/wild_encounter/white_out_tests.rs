@@ -37,7 +37,7 @@ const SHUCKLE: u16 = 213;
 ///
 /// Pack-free by construction: every assertion below is about state
 /// `white_out` writes *before* it ever attempts the warp home
-/// (`self.save1.money`/`self.party_lead`), so it holds whether or not a
+/// (`self.save1.money`/the loaded lead), so it holds whether or not a
 /// local pack is extracted. The warp landing itself is pinned separately,
 /// pack-gated, by
 /// [`real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`].
