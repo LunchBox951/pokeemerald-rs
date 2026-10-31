@@ -599,6 +599,18 @@ pub enum BattleEvent {
         /// The primary status Shed Skin cured.
         status: Status1,
     },
+    /// `STRINGID_PKMNRAISEDSPEED`, `BattleScript_SpeedBoostActivates`
+    /// (`data/battle_scripts_1.s:3965-3969`): a living Speed Boost holder
+    /// below +6 raised its own Speed stage by one at its `ENDTURN_ABILITIES`
+    /// position, with no RNG draw (`pokeemerald/src/battle_util.c:2642-2652`).
+    /// Nothing is reported for a holder already at +6 or one whose first-turn
+    /// counter still suppresses the ability.
+    SpeedBoostActivated {
+        /// Whether the player's battler is the holder.
+        by_player: bool,
+        /// The holder's Speed stage after the boost.
+        new_stage: StatStage,
+    },
     /// A trainer sent out a party member: the forced replacement after a
     /// faint, or a prechosen voluntary switch.
     TrainerSentOut {
