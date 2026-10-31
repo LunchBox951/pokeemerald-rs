@@ -282,3 +282,76 @@ fn history_after_a_later_start_is_still_discarded() {
         "history queued after the second start is discarded"
     );
 }
+
+#[test]
+fn a_refused_pause_before_the_first_callback_keeps_the_bounded_discard() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.no_hw_pause = true;
+    });
+    let mut rig = rig(&w, 8);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+
+    // History queued while the started rebuild blocks.
+    let producer = rig.producer.clone();
+    with(&w).during_build = Some(Box::new(move |_| {
+        assert_eq!(producer.push(&[0.5; 4]), 4);
+    }));
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+
+    // Stop before stream 1's first callback, then queue a prefill.
+    rig.shared.set_running(false, &rig.producer);
+    assert_eq!(rig.producer.push(&[0.25; 4]), 4);
+    // The pause is refused: stream 1 is replaced by a paused stream 2.
+    rig.transport.step(MS(140));
+    assert_eq!(with(&w).builds, 3);
+
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(160));
+    let out = run_data_callback::<f32>(&w, 2, 8);
+    assert!(
+        out[0] > 0.0 && out.iter().all(|&sample| sample < 0.4),
+        "the prefill queued after the stop plays first, without the build-time history: {out:?}"
+    );
+}
+
+#[test]
+fn a_default_change_before_the_first_callback_keeps_the_bounded_discard() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 8);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+
+    // History queued while the started rebuild blocks.
+    let producer = rig.producer.clone();
+    with(&w).during_build = Some(Box::new(move |_| {
+        assert_eq!(producer.push(&[0.5; 4]), 4);
+    }));
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    with(&w).during_build = None;
+
+    // Stop before stream 1's first callback; the pause succeeds. Then
+    // queue a prefill and let the default change retire the paused stream.
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(140));
+    assert_eq!(with(&w).pauses, 1);
+    assert_eq!(rig.producer.push(&[0.25; 4]), 4);
+    with(&w).default = Some("b".into());
+    rig.transport.step(MS(1_200));
+    assert_eq!(with(&w).builds, 3);
+
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(1_220));
+    let out = run_data_callback::<f32>(&w, 2, 8);
+    assert!(
+        out[0] > 0.0 && out.iter().all(|&sample| sample < 0.4),
+        "the prefill queued after the stop plays first, without the build-time history: {out:?}"
+    );
+}
