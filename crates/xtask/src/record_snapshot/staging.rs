@@ -96,8 +96,28 @@ fn entry_name(path: &Path) -> std::io::Result<&std::ffi::OsStr> {
     })
 }
 
+/// Gives the owner read and write on the freshly created `file` through its
+/// handle, keeping the `0666 & !umask` the open left for group and other.
+///
+/// A umask that strips owner bits (`0444`) would otherwise publish a pointer
+/// or payload its own owner cannot read back, since the rename carries the
+/// mode over. The mode changes only when an owner bit is missing. Windows
+/// inherits the directory ACL and has no mode to widen.
+#[cfg(unix)]
+pub(super) fn restore_owner_access(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode = file.metadata()?.permissions().mode();
+    if mode & 0o600 != 0o600 {
+        file.set_permissions(std::fs::Permissions::from_mode((mode & 0o7777) | 0o600))?;
+    }
+    Ok(())
+}
+
 fn stage_file(file: std::fs::File, path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     let result = (|| {
+        #[cfg(unix)]
+        restore_owner_access(&file)?;
         let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
         writer.flush()?;

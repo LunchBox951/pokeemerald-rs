@@ -205,7 +205,8 @@ fn the_defeated_flag_survives_a_save_continue_round_trip() {
     let block1 = phase.save1().clone();
     let block2 = phase.save2().clone();
     let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-    let resumed = OverworldPhase::from_saved(scene, ROUTE_103, block1, block2);
+    let resumed =
+        OverworldPhase::from_saved(scene.in_room_for_test(ROUTE_103), ROUTE_103, block1, block2);
 
     assert_eq!(
         resumed
@@ -293,4 +294,13 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
         "the trainer id must be cleared on an abort too -- an id retained past the point the \
          battle slot emptied is stale the instant a fresh cone entry reuses the field"
     );
+    assert!(
+        phase.lead_for_test().is_some(),
+        "an abort hands the lead back"
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase
+        .take_lead_battler()
+        .expect("the abort closed the loan");
+    phase.restore_lead_battler(lent);
 }

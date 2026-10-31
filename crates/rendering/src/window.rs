@@ -4,17 +4,48 @@
 //! With no enabled window, every layer and color effect remains enabled.
 
 /// A window register's inclusive-start, exclusive-end axis range.
+///
+/// A range used vertically also carries the hardware enable latch as it stood
+/// before visible line zero; see [`with_vertical_latch`](Self::with_vertical_latch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowRange {
     start: u8,
     end: u8,
+    /// Vertical enable latch immediately before visible line zero.
+    incoming_on: bool,
 }
 
 impl WindowRange {
     /// Creates a range from its register byte fields.
+    ///
+    /// The vertical latch starts off, as mGBA's window latch does at reset.
+    /// A later frame carries the previous frame's
+    /// [`next_frame_latch`](Self::next_frame_latch) in through
+    /// [`with_vertical_latch`](Self::with_vertical_latch).
     #[must_use]
     pub const fn new(start: u8, end: u8) -> Self {
-        Self { start, end }
+        Self {
+            start,
+            end,
+            incoming_on: false,
+        }
+    }
+
+    /// Returns this range carrying `incoming_on`, the vertical enable latch
+    /// immediately before visible line zero.
+    ///
+    /// The first frame starts with the latch off; every later frame starts
+    /// with the previous frame's [`next_frame_latch`](Self::next_frame_latch),
+    /// computed from that frame's endpoints. A register write changes only the
+    /// endpoints, never the latch
+    /// (`mgba/src/gba/renderers/video-software.c:372-378`)
+    /// `(behavioral-fidelity)`.
+    #[must_use]
+    pub const fn with_vertical_latch(self, incoming_on: bool) -> Self {
+        Self {
+            incoming_on,
+            ..self
+        }
     }
 
     /// Returns whether `coord` is in the horizontal range.
@@ -43,25 +74,55 @@ impl WindowRange {
         }
     }
 
-    /// Returns whether visible scanline `y` is in the vertical range.
+    /// Returns whether visible scanline `y` is in the vertical range, given
+    /// the latch carried into the frame.
     ///
-    /// A reversed range reopens at line zero only when its start is reachable
-    /// during the `160..228` vertical-blanking interval. Starts at `228..=255`
-    /// are never reached, so those ranges stay closed. This follows mGBA's
-    /// `GBAVideoSoftwareRendererFinishFrame` and
-    /// `GBAVideoSoftwareRendererStepWindow` flip-flop behavior
-    /// `(behavioral-fidelity)`.
+    /// The window is a stored on/off latch, not a function of `y` alone: each
+    /// visible line sets it at `start` and then clears it at `end`
+    /// (`GBAVideoSoftwareRendererStepWindow`,
+    /// `mgba/src/gba/renderers/video-software.c:881-891`)
+    /// `(behavioral-fidelity)`. The answer is the latest of those events at or
+    /// before `y`, else `incoming_on`.
     #[must_use]
-    pub const fn contains_vertical(&self, y: u8) -> bool {
+    pub const fn contains_vertical_with_latch(&self, y: u8, incoming_on: bool) -> bool {
+        let end_reached = self.end <= y;
+        let start_reached = self.start <= y;
+        if end_reached && (!start_reached || self.end >= self.start) {
+            return false;
+        }
+        start_reached || incoming_on
+    }
+
+    /// Returns the latch left after a whole frame that began with `incoming_on`.
+    ///
+    /// After visible line 159, `GBAVideoSoftwareRendererFinishFrame` clears the
+    /// latch when `end` is in `160..228`, then sets it when `start` is in
+    /// `160..228` and above `end` (`video-software.c:762-771`). An `end` of
+    /// `228` or more never clears it and a `start` of `228` or more never
+    /// opens it `(behavioral-fidelity)`.
+    #[must_use]
+    pub const fn next_frame_latch(&self, incoming_on: bool) -> bool {
         const VISIBLE_SCANLINE_COUNT: u8 = 160;
         const TOTAL_SCANLINE_COUNT: u8 = 228;
 
-        if self.start <= self.end {
-            return y >= self.start && y < self.end;
+        let mut on = self.contains_vertical_with_latch(VISIBLE_SCANLINE_COUNT - 1, incoming_on);
+        if self.end >= VISIBLE_SCANLINE_COUNT && self.end < TOTAL_SCANLINE_COUNT {
+            on = false;
         }
-        let in_upper_visible_band = self.start < VISIBLE_SCANLINE_COUNT && y >= self.start;
-        let in_reopened_lower_band = self.start < TOTAL_SCANLINE_COUNT && y < self.end;
-        in_upper_visible_band || in_reopened_lower_band
+        if self.start >= VISIBLE_SCANLINE_COUNT
+            && self.start < TOTAL_SCANLINE_COUNT
+            && self.start > self.end
+        {
+            on = true;
+        }
+        on
+    }
+
+    /// Returns whether visible scanline `y` is in the vertical range, using
+    /// the latch this range carries.
+    #[must_use]
+    pub const fn contains_vertical(&self, y: u8) -> bool {
+        self.contains_vertical_with_latch(y, self.incoming_on)
     }
 }
 
@@ -303,6 +364,9 @@ impl WindowRegion {
 }
 
 #[cfg(test)]
+mod latch_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect, WindowRegion};
 
@@ -480,7 +544,8 @@ mod tests {
 
     #[test]
     fn vertical_wrapped_with_visible_start_shows_both_bands() {
-        let range = WindowRange::new(100, 40);
+        // Steady state: the previous frame left the latch open from line 100.
+        let range = WindowRange::new(100, 40).with_vertical_latch(true);
         assert!(range.contains_vertical(0));
         assert!(range.contains_vertical(39));
         assert!(!range.contains_vertical(40));
@@ -491,12 +556,25 @@ mod tests {
 
     #[test]
     fn vertical_wrapped_start_in_vblank_reopens_at_line_zero() {
-        let range = WindowRange::new(200, 40);
+        // FinishFrame reopened the latch from the previous frame.
+        let range = WindowRange::new(200, 40).with_vertical_latch(true);
         assert!(range.contains_vertical(0));
         assert!(range.contains_vertical(39));
         assert!(!range.contains_vertical(40));
         assert!(!range.contains_vertical(100));
         assert!(!range.contains_vertical(159));
+    }
+
+    #[test]
+    fn vertical_end_past_vblank_keeps_latch_open_into_next_frame() {
+        // mGBA: line 100 opens the latch (video-software.c:885-886); end 240 is
+        // never a scanline and FinishFrame clears only ends in 160..228
+        // (:763-764), so the steady-state frame starts inside the window.
+        // The previous frame opened the latch at line 100 and never closed it.
+        let range = WindowRange::new(100, 240).with_vertical_latch(true);
+        assert!(range.contains_vertical(100));
+        assert!(range.contains_vertical(0), "latch carried across the frame");
+        assert!(range.contains_vertical(99));
     }
 
     #[test]

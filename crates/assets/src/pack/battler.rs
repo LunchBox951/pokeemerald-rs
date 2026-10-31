@@ -1,17 +1,12 @@
-//! Typed static battler art (upstream `gMonStillFrontPicTable`, `gMonBackPicTable`,
-//! `gMonPaletteTable`, `gMonShinyPaletteTable`).
+//! Static battler art for the species the pack carries: the three starters
+//! (`src/starter_choose.c:113-118`) and the checkpoint's other eleven Pokémon.
 //!
-//! The pack ids stay private so battle code composes no strings. Only the
-//! species the pack carries resolve; every lookup re-validates shapes, since
-//! a hand-built or corrupt pack can bypass extraction. Which palette a
-//! battler draws is the caller's choice, as upstream picks it by species and
-//! personality (`GetMonSpritePalFromSpeciesAndPersonality`).
+//! Pack IDs stay private; [`AssetPack::species_battler`] validates each requested pair.
 
-use super::starter_chooser::PalettedImage;
-use super::{AssetPack, PackError};
+use super::{AssetPack, PackError, PalettedImage};
 use crate::SpeciesId;
 
-/// Width and height of every battler picture: one 64x64 mon pic (`MON_PIC_WIDTH`).
+/// One mon-picture frame (`include/constants/pokemon.h:262-264`).
 pub(super) const BATTLER_SIDE: u32 = 64;
 /// Rows of Poochyena's stored still-front image, which upstream draws as a
 /// 64x256 sheet: only the first `BATTLER_SIDE` rows are the picture, since
@@ -19,36 +14,37 @@ pub(super) const BATTLER_SIDE: u32 = 64;
 const POOCHYENA_FRONT_SHEET_HEIGHT: u32 = 256;
 const BATTLER_PICTURE_PIXELS: usize = 64 * 64;
 const BATTLER_BIT_DEPTH: u8 = 4;
-const BATTLER_PALETTE_COLORS: u16 = 16;
+const BATTLER_PALETTE_COLORS: u16 = 1 << BATTLER_BIT_DEPTH;
 
-/// Which side of the battler an image shows.
+/// Static image orientation, independent of palette selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattlerDirection {
-    /// The opposing side's art (`gMonStillFrontPicTable`).
+    /// `gMonStillFrontPicTable` entry (`src/data/pokemon_graphics/still_front_pic_table.h:1`).
     Front,
-    /// The player's side's art (`gMonBackPicTable`).
+    /// `gMonBackPicTable` entry (`src/data/pokemon_graphics/back_pic_table.h:1`).
     Back,
 }
 
-/// Which colouring a battler draws with.
+/// Explicit palette choice; shininess is not inferred from trainer ID or personality.
+/// Upstream selection: `src/pokemon.c:6541-6552`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteVariant {
-    /// The species palette (`gMonPaletteTable`).
+    /// `gMonPaletteTable` entry (`src/data/pokemon_graphics/palette_table.h:1`).
     Normal,
-    /// The shiny palette (`gMonShinyPaletteTable`).
+    /// `gMonShinyPaletteTable` entry (`src/data/pokemon_graphics/shiny_palette_table.h:1`).
     Shiny,
 }
 
-/// One species' battler image and palette, borrowing the pack for `'a`.
+/// Requested identity and art returned by [`AssetPack::species_battler`].
 #[derive(Debug, Clone, Copy)]
 pub struct BattlerHandle<'a> {
-    /// The species the art belongs to.
+    /// Lookup key, without species substitution.
     pub species: SpeciesId,
-    /// Which side the image shows.
+    /// Requested view, without front/back substitution.
     pub direction: BattlerDirection,
-    /// Which palette the image is paired with.
+    /// Requested palette, without normal/shiny substitution.
     pub variant: PaletteVariant,
-    /// The 64x64 image with its 16-colour palette.
+    /// 64x64 4bpp image paired with exactly 16 colours.
     pub art: PalettedImage<'a>,
 }
 
@@ -120,7 +116,7 @@ fn art_ids(
     (image, palette)
 }
 
-/// Image and palette ids for one battler, or `None` for a species without art.
+/// Image and palette pack keys; `None` for every species without battler art.
 pub(super) fn ids(
     species: SpeciesId,
     direction: BattlerDirection,
@@ -139,15 +135,15 @@ fn stored_height(art: &BattlerArt, direction: BattlerDirection) -> u32 {
 }
 
 impl AssetPack {
-    /// One species' battler image paired with a palette, validated.
+    /// Requested species art, with the image-palette pair validated on every call.
     ///
     /// # Errors
     ///
-    /// [`PackError::UnsupportedBattlerSpecies`] for a species the pack has no
-    /// battler art for; [`PackError::UnknownAsset`] or [`PackError::WrongKind`]
-    /// for a missing or wrong-kind entry; [`PackError::MalformedBattlerAsset`]
-    /// when dimensions, source bit depth, palette size, or pixel indices differ
-    /// from upstream.
+    /// [`PackError::UnsupportedBattlerSpecies`] for species the pack has no battler art for;
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for missing or wrong-kind entries;
+    /// [`PackError::MalformedBattlerAsset`] for invalid image dimensions, source bit depth,
+    /// palette size, or pixel indices. Payload lengths are checked by `pack_format` at load,
+    /// so a loaded pack never reaches this method with a misshapen payload.
     pub fn species_battler(
         &self,
         species: SpeciesId,
