@@ -243,6 +243,70 @@ mod tests {
         assert!(!try_run_from_battle(50, 100, 1, &mut rng));
     }
 
+    /// `TryRunFromBattle` compares `Random() & 0xFF`
+    /// (`pokeemerald/src/battle_util.c:463`-`:470`): the high byte of the
+    /// 16-bit draw never reaches the comparison. Each case pairs one low
+    /// byte with several high bytes, so comparing the whole `u16` or the
+    /// high byte changes at least one outcome.
+    const HIGH_BYTES: [u16; 3] = [0x0000, 0x0100, 0xFF00];
+
+    #[test]
+    fn the_escape_roll_ignores_the_draws_high_byte_at_the_first_attempt_threshold() {
+        const ESCAPE_THRESHOLD: u16 = 64;
+
+        for high_byte in HIGH_BYTES {
+            let escaping_draw = high_byte | (ESCAPE_THRESHOLD - 1);
+            let mut rng = FixedRng(escaping_draw);
+            assert!(
+                try_run_from_battle(50, 100, 0, &mut rng),
+                "draw {escaping_draw:#06x} has low byte 63 < 64"
+            );
+            let failing_draw = high_byte | ESCAPE_THRESHOLD;
+            let mut rng = FixedRng(failing_draw);
+            assert!(
+                !try_run_from_battle(50, 100, 0, &mut rng),
+                "draw {failing_draw:#06x} has low byte 64, not below 64"
+            );
+        }
+    }
+
+    #[test]
+    fn the_escape_roll_ignores_the_draws_high_byte_at_the_raised_threshold() {
+        const SECOND_ATTEMPT_THRESHOLD: u16 = 94;
+
+        for high_byte in HIGH_BYTES {
+            let escaping_draw = high_byte | (SECOND_ATTEMPT_THRESHOLD - 1);
+            let mut rng = FixedRng(escaping_draw);
+            assert!(
+                try_run_from_battle(50, 100, 1, &mut rng),
+                "draw {escaping_draw:#06x} has low byte 93 < 94"
+            );
+            let failing_draw = high_byte | SECOND_ATTEMPT_THRESHOLD;
+            let mut rng = FixedRng(failing_draw);
+            assert!(
+                !try_run_from_battle(50, 100, 1, &mut rng),
+                "draw {failing_draw:#06x} has low byte 94, not below 94"
+            );
+        }
+    }
+
+    #[test]
+    fn every_slower_run_call_consumes_exactly_one_draw_whatever_its_high_byte() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        for (call, value) in [0x003F, 0x0040, 0x013F, 0x0140, 0xFF3F, 0xFF40]
+            .into_iter()
+            .enumerate()
+        {
+            rng.value = value;
+            let _ = try_run_from_battle(50, 100, 0, &mut rng);
+            assert_eq!(
+                rng.draws,
+                u32::try_from(call).unwrap() + 1,
+                "call {call} with draw {value:#06x}"
+            );
+        }
+    }
+
     #[test]
     fn escape_threshold_wraps_instead_of_saturating() {
         const WRAPPED_THRESHOLD: u16 = 140;
