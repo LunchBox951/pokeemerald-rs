@@ -93,29 +93,25 @@ pub(crate) fn pack_bytes(entries: Vec<PackEntry>) -> Vec<u8> {
 
 /// Claims a fresh, writable file at `path` and returns its owned handle.
 /// `create_new` (`O_EXCL`) never follows a symlink at `path`, so a planted
-/// link cannot redirect a write onto its target. A stale occupant is
-/// unlinked (the entry itself, never what it points to) and the claim
-/// retried once. Install cleanup for `path` only after this returns, so a
-/// failed claim never removes an entry the caller does not own.
+/// link cannot redirect a write onto its target. An occupied `path` fails
+/// the claim with a panic naming it: `AlreadyExists` does not show the
+/// occupant is the caller's, so it is never unlinked. Install cleanup for
+/// `path` only after this returns, so a failed claim never removes an entry
+/// the caller does not own.
 pub(crate) fn claim_scratch_exclusive(path: &std::path::Path) -> std::fs::File {
-    let mut file = None;
-    for _ in 0..2 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(f) => {
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                std::fs::remove_file(path).expect("a stale scratch entry is removable");
-            }
-            Err(e) => panic!("the scratch directory is writable: {e}"),
-        }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => panic!(
+            "the scratch path {} is already occupied by an entry this fixture did not create; \
+             refusing to remove it",
+            path.display()
+        ),
+        Err(e) => panic!("the scratch directory is writable: {e}"),
     }
-    file.expect("the scratch path is exclusively creatable")
 }
 
 /// Writes `bytes` to a fresh file at `path` claimed by
@@ -127,15 +123,37 @@ pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<
         .expect("the scratch pack is writable");
 }
 
-/// Runs `write` once against a planted symlink and once against an
-/// occupied regular file at `path`, asserting each pre-existing target
-/// keeps its sentinel bytes and `path` ends as a regular file holding
-/// `expected`. The occupied-file case hard-links a victim at `path`, so a
-/// writer that truncates in place (`std::fs::write`) rewrites the victim's
-/// shared inode, while one that unlinks the entry and re-creates it leaves
-/// the victim alone. `write` returns whatever guard keeps its file alive;
-/// the guard is dropped only after the check, so a writer that skips the
-/// write fails. The symlink case is unix-only.
+/// Whether `a` and `b` resolve to one inode (a hard link pair, or a link and
+/// its target). Always true off
+/// Unix, where identity cannot be compared with std.
+fn same_inode(a: &std::path::Path, b: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        true
+    }
+}
+
+/// Runs `write` against a planted symlink and against an occupied regular
+/// file at `path`, asserting that `write` refuses (panics) without touching
+/// the occupant: the entry at `path` is still the planted symlink or
+/// hard-linked file and the victim keeps its sentinel bytes. It then removes
+/// that entry and runs `write` again on the free `path`, asserting it leaves
+/// a regular file holding `expected` and still never touches the victim.
+/// The occupied-file case hard-links a victim at `path`, so a writer that
+/// truncates in place (`std::fs::write`) rewrites the victim's shared inode.
+/// `write` returns whatever guard keeps its file alive; the guard is dropped
+/// only after the check, so a writer that skips the write fails. The symlink
+/// case is unix-only. [`claim_scratch_exclusive`] on a lone single-link
+/// occupant is covered by its own test.
 pub(crate) fn assert_scratch_claim_is_exclusive<G>(
     path: &std::path::Path,
     expected: &[u8],
@@ -153,34 +171,142 @@ pub(crate) fn assert_scratch_claim_is_exclusive<G>(
         let _ = std::fs::remove_file(path);
         victim
     };
-    let check = |kind: &str, victim: &std::path::Path| {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&write));
+    let check = |kind: &str, victim: &std::path::Path, planted_link: bool| {
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&write));
+        let still_planted = std::fs::symlink_metadata(path)
+            .is_ok_and(|m| m.file_type().is_symlink() == planted_link && !m.is_dir());
+        let occupant = std::fs::read(path);
+        let same_entry = same_inode(path, victim);
+        let victim_after_refusal = std::fs::read(victim);
+        let refused_ok = refused.is_err();
+        drop(refused);
+
+        let _ = std::fs::remove_file(path);
+        let freed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&write));
         let replaced = std::fs::symlink_metadata(path).map(|m| m.file_type().is_file());
         let written = std::fs::read(path);
-        let completed = outcome.is_ok();
-        drop(outcome);
-        let after = std::fs::read(victim).unwrap();
+        let completed = freed.is_ok();
+        drop(freed);
+        let victim_after_write = std::fs::read(victim);
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(victim);
-        assert_eq!(after, sentinel, "the {kind} target was overwritten");
-        assert!(completed, "the writer must replace the {kind}, not panic");
+
+        assert!(refused_ok, "the writer must refuse the {kind}, not take it");
+        assert!(still_planted, "the writer replaced the {kind}");
+        assert!(
+            same_entry,
+            "the writer unlinked the {kind} and recreated a lookalike"
+        );
+        assert_eq!(
+            occupant.ok().as_deref(),
+            Some(&sentinel[..]),
+            "the writer changed what the {kind} held"
+        );
+        assert_eq!(
+            victim_after_refusal.ok().as_deref(),
+            Some(&sentinel[..]),
+            "the {kind} target was overwritten"
+        );
+        assert!(completed, "the writer must claim the freed path, not panic");
         assert!(
             matches!(replaced, Ok(true)),
-            "the writer must leave a regular file where the {kind} was, got {replaced:?}"
+            "the writer must leave a regular file at the freed {kind} path, got {replaced:?}"
         );
         assert_eq!(
             written.ok().as_deref(),
             Some(expected),
-            "the writer must write its bytes to the replaced path"
+            "the writer must write its bytes to the freed path"
+        );
+        assert_eq!(
+            victim_after_write.ok().as_deref(),
+            Some(&sentinel[..]),
+            "the {kind} target was overwritten by the freed-path write"
         );
     };
     #[cfg(unix)]
     {
         let planted = victim("symlink");
         std::os::unix::fs::symlink(&planted, path).unwrap();
-        check("planted symlink", &planted);
+        check("planted symlink", &planted, true);
     }
     let occupied = victim("occupied");
     std::fs::hard_link(&occupied, path).unwrap();
-    check("occupied file", &occupied);
+    check("occupied file", &occupied, false);
+}
+
+/// The marker colours of [`synthetic_title_entries`]: the backdrop (and the
+/// pixels outside the logo layer) are [`TITLE_BACKDROP`], the logo layer is
+/// [`TITLE_LOGO`], and the copyright sprite is [`TITLE_SPRITE`].
+pub(crate) const TITLE_BACKDROP: (u8, u8, u8) = (0, 0, 31);
+/// See [`TITLE_BACKDROP`].
+pub(crate) const TITLE_LOGO: (u8, u8, u8) = (31, 0, 0);
+/// See [`TITLE_BACKDROP`].
+pub(crate) const TITLE_SPRITE: (u8, u8, u8) = (0, 31, 0);
+
+/// Every entry [`crate::title::TitleScene::from_pack`] reads, small enough to
+/// build in a test but with one distinguishable BG colour (the logo layer
+/// over a backdrop) and one OBJ colour (the always-visible copyright
+/// banner), so a palette fade's independent BG and OBJ halves show up
+/// separately in the composed frame.
+pub(crate) fn synthetic_title_entries() -> Vec<PackEntry> {
+    let colour = |(r, g, b): (u8, u8, u8)| Bgr555::from_channels(r, g, b);
+    let raw = |id: &'static str, len: usize| pack_format::raw_entry(id.into(), vec![0u8; len]);
+    vec![
+        image_entry("title/image/rayquaza", 8, 8, 4, 0),
+        image_entry("title/image/clouds", 8, 8, 4, 0),
+        image_entry("title/image/pokemon_logo", 8, 8, 8, 1),
+        palette_entry_with_colors(
+            "title/palette/pokemon_logo",
+            16,
+            &[(0, colour(TITLE_BACKDROP)), (1, colour(TITLE_LOGO))],
+        ),
+        palette_entry("title/palette/rayquaza_and_clouds", 16),
+        raw("title/raw/rayquaza", 2 * 32 * 32),
+        raw("title/raw/clouds", 2 * 32 * 32),
+        raw("title/raw/pokemon_logo", 32 * 32),
+        image_entry("title/image/emerald_version", 128, 32, 8, 0),
+        image_entry("title/image/press_start", 160, 24, 8, 1),
+        palette_entry("title/palette/emerald_version", 16),
+        palette_entry_with_color("title/palette/press_start", 16, 1, colour(TITLE_SPRITE)),
+    ]
+}
+
+#[test]
+fn claim_scratch_exclusive_leaves_a_foreign_single_link_occupant_intact() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-claim-foreign-occupant-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let sentinel = b"not the fixture's file";
+    write_scratch_exclusive(&path, sentinel);
+    #[cfg(unix)]
+    let planted_inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = std::fs::metadata(&path).unwrap();
+        (meta.dev(), meta.ino())
+    };
+    let outcome = std::panic::catch_unwind(|| drop(claim_scratch_exclusive(&path)));
+    let after = std::fs::read(&path);
+    #[cfg(unix)]
+    let kept_inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(&path).is_ok_and(|meta| (meta.dev(), meta.ino()) == planted_inode)
+    };
+    let _ = std::fs::remove_file(&path);
+    #[cfg(unix)]
+    assert!(kept_inode, "the claim unlinked the occupant it never owned");
+    assert_eq!(
+        after.ok().as_deref(),
+        Some(&sentinel[..]),
+        "claim_scratch_exclusive destroyed a pre-existing file it never owned"
+    );
+    let message = outcome
+        .as_ref()
+        .err()
+        .and_then(|payload| payload.downcast_ref::<String>());
+    assert!(
+        message.is_some_and(|m| m.contains(&*path.to_string_lossy())),
+        "the claim must fail naming the occupied path, got {message:?}"
+    );
 }

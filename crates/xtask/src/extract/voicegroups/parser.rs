@@ -155,10 +155,9 @@ fn parse_byte(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupEr
 }
 
 /// The largest `DirectSound` pan override the asset schema accepts (see
-/// `crates/assets::audio::voicegroup`'s private `MAX_PAN_OVERRIDE`,
-/// duplicated here rather than shared -- this extraction pipeline never
-/// depends on `crates/assets`, matching `crate::extract::layouts::BORDER_BLOCK_BYTES`'s
-/// documented decoupling from the same crate).
+/// `crates/assets::audio::voicegroup`'s private `MAX_PAN_OVERRIDE`, mirrored
+/// here so the parser reports a source-specific error naming the offending
+/// line; `super::encode` re-checks the same domain through `assets`).
 const MAX_PAN_OVERRIDE: u8 = 127;
 
 /// The largest square duty selector the asset schema accepts (see

@@ -11,6 +11,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod field_message;
 mod format;
 mod handles;
 mod naming_screen;
@@ -18,6 +19,7 @@ mod opening_scene;
 mod paletted_image;
 mod pokedex_graphics;
 mod starter_chooser;
+mod text_tokens;
 mod trainer_pic;
 
 use std::path::{Path, PathBuf};
@@ -42,6 +44,7 @@ pub use battle_message::{
 };
 pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
+pub use field_message::{FieldMessage, FieldMessageError, FieldMessageTable, FIELD_MESSAGE_COUNT};
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 pub use naming_screen::NamingScreenHandle;

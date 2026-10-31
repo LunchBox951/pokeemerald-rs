@@ -104,8 +104,9 @@ pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
 pub(crate) use crate::pack_test_support::write_scratch_exclusive;
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding
-/// `sentinel`, runs `write`, and asserts the victim is untouched. Returns
-/// after removing the planted entry and the victim.
+/// `sentinel`, runs `write`, and asserts the writer refused (panicked) and
+/// left both the symlink and the victim untouched. Returns after removing
+/// the planted entry and the victim.
 #[cfg(unix)]
 pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: impl FnOnce()) {
     let victim = std::env::temp_dir().join(format!(
@@ -123,6 +124,7 @@ pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
     std::os::unix::fs::symlink(&victim, path).unwrap();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
     let after = std::fs::read(&victim).unwrap();
+    let link_kept = std::fs::read_link(path).is_ok_and(|target| target == victim);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(&victim);
     assert_eq!(
@@ -130,8 +132,12 @@ pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
         "a planted symlink's target was overwritten"
     );
     assert!(
-        outcome.is_ok(),
-        "the writer must replace a planted symlink, not panic on it"
+        link_kept,
+        "the writer removed or replaced a planted symlink"
+    );
+    assert!(
+        outcome.is_err(),
+        "the writer must refuse a planted symlink, not claim it"
     );
 }
 
