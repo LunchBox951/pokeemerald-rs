@@ -33,6 +33,7 @@ pub(crate) mod field_messages;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod naming_screen;
 pub(crate) mod opening_scene;
 pub(crate) mod song;
 pub(crate) mod sprites;
@@ -74,6 +75,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     opening_scene::write,
     battle_interface::write,
     battlers::write,
+    naming_screen::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.

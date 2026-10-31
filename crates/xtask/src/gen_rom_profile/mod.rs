@@ -37,6 +37,7 @@ mod layouts;
 mod locate;
 mod lz77_blobs;
 mod map_file;
+mod naming_screen;
 mod opening_scene;
 mod pack_source;
 mod palettes;
@@ -173,6 +174,7 @@ fn locate_profile(
         starter_chooser: starter_chooser::locate(ctx, lines)?,
         opening_scene: opening_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
+        naming_screen: naming_screen::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }

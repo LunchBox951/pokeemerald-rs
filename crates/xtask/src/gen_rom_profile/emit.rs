@@ -4,8 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan,
-    ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    FieldMessagePlan, ImagePlan, MapLayoutPlan, NamingScreenPlan, OpeningScenePlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -71,6 +71,7 @@ use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
     FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    NamingScreenRoots,
     OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
@@ -133,6 +134,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     starter_chooser_roots(&mut out, &plan.starter_chooser);
     opening_scene_roots(&mut out, &plan.opening_scene);
     battle_interface_roots(&mut out, &plan.battle_interface);
+    naming_screen_roots(&mut out, &plan.naming_screen);
 
     battler_roots(&mut out, &plan.battlers);
 
@@ -185,6 +187,14 @@ fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
         blob_root(&interface.battle_bar)
     );
     let _ = writeln!(out, "    }},");
+}
+
+fn naming_screen_roots(out: &mut String, naming: &NamingScreenPlan) {
+    graphics_family(
+        out,
+        ("naming_screen", "NamingScreenRoots"),
+        (&naming.images, &naming.palettes, &naming.tilemaps),
+    );
 }
 
 /// A family of images, palettes, and tilemap blobs: the `Roots` field and
@@ -785,8 +795,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
-        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, OpeningScenePlan, PalettePlan,
-        ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
+        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, NamingScreenPlan, OpeningScenePlan,
+        PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -934,6 +944,55 @@ mod bag_field_tests {
         }
     }
 
+    fn naming_plan() -> NamingScreenPlan {
+        NamingScreenPlan {
+            images: vec![ImagePlan {
+                id: "naming-screen/image/cursor".to_owned(),
+                addr: 0x081C_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 8,
+                height: 40,
+                metatile_width: 1,
+                metatile_height: 5,
+                tile_count: 5,
+            }],
+            palettes: vec![PalettePlan {
+                id: "naming-screen/palette/keyboard".to_owned(),
+                addr: 0x081D_0000,
+                color_count: 16,
+                encoding: Encoding::Raw,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "naming-screen/raw/background".to_owned(),
+                addr: 0x081E_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
+    fn assert_naming_roots(module: &str) {
+        assert!(
+            module.contains("    naming_screen: NamingScreenRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"naming-screen/image/cursor\", addr: GbaPtr::at(0x081C_0000), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 8, height: 40, metatile_width: 1, metatile_height: 5, tile_count: 5 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"naming-screen/palette/keyboard\", addr: GbaPtr::at(0x081D_0000), color_count: 16, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"naming-screen/raw/background\", addr: GbaPtr::at(0x081E_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("NamingScreenRoots::NONE"), "{module}");
+    }
+
     fn assert_interface_roots(module: &str) {
         assert!(
             module.contains("    battle_interface: BattleInterfaceRoots {"),
@@ -1061,11 +1120,13 @@ mod bag_field_tests {
             starter_chooser: chooser_plan(),
             opening_scene: scene_plan(),
             battle_interface: interface_plan(),
+            naming_screen: naming_plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
         assert_interface_roots(&module);
+        assert_naming_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

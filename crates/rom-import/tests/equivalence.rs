@@ -77,6 +77,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "bag/",
     "starter-chooser/",
     "opening-scene/",
+    "naming-screen/",
 ];
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
@@ -519,6 +520,71 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
             "{id} must stay pinned by id, not claimed by a prefix"
         );
     }
+}
+
+/// The profile's naming-screen roots are exactly the checkout manifest's 26
+/// ids, so the complete `naming-screen/` prefix cannot pass by both backends
+/// dropping the same entry.
+#[test]
+fn the_naming_screen_profile_roots_are_the_manifest_ids() {
+    const SHEETS: [&str; 15] = [
+        "menu",
+        "page_swap_frame",
+        "back_button",
+        "ok_button",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "cursor",
+        "cursor_squished",
+        "cursor_filled",
+        "page_swap_button",
+        "input_arrow",
+        "underscore",
+        "pc_icon_off",
+        "pc_icon_on",
+    ];
+    const PALETTES: [&str; 7] = [
+        "menu",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "buttons",
+        "cursor",
+        "keyboard",
+    ];
+    const TILEMAPS: [&str; 4] = [
+        "background",
+        "keyboard_upper",
+        "keyboard_lower",
+        "keyboard_symbols",
+    ];
+    let mut expected: Vec<String> = SHEETS
+        .iter()
+        .map(|stem| format!("naming-screen/image/{stem}"))
+        .chain(
+            PALETTES
+                .iter()
+                .map(|stem| format!("naming-screen/palette/{stem}")),
+        )
+        .chain(
+            TILEMAPS
+                .iter()
+                .map(|stem| format!("naming-screen/raw/{stem}")),
+        )
+        .collect();
+    expected.sort_unstable();
+    let roots = &rom_import::EMERALD_US_REV0.roots.naming_screen;
+    let mut profiled: Vec<String> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .map(str::to_owned)
+        .collect();
+    profiled.sort_unstable();
+    assert_eq!(profiled, expected);
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is
