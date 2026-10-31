@@ -653,7 +653,12 @@ impl CgbVoice {
             self.oscillator
                 .commit_initial_writes(!self.envelope.is_active());
         }
-        if hardware_write || initial_trigger {
+        // A square's retiring first pass reaches no trigger of its own; only
+        // `CgbOscOff`'s `NR14` write follows (`m4a.c:1053-1056,1205-1226`).
+        let skips_trigger = initial_trigger
+            && !self.envelope.is_active()
+            && matches!(self.oscillator, Oscillator::Square(_));
+        if (hardware_write || initial_trigger) && !skips_trigger {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
@@ -782,6 +787,10 @@ impl CgbVoice {
             Oscillator::Square(s) => Some(s),
             _ => None,
         }
+    }
+
+    pub(crate) fn square_frequency(&self) -> Option<u16> {
+        self.square_oscillator().map(SquareChannel::frequency)
     }
 }
 
