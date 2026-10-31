@@ -118,7 +118,7 @@ fn held_output() -> Vec<f32> {
 }
 
 fn assert_frame_holds(actual: &[f32], held: &[f32]) {
-    for (index, pair) in actual.chunks_exact(2).enumerate() {
+    for (index, pair) in actual.as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(pair, held, "sample {index} is the held latch");
     }
 }
