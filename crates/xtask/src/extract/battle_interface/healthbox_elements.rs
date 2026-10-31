@@ -56,14 +56,25 @@ const BATTLE_BAR_SOURCES: [Sheet; 3] = [
     sheet("numbers2", 96, 8),
 ];
 
-/// Every pack id [`extract_healthbox_elements`] emits: the thirteen table
-/// elements in table order, then the battle bar.
-pub(in crate::extract) fn pack_ids() -> Vec<String> {
+/// The thirteen element pack ids in `gHealthboxElementsGfxTable` order.
+pub(in crate::extract) fn table_pack_ids() -> Vec<String> {
     ELEMENT_TABLE
         .iter()
         .map(|element| format!("{RAW_PREFIX}/healthbox_element/{}", element.stem))
-        .chain([format!("{RAW_PREFIX}/battle_bar")])
         .collect()
+}
+
+/// The battle bar's pack id.
+pub(in crate::extract) fn battle_bar_pack_id() -> String {
+    format!("{RAW_PREFIX}/battle_bar")
+}
+
+/// Every pack id [`extract_healthbox_elements`] emits: the thirteen table
+/// elements in table order, then the battle bar.
+pub(in crate::extract) fn pack_ids() -> Vec<String> {
+    let mut ids = table_pack_ids();
+    ids.push(battle_bar_pack_id());
+    ids
 }
 
 /// Extracts the element table and the battle bar.
@@ -83,7 +94,7 @@ pub(in crate::extract) fn extract_healthbox_elements(
     for source in BATTLE_BAR_SOURCES {
         battle_bar.extend(convert_sheet(upstream, source, &mut read_file)?);
     }
-    push_raw_bytes(format!("{RAW_PREFIX}/battle_bar"), battle_bar, writer);
+    push_raw_bytes(battle_bar_pack_id(), battle_bar, writer);
     Ok(())
 }
 

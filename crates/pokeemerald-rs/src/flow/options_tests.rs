@@ -10,7 +10,7 @@ use crate::game_save::{SaveSlot, SavedGame};
 use crate::main_menu::{self, MainMenuItem};
 use crate::new_game::NewGameOptions;
 use crate::pack_source::PackSource;
-use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
+use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry_with_color};
 use engine::save::{BattleStyle, ButtonMode, SoundMode};
 use engine::settings::GameSettings;
 use platform::{ButtonState, Buttons};
@@ -23,7 +23,7 @@ const MAX_FRAMES: usize = 200;
 /// Every selectable frame (one distinguishable colour each), the font, and
 /// the main-menu backdrop: all [`crate::options::OptionsMenu::from_pack`] and
 /// the rebuilt main menu read.
-fn synthetic_options_pack_bytes() -> Vec<u8> {
+fn synthetic_options_entries() -> Vec<pack_format::PackEntry> {
     let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
     let mut entries = Vec::new();
     for id in 0..FRAME_COUNT {
@@ -54,7 +54,7 @@ fn synthetic_options_pack_bytes() -> Vec<u8> {
         0,
         Bgr555::from_channels(4, 4, 16),
     ));
-    pack_bytes(entries)
+    entries
 }
 
 pub(super) struct Fixture {
@@ -74,10 +74,17 @@ impl Fixture {
     }
 
     pub(super) fn new(label: &str) -> Self {
+        Self::with_extra_entries(label, Vec::new())
+    }
+
+    /// [`Self::new`], with `extra` entries added to the pack.
+    pub(super) fn with_extra_entries(label: &str, extra: Vec<pack_format::PackEntry>) -> Self {
         let temp = TempSave::new(label);
         let slot = temp.slot();
         let pack_path = Self::pack_path(label);
-        write_scratch_exclusive(&pack_path, synthetic_options_pack_bytes());
+        let mut entries = synthetic_options_entries();
+        entries.extend(extra);
+        write_scratch_exclusive(&pack_path, pack_bytes_with_fonts(entries));
         // `PackSource::Test` needs a `'static` path, as `flow::tests` does.
         let leaked: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
         Self {
@@ -466,7 +473,7 @@ fn the_options_fixture_refuses_a_planted_symlink() {
     let label = "symlink-regression";
     super::tests::assert_planted_symlink_untouched(
         &Fixture::pack_path(label),
-        &synthetic_options_pack_bytes(),
+        &pack_bytes_with_fonts(synthetic_options_entries()),
         || Fixture::new(label),
     );
 }

@@ -12,10 +12,29 @@ mod routing;
 
 use self::{oscillator::Oscillator, routing::StereoRouting};
 
-const BIPOLAR_SAMPLE_SCALE: i32 = 127;
-const WAVE_SAMPLE_SCALE: i32 = 16;
+// PSG output in DirectSound accumulator units (one s8 FIFO unit each).
+//
+// Emerald mixes the PSG at 100% (`SOUND_ALL_MIX_FULL`) with NR50 = 0x77
+// (`pokeemerald/src/m4a.c:275,370-372`; `include/gba/io_reg.h:618-623`). mGBA sums
+// the unipolar channel outputs, shifts them left 3, and multiplies by
+// `1 + 7` (`mgba/src/gb/audio.c:778-793`), then shifts right by `4 - 2` for the
+// full PSG mix (`mgba/src/gba/audio.c:362-366`): one PSG volume or nibble unit
+// is `8 * 8 >> 2 = 16` hardware units. A full-volume FIFO s8 sample is
+// `<< 2` with no halving (`mgba/src/gba/audio.c:368-384`): 4 hardware units. The mixer
+// accumulates in FIFO units, so one PSG unit is `16 / 4 = 4`.
+const PSG_HARDWARE_UNITS_PER_LEVEL: i32 = ((1 << 3) * (1 + 7)) >> (4 - 2);
+const FIFO_HARDWARE_UNITS_PER_SAMPLE: i32 = 1 << 2;
+const PSG_LEVEL_FIFO_UNITS: i32 = PSG_HARDWARE_UNITS_PER_LEVEL / FIFO_HARDWARE_UNITS_PER_SAMPLE;
+const WAVE_SAMPLE_SCALE: i32 = PSG_LEVEL_FIFO_UNITS;
 const LINEAR_ENVELOPE_SCALE: u32 = 16;
 const SAMPLE_GAIN_BITS: u32 = 8;
+// Square and noise are unipolar on hardware (`0..=volume`, `mgba/src/gb/audio.c:641,917`)
+// but rendered about their midpoint as `+-volume`: one volume unit then spans
+// half of `PSG_LEVEL_FIFO_UNITS` per side. `frame_gain` already carries
+// `LINEAR_ENVELOPE_SCALE` per volume unit in Q8, so the scale below makes a
+// full `+-1` sample contribute `+-volume * PSG_LEVEL_FIFO_UNITS / 2`.
+const BIPOLAR_SAMPLE_SCALE: i32 =
+    (PSG_LEVEL_FIFO_UNITS << SAMPLE_GAIN_BITS) / (2 * LINEAR_ENVELOPE_SCALE.cast_signed());
 const MIDI_KEY_COUNT: i32 = 256;
 const CGB_FREQUENCY_REGISTER_BITS: u32 = 11;
 const EVEN_FREQUENCY_REGISTER_MASK: u16 = (1 << CGB_FREQUENCY_REGISTER_BITS) - 2;
@@ -244,6 +263,43 @@ impl CgbVoice {
             echo_volume,
             echo_length,
         )
+    }
+
+    /// The square channel `MPlayExtender` leaves triggered at frequency 0 with
+    /// its DAC on before any note (`pokeemerald/src/m4a.c:268-273`). It is
+    /// idle-slot hardware only: its duty index free-runs while the slot is
+    /// empty, and the first note on the slot inherits it
+    /// (`mgba/src/gb/audio.c:162-171,493-510`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is [`CgbChannelNumber::Wave`] or `Noise`.
+    #[must_use]
+    pub(crate) fn initialized_square_hardware(channel: CgbChannelNumber) -> Self {
+        assert!(
+            matches!(
+                channel,
+                CgbChannelNumber::Square1 | CgbChannelNumber::Square2
+            ),
+            "square hardware requires Square1 or Square2, got {channel:?}"
+        );
+        let mut hardware = Self::new(
+            channel,
+            Oscillator::Square(SquareChannel::new(0, 0, None)),
+            CgbAdsr::flat(),
+            DacCorrection::None,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        hardware.initial_trigger = InitialTrigger::Committed;
+        hardware
     }
 
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
@@ -577,12 +633,22 @@ impl CgbVoice {
         if envelope_boundary {
             self.routing.recompute_pan();
         }
+        // A retiring frame jumps through `oscillator_off` to `channel_complete`,
+        // past the `CGB_CHANNEL_MO_VOL` NR51 and NRx2/NRx4 writes
+        // (`m4a.c:1053-1056,1084-1101,1205-1226`); only a note's first pass keeps
+        // its note-on writes.
+        let commits_hardware = self.envelope.is_active() || initial_trigger;
         // NR51 moves only under `CGB_CHANNEL_MO_VOL` (`m4a.c:1081-1082,1205-1208`).
         let is_wave = matches!(self.channel, CgbChannelNumber::Wave);
-        if retriggered_by_transition || retriggered_by_note_off || (is_wave && envelope_boundary) {
+        if commits_hardware
+            && (retriggered_by_transition
+                || retriggered_by_note_off
+                || (is_wave && envelope_boundary))
+        {
             self.routing.commit_pan();
         }
-        let hardware_write = retriggered_by_note_off || retriggered_by_transition;
+        let hardware_write =
+            commits_hardware && (retriggered_by_note_off || retriggered_by_transition);
         if initial_trigger {
             self.oscillator
                 .commit_initial_writes(!self.envelope.is_active());
@@ -667,6 +733,14 @@ impl CgbVoice {
 
 #[cfg(test)]
 impl CgbVoice {
+    /// Writes `freq_reg` through `NR13`/`NR14` to a square voice's hardware.
+    pub(crate) fn with_square_frequency_register(mut self, freq_reg: u16) -> Self {
+        if let Oscillator::Square(square) = &mut self.oscillator {
+            square.set_frequency(freq_reg);
+        }
+        self
+    }
+
     fn noise_is_narrow(&self) -> Option<bool> {
         match &self.oscillator {
             Oscillator::Noise(n) => Some(n.is_narrow()),

@@ -6,9 +6,12 @@ use engine::save::bag::Bag;
 use platform::Buttons;
 use rendering::Framebuffer;
 
-use super::pack_fixture::{entries_with_marked_narrow_glyphs, load, BAG_TEXT};
-use super::tests::{frame_of, painted, sample_bag, switch_pocket, LIST_X, LIST_Y, ROW};
-use super::{open_from_pack, BagScreen, BagScreenMode, BagScreenRequest};
+use super::pack_fixture::{
+    entries_with_marked_narrow_glyphs, entries_with_marked_normal_glyphs, load, BAG_TEXT,
+    MOVE_DATA_TEXT,
+};
+use super::tests::{frame_of, painted, press, sample_bag, switch_pocket, LIST_X, LIST_Y, ROW};
+use super::{open_from_pack, BagScreen, BagScreenMode, BagScreenRequest, BagScreenTick};
 
 /// The window-local x of every pixel column of list row `row` that the narrow
 /// font drew in the text colour. Under a pack that marks only some glyphs'
@@ -95,5 +98,114 @@ fn quantities_pad_with_the_five_pixel_spacer_not_a_space() {
             column(start + times + 5),
             column(start + times + 10),
         ],
+    );
+}
+
+#[test]
+fn the_list_cursor_draws_from_the_normal_font() {
+    // `BagMenu_PrintCursorAtPos` prints the arrow with `FONT_NORMAL` (`item_menu.c:1023`).
+    let arrow = narrow_id('▶');
+    let pack = load("marked-normal", entries_with_marked_normal_glyphs(&[arrow]));
+    let screen = open_from_pack(
+        &pack,
+        &sample_bag(),
+        BagScreenRequest::new(BagScreenMode::Field),
+    )
+    .expect("the synthetic pack opens");
+    assert_eq!(drawn_columns(&frame_of(&screen), 0), vec![0]);
+}
+
+/// Columns of the TM/HM value window (`WIN_TMHM_INFO`, left edge 56) in which
+/// the normal font drew in the move data's text colour, within the pixel rows
+/// `[top, bottom)`. Each text line is a 16 px cell and the lines start 12 px
+/// apart, so each band holds only the rows of one line.
+fn value_columns(fb: &Framebuffer, band: (usize, usize)) -> Vec<usize> {
+    (VALUE_LEFT..VALUE_LEFT + VALUE_WIDTH)
+        .filter(|&x| painted(fb, x, band.0, 1, band.1 - band.0, MOVE_DATA_TEXT))
+        .map(|x| x - VALUE_LEFT)
+        .collect()
+}
+
+const VALUE_LEFT: usize = 56;
+const VALUE_WIDTH: usize = 32;
+/// Where `PrintTMHMMoveData` prints a value (`item_menu.c:2576,2588,2592`).
+const VALUE_TEXT_X: usize = 7;
+const POWER_BAND: (usize, usize) = (116, 128);
+const ACCURACY_BAND: (usize, usize) = (132, 140);
+const PP_BAND: (usize, usize) = (144, 152);
+
+fn move_data_glyphs() -> Vec<usize> {
+    "-0123456789".chars().map(narrow_id).collect()
+}
+
+/// Window-local columns of `text`'s glyphs, each placed after the advance of
+/// those before it in the normal font. `\u{E077}` is `CHAR_SPACER`.
+fn columns_of(text: &str) -> Vec<usize> {
+    let mut x = VALUE_TEXT_X;
+    let mut columns = Vec::new();
+    for c in text.chars() {
+        let id = if c == '\u{E077}' { 0x77 } else { narrow_id(c) };
+        let width = assets::fonts::FontId::Normal
+            .glyph_width(u16::try_from(id).unwrap())
+            .unwrap();
+        if c != '\u{E077}' {
+            columns.push(x);
+        }
+        x += usize::from(width);
+    }
+    columns
+}
+
+fn move_data_columns(item: ItemId) -> [Vec<usize>; 3] {
+    let pack = load(
+        "marked-move-data",
+        entries_with_marked_normal_glyphs(&move_data_glyphs()),
+    );
+    let mut bag = Bag::default();
+    assert!(bag.add_item(item, 1));
+    let mut screen = open_from_pack(&pack, &bag, BagScreenRequest::new(BagScreenMode::Field))
+        .expect("the synthetic pack opens");
+    for _ in 0..2 {
+        switch_pocket(&mut screen, Buttons::RIGHT);
+    }
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    let fb = frame_of(&screen);
+    [POWER_BAND, ACCURACY_BAND, PP_BAND].map(|band| value_columns(&fb, band))
+}
+
+#[test]
+fn move_stats_print_right_aligned_in_three_positions() {
+    // `ConvertIntToDecimalStringN(.., STR_CONV_MODE_RIGHT_ALIGN, 3)` pads with
+    // `CHAR_SPACER`; Focus Punch is power 150, accuracy 100, PP 20.
+    let spacer = "\u{E077}";
+    assert_eq!(
+        move_data_columns(ItemId::TM_FOCUS_PUNCH),
+        [
+            columns_of("150"),
+            columns_of("100"),
+            columns_of(&format!("{spacer}20")),
+        ]
+    );
+}
+
+#[test]
+fn a_power_under_two_or_no_accuracy_prints_three_dashes() {
+    // Toxic: power 0, accuracy 85, PP 10. Protect: power 0, accuracy 0, PP 10.
+    let spacer = "\u{E077}";
+    assert_eq!(
+        move_data_columns(ItemId::TM_TOXIC),
+        [
+            columns_of("---"),
+            columns_of(&format!("{spacer}85")),
+            columns_of(&format!("{spacer}10")),
+        ]
+    );
+    assert_eq!(
+        move_data_columns(ItemId::TM_PROTECT),
+        [
+            columns_of("---"),
+            columns_of("---"),
+            columns_of(&format!("{spacer}10")),
+        ]
     );
 }
