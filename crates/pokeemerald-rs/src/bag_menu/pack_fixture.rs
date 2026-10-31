@@ -41,6 +41,12 @@ pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
 pub(super) const GRAY_CURSOR_TEXT: Rgb888 = NORMAL_SHADOW;
 pub(super) const GRAY_CURSOR_SHADOW: Rgb888 = rgb(0, 0, 20);
 /// The closed bag's marker row, the only thing frame 0 of the sheet draws.
+/// A marker in every pocket's bag picture, at local column 48, row 32: 16
+/// right of the picture's centre, where a turn about the centre moves it.
+pub(super) const BAG_MARKER: Rgb888 = BAG_MARKER_555.to_rgb888();
+const BAG_MARKER_555: Bgr555 = bgr(31, 31, 31);
+const BAG_MARKER_INDEX: u8 = 7;
+pub(super) const BAG_MARKER_AT: (usize, usize) = (48, 32);
 pub(super) const CLOSED_BAG: Rgb888 = CLOSED_BAG_555.to_rgb888();
 const CLOSED_BAG_555: Bgr555 = bgr(15, 15, 0);
 /// The rotating ball's two markers: A is 4 right of its centre, B 6 above it.
@@ -56,15 +62,19 @@ const WIPE_COVER_555: Bgr555 = bgr(12, 0, 12);
 const WIPE_RESTORED_555: Bgr555 = bgr(0, 12, 12);
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
 /// The scroll-arrow sheet's markers. The horizontal-arrow frame (rows 0-15)
-/// is solid `ARROW_HORIZONTAL`; the vertical frame (rows 16-31) is clear but
-/// for `ARROW_NEAR` at its column 3, row 2 and `ARROW_FAR` at column 12,
-/// row 13, so a flip or a wrong frame moves or recolours them.
+/// is clear but for `ARROW_HORIZONTAL` at its column 3, row 2 and
+/// `ARROW_HORIZONTAL_FAR` at column 12, row 13; the vertical frame (rows
+/// 16-31) is clear but for `ARROW_NEAR` at the same place and `ARROW_FAR`
+/// at the same other place, so a flip or a wrong frame moves or recolours
+/// them.
 pub(super) const ARROW_NEAR: Rgb888 = ARROW_NEAR_555.to_rgb888();
 pub(super) const ARROW_FAR: Rgb888 = ARROW_FAR_555.to_rgb888();
 pub(super) const ARROW_HORIZONTAL: Rgb888 = ARROW_HORIZONTAL_555.to_rgb888();
+pub(super) const ARROW_HORIZONTAL_FAR: Rgb888 = ARROW_HORIZONTAL_FAR_555.to_rgb888();
 const ARROW_NEAR_555: Bgr555 = bgr(31, 10, 10);
 const ARROW_FAR_555: Bgr555 = bgr(10, 31, 10);
 const ARROW_HORIZONTAL_555: Bgr555 = bgr(10, 10, 31);
+const ARROW_HORIZONTAL_FAR_555: Bgr555 = bgr(31, 10, 31);
 /// The swap-line sheet's markers: the first sprite's frame (rows 0-15) holds
 /// only `SWAP_END` at column 2, row 3, and the others' frame (rows 16-31)
 /// only `SWAP_SEGMENT` at column 5, row 4.
@@ -289,10 +299,16 @@ fn picture_entries() -> Vec<PackEntry> {
     let closed_row = CLOSED_BAG_ROW * BAG_SIDE as usize;
     pixels[..(BAG_SIDE * BAG_SIDE) as usize].fill(0);
     pixels[closed_row..closed_row + BAG_SIDE as usize].fill(CLOSED_MARKER_INDEX);
+    for frame in 1..BAG_FRAMES as usize {
+        let at =
+            (frame * BAG_SIDE as usize + BAG_MARKER_AT.1) * BAG_SIDE as usize + BAG_MARKER_AT.0;
+        pixels[at] = BAG_MARKER_INDEX;
+    }
     let mut colors: Vec<(u8, Bgr555)> = (1u8..6)
         .map(|frame| (frame, Bgr555::from_channels(frame * 4, 5, 5)))
         .collect();
     colors.push((CLOSED_MARKER_INDEX, CLOSED_BAG_555));
+    colors.push((BAG_MARKER_INDEX, BAG_MARKER_555));
     let mut ball = vec![0u8; (BALL_SIDE * BALL_SIDE) as usize];
     for ((x, y), index) in [(BALL_A_AT, 1u8), (BALL_B_AT, 2)] {
         ball[y * BALL_SIDE as usize + x] = index;
@@ -333,7 +349,9 @@ fn scroll_indicator_entries() -> Vec<PackEntry> {
     const SIDE: u32 = 16;
     let side = SIDE as usize;
     let mut sheet = vec![0u8; side * side * 2];
-    sheet[..side * side].fill(3);
+    for ((x, y), index) in [(ARROW_NEAR_AT, 3u8), (ARROW_FAR_AT, 4)] {
+        sheet[y * side + x] = index;
+    }
     for ((x, y), index) in [(ARROW_NEAR_AT, 1u8), (ARROW_FAR_AT, 2)] {
         sheet[(side + y) * side + x] = index;
     }
@@ -353,6 +371,7 @@ fn scroll_indicator_entries() -> Vec<PackEntry> {
                 (1, ARROW_NEAR_555),
                 (2, ARROW_FAR_555),
                 (3, ARROW_HORIZONTAL_555),
+                (4, ARROW_HORIZONTAL_FAR_555),
             ],
         ),
     ]

@@ -164,8 +164,14 @@ impl BagScreen {
     /// step is remembered; a context menu's own movement is not.
     pub(super) fn apply(&mut self, input: BagMenuInput) -> Option<BagMenuOutcome> {
         let browsing = self.menu.context_grid().is_none();
+        let before = self.list_position();
         let outcome = self.menu.handle_input(input);
         if browsing && matches!(input, BagMenuInput::Up | BagMenuInput::Down) {
+            if self.list_position() != before {
+                // `BagMenu_MoveCursorCallback`, which the list calls only when
+                // the selection moves (`item_menu.c:926-932`).
+                self.shake.start();
+            }
             let index = self.pocket_index();
             let positions = &mut self.menu_request.positions;
             positions.scroll[index] = self.menu.scroll();
