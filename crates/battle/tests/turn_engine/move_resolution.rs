@@ -16,7 +16,7 @@
 //! matchup below ties on Speed.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
 
 const TACKLE: MoveId = MoveId::TACKLE;
@@ -40,22 +40,22 @@ const PIN_MISSILE: MoveId = MoveId::PIN_MISSILE;
 const POISON_STING: MoveId = MoveId::POISON_STING;
 
 /// `SPECIES_BULBASAUR`.
-const BULBASAUR: u16 = 1;
+const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
 /// `SPECIES_CHARMANDER`.
-const CHARMANDER: u16 = 4;
+const CHARMANDER: SpeciesId = SpeciesId::CHARMANDER;
 /// `SPECIES_RATTATA`: the fast mover against [`GASTLY`] and [`SHEDINJA`] in
 /// this file's fixtures.
-const RATTATA: u16 = 19;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// `SPECIES_GASTLY`: Ghost/Poison (immune to Normal-type damage), Levitate
 /// in its only ability slot. Base Speed 80 is higher than [`RATTATA`]'s 72,
 /// but the level-10-versus-5 gap used here still makes Rattata faster.
-const GASTLY: u16 = 92;
+const GASTLY: SpeciesId = SpeciesId::GASTLY;
 /// `SPECIES_DUNSPARCE`: Serene Grace in its primary ability slot (secondary
 /// slot is Run Away).
-const DUNSPARCE: u16 = 206;
+const DUNSPARCE: SpeciesId = SpeciesId::DUNSPARCE;
 /// `SPECIES_SHEDINJA`: Bug/Ghost, Wonder Guard in its only ability slot;
 /// always 1 HP, so any landed hit faints it.
-const SHEDINJA: u16 = 303;
+const SHEDINJA: SpeciesId = SpeciesId::SHEDINJA;
 
 /// A roll that fails a run attempt.
 const RUN_ROLL_FAILS: u16 = 65000;

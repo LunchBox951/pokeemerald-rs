@@ -3,8 +3,8 @@ use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 
 const TACKLE: MoveId = MoveId::TACKLE;
-const EARLY_BIRD_KANGASKHAN: u16 = SpeciesId::KANGASKHAN.0;
-const TACKLE_IMMUNE_GASTLY: u16 = SpeciesId::GASTLY.0;
+const EARLY_BIRD_KANGASKHAN: SpeciesId = SpeciesId::KANGASKHAN;
+const TACKLE_IMMUNE_GASTLY: SpeciesId = SpeciesId::GASTLY;
 
 const SLEEPER_LEVEL: u8 = 5;
 const SLOWER_ENEMY_LEVEL: u8 = 4;
@@ -24,7 +24,7 @@ const TACKLE_INTO_GHOST_DRAWS: [u16; 4] = [
     DISCARDED_EFFECT_CHANCE_DRAW,
 ];
 
-fn sleeper(dex: &Dex, species: u16, turns: u8) -> BattlePokemon {
+fn sleeper(dex: &Dex, species: SpeciesId, turns: u8) -> BattlePokemon {
     let mut mon = max_iv_mon_with_personality(dex, species, SLEEPER_LEVEL, vec![TACKLE], 0);
     mon.set_status1(Status1::Asleep { turns });
     mon
@@ -240,9 +240,9 @@ fn serene_grace_poison_is_rejected_for_short_and_long_sleep_before_any_draw() {
         (SpeciesId::ZIGZAGOON, 5),
     ] {
         let dex = Dex::new();
-        let mut player = max_iv_mon(&dex, species.0, 10, vec![TACKLE]);
+        let mut player = max_iv_mon(&dex, species, 10, vec![TACKLE]);
         player.set_status1(Status1::Asleep { turns });
-        let enemy = max_iv_mon(&dex, SpeciesId::DUNSPARCE.0, 10, vec![MoveId::POISON_STING]);
+        let enemy = max_iv_mon(&dex, SpeciesId::DUNSPARCE, 10, vec![MoveId::POISON_STING]);
         assert_eq!(enemy.ability(), AbilityId::SERENE_GRACE);
 
         let mut rng = SequenceRng::new([]);

@@ -11,7 +11,7 @@ const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 
 fn mon(species: SpeciesId, slot: u8, status: Status1) -> BattlePokemon {
     let dex = Dex::new();
-    let mut mon = max_iv_mon(&dex, species.0, 20, vec![MoveId::TACKLE]).with_ability_slot(slot);
+    let mut mon = max_iv_mon(&dex, species, 20, vec![MoveId::TACKLE]).with_ability_slot(slot);
     mon.set_status1(status);
     mon
 }

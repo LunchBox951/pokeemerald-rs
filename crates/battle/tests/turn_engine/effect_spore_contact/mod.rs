@@ -17,7 +17,7 @@ use crate::poison_support::*;
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, Status1};
 
-const SHROOMISH: u16 = 306;
+const SHROOMISH: SpeciesId = SpeciesId::SHROOMISH;
 const FASTER_THAN_HOLDER_LEVEL: u8 = 12;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
@@ -84,13 +84,13 @@ fn rattata(dex: &Dex, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
 
 /// Builds a species at a level that out-speeds a level-5 [`shroomish`] holder.
 fn species_with_ability(dex: &Dex, species: SpeciesId, ability: AbilityId) -> BattlePokemon {
-    let mon = max_iv_mon(dex, species.0, FASTER_THAN_HOLDER_LEVEL, vec![TACKLE]);
+    let mon = max_iv_mon(dex, species, FASTER_THAN_HOLDER_LEVEL, vec![TACKLE]);
     assert_eq!(mon.ability(), ability);
     mon
 }
 
 fn synchronizer(dex: &Dex) -> BattlePokemon {
-    species_with_ability(dex, SpeciesId(RALTS), AbilityId::SYNCHRONIZE)
+    species_with_ability(dex, RALTS, AbilityId::SYNCHRONIZE)
 }
 
 /// Leaves `mon` with exactly `hp` HP.

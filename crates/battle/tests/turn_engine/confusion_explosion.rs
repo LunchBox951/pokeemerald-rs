@@ -6,12 +6,12 @@
 //! was drawn.
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, Dex, PlayerAction, StatStage};
 
 const TACKLE: MoveId = MoveId::TACKLE;
 /// `SPECIES_KOFFING`: Hardy L20 with all IVs at 31 has Attack 37 and Defense 49.
-const KOFFING: u16 = 109;
+const KOFFING: SpeciesId = SpeciesId::KOFFING;
 
 /// `FAILED_ESCAPE_ROLL` for the slow Rattata runner: the player's Run fails,
 /// so the confused wild Koffing still takes its own action.

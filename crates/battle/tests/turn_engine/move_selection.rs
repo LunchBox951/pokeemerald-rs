@@ -5,7 +5,7 @@
 //! was drawn.
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage,
     STRUGGLE,
@@ -23,16 +23,16 @@ const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
 const HORN_DRILL: MoveId = MoveId::HORN_DRILL;
 const HAZE: MoveId = MoveId::HAZE;
 
-const CHARMANDER: u16 = 4;
-const RATTATA: u16 = 19;
-const VOLTORB: u16 = 100;
-const DUNSPARCE: u16 = 206;
-const TREECKO: u16 = 277;
-const POOCHYENA: u16 = 286;
+const CHARMANDER: SpeciesId = SpeciesId::CHARMANDER;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
+const VOLTORB: SpeciesId = SpeciesId::VOLTORB;
+const DUNSPARCE: SpeciesId = SpeciesId::DUNSPARCE;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
+const POOCHYENA: SpeciesId = SpeciesId::POOCHYENA;
 
 /// A wild species fast enough that these fixtures' Run draws an escape roll
 /// instead of succeeding for free.
-const FAST_WILD_OPPONENT: u16 = 288;
+const FAST_WILD_OPPONENT: SpeciesId = SpeciesId::ZIGZAGOON;
 
 const FAILED_ESCAPE_ROLL: u16 = 65_000;
 
