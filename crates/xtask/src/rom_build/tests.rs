@@ -700,3 +700,5 @@ fn a_symlinked_output_is_refused() {
         "{err}"
     );
 }
+
+mod checkout_reading;

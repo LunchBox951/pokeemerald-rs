@@ -1,8 +1,5 @@
-//! Errors produced by `cargo xtask gen-rom-profile`.
-//!
-//! Every variant names the root that failed, because the generator's whole
-//! job is to be certain about addresses: an ambiguous match is a hard
-//! failure, never a first-match-wins guess.
+//! Errors produced by `cargo xtask gen-rom-profile`. An ambiguous match is
+//! a hard failure, never a first-match-wins guess.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -116,8 +113,7 @@ pub enum GenRomProfileError {
     },
     /// The output would land on the ROM the profile was derived from.
     ///
-    /// Carries both names the developer typed, because the whole point is
-    /// that they are two spellings of one file.
+    /// Carries both names, which are two spellings of one file.
     OutputIsRom {
         /// The ROM path, as given to `--rom`.
         rom_path: PathBuf,

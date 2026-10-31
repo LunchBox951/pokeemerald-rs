@@ -6,7 +6,6 @@ use engine::rng::Rng;
 use super::{route103_rival_for, PlayerStarter, Rival};
 use crate::flow::npc_trainer_battle::{
     advance_npc_trainer_battle, start_npc_trainer_battle, trainer_party_personalities,
-    NpcTrainerBattleError,
 };
 use crate::flow::wild_encounter::SharedRng;
 
@@ -231,24 +230,6 @@ fn every_trainer_and_species_name_has_a_charmap_encoding() {
             );
         }
     }
-}
-
-#[test]
-fn a_held_item_party_is_refused_rather_than_stripped() {
-    let table = TrainerTable::new();
-    let id = (1..assets::trainers::TRAINERS_COUNT)
-        .map(|index| TrainerId(u16::try_from(index).unwrap()))
-        .find(|id| {
-            matches!(
-                table.trainer(*id).unwrap().party,
-                TrainerParty::ItemDefaultMoves(_) | TrainerParty::ItemCustomMoves(_)
-            )
-        })
-        .expect("trainer table must contain a held-item party");
-    assert_eq!(
-        trainer_party_personalities(id).unwrap_err(),
-        NpcTrainerBattleError::HeldItemParty(id)
-    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Locating voicegroups, key-split tables and their children, with the symbol-expectation tests.
+//! Locates voicegroups and key-split tables from source-declared slots.
 
 use std::path::Path;
 
@@ -19,12 +19,9 @@ use super::{
     PROGRAMMABLE_WAVE_SYMBOL, SLOT_BYTES, SLOT_POINTER, SLOT_TABLE, TYPE_KEYSPLIT, TYPE_RHYTHM,
 };
 
-/// What a linker map should say at a voicegroup's address.
+/// The map symbol expected at a voicegroup's address.
 ///
-/// Upstream's `voice_group` macro declares a `.global` only in its unbiased
-/// spelling; a `starting_note` bias makes the label a `.set` naming an
-/// address *before* the first slot, which no map lists and which is
-/// interior to whatever data precedes the group.
+/// A biased group's label is a `.set`, which no map lists.
 pub(super) fn voicegroup_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
     if starting_note == 0 {
         SymbolExpectation::Exact(format!("voicegroup_{label}"))
@@ -33,10 +30,8 @@ pub(super) fn voicegroup_symbol(label: &str, starting_note: u8) -> SymbolExpecta
     }
 }
 
-/// What a linker map should say at a key-split table's address.
-///
-/// Upstream's `keysplit` macro splits the same way `voice_group` does, and
-/// a biased table's address is interior for the same reason.
+/// The map symbol expected at a key-split table's address; biased tables
+/// have none, as with [`voicegroup_symbol`].
 fn keysplit_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
     if starting_note == 0 {
         SymbolExpectation::Exact(format!("keysplit_{label}"))
@@ -45,7 +40,7 @@ fn keysplit_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
     }
 }
 
-/// Describe one voicegroup, biasing its address the way the ROM does.
+/// The plan entry for the voicegroup `label` at `addr`.
 pub(super) fn plan_for(label: &str, addr: u32, group: &RawVoiceGroup) -> VoicegroupPlan {
     VoicegroupPlan {
         id: format!("audio/voicegroup/{label}"),
@@ -56,12 +51,10 @@ pub(super) fn plan_for(label: &str, addr: u32, group: &RawVoiceGroup) -> Voicegr
     }
 }
 
-/// Find the run of slots that is this voicegroup.
+/// The ROM address of `group`: the single run of slots whose sample pointers
+/// match the located samples.
 ///
-/// The signature is every slot that names a sample: the ROM's pointer at
-/// that slot must be the address already found for that sample. A group
-/// with a `starting_note` bias is addressed before its first slot, exactly
-/// as the mixer indexes it, so the returned address is biased too.
+/// `starting_note` biases the returned address back from the first slot.
 pub(super) fn locate_voicegroup(
     ctx: &Context<'_>,
     label: &str,
@@ -75,8 +68,6 @@ pub(super) fn locate_voicegroup(
             .find(|plan| plan.id == id)
             .map(|plan| plan.addr)
     };
-    // Each slot that names a sample constrains the run; collect them as
-    // (slot index, required pointer).
     let mut constraints: Vec<(usize, u32)> = Vec::new();
     for (index, slot) in group.slots.iter().enumerate() {
         let required = match slot {
@@ -132,7 +123,7 @@ pub(super) fn locate_voicegroup(
     })
 }
 
-/// Follow a group's key-split and rhythm slots to its children.
+/// The child voicegroups and key-split tables of one group.
 type Children = (Vec<VoicegroupPlan>, Vec<KeysplitPlan>);
 
 pub(super) fn walk_children(
@@ -147,6 +138,7 @@ pub(super) fn walk_children(
     let mut keysplits = Vec::new();
 
     for (index, slot) in group.slots.iter().enumerate() {
+        // `starting_note` biases the group's address back from its first slot.
         let slot_addr = parent
             + u32::from(group.starting_note) * SLOT_BYTES
             + u32::try_from(index).expect("a slot index fits in u32") * SLOT_BYTES;
@@ -200,7 +192,7 @@ pub(super) fn walk_children(
     Ok((voicegroups, keysplits))
 }
 
-/// Read a key-split slot's table pointer and check the bytes behind it.
+/// The key-split table at a slot's table pointer.
 fn locate_keysplit(
     ctx: &Context<'_>,
     slot_addr: u32,
@@ -220,8 +212,7 @@ fn locate_keysplit(
             id: format!("keysplit_{label}"),
             reason: "the slot's table pointer is not a cartridge address".to_owned(),
         })?;
-    // The ROM's pointer is biased back by the first note the table maps, so
-    // `table[note]` indexes directly. The real bytes start at the bias.
+    // The table pointer is biased back by `starting_note`; the bytes start after it.
     let data = addr + u32::from(table.starting_note);
     if slice_at_addr(ctx.rom, data, table.table.len()) != Some(table.table.as_slice()) {
         return Err(GenRomProfileError::StructMismatch {
@@ -248,7 +239,7 @@ fn locate_keysplit(
     })
 }
 
-/// Parse `sound/keysplit_tables.inc`.
+/// The key-split tables of `sound/keysplit_tables.inc`.
 fn read_keysplit_tables(
     upstream: &Path,
 ) -> Result<std::collections::HashMap<String, parser::RawKeySplitTable>, GenRomProfileError> {
@@ -271,11 +262,8 @@ mod tests {
 
     #[test]
     fn a_biased_audio_root_asks_a_map_for_nothing() {
-        // Upstream's biased `voice_group`/`keysplit` spellings emit a `.set`
-        // and no `.global`, so the biased address is in the middle of the
-        // preceding data and no map names it. Demanding *some* symbol there
-        // would fail `--map` on a correct ROM and a correct map: every
-        // key-split table upstream ships is biased, as is `rs_drumset`.
+        // Biased roots are `.set` labels, so demanding a map symbol would fail
+        // `--map` on a correct ROM.
         assert_eq!(
             voicegroup_symbol("rs_drumset", 36),
             SymbolExpectation::Interior

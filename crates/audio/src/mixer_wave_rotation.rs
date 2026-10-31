@@ -13,7 +13,7 @@ const IDLE_FRAMES: usize = 3;
 /// Whole wave-RAM steps one rendered frame advances at [`KEY`], unfixed.
 const ROTATION_PER_FRAME: usize = 6;
 
-/// Ascending then descending nibbles: every rotation of it is distinct.
+/// Ascending then descending nibbles, so every rotation is distinct.
 const RAMP_RAM: [u8; 16] = [
     0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
 ];
@@ -60,14 +60,12 @@ fn frame(mixer: &mut Mixer) -> Vec<f32> {
     out
 }
 
-/// The first frame of a fresh mixer playing `samples` from phase zero.
 fn fresh_frame(samples: [i8; 32]) -> Vec<f32> {
     let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
     assert!(mixer.add_cgb_voice(wave_voice("oracle", samples)));
     frame(&mut mixer)
 }
 
-/// A mixer whose wave slot has rendered one frame of `ramp-a`.
 fn sounding_mixer() -> Mixer {
     let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
     assert!(mixer.add_cgb_voice(wave_voice("ramp-a", ramp())));
@@ -75,10 +73,8 @@ fn sounding_mixer() -> Mixer {
     mixer
 }
 
-/// A replacement continues the rotation: the head matches a fresh channel
-/// started at the rotated table, but the output latch is the nibble the
-/// previous clock removed (`mgba/src/gb/audio.c:557-568`), so the frame holds
-/// that older nibble until the first clock, then equals the fresh render.
+/// A replacement keeps the rotation but holds the nibble the previous clock
+/// removed until its first clock (`mgba/src/gb/audio.c:557-568`).
 fn assert_continues_rotation(actual: &[f32]) {
     let oracle = fresh_frame(rotated_ramp());
     let first_clock = actual
@@ -130,8 +126,7 @@ fn a_stopped_wave_slot_keeps_the_rotation_through_idle_frames() {
 }
 
 /// A changed asset reloads the unrotated table but keeps the held output
-/// nibble (`mgba/src/gb/audio.c:300-337`): the frame holds the previous
-/// slot's latch until the first clock, then equals the fresh render.
+/// nibble until the first clock (`mgba/src/gb/audio.c:300-337`).
 fn assert_reloads_after_first_clock(actual: &[f32], oracle: &[f32]) {
     let first_clock = actual
         .iter()
