@@ -141,6 +141,17 @@ pub enum ExtractError {
         /// Decoded bit depth.
         bit_depth: u8,
     },
+    /// The keypad-icon sheet violates its 128x32 four-bit contract.
+    KeypadIconSheetWrongShape {
+        /// Source path.
+        path: PathBuf,
+        /// Decoded width in pixels.
+        width: u32,
+        /// Decoded height in pixels.
+        height: u32,
+        /// Decoded bit depth.
+        bit_depth: u8,
+    },
     /// A text-window image does not match its required dimensions.
     TextWindowImageWrongDimensions {
         /// Source path.
@@ -431,6 +442,17 @@ impl fmt::Display for ExtractError {
                 f,
                 "font glyph sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
                  256x512 at 2bpp",
+                path.display()
+            ),
+            Self::KeypadIconSheetWrongShape {
+                path,
+                width,
+                height,
+                bit_depth,
+            } => write!(
+                f,
+                "keypad-icon sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
+                 128x32 at 4bpp",
                 path.display()
             ),
             Self::TextWindowImageWrongDimensions {

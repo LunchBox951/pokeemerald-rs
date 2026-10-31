@@ -548,6 +548,8 @@ pub struct ProfilePlan {
     pub layouts: Vec<MapLayoutPlan>,
     /// The Latin glyph sheets.
     pub fonts: Vec<FontPlan>,
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: Vec<ImagePlan>,
     /// Text-window frames and palettes.
     pub text_window: TextWindowPlan,
     /// Interface palettes.

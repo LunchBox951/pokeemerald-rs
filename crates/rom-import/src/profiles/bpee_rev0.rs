@@ -620,6 +620,9 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {
         FontRoot { id: "font/small/glyphs", addr: GbaPtr::at(0x0863_3CE4), len: 32768, width: 256, height: 512, bit_depth: 2 },
         FontRoot { id: "font/small_narrow/glyphs", addr: GbaPtr::at(0x0862_BAE4), len: 32768, width: 256, height: 512, bit_depth: 2 },
     ],
+    font_images: &[
+        ImageRoot { id: "font/keypad_icons", addr: GbaPtr::at(0x082E_9D90), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 128, height: 32, metatile_width: 16, metatile_height: 4, tile_count: 64 },
+    ],
     text_window: TextWindowRoots {
         images: &[
             ImageRoot { id: "text-window/image/1", addr: GbaPtr::at(0x0850_E87C), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 24, height: 24, metatile_width: 3, metatile_height: 3, tile_count: 9 },

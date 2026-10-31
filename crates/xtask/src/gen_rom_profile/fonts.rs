@@ -1,4 +1,4 @@
-//! Locates the five Latin glyph sheets.
+//! Locates the five Latin glyph sheets and the keypad-icon sheet.
 //!
 //! `gbagfx` writes a glyph sheet in `.latfont` layout (64 bytes per 16x16
 //! glyph), stored verbatim in the ROM.
@@ -6,10 +6,11 @@
 //! as a 32 KiB needle. All five shipped sheets are required.
 
 use super::error::GenRomProfileError;
+use super::images::{locate_images, ImageQuery};
 use super::inventory;
 use super::locate::{camel_case, exactly_one};
 use super::pack_source::latin_font_bytes;
-use super::plan::{FontPlan, ReportLine};
+use super::plan::{FontPlan, ImagePlan, ReportLine};
 use super::tilesets::len32;
 use super::Context;
 
@@ -58,3 +59,25 @@ pub fn locate(
     }
     Ok(plans)
 }
+
+/// Pack id of the keypad-icon sheet.
+const KEYPAD_ICONS_ID: &str = "font/keypad_icons";
+
+/// Locate the keypad-icon sheet, which `text.c` includes as plain row-major
+/// `.4bpp` tiles (`sKeypadIconTiles`, `text.c:117`).
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] if the pack lacks the sheet,
+/// [`GenRomProfileError::EntryShape`] if it is not a raster of whole tiles,
+/// or [`GenRomProfileError::NotFound`] / [`GenRomProfileError::Ambiguous`]
+/// if it does not turn up exactly once.
+pub fn locate_keypad_icons(
+    ctx: &Context<'_>,
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<ImagePlan>, GenRomProfileError> {
+    locate_images(ctx, &[ImageQuery::raw(KEYPAD_ICONS_ID)], report)
+}
+
+#[cfg(test)]
+mod tests;
