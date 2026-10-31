@@ -2,6 +2,10 @@
 
 use crate::error::AssetError;
 
+pub mod item_effects;
+
+pub use item_effects::{ItemEffect, ItemEffectSlot, ItemEffectTable};
+
 /// Number of entries in the item table.
 pub const ITEMS_COUNT: usize = 377;
 
