@@ -46,6 +46,16 @@ rustix = { version = "1.1", default-features = false, features = [
     "fs",
 ], optional = true }
 
+# The test-support module claims its fixture directories through a pinned
+# descriptor (`O_NOFOLLOW`, and `O_PATH` on Linux), in every test build rather
+# than only under `scenes`. Same crate, version, and feature boundary as
+# above, never linked into a shipped build; recorded in `README.md`.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "fs",
+] }
+
 # `record-snapshot` and the extract pack publish compare a fresh open of a path
 # with the handle they hold on Windows through `win-fs`'s identity query.
 # Unconditional on Windows because extraction is not behind `scenes`.

@@ -141,12 +141,9 @@ fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
     write_synthetic_pack(entries)
 }
 
+/// A path nothing occupies yet, inside this test's private temporary root.
 fn scratch_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "pokeemerald-rs-xtask-record-snapshot-test-{}-{:?}-{name}",
-        std::process::id(),
-        std::thread::current().id()
-    ))
+    crate::test_support::private_path(name)
 }
 
 struct ScratchGuard(PathBuf);
@@ -159,10 +156,16 @@ impl Drop for ScratchGuard {
 }
 
 fn write_pack(name: &str) -> (PathBuf, ScratchGuard) {
-    let path = scratch_path(&format!("{name}.pack"));
-    std::fs::write(&path, synthetic_main_menu_pack_bytes()).unwrap();
+    write_pack_in(&crate::test_support::private_root(), name).unwrap()
+}
+
+/// Writes the synthetic pack at a new name under `base`, refusing any entry
+/// already there.
+fn write_pack_in(base: &std::path::Path, name: &str) -> std::io::Result<(PathBuf, ScratchGuard)> {
+    let path = base.join(format!("{name}.pack"));
+    crate::test_support::write_new(&path, &synthetic_main_menu_pack_bytes())?;
     let guard = ScratchGuard(path.clone());
-    (path, guard)
+    Ok((path, guard))
 }
 
 /// Fails unless every staged pointer file left in `output_dir` is named by
@@ -561,10 +564,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
     let _pack = crate::extract::REAL_PACK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let output_dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-xtask-record-snapshot-real-pack-{}",
-        std::process::id()
-    ));
+    let output_dir = scratch_path("real-pack-out");
     let guard = ScratchGuard(output_dir.clone());
 
     let first = run_with_paths(
@@ -2517,6 +2517,23 @@ fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as
         std::fs::read(generation.join(format!("{}.rgb", scene.name()))).unwrap(),
         b"rgb-bytes",
         "the pointer in the held directory names the generation beside it"
+    );
+}
+
+/// The pack fixture is created with `create_new`: a symlink already at its
+/// name is refused and its target is left untouched.
+#[cfg(unix)]
+#[test]
+fn write_pack_does_not_follow_a_planted_symlink() {
+    let base = crate::test_support::private_dir("planted");
+    let victim = base.join("victim");
+    std::fs::write(&victim, b"precious").unwrap();
+    std::os::unix::fs::symlink(&victim, base.join("planted.pack")).unwrap();
+    assert!(write_pack_in(&base, "planted").is_err());
+    assert_eq!(
+        std::fs::read(&victim).unwrap(),
+        b"precious",
+        "write_pack followed a planted symlink"
     );
 }
 
