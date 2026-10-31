@@ -1698,3 +1698,26 @@ fn title_confirm_freezes_clouds_but_not_sprites_on_the_press_frame() {
         );
     }
 }
+
+/// `Task_HandleMainMenuInput` checks B ahead of the D-pad
+/// (`main_menu.c:895-902`): B, alone or with Down, begins the white fade
+/// back to the title on either boot-menu type, never staying or navigating.
+#[test]
+fn main_menu_b_leaves_the_menu_on_both_types() {
+    for menu_type in [MainMenuType::NoSavedGame, MainMenuType::SavedGame] {
+        for keys in [Buttons::B, Buttons::B | Buttons::DOWN] {
+            let (_temp, mut save_slot) = empty_slot("b-cancel");
+            let scene = pack_free_menu(menu_type, &mut save_slot);
+            let (next, _) = advance_scene(
+                scene,
+                pressed(keys),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
+            assert!(
+                !matches!(next, AppScene::MainMenu(_) | AppScene::MainMenuHighlight(_)),
+                "{menu_type:?} with {keys:?} must take the B cancel path"
+            );
+        }
+    }
+}

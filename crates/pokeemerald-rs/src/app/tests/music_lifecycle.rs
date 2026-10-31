@@ -6,6 +6,11 @@ use crate::music::MusicError;
 use assets::pack::PackError;
 use platform::Buttons;
 
+/// Frames `CB2_InitTitleScreen` runs before `MainCB2` (S0..S34), and the one
+/// whose state starts `MUS_TITLE`.
+const TITLE_INIT_FRAMES: usize = 35;
+const MUSIC_FRAME: usize = 4;
+
 /// S-3 (issue #185): a synthetic, pack-free song that loops forever via its
 /// own `Goto` -- exactly like a real BGM (see `crate::music`'s module docs
 /// on why continuous playback needs no extra restart logic beyond a song's
@@ -344,11 +349,21 @@ fn the_fading_player_outlives_its_empty_ring_by_the_device_tail() {
 fn real_pack_boot_starts_title_music_and_sustains_it_without_underrun() {
     let mut app = App::new_headless_real_title().expect("run `cargo xtask extract` first");
     assert!(
-        app.has_music_for_test(),
-        "App::boot must have started mus_title against the real pack + null audio backend"
+        !app.has_music_for_test(),
+        "construction runs no callback frame, so mus_title has not started"
     );
 
+    // `CB2_InitTitleScreen` starts `MUS_TITLE` on state 4, the fifth step.
     let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    for step in 0..MUSIC_FRAME {
+        app.step().expect("headless step never errors");
+        assert!(!app.has_music_for_test(), "S{step}: before state 4");
+    }
+    app.step().expect("headless step never errors");
+    assert!(
+        app.has_music_for_test(),
+        "S{MUSIC_FRAME} must start mus_title against the real pack + null audio backend"
+    );
     for _ in 0..120 {
         app.step().expect("headless step never errors");
         app.drain_music_for_test(&mut drained);
@@ -403,9 +418,14 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
     let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
         .expect("null backend never errors");
-    app.attach_music_for_test(music);
 
     let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    // The initializer first: a press before `MainCB2` runs is ignored.
+    for _ in 0..TITLE_INIT_FRAMES {
+        app.step().unwrap();
+    }
+    assert!(matches!(app.scene, Some(crate::flow::AppScene::Title(_))));
+    app.attach_music_for_test(music);
     app.set_headless_buttons(Buttons::START).unwrap();
     app.step().unwrap();
     app.drain_music_for_test(&mut drained);
@@ -432,4 +452,124 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
         music.is_some(),
         music.map(crate::music::MusicPlayer::fade_finished)
     );
+}
+
+/// B on the main menu returns to the title and `CB2_InitTitleScreen` starts
+/// `MUS_TITLE` again (`pokeemerald/src/title_screen.c:661`), even though the
+/// first title music faded out and was dropped on the way to the menu.
+///
+/// Needs the real pack, so it is `#[ignore]`d and runs in CI's `real-pack` job.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn main_menu_b_restarts_the_title_music_on_the_returning_title() {
+    use crate::flow::AppScene;
+
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let mut save_slot = SaveSlot::disabled();
+    let mut app = App::assemble(
+        platform::Platform::new_headless(),
+        crate::app::compose_title_scene(title_scene, &mut save_slot),
+        save_slot,
+        crate::pack_source::PackSource::Repo,
+    );
+    app.title_audio = crate::app::TitleAudio::Null;
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    let mut step = |app: &mut App, buttons: Buttons| {
+        app.set_headless_buttons(buttons).unwrap();
+        app.step().unwrap();
+        app.drain_music_for_test(&mut drained);
+    };
+
+    for _ in 0..TITLE_INIT_FRAMES {
+        step(&mut app, Buttons::NONE);
+    }
+    step(&mut app, Buttons::START);
+    for _ in 0..600 {
+        step(&mut app, Buttons::NONE);
+    }
+    assert!(matches!(app.scene, Some(AppScene::MainMenu(_))));
+    assert!(
+        !app.has_music_for_test(),
+        "the title music has faded out and dropped by the menu"
+    );
+
+    step(&mut app, Buttons::B);
+    for _ in 0..40 {
+        step(&mut app, Buttons::NONE);
+        if matches!(app.scene, Some(AppScene::TitleInit(_))) {
+            break;
+        }
+    }
+    // The returning title's initializer: no music through states 0 to 3,
+    // `MUS_TITLE` on state 4, and the title then plays it.
+    for frame in 0..TITLE_INIT_FRAMES {
+        let Some(AppScene::TitleInit(init)) = &app.scene else {
+            panic!("S{frame}: the initializer must still be running");
+        };
+        assert_eq!(usize::from(init.next_step()), frame);
+        step(&mut app, Buttons::NONE);
+        assert_eq!(
+            app.has_music_for_test(),
+            frame >= MUSIC_FRAME,
+            "S{frame}: mus_title starts on state 4"
+        );
+    }
+    assert!(matches!(app.scene, Some(AppScene::Title(_))));
+    for _ in 0..200 {
+        step(&mut app, Buttons::NONE);
+    }
+    assert!(matches!(app.scene, Some(AppScene::Title(_))));
+    assert!(
+        app.music.as_ref().is_some_and(|m| !m.fade_finished()),
+        "the returning title must have its music playing again"
+    );
+}
+
+/// Pack-free timing of the restart: `CB2_InitTitleScreen`'s state 4 replaces
+/// whatever player is running with `MUS_TITLE`
+/// (`pokeemerald/src/title_screen.c:662`), neither earlier nor later. The
+/// synthetic pack has no `mus_title`, so the replacement shows as the
+/// outgoing player being released on the fifth step (the failed start is
+/// logged, not retried).
+#[test]
+fn the_title_music_restarts_on_the_fifth_initializer_frame() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-2799-music-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::pack_test_support::write_scratch_exclusive(
+        &path,
+        crate::pack_test_support::pack_bytes(crate::pack_test_support::synthetic_title_entries()),
+    );
+    let pack = assets::AssetPack::load(&path).expect("the synthetic pack loads");
+    let title = crate::title::TitleScene::from_pack(&pack).expect("the synthetic title decodes");
+    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let mut save_slot = SaveSlot::disabled();
+    let mut app = App::assemble(
+        platform::Platform::new_headless(),
+        crate::app::compose_title_scene(title, &mut save_slot),
+        save_slot,
+        crate::pack_source::PackSource::Test(leaked),
+    );
+    app.title_audio = crate::app::TitleAudio::Null;
+    let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
+    app.attach_music_for_test(
+        crate::music::MusicPlayer::start(looping_song_for_test(), output)
+            .expect("null backend never errors"),
+    );
+
+    for step in 0..MUSIC_FRAME {
+        app.step().unwrap();
+        assert!(
+            app.has_music_for_test(),
+            "S{step}: the outgoing player stays"
+        );
+    }
+    app.step().unwrap();
+    assert!(
+        !app.has_music_for_test(),
+        "S{MUSIC_FRAME}: the title music replaces it"
+    );
+    drop(std::fs::remove_file(&path));
 }

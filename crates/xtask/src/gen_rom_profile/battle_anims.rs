@@ -21,6 +21,8 @@
 //!    every use, and two templates or two tasks never share one.
 //! 4. The importer's own reader runs over the finished plan and must yield the
 //!    pack's payload byte for byte.
+//! 5. The report asks the map to name each table, template, and task at its
+//!    address, which is the only check of a name against the ROM.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -85,7 +87,31 @@ pub fn locate(
     let bindings = place_programs(ctx, &expected, &tables)?;
     let plan = bindings.plan(&expected, tables)?;
     check_plan(ctx, &plan, payload)?;
+    report_symbols(&plan, report);
     Ok(plan)
+}
+
+/// Ask the map to name each bound template and task at its address.
+///
+/// The roundtrip in [`check_plan`] resolves pointers through the names just
+/// bound, so only the map can tell a renamed global from the original. A map
+/// lists a task function at its even address, without the Thumb bit its
+/// operand carries.
+fn report_symbols(plan: &BattleAnimationPlan, report: &mut Vec<ReportLine>) {
+    let lines = |kind: &str, symbols: &[AnimSymbolPlan], clear_thumb: bool| {
+        symbols
+            .iter()
+            .map(|AnimSymbolPlan { symbol, addr }| {
+                let addr = if clear_thumb { addr & !1 } else { *addr };
+                ReportLine::unique(PACK_ID, addr, 0)
+                    .with(Resolution::StructDerived)
+                    .symbol(symbol.as_str())
+                    .note(format!("{kind} bound by the scripts"))
+            })
+            .collect::<Vec<_>>()
+    };
+    report.extend(lines("template", &plan.templates, false));
+    report.extend(lines("task", &plan.tasks, true));
 }
 
 fn mismatch(id: &str, reason: String) -> GenRomProfileError {

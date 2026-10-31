@@ -25,7 +25,10 @@
 //! [`AppScene::MainMenuFadeWait`] for the waiting states themselves. The
 //! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
 //! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
-//! (`main_menu.c:583-608`).
+//! (`main_menu.c:583-608`). A fresh B on the main menu (checked after A, ahead
+//! of the D-pad) takes the same wait toward white and, once done, installs
+//! `CB2_InitTitleScreen` (`main_menu.c:895-902,1109-1120`), which
+//! [`AppScene::TitleInit`] runs on both entries to the title.
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -36,10 +39,10 @@
 //! Two points, both taking the session's [`SaveSlot`] as an argument rather
 //! than reaching for a global `(oop-boundaries)`:
 //!
-//! * **Read**, at boot, before the title ([`AnimatedTitle::boot`], as
-//!   upstream's copyright screen does): the title scenes carry the loaded save,
-//!   and on `Title` -> `MainMenu` [`menu_type_for`] turns its `gSaveFileStatus` into the item list to
-//!   show, so a valid save produces upstream's `HAS_SAVED_GAME` menu with
+//! * **Read**, at boot, before the title ([`boot_save`], as upstream's
+//!   copyright screen does): the title scenes carry the loaded save, and on
+//!   `Title` -> `MainMenu` [`menu_type_for`] turns its `gSaveFileStatus` into
+//!   the item list to show, so a valid save produces upstream's `HAS_SAVED_GAME` menu with
 //!   `CONTINUE` on it while anything else falls back to `HAS_NO_SAVED_GAME`.
 //!   The loaded blocks ride along in [`MainMenuState`] until
 //!   [`MainMenuAction::Continue`] hands them to
@@ -68,6 +71,8 @@ use fade_wait::{
     advance_title_fade_wait, MainMenuFadeIn, MainMenuFadeWait, TitleFadeWait,
 };
 use options::{advance_options, OptionsState};
+use title_init::advance_title_init;
+pub(crate) use title_init::TitleInit;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
@@ -117,6 +122,11 @@ pub(crate) mod route103_rival;
 /// The boot-loaded button mode on the title scenes (I-6).
 #[cfg(test)]
 mod title_button_mode_tests;
+/// `CB2_InitTitleScreen`'s setup frames and white fade-in on both entries to
+/// the title (I-2) -- this module's own docs.
+mod title_init;
+#[cfg(test)]
+mod title_init_tests;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
@@ -178,6 +188,12 @@ mod save_continue_window_frame_tests;
 #[cfg(test)]
 mod start_menu_tests;
 
+/// The main menu's B path back to the title (I-2): priority against A and
+/// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own
+/// module for the same reason as its siblings `(oop-boundaries)`.
+#[cfg(test)]
+mod main_menu_back_tests;
+
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
 /// scene, the tick most recently composed, and whether that frame has been
@@ -189,26 +205,39 @@ pub(crate) struct AnimatedTitle {
     pub(crate) scene: TitleScene,
     pub(crate) tick: u32,
     pub(crate) presented: bool,
-    /// The save the boot load recovered, boot defaults applied. Upstream reads
-    /// it during the copyright screen (`pokeemerald/src/intro.c:1147-1156`),
-    /// before the title screen and its `ReadKeys` (`main.c:279-288`), so the
-    /// title scenes carry its `optionsButtonMode` and the `Title` ->
-    /// `MainMenu` handoff hands the same blocks on instead of loading again.
+    /// The session save the title carries: the boot load's, with boot defaults
+    /// applied, or the live one a main-menu B carried back
+    /// (`pokeemerald/src/main_menu.c:1109-1120`: `gSaveBlock2Ptr` and
+    /// `gSaveFileStatus` outlive the menu, so settings committed in OPTION
+    /// survive the round trip). Upstream reads the boot save during the
+    /// copyright screen (`pokeemerald/src/intro.c:1147-1156`), before the title
+    /// screen and its `ReadKeys` (`main.c:279-288`), so the title scenes carry
+    /// its `optionsButtonMode` and the `Title` -> `MainMenu` handoff hands the
+    /// same blocks on instead of loading again.
     pub(crate) saved: SavedGame,
 }
 
 impl AnimatedTitle {
-    /// The fresh, un-presented title at tick 0, after the boot load of
-    /// `save_slot` (module docs on [`AnimatedTitle::saved`]).
-    pub(crate) fn boot(scene: TitleScene, save_slot: &mut SaveSlot) -> Self {
-        let mut saved = save_slot.load();
-        apply_boot_defaults(&mut saved);
+    /// The fresh, un-presented title at tick 0 carrying `saved`.
+    pub(crate) const fn new(scene: TitleScene, saved: SavedGame) -> Self {
         Self {
             scene,
             tick: 0,
             presented: false,
             saved,
         }
+    }
+
+    /// The fresh title after the boot load of `save_slot` ([`boot_save`]), as
+    /// [`TitleInit::boot`] does for the production boot.
+    #[cfg(test)]
+    pub(crate) fn boot(scene: TitleScene, save_slot: &mut SaveSlot) -> Self {
+        Self::new(scene, boot_save(save_slot))
+    }
+
+    /// The carried save's `optionsButtonMode` ([`AppScene::button_mode`]).
+    fn button_mode(&self) -> ButtonMode {
+        self.saved.block2.options_button_mode
     }
 }
 
@@ -220,6 +249,11 @@ impl AnimatedTitle {
 /// itself stays cheap to move around
 /// (`clippy::large_enum_variant`).
 pub(crate) enum AppScene {
+    /// `CB2_InitTitleScreen` running its setup frames and white fade-in over
+    /// the loaded title, on a fresh boot and after the main menu's B (I-2).
+    /// Input is ignored until it installs `MainCB2`, which becomes
+    /// [`AppScene::Title`].
+    TitleInit(Box<TitleInit>),
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
@@ -273,13 +307,40 @@ pub(crate) enum AppScene {
 }
 
 impl AppScene {
+    /// Whether this scene is the main menu's white fade back to the title
+    /// (B, `pokeemerald/src/main_menu.c:895-902`).
+    #[cfg(test)]
+    pub(crate) const fn returns_to_title(&self) -> bool {
+        matches!(self, Self::MainMenuFadeWait(wait) if wait.returns_to_title())
+    }
+
+    /// Whether this scene's next frame is `CB2_InitTitleScreen`'s state 4,
+    /// which starts `MUS_TITLE` (`pokeemerald/src/title_screen.c:662`). The
+    /// app starts the title music on the frame that follows a `true` here.
+    pub(crate) const fn starts_title_music(&self) -> bool {
+        matches!(self, Self::TitleInit(init) if init.starts_title_music())
+    }
+
+    /// Whether the title music, once started, should keep playing: the
+    /// settled title, and the initializer from the frame after state 4.
+    pub(crate) const fn holds_title_music(&self) -> bool {
+        match self {
+            Self::Title(_) => true,
+            Self::TitleInit(init) => init.title_music_started(),
+            _ => false,
+        }
+    }
+
     /// The `optionsButtonMode` this scene's save carries
     /// (`pokeemerald/src/main.c:279-288`'s source). The title scenes carry the
-    /// boot load's save ([`AnimatedTitle::saved`]), as upstream reads it during
-    /// the copyright screen (`intro.c:1147-1156`). The intro carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
+    /// save ([`AnimatedTitle::saved`]): the boot load's, as upstream reads it
+    /// during the copyright screen (`intro.c:1147-1156`), so L=A already applies
+    /// on the title; or the live one a main-menu B returned with. The intro
+    /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
     fn button_mode(&self) -> ButtonMode {
         match self {
-            Self::Title(title) => title.saved.block2.options_button_mode,
+            Self::TitleInit(init) => init.button_mode(),
+            Self::Title(title) => title.button_mode(),
             Self::TitleFadeWait(wait) => wait.button_mode(),
             Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
                 state.saved.block2.options_button_mode
@@ -326,11 +387,20 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
+/// The boot load of `save_slot`, before the title's first frame: upstream's
+/// `LoadGameSave(SAVE_NORMAL)` and the `Empty`/`Corrupt` defaulting in
+/// `CB2_InitCopyrightScreenAfterBootup` (`pokeemerald/src/intro.c:1147-1159`).
+pub(crate) fn boot_save(save_slot: &mut SaveSlot) -> SavedGame {
+    let mut saved = save_slot.load();
+    apply_boot_defaults(&mut saved);
+    saved
+}
+
 /// `SetDefaultOptions` (`new_game.c:91-98`) for the boot verdicts that clear
 /// `SaveBlock2` -- exactly [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s
 /// `Empty`/`Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`), even when a
 /// checksum-valid block was recovered. Run once, as the boot load lands in
-/// [`AnimatedTitle::boot`], so the block the Options screen edits is the live
+/// [`boot_save`], so the block the Options screen edits is the live
 /// one: upstream defaults only at boot, never again on each read.
 fn apply_boot_defaults(saved: &mut SavedGame) {
     if saved.status.boot_clears_save_block2() {
@@ -499,7 +569,7 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 /// `MainMenuState`. Upstream reads the save before the title ever draws
 /// (`CB2_InitCopyrightScreenAfterBootup`, `src/intro.c:1147-1159`) and parks
 /// the verdict in `gSaveFileStatus` for `Task_MainMenuCheckSaveFile`; here
-/// [`AnimatedTitle::boot`] does that read and the title carries the result.
+/// [`boot_save`] does that read and the title carries the result.
 ///
 /// Returns the title back as `Err`, after logging, if the pack load fails --
 /// the caller stays on the title screen.
@@ -559,7 +629,7 @@ fn load_menu_for(
 /// frame.
 ///
 /// `save_slot` is this session's save medium ([`SaveSlot`]). The boot load
-/// ([`AnimatedTitle::boot`]) already read it before the title, so the `Title`
+/// ([`boot_save`]) already read it before the title, so the `Title`
 /// -> `MainMenu` transition hands that save on, and the `Overworld` arm hands it to
 /// [`OverworldPhase::advance_start_menu_frame`], the *only* write side
 /// (module docs).
@@ -585,6 +655,7 @@ pub(crate) fn advance_scene(
         buttons
     };
     match scene {
+        AppScene::TitleInit(init) => advance_title_init(init),
         AppScene::Title(title) => advance_title(title, buttons),
         AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),

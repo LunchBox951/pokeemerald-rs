@@ -10,8 +10,8 @@
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
 use crate::ability::{
-    huge_power_attack, pinch_boosts_power, plus_minus_special_attack, suppresses_critical_hits,
-    thick_fat_special_attack,
+    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
+    suppresses_critical_hits, thick_fat_special_attack,
 };
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
@@ -312,7 +312,7 @@ fn damage_input(
         attack_stage,
         defense_stat: defense,
         defense_stage,
-        attacker_burned: false,
+        attacker_burned: burn_halves_damage(attacker.ability(), attacker.status1()),
         reflect: false,
         light_screen: false,
         weather: Weather::None,
