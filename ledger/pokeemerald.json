@@ -31870,6 +31870,36 @@
     },
     "src/naming_screen.c": {
       "artifacts": {
+        "CreateSprites": {
+          "reason": "CreateSprites (naming_screen.c:1110-1116) with CreateCursorSprite, CreatePageSwapButtonSprites, CreateBackOkSprites, CreateTextEntrySprites and the sprite templates and subsprite tables (:1119-1364, :2140-2519): the cursor, page-swap frame, label and fill, Back, OK, input arrow, and underscores at their settled positions, banks and priorities as OAM entries, with the cursor semi-transparent. Not modelled: the invisible-until-slide-on state, SpriteCB_PageSwap, SpriteCB_Cursor flashing, the arrow and underscore bob callbacks (callers pass offsets), the input-target icon other than the player's, and CreateSprites' call order.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawBgTilemap": {
+          "reason": "DrawBgTilemap (naming_screen.c:1888-1891): the 32x20 background, upper, lower, and symbols tilemaps copied into a BG tilemap buffer, rewritten as NamingScene's decoded tilemaps padded to the 32x32 screenblock; each frame overlays the window tiles PutWindowTilemap writes.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "DrawKeyboardPageOnDeck": {
+          "reason": "DrawKeyboardPageOnDeck (naming_screen.c:1961-1996): modelled as PageSelection, which pairs the visible page with KeyboardPage::next on the other keyboard layer and draws both (sPageToNextKeyboardId, sNextKeyboardPageTilemaps, :584-603, :1951-1959). Not modelled: choosing the hidden layer from the BG1CNT and BG2CNT priorities, the swap animation and its priority exchange, and the call timing; the caller states which layer is in front.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawTextEntry": {
+          "reason": "DrawTextEntry (naming_screen.c:1898-1920): the entry window filled with 1 and each slot's character printed in FONT_NORMAL at inputCharBaseXPos - 0x40 + 8 * i, y 1, in the default font colours, as NamingScene's entry window. Not modelled: IsWideLetter (always false upstream), the gender icon (TryDrawGenderIcon), and the entry state itself, which the caller supplies.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawTextEntryBox": {
+          "reason": "DrawTextEntryBox (naming_screen.c:1704-1735): the title window filled with 1 and the title printed at (8, 1), as DrawNormalTextEntryBox for the player template's YOUR NAME? title. Not modelled: DrawMonTextEntryBox's species-name prefix and the box and Walda titles.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "HandleDpadMovement": {
           "reason": "HandleDpadMovement (naming_screen.c:1602-1698) rewritten in NamingScreenModel::read_dpad: sequential Up/Down/Left/Right test with the last match winning, horizontal wrap through the button column, the key-row/button-row mapping with the remembered tButtonId row (including its BUTTON_BACK/BUTTON_OK overwrite quirk), and vertical wrap per column kind. The screen-local 16-frame initial repeat set in NamingScreen_Init (:465-484) and the 5-frame continued repeat of ReadKeys (main.c:250-290) are modelled by a per-screen key-repeat counter that advances on every frame, including locked ones (issue #1854).",
           "rust_target": "crates/pokeemerald-rs/src/naming.rs",
@@ -31882,11 +31912,53 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "LoadPalettes": {
+          "reason": "LoadPalettes (naming_screen.c:1881-1886): the six gNamingScreenMenu_Pal rows into background banks 0-5, keyboard.pal into bank 10, and text-window palette 2 into bank 11, rewritten as the background palette NamingScene builds from NamingScreenHandle::menu_palette_banks. The matching object banks (the sSpritePalettes allocation: menu 0-5, buttons again at 6 and 7, the avatar at 8) are built beside it.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "MainState_FadeIn": {
+          "reason": "MainState_FadeIn (naming_screen.c:620-638): the initial still arrangement is modelled as PageSelection::initial and NamingScene::render: the background, lower and upper tilemaps, both keyboard windows, the entry and title, and the controls banner, with upper visible on BG1 and lower prepared on BG2. Not modelled: the palette fade-in, the state advance, the VRAM copies, and the sprite creation order.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "NamingScreen_CreatePlayerIcon": {
+          "reason": "NamingScreen_CreatePlayerIcon (naming_screen.c:1396-1405): the rival graphic of the player's own gender (Brendan or May) at (56, 37), OAM priority 3, on frame 3 that ANIM_STD_GO_SOUTH starts on, as the NamingAvatar sprite. Not modelled: GetRivalAvatarGraphicsIdByStateIdAndGender (the caller picks the avatar), the walking animation, and the other input-target icons.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "NamingScreen_InitBGs": {
+          "reason": "NamingScreen_InitBGs (naming_screen.c:497-535) with sBgTemplates and sWindowTemplates (:200-276): the five windows' tile rectangles, base blocks and palette banks, the BG priorities 0, 1, 2, 3 with the keyboard pair exchanging 1 and 2, and BLDCNT target 2 on BG1 and BG2 with BLDALPHA 12 and 8, as NamingScene's layers and effects. Not modelled: DISPCNT and GPU register writes, tilemap-buffer allocation, scroll resets, and the standard window and tile loading.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "PrintControls": {
+          "reason": "PrintControls (naming_screen.c:1998-2006): the banner window filled with 15 and gText_MoveOkBack printed in FONT_SMALL at (2, 1), white on dark gray, in bank 11. Not modelled: the D-pad, A and B keypad icons, whose keypad_icons art is not in the asset pack; the banner reserves each icon's 8 pixels and draws only the words.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "PrintKeyboardKeys": {
+          "reason": "PrintKeyboardKeys (naming_screen.c:1927-1959) with sFillValues and the sNamingScreenKeyboardText rows of text_input_strings.c:10-21, rewritten as NamingScene's per-page 152x64 window: page fill (13 upper, 14 lower, 15 symbols), white-on-dark-gray FONT_NORMAL rows at y = 16 * row + 1, the {CLEAR n} gaps of KeyboardPage::clear_gaps, and sPageColumnXPos as KeyboardPage::column_x_offsets in page_spec.rs. Printed through the engine Printer with every glyph revealed at once.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "SaveInputText": {
           "reason": "SaveInputText (naming_screen.c:1850-1863) rewritten in NamingScreenModel::confirm: the entry replaces the caller's seeded destination unless every entered character is blank (space or EOS); the confirmed value is returned and no intro or save state is touched (issue #1854). MainState_PressedOKButton's party-full PC message belongs to the CAUGHT_MON template, which this model does not serve.",
           "rust_target": "crates/pokeemerald-rs/src/naming.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "SetCursorPos": {
+          "reason": "SetCursorPos (naming_screen.c:1130-1144): the sprite centre at sPageColumnXPos[column] + 38 and row * 16 + 88, and the hidden button column, as KeyboardPage::cursor_center. Not modelled: the sX, sY, sPrevX and sPrevY bookkeeping, which the caller's cursor model owns.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/page_spec.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         }
       },
       "category": "code.source",
