@@ -162,6 +162,7 @@ fn xcmd_iecv_and_iecl_extend_a_cgb_voices_lifetime() {
                 release: 0,
             },
             fixed_rate: false,
+            length: 0,
         })];
         let song = Song::new(voices, vec![make_track(with_echo)], 150);
         let mut seq = Sequencer::new(song);

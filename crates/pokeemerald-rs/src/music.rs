@@ -224,6 +224,7 @@ fn convert_square1(v: &Square1Voice) -> Instrument {
         sweep: v.sweep,
         adsr: convert_cgb_envelope(v.envelope),
         fixed_rate: v.fixed_rate,
+        length: v.length,
     })
 }
 
@@ -233,6 +234,7 @@ fn convert_square2(v: &Square2Voice) -> Instrument {
         sweep: UNUSED_SQUARE_2_SWEEP,
         adsr: convert_cgb_envelope(v.envelope),
         fixed_rate: v.fixed_rate,
+        length: v.length,
     })
 }
 
@@ -240,6 +242,7 @@ fn convert_noise(v: &NoiseVoice) -> Instrument {
     Instrument::CgbNoise(NoiseTone {
         lfsr_width_selector: v.period,
         adsr: convert_cgb_envelope(v.envelope),
+        length: v.length,
     })
 }
 

@@ -538,6 +538,7 @@ fn a_terminal_fade_step_retires_a_sustained_cgb_voice() {
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let track = vec![Event::Voice(0), tied_note(60), Event::Wait(200)];
     let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));

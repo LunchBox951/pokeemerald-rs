@@ -200,6 +200,7 @@ fn cgb_note_resets_modulation_only_after_allocation() {
             sweep: 0,
             adsr: CgbAdsr::flat(),
             fixed_rate: false,
+            length: 0,
         }),
     ];
     let song = Song::new(instruments, vec![vec![], vec![]], 150);
@@ -253,6 +254,7 @@ fn accepted_cgb_sweep_note_uses_reset_pitch_modulation() {
         sweep: ADDING_SWEEP_PERIOD_1_SHIFT_1,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let song = Song::new(instruments, vec![vec![]], 150);
     let mut seq = Sequencer::new(song);
