@@ -366,20 +366,31 @@ fn claim_unwind_pack() -> TempPackGuard {
 
 #[test]
 fn temp_pack_cleanup_is_unwind_safe() {
-    let path = unwind_pack_path();
+    const DELIBERATE: &str = "deliberate panic to exercise temporary pack cleanup";
 
-    let result = std::panic::catch_unwind(|| {
-        let temp_pack = claim_unwind_pack();
-        assert!(temp_pack.path().exists());
+    // Setup runs outside the unwind catch so a fixture failure fails the test
+    // instead of being mistaken for the deliberate panic.
+    let temp_pack = claim_unwind_pack();
+    let path = temp_pack.path().to_path_buf();
+    assert!(path.exists(), "the scratch pack must exist while in scope");
+
+    let result = std::panic::catch_unwind(move || {
+        let _temp_pack = temp_pack;
         panic!("deliberate panic to exercise temporary pack cleanup");
     });
 
-    assert!(result.is_err(), "the deliberate panic must be observed");
+    let payload = result.expect_err("the deliberate panic must be observed");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some(DELIBERATE),
+        "the unwind must come from the deliberate panic"
+    );
     assert!(!path.exists(), "temporary pack must be removed on unwind");
 }
 
 /// A symlink or an occupied file planted at a main-menu scratch pack's
-/// predictable path must be replaced, never written through or truncated.
+/// predictable path must be refused and left intact, never written through,
+/// truncated, or unlinked.
 #[test]
 fn the_main_menu_scratch_packs_never_write_through_a_planted_entry() {
     let font_index = TRANSPARENT_FONT_INDEX;
