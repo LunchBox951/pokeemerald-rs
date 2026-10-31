@@ -7,15 +7,16 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, field_messages, fonts,
-    inventory, layouts, locate_profile, opening_scene, sprites, starter_chooser, text_window,
-    tilesets, title,
+    bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
+    field_messages, fonts, inventory, layouts, locate_profile, opening_scene, sprites,
+    starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
-    healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
-    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
+    healthbox_frame_ids, healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids,
+    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
+    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -41,6 +42,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
         .chain(opening_scene_ids())
+        .chain(evolution_scene_ids())
         .chain(battle_interface_ids())
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
@@ -78,6 +80,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             starter_chooser::locate(ctx, &mut report).map(|_| ())
         } else if domain == "opening_scene" {
             opening_scene::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "evolution_scene" {
+            evolution_scene::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_interface" {
             battle_interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
@@ -136,6 +140,7 @@ fn the_fixed_inventory_ids_are_unique() {
         title_ids(),
         starter_chooser_ids(),
         opening_scene_ids(),
+        evolution_scene_ids(),
         battle_interface_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -383,6 +388,24 @@ fn a_surplus_opening_scene_entry_is_refused_by_id() {
 }
 
 #[test]
+fn the_evolution_scene_inventory_is_two_images_three_palettes_and_two_tilemaps() {
+    let ids = evolution_scene_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 7);
+    assert_eq!(count("evolution-scene/image/"), 2);
+    assert_eq!(count("evolution-scene/palette/"), 3);
+    assert_eq!(count("evolution-scene/raw/"), 2);
+}
+
+#[test]
+fn a_pack_missing_an_evolution_scene_entry_is_refused() {
+    for id in evolution_scene_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "evolution_scene");
+    }
+}
+
+#[test]
 fn a_pack_missing_a_battle_interface_entry_is_refused() {
     for id in battle_interface_ids()
         .into_iter()
@@ -392,6 +415,30 @@ fn a_pack_missing_a_battle_interface_entry_is_refused() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battle_interface");
     }
+}
+
+#[test]
+fn a_surplus_evolution_scene_entry_is_refused_by_id() {
+    let surplus = "evolution-scene/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-evolution-scene", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = evolution_scene::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
 }
 
 #[test]

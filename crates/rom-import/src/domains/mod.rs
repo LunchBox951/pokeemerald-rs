@@ -29,6 +29,7 @@ pub(crate) mod battle_anim;
 pub(crate) mod battle_interface;
 pub(crate) mod battle_messages;
 pub(crate) mod battlers;
+pub(crate) mod evolution_scene;
 pub(crate) mod field_messages;
 pub(crate) mod fonts;
 pub(crate) mod interface;
@@ -72,6 +73,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     bag::write,
     starter_choose::write,
     opening_scene::write,
+    evolution_scene::write,
     battle_interface::write,
     battlers::write,
 ];

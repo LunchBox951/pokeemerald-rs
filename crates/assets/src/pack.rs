@@ -11,6 +11,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod evolution_scene;
 mod field_message;
 mod format;
 mod handles;
@@ -44,6 +45,7 @@ pub use battle_message::{
 };
 pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
+pub use evolution_scene::EvolutionSceneHandle;
 pub use field_message::{FieldMessage, FieldMessageError, FieldMessageTable, FIELD_MESSAGE_COUNT};
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
