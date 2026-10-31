@@ -636,8 +636,6 @@ mod tests {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality, ability) in [
-            (SpeciesId::SLAKOTH, SLOT_0, assets::AbilityId::TRUANT),
-            (SpeciesId::SLAKING, SLOT_1, assets::AbilityId::TRUANT),
             (SpeciesId::TAUROS, SLOT_1, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GYARADOS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GRANBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
@@ -708,6 +706,8 @@ mod tests {
             (SpeciesId::PARASECT, SLOT_1),
             (SpeciesId::SHROOMISH, SLOT_0),
             (SpeciesId::BRELOOM, SLOT_1),
+            (SpeciesId::SLAKOTH, SLOT_0),
+            (SpeciesId::SLAKING, SLOT_1),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,

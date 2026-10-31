@@ -458,7 +458,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     );
 }
 
-/// A Truant lead (`battle_util.c:2086-2097`) builds no Zigzagoon and leaves the
+/// An Intimidate lead (`battle_util.c:3003-3016`, a switch-in effect admission refuses) builds no Zigzagoon and leaves the
 /// rescue armed, so `CreateMon`'s draws are not spent on a refused battle.
 #[test]
 fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
@@ -469,9 +469,9 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
         Direction::East,
     ));
     phase.rng = Rng::new(4242);
-    let slakoth = BattlePokemon::new(
+    let mightyena = BattlePokemon::new(
         &Dex::new(),
-        assets::SpeciesId::SLAKOTH,
+        assets::SpeciesId::MIGHTYENA,
         5,
         Ivs {
             hp: MAX_IV,
@@ -484,14 +484,14 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
         0,
         vec![assets::MoveId::SCRATCH],
     )
-    .expect("Slakoth/Scratch must be in the dex");
+    .expect("Mightyena/Scratch must be in the dex");
     assert_eq!(
-        battle::ensure_participant_admissible(&slakoth),
+        battle::ensure_participant_admissible(&mightyena),
         Err(battle::BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
     );
-    phase.set_fresh_lead_for_test(slakoth);
+    phase.set_fresh_lead_for_test(mightyena);
 
     walk_one_tile_east(&mut phase);
 

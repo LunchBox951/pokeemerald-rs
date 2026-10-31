@@ -39,6 +39,8 @@ pub(crate) mod opponent_ai;
 mod switch_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
+#[cfg(test)]
+mod truant_tests;
 
 pub use battler_state::{BattlerSide, BattlerState, LastLandedMove, PerishSongTurns};
 pub use events::{BattleEvent, TurnError};
@@ -118,7 +120,7 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
-    /// Move history and Perish Song state per battler, `[player, enemy]`,
+    /// Move history, Perish Song and Truant state per battler, `[player, enemy]`,
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
 }
@@ -267,7 +269,7 @@ impl Battle {
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
-    /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
+    /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
     /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`].
@@ -504,7 +506,7 @@ impl Battle {
         }
     }
 
-    /// Returns a battler's move history and Perish Song state.
+    /// Returns a battler's move history, Perish Song and Truant state.
     #[must_use]
     pub const fn battler_state(&self, side: BattlerSide) -> &BattlerState {
         &self.battler_states[side.index()]
@@ -1018,6 +1020,7 @@ impl Battle {
                 continue;
             }
             self.apply_shed_skin_residual(is_player, rng, events);
+            self.apply_truant_residual(is_player);
             self.apply_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
@@ -1081,6 +1084,18 @@ impl Battle {
             by_player: is_player,
             status,
         });
+    }
+
+    /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_TRUANT` case: a living holder
+    /// toggles its loafing counter whether or not it acted this turn
+    /// (`pokeemerald/src/battle_util.c:2601`-`:2602`, `:2653`-`:2655`). It draws
+    /// nothing and reports nothing.
+    fn apply_truant_residual(&mut self, is_player: bool) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || battler.ability() != AbilityId::TRUANT {
+            return;
+        }
+        self.battler_states[BattlerSide::from_is_player(is_player).index()].toggle_truant();
     }
 
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
@@ -1219,6 +1234,10 @@ impl Battle {
         // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
         self.player.clear_battle_scratch();
         self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
+        // `Cmd_switchineffects` then sets an incoming Truant holder's counter
+        // (`battle_script_commands.c:5258`-`:5263`).
+        self.battler_states[BattlerSide::Player.index()]
+            .enter_field(self.player.ability() == AbilityId::TRUANT);
         self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::PlayerSentOut {
             species: self.player.species(),
@@ -1322,6 +1341,10 @@ impl Battle {
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
         self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
+        // `Cmd_switchineffects` then sets an incoming Truant holder's counter
+        // (`battle_script_commands.c:5258`-`:5263`).
+        self.battler_states[BattlerSide::Enemy.index()]
+            .enter_field(self.enemy.ability() == AbilityId::TRUANT);
         // `SwitchInClearSetData` zeroes `gCurrentMove` (`battle_main.c:3257`).
         self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::TrainerSentOut {
@@ -1349,8 +1372,8 @@ impl Battle {
         result
     }
 
-    /// Runs one battler's turn-order slot: the confusion decrement, the
-    /// full-paralysis draw, the Soundproof block, PP handling, then
+    /// Runs one battler's turn-order slot: the sleep decrement, the Truant
+    /// loafing gate, the confusion decrement, the full-paralysis draw, the Soundproof block, PP handling, then
     /// execution.
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
@@ -1393,6 +1416,9 @@ impl Battle {
                     by_player: player_is_attacker,
                 });
             }
+        }
+        if self.cancels_for_truant(player_is_attacker, move_id, events)? {
+            return Ok(());
         }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
@@ -1477,6 +1503,38 @@ impl Battle {
             }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// `CANCELER_TRUANT` follows sleep and precedes every later canceller
+    /// (`src/battle_util.c:2086`-`:2097`): a holder whose counter is set
+    /// loafs before the confusion and paralysis draws and PP handling.
+    /// `BattleScript_MoveUsedLoafingAround` runs `moveendto
+    /// MOVEEND_NEXT_TARGET`, which includes `MOVEEND_UPDATE_LAST_MOVES`, so
+    /// the cancelled move is recorded like sleep's. Returns whether the
+    /// action ended here.
+    fn cancels_for_truant(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let attacker = if player_is_attacker {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        let side = BattlerSide::from_is_player(player_is_attacker);
+        if attacker.ability() != AbilityId::TRUANT
+            || !self.battler_states[side.index()].truant_loafing()
+        {
+            return Ok(false);
+        }
+        events.push(BattleEvent::LoafingAround {
+            by_player: player_is_attacker,
+            move_id,
+        });
+        self.record_cancelled_move(player_is_attacker, move_id)?;
+        Ok(true)
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one

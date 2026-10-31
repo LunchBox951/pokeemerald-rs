@@ -46,10 +46,22 @@ pub enum BattleEvent {
     /// decrement, cancelling its chosen move before any PP was spent
     /// (`CANCELER_ASLEEP`, `src/battle_util.c:2015`-`:2057`).
     ///
-    /// This precedes the confusion and paralysis cancellers, which do not
-    /// run for the action.
+    /// This precedes the Truant, confusion and paralysis cancellers, which do
+    /// not run for the action.
     FastAsleep {
         /// Whether the player's battler is asleep.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A Truant holder loafed on its off turn, cancelling its chosen move
+    /// before any PP was spent (`CANCELER_TRUANT`,
+    /// `src/battle_util.c:2086`-`:2097`).
+    ///
+    /// Sleep is checked first; the confusion and paralysis cancellers and
+    /// every later draw do not run for the action.
+    LoafingAround {
+        /// Whether the player's battler loafed.
         by_player: bool,
         /// The move that was never attempted.
         move_id: MoveId,
