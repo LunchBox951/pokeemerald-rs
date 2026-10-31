@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::Fault;
 
 #[derive(Debug, Default)]
-pub(super) struct Charmap {
+pub(in crate::extract) struct Charmap {
     chars: HashMap<char, Vec<u8>>,
     escapes: HashMap<char, Vec<u8>>,
     constants: HashMap<String, Vec<u8>>,
@@ -47,7 +47,7 @@ fn hex_bytes(text: &str, line: usize) -> Result<Vec<u8>, Fault> {
 }
 
 impl Charmap {
-    pub(super) fn parse(text: &str) -> Result<Self, Fault> {
+    pub(in crate::extract) fn parse(text: &str) -> Result<Self, Fault> {
         let mut map = Self::default();
         for (index, raw) in text.lines().enumerate() {
             let line = index + 1;
@@ -98,7 +98,7 @@ impl Charmap {
     }
 
     /// Map one `_()` or `.string` literal body to charmap bytes (no terminator).
-    pub(super) fn convert(&self, body: &str, line: usize) -> Result<Vec<u8>, Fault> {
+    pub(in crate::extract) fn convert(&self, body: &str, line: usize) -> Result<Vec<u8>, Fault> {
         let c: Vec<char> = body.chars().collect();
         let mut out = Vec::new();
         let mut i = 0;
