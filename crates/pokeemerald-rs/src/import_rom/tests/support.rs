@@ -3,8 +3,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::scratch_dir_test_support::ScratchDir;
 use rom_import::fixture::RomFixture;
 use rom_import::ImportedPack;
 
@@ -14,35 +14,31 @@ pub(super) fn fake_pack(bytes: &[u8]) -> ImportedPack {
     ImportedPack::new(7, bytes.to_vec())
 }
 
-/// A temporary directory that removes itself, so a failing test cannot
-/// leave a 16 MiB fixture behind.
+/// A temporary directory that removes what the test put in it, so a failing
+/// test cannot leave a 16 MiB fixture behind.
+///
+/// It claims an exclusively created directory ([`ScratchDir`]), so a
+/// predictable shared-temp name never reaches a stranger's directory or a
+/// planted symlink, and its drop removes only the entries reached through
+/// [`TempDir::join`] before the directory itself. Derive every path a test
+/// or the importer creates from [`TempDir::join`]; an entry made behind its
+/// back is left in place, directory included.
 pub(crate) struct TempDir {
+    scratch: ScratchDir,
     pub(crate) path: PathBuf,
 }
 
 impl TempDir {
     /// A fresh, empty directory under the OS temporary directory.
     pub(crate) fn new(label: &str) -> Self {
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-import-{label}-{}-{unique}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("a temporary directory");
-        Self { path }
+        let scratch = ScratchDir::new(&format!("pokeemerald-rs-import-{label}"));
+        let path = scratch.path().to_path_buf();
+        Self { scratch, path }
     }
 
-    /// A path inside this directory.
-    pub(crate) fn join(&self, name: &str) -> PathBuf {
-        self.path.join(name)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+    /// A path inside this directory, recorded for cleanup.
+    pub(crate) fn join(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.scratch.join(name)
     }
 }
 
@@ -167,4 +163,27 @@ pub(crate) fn fill_descriptor_table_leaving(free: usize) -> Vec<fs::File> {
     );
     fillers.truncate(fillers.len() - free);
     fillers
+}
+
+#[test]
+fn a_temp_dir_never_reaches_a_stranger_or_planted_link_at_its_predictable_path() {
+    // The unfixed fixture named its directory `{prefix}-{pid}-{counter}` from
+    // a process-wide counter and deleted whatever sat there. The counter value
+    // this test would have drawn depends on which tests ran first, so a
+    // stranger is planted at every value a run can reach (the suite makes
+    // the whole lib suite draws at most 81 counter values, below LEGACY_COUNTER_SPAN).
+    const LEGACY_COUNTER_SPAN: u32 = 256;
+    let pid = std::process::id();
+    let legacy: Vec<String> = (0..LEGACY_COUNTER_SPAN)
+        .map(|n| format!("pokeemerald-rs-import-occupant-probe-{pid}-{n}"))
+        .collect();
+    crate::scratch_dir_test_support::assert_claim_spares_planted_occupants(
+        "pokeemerald-rs-import-occupant-probe",
+        &legacy,
+        || {
+            let dir = TempDir::new("occupant-probe");
+            let child = dir.join("probe");
+            (dir, child)
+        },
+    );
 }

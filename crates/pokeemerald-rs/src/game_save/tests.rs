@@ -5,6 +5,8 @@ use engine::save::{
     SECTOR_SIGNATURE, SECTOR_SIZE,
 };
 
+use crate::scratch_dir_test_support::ScratchDir;
+
 use super::{SaveFileStatus, SaveLineage, SaveSlot};
 
 const SAVEBLOCK2_SECTOR_ID: u16 = 0;
@@ -16,7 +18,7 @@ const OLDER_DEFERRED_BYTE: u8 = 0x11;
 const CURRENT_DEFERRED_BYTE: u8 = 0x5A;
 
 struct TempSave {
-    dir: std::path::PathBuf,
+    scratch: ScratchDir,
     path: std::path::PathBuf,
 }
 
@@ -27,16 +29,22 @@ impl TempSave {
     /// so scratch saves sharing one directory would serialise on a single
     /// lock -- and a test that removed it would strip the exclusion the
     /// others were relying on.
+    ///
+    /// The directory is exclusively claimed ([`ScratchDir`]), and its drop
+    /// removes only the entries reached through [`TempSave::join`] (the save
+    /// file included) before the directory itself, so a stranger's
+    /// directory at the predictable name is never reached.
     fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-game-save-{label}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
-        let path = dir.join("pokeemerald.sav");
-        Self { dir, path }
+        let scratch = ScratchDir::new(&format!("pokeemerald-rs-game-save-{label}"));
+        let path = scratch.join("pokeemerald.sav");
+        // The save's lock file, taken beside it by every store.
+        let _ = scratch.join(engine::save::LOCK_FILE_NAME);
+        Self { scratch, path }
+    }
+
+    /// A path inside the save's directory, recorded for cleanup.
+    fn join(&self, name: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.scratch.join(name)
     }
 
     fn slot(&self) -> SaveSlot {
@@ -44,10 +52,24 @@ impl TempSave {
     }
 }
 
-impl Drop for TempSave {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.dir));
-    }
+#[test]
+fn a_temp_save_never_reaches_a_stranger_or_planted_link_at_its_predictable_path() {
+    // The unfixed fixture named its directory `{prefix}-{pid}-{ThreadId}` and
+    // deleted whatever sat there, so a stranger is planted at that name too.
+    let legacy = format!(
+        "pokeemerald-rs-game-save-occupant-probe-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    );
+    crate::scratch_dir_test_support::assert_claim_spares_planted_occupants(
+        "pokeemerald-rs-game-save-occupant-probe",
+        &[legacy],
+        || {
+            let temp = TempSave::new("occupant-probe");
+            let child = temp.join("probe");
+            (temp, child)
+        },
+    );
 }
 
 fn no_flash_slot() -> SaveSlot {
@@ -529,7 +551,7 @@ fn storing_takes_the_inter_process_lock() {
 #[test]
 fn storing_through_the_production_entry_point_takes_the_save_file_lock() {
     let temp = TempSave::new("lock-entry-point-slot");
-    std::fs::create_dir(temp.dir.join(engine::save::LOCK_FILE_NAME))
+    std::fs::create_dir(temp.join(engine::save::LOCK_FILE_NAME))
         .expect("the scratch lock slot must be occupiable");
 
     let mut slot = temp.slot();

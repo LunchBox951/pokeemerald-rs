@@ -167,3 +167,8 @@ mod voicegroup_pack_tests;
 /// [`start_menu::palette_tests`].
 #[cfg(test)]
 mod pack_test_support;
+
+/// Exclusively claimed scratch directories shared by the `import_rom` and
+/// `game_save` test fixtures.
+#[cfg(test)]
+mod scratch_dir_test_support;
