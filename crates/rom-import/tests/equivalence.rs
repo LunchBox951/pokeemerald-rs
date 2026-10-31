@@ -36,9 +36,11 @@
 //! producer has not landed: the species-cry table and exactly the
 //! [`CRY_TABLE_LEN`] distinct samples it names, read from the checkout's own
 //! table. Only those ids are not required of the ROM backend; any other
-//! `audio/` id, including a stray one under the cry prefixes, stays required.
-//! The staging fails as soon as the ROM backend writes any staged id, so the
-//! producer's slice must remove it. Every other `audio/` id stays compared.
+//! `audio/sample/` id, including a stray one under the cry sample prefix, stays
+//! required. The staging fails as soon as the ROM backend writes any staged id,
+//! so the producer's slice must remove it. Every other `audio/voicegroup/` and
+//! `audio/sample/` id stays compared; the songs are pinned by
+//! [`ROM_IMPORTED_SONG_IDS`], not claimed by prefix.
 //!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
@@ -70,7 +72,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
-    "audio/",
+    "audio/voicegroup/",
+    "audio/sample/",
     "battle-message/",
     "field-message/",
     "battle-anim/",
@@ -78,6 +81,18 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "starter-chooser/",
     "opening-scene/",
 ];
+
+/// The only song the ROM backend imports, by id: its song root is the profile's lone
+/// `mus_title` entry. The checkout pack also carries every other checkpoint song, so
+/// `audio/song/` is not in [`COMPLETE_PREFIXES`]; a dropped title still fails by this id.
+const ROM_IMPORTED_SONG_IDS: [&str; 1] = ["audio/song/mus_title"];
+
+/// Whether the ROM backend claims every checkout entry with this id.
+fn is_claimed_complete(id: &str) -> bool {
+    COMPLETE_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
 /// in `gHealthboxElementsGfxTable` order, the battle bar, the singles
@@ -240,6 +255,30 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
 /// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
 
+/// A difference line for each of `ids` the ROM backend did not write.
+fn missing_imported<V>(ids: &[&str], imported: &BTreeMap<String, V>) -> Vec<String> {
+    ids.iter()
+        .filter(|id| !imported.contains_key(**id))
+        .map(|id| format!("{id}: the ROM backend wrote no such entry"))
+        .collect()
+}
+
+#[test]
+fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
+    assert!(is_claimed_complete("audio/voicegroup/title"));
+    assert!(is_claimed_complete(
+        "audio/sample/direct-sound/sc88pro_trumpet_60"
+    ));
+    for id in ROM_IMPORTED_SONG_IDS {
+        assert!(
+            !is_claimed_complete(id),
+            "{id} is pinned by id, not by prefix"
+        );
+    }
+    assert!(!is_claimed_complete("audio/song/se_select"));
+    assert!(!is_claimed_complete("audio/song/mus_vs_wild"));
+}
+
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
 fn the_rom_backend_matches_the_checkout_pack() {
@@ -302,10 +341,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     for id in checkout.keys() {
-        let claimed = COMPLETE_PREFIXES
-            .iter()
-            .any(|prefix| id.starts_with(prefix));
-        if claimed
+        if is_claimed_complete(id)
             && !staged.contains(id)
             && !imported.contains_key(id)
             && !reviewed.contains_key(id.as_str())
@@ -313,6 +349,10 @@ fn the_rom_backend_matches_the_checkout_pack() {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }
+
+    // `audio/song/` is not a complete prefix, so the imported songs are
+    // pinned by id too (`ROM_IMPORTED_SONG_IDS`).
+    differences.extend(missing_imported(&ROM_IMPORTED_SONG_IDS, &imported));
 
     // `pokemon/` is not a complete prefix while only the starters exist, so
     // their entries are pinned by id: a dropped root fails here.
