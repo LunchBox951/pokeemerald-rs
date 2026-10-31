@@ -35,7 +35,7 @@
 //! counter: a capacity that does not divide `usize::MAX + 1` would alias
 //! two sequence positions onto one slot the instant such a counter wrapped.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Shared state behind a [`Producer`]/[`Consumer`] pair.
@@ -52,7 +52,32 @@ struct Shared {
     /// and consumer sides share. Always in `[0, capacity]`.
     occupied: AtomicUsize,
     underruns: AtomicU64,
+    /// Samples ever accepted by [`Producer::push`], wrapping. Written only
+    /// while `head` is held, so it and the write index advance together;
+    /// [`Producer::pushed`] reads it without the lock.
+    pushed: AtomicU64,
+    /// Samples ever taken off the queue, read or discarded, wrapping.
+    /// Written only by the consumer side, so with `pushed` it fixes the
+    /// queue's position in push order: the queued samples pushed before a
+    /// [`Producer::pushed`] mark number `mark - consumed`, whatever the
+    /// producer pushes meanwhile. Kept here so a reclaimed consumer
+    /// continues the count.
+    consumed: AtomicU64,
+    /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
+    /// claimed after the previous one is dropped with its device stream.
+    consumer_alive: AtomicBool,
+    /// The discard the consumer's next read applies: [`NO_DISCARD`],
+    /// [`DISCARD_ALL`], or a [`Producer::pushed`] mark before which queued
+    /// samples are dropped. Shared so a producer-side `stop` can bound a
+    /// discard the consumer, already moved into a device callback, still
+    /// holds.
+    pending_discard: AtomicU64,
 }
+
+/// [`Shared::pending_discard`]: nothing to drop at the next read.
+const NO_DISCARD: u64 = u64::MAX;
+/// [`Shared::pending_discard`]: drop everything queued at the next read.
+const DISCARD_ALL: u64 = u64::MAX - 1;
 
 /// Lock `head`, recovering from poisoning rather than propagating a panic.
 ///
@@ -79,6 +104,10 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         head: Mutex::new(0),
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
+        pushed: AtomicU64::new(0),
+        consumed: AtomicU64::new(0),
+        consumer_alive: AtomicBool::new(true),
+        pending_discard: AtomicU64::new(NO_DISCARD),
     });
     (
         Producer {
@@ -123,11 +152,52 @@ impl Producer {
         }
         if n > 0 {
             *head = (*head + n) % self.shared.capacity;
-            // Release: publishes the slot stores above to the consumer's
-            // `Acquire` load of `occupied`.
+            // Counted before `occupied` publishes the samples, so a consumer
+            // that sees them queued also sees them counted. Otherwise
+            // relaxed: only ever written while `head` is held, and a reader
+            // without it needs only some value this counter has held.
+            let pushed = self.shared.pushed.load(Ordering::Relaxed);
+            self.shared.pushed.store(
+                pushed.wrapping_add(u64::try_from(n).unwrap_or(u64::MAX)),
+                Ordering::Relaxed,
+            );
+            // Release: publishes the slot stores and the count above to the
+            // consumer's `Acquire` load of `occupied`.
             self.shared.occupied.fetch_add(n, Ordering::Release);
         }
         n
+    }
+
+    /// Samples ever accepted by [`Self::push`], wrapping on overflow.
+    ///
+    /// A mark taken here splits the queue: [`HeldQueue::discard_pushed_before`]
+    /// keeps only what was pushed after it. Used by the audio transport to
+    /// record where a `stop` landed.
+    ///
+    /// Never takes the producer lock, so a `stop` cannot wait behind another
+    /// producer's push. A push still in progress may or may not be counted;
+    /// either way the mark falls between whole pushes.
+    pub(crate) fn pushed(&self) -> u64 {
+        self.shared.pushed.load(Ordering::Relaxed)
+    }
+
+    /// Narrow a pending [`Consumer::discard_queued_at_first_read`] to the
+    /// samples pushed before `mark`, so what is pushed after it survives
+    /// that read. Does nothing once the read has happened, when nothing is
+    /// pending, or when an earlier mark already bounds it. Lock-free.
+    pub(crate) fn keep_pushed_from_at_first_read(&self, mark: u64) {
+        let _ = self.shared.pending_discard.compare_exchange(
+            DISCARD_ALL,
+            mark.min(DISCARD_ALL - 1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// Whether a [`Consumer::discard_queued_at_first_read`] is still owed:
+    /// the consumer has not read since it was requested. Lock-free.
+    pub(crate) fn owes_first_read_discard(&self) -> bool {
+        self.shared.pending_discard.load(Ordering::Acquire) != NO_DISCARD
     }
 
     /// Total samples this ring holds, fixed when it was created.
@@ -156,6 +226,39 @@ impl Producer {
     pub fn underruns(&self) -> u64 {
         self.shared.underruns.load(Ordering::Relaxed)
     }
+
+    /// Claim a replacement [`Consumer`] once the previous one has been
+    /// dropped, keeping the queued samples and the underrun counter.
+    ///
+    /// Returns `None` while a consumer still exists: the one-consumer
+    /// invariant is never relaxed. The replacement's read index is rebuilt
+    /// from the write index and the queued count, so it resumes exactly
+    /// where the dropped consumer stopped. Used by the audio transport to
+    /// re-attach a rebuilt device stream to the same queue.
+    pub(crate) fn reclaim_consumer(&self) -> Option<Consumer> {
+        // Holding `head` excludes pushes, so the write index and queued
+        // count describe one consistent state while the tail is derived.
+        let head = lock_head(&self.shared.head);
+        self.shared
+            .consumer_alive
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        let capacity = self.shared.capacity;
+        let occupied = self.shared.occupied.load(Ordering::Acquire);
+        let tail = if capacity == 0 {
+            0
+        } else {
+            (*head + capacity - occupied) % capacity
+        };
+        // A discard left by the previous consumer was for its stream.
+        self.shared
+            .pending_discard
+            .store(NO_DISCARD, Ordering::Release);
+        Some(Consumer {
+            shared: Arc::clone(&self.shared),
+            tail,
+        })
+    }
 }
 
 /// The read half of a sample ring buffer, driven once per audio device
@@ -178,6 +281,7 @@ impl Consumer {
     /// A pure query: does not touch the underrun counter. Most callers want
     /// [`Consumer::pop_or_silence`] or [`Consumer::fill`] instead.
     pub fn try_pop(&mut self) -> Option<f32> {
+        self.settle_pending_discard();
         // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
         // so a published slot's value is visible before this reads it.
         if self.shared.occupied.load(Ordering::Acquire) == 0 {
@@ -186,6 +290,7 @@ impl Consumer {
         let idx = self.tail % self.shared.capacity;
         let sample = f32::from_bits(self.shared.buffer[idx].load(Ordering::Relaxed));
         self.tail = (self.tail + 1) % self.shared.capacity;
+        self.shared.consumed.fetch_add(1, Ordering::Relaxed);
         // Release: publishes the freed slot to the producer's `Acquire`
         // load of `occupied`.
         self.shared.occupied.fetch_sub(1, Ordering::Release);
@@ -217,6 +322,7 @@ impl Consumer {
     /// counter in one update — identical accounting to calling
     /// [`Consumer::pop_or_silence`] once per missing sample.
     pub fn fill(&mut self, out: &mut [f32]) {
+        self.settle_pending_discard();
         // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
         // so every published slot this observes is visible before the reads
         // below.
@@ -231,6 +337,10 @@ impl Consumer {
         }
         if drained > 0 {
             self.tail = (self.tail + drained) % self.shared.capacity;
+            self.shared.consumed.fetch_add(
+                u64::try_from(drained).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
             // Release: publishes the freed slots to the producer's `Acquire`
             // load of `occupied`.
             self.shared.occupied.fetch_sub(drained, Ordering::Release);
@@ -242,6 +352,79 @@ impl Consumer {
                 Ordering::Relaxed,
             );
         }
+    }
+
+    /// Hold off every [`Producer::push`] until the returned guard drops, so
+    /// a discard decided while it is held cannot drop a sample pushed after
+    /// that decision: such a push waits for the guard.
+    ///
+    /// Takes the producer lock, so it belongs on the thread that attaches a
+    /// consumer to a device stream, never in the device callback itself.
+    pub(crate) fn hold_pushes(&mut self) -> HeldQueue<'_> {
+        let head = lock_head(&self.shared.head);
+        HeldQueue {
+            head,
+            tail: &mut self.tail,
+            shared: &self.shared,
+        }
+    }
+
+    /// Drop whatever is queued when this consumer is next read, before that
+    /// read, without counting an underrun.
+    ///
+    /// Lock-free, so it holds once the consumer has moved into a device
+    /// callback: everything the producer pushed before the stream's first
+    /// callback is dropped there, however long the stream took to build.
+    /// [`Producer::keep_pushed_from_at_first_read`] can narrow it before
+    /// that read.
+    pub(crate) fn discard_queued_at_first_read(&mut self) {
+        self.shared
+            .pending_discard
+            .store(DISCARD_ALL, Ordering::Release);
+    }
+
+    fn settle_pending_discard(&mut self) {
+        if self.shared.pending_discard.load(Ordering::Acquire) == NO_DISCARD {
+            return;
+        }
+        // Snapshot the queue before claiming the discard. A `stop` that
+        // narrows it after the claim finds nothing pending, and anything it
+        // is followed by is pushed after this snapshot, so `DISCARD_ALL`
+        // drops only what predates the claim. Acquire: synchronizes-with
+        // the producer's `Release` `fetch_add`. Only this consumer ever
+        // lowers `occupied`, so these slots stay queued until the
+        // `fetch_sub` below frees them.
+        let claimed = self.shared.occupied.load(Ordering::Acquire);
+        let pending = self
+            .shared
+            .pending_discard
+            .swap(NO_DISCARD, Ordering::AcqRel);
+        #[cfg(test)]
+        tests::after_discard_claim();
+        let queued = match pending {
+            NO_DISCARD => return,
+            DISCARD_ALL => claimed,
+            mark => {
+                // Narrowed before the claim: the queued samples pushed
+                // before the mark. Both counts are fixed from this side,
+                // the mark by the producer's `stop` and `consumed` by this
+                // consumer, so a push landing meanwhile changes neither;
+                // `claimed` bounds it only against a mark past the queue.
+                #[cfg(test)]
+                tests::between_bounded_discard_loads();
+                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), claimed)
+            }
+        };
+        if queued == 0 {
+            return;
+        }
+        self.tail = (self.tail + queued) % self.shared.capacity;
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
+        // Release: publishes the freed slots to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(queued, Ordering::Release);
     }
 
     /// Samples currently queued and ready to read.
@@ -258,235 +441,73 @@ impl Consumer {
     }
 }
 
+impl Drop for Consumer {
+    fn drop(&mut self) {
+        self.shared.consumer_alive.store(false, Ordering::Release);
+    }
+}
+
+/// How many of `queued` samples were pushed before `mark`: the samples
+/// numbered from `consumed` up to `mark` in push order, none if the
+/// consumer already read past the mark, and at most the queue if the mark
+/// lies past it. The counts wrap, so their difference is read as signed: a
+/// mark behind the consumer is a small negative distance, never a huge
+/// positive one.
+fn stale_before(mark: u64, consumed: u64, queued: usize) -> usize {
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "reinterpreting the wrapped difference as signed is the point: a mark behind `consumed` must read as negative"
+    )]
+    let ahead = mark.wrapping_sub(consumed) as i64;
+    if ahead <= 0 {
+        return 0;
+    }
+    usize::try_from(ahead).unwrap_or(usize::MAX).min(queued)
+}
+
+/// A [`Consumer`] whose producer is held off; see [`Consumer::hold_pushes`].
+pub(crate) struct HeldQueue<'a> {
+    head: std::sync::MutexGuard<'a, usize>,
+    tail: &'a mut usize,
+    shared: &'a Shared,
+}
+
+impl HeldQueue<'_> {
+    /// Drop every queued sample, without counting an underrun.
+    pub(crate) fn discard_all(&mut self) {
+        *self.tail = *self.head;
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
+        self.shared.occupied.store(0, Ordering::Release);
+    }
+
+    /// Drop the queued samples pushed before [`Producer::pushed`] returned
+    /// `mark`, keeping those pushed since, without counting an underrun.
+    ///
+    /// Queued samples are unread and in push order, so the oldest
+    /// `mark - consumed` of them are the ones pushed before the mark.
+    pub(crate) fn discard_pushed_before(&mut self, mark: u64) {
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        let stale = stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), queued);
+        if stale == 0 {
+            return;
+        }
+        *self.tail = (*self.tail + stale) % self.shared.capacity;
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(stale).unwrap_or(u64::MAX), Ordering::Relaxed);
+        // Release: publishes the freed slots to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(stale, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 // Tests compare PCM sample arrays for exact equality on purpose: every
 // value here is the deliberate, exactly-representable output of a ring
 // buffer push/fill, not the result of accumulated floating-point math.
 #[allow(clippy::float_cmp)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fill_drains_queued_samples_in_order() {
-        let (producer, mut consumer) = ring_buffer(8);
-        assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0]), 4);
-        assert_eq!(consumer.available(), 4);
-
-        let mut out = [0.0; 4];
-        consumer.fill(&mut out);
-        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(consumer.available(), 0);
-        assert_eq!(consumer.underruns(), 0);
-    }
-
-    #[test]
-    fn underrun_pads_shortfall_with_silence_and_counts_it() {
-        let (producer, mut consumer) = ring_buffer(8);
-        assert_eq!(producer.push(&[1.0, 2.0]), 2);
-
-        let mut out = [9.0; 5];
-        consumer.fill(&mut out);
-        assert_eq!(out, [1.0, 2.0, 0.0, 0.0, 0.0]);
-        // 3 slots had nothing queued: 3 individual underrun samples.
-        assert_eq!(consumer.underruns(), 3);
-        // Producer's view of the counter is the same shared counter.
-        assert_eq!(producer.underruns(), 3);
-    }
-
-    #[test]
-    fn bulk_fill_consolidates_shortfall_into_the_underrun_count() {
-        // A single `fill` that outruns the queue must add exactly the missing
-        // sample count to the counter — the bulk drain's consolidated update
-        // must match per-sample accounting exactly.
-        let (producer, mut consumer) = ring_buffer(64);
-        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
-
-        let mut out = [9.0; 10];
-        consumer.fill(&mut out);
-        assert_eq!(out, [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        // 3 drained, 7 padded: exactly 7 underrun samples from one call.
-        assert_eq!(consumer.underruns(), 7);
-
-        // A wholly-empty fill counts its entire length, accumulating onto the
-        // previous consolidated total.
-        let mut out2 = [0.0; 5];
-        consumer.fill(&mut out2);
-        assert_eq!(consumer.underruns(), 12);
-
-        // A fill fully satisfied by the queue adds nothing.
-        assert_eq!(producer.push(&[4.0, 5.0]), 2);
-        let mut out3 = [0.0; 2];
-        consumer.fill(&mut out3);
-        assert_eq!(out3, [4.0, 5.0]);
-        assert_eq!(consumer.underruns(), 12);
-    }
-
-    /// Capacity is the ring's fixed size, not a reading of how much of it is
-    /// free: queueing samples must not appear to shrink the ring.
-    #[test]
-    fn capacity_is_unchanged_by_what_is_queued() {
-        let (producer, _consumer) = ring_buffer(8);
-        assert_eq!(producer.capacity(), 8);
-        assert_eq!(producer.available_space(), 8);
-
-        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
-        assert_eq!(producer.capacity(), 8);
-        assert_eq!(producer.available_space(), 5);
-    }
-
-    #[test]
-    fn push_beyond_capacity_drops_the_overflow() {
-        let (producer, mut consumer) = ring_buffer(4);
-        assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), 4);
-        assert_eq!(producer.available_space(), 0);
-        assert_eq!(consumer.available(), 4);
-
-        let mut out = [0.0; 4];
-        consumer.fill(&mut out);
-        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
-    }
-
-    #[test]
-    fn sustained_push_and_drain_cycles_never_grow_past_capacity() {
-        // The backing array is fixed-size and each side's index wraps by
-        // `% capacity` (see the module docs) — this exercises that wrap
-        // under sustained use: capacity never grows, and values survive many
-        // drain/refill cycles that each cross the initial capacity boundary.
-        let (producer, mut consumer) = ring_buffer(4);
-        for cycle in 0..1000_u32 {
-            // `cycle` never exceeds 1000, well within `f32`'s 24-bit exact
-            // integer range, so this loses no precision.
-            #[allow(clippy::cast_precision_loss)]
-            let a = cycle as f32;
-            let b = a + 0.5;
-            assert_eq!(producer.push(&[a, b]), 2);
-            assert!(producer.available_space() <= 4);
-
-            let mut out = [0.0; 2];
-            consumer.fill(&mut out);
-            assert_eq!(out, [a, b]);
-        }
-        assert_eq!(consumer.underruns(), 0);
-        assert_eq!(consumer.available(), 0);
-    }
-
-    #[test]
-    fn producer_pushes_from_another_thread() {
-        let (producer, mut consumer) = ring_buffer(1024);
-        // `i` never exceeds 512, well within `f32`'s 24-bit exact integer
-        // range, so this loses no precision.
-        #[allow(clippy::cast_precision_loss)]
-        let data: Vec<f32> = (0..512).map(|i| i as f32).collect();
-        let expected = data.clone();
-
-        let producer_thread = producer.clone();
-        let handle = std::thread::spawn(move || {
-            let mut written = 0;
-            while written < data.len() {
-                written += producer_thread.push(&data[written..]);
-            }
-        });
-        handle.join().expect("producer thread panicked");
-
-        let mut out = vec![0.0; expected.len()];
-        consumer.fill(&mut out);
-        assert_eq!(out, expected);
-        assert_eq!(consumer.underruns(), 0);
-    }
-
-    /// The device callback drains through [`Consumer::fill`] under a hard
-    /// deadline, while the producer pushes from an ordinary (preemptible)
-    /// game thread. A producer descheduled mid-push — holding `Shared::head`
-    /// — must therefore not be able to stall the callback: the callback has
-    /// to keep making progress on what is already published, since it never
-    /// touches that lock.
-    #[test]
-    fn fill_does_not_block_on_a_producer_stalled_mid_push() {
-        let (producer, mut consumer) = ring_buffer(8);
-        assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0]), 4);
-
-        // Stand in for the producer being preempted while it holds
-        // `Shared::head`'s lock: a real scheduler can stall it for an
-        // arbitrary slice, far past one callback period.
-        // The stall lasts until `fill` reports back, so a `fill` that waits
-        // on the lock can only report after the hold gives up on it: the
-        // verdict is which side let go first, not how long the host
-        // scheduler happened to take. The hold's timeout is a ceiling for a
-        // regressed `fill`, never a bound this test measures against.
-        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
-        let (filled_tx, filled_rx) = std::sync::mpsc::channel();
-        let shared = Arc::clone(&producer.shared);
-        let stalled_producer = std::thread::spawn(move || {
-            let _guard = lock_head(&shared.head);
-            acquired_tx.send(()).expect("receiver dropped");
-            filled_rx
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .is_ok()
-        });
-        acquired_rx.recv().expect("stalled producer never started");
-
-        let mut out = [9.0; 4];
-        consumer.fill(&mut out);
-        let filled_while_stalled = filled_tx.send(()).is_ok();
-        let released_after_fill = stalled_producer.join().expect("producer thread panicked");
-
-        assert!(
-            filled_while_stalled && released_after_fill,
-            "callback fill waited on a stalled producer"
-        );
-        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(consumer.underruns(), 0);
-    }
-
-    /// Each side's index wraps by `% capacity` on every advance (see the
-    /// module docs), never via an unbounded counter reduced `% capacity`
-    /// only at the point of indexing — that alternative aliases two
-    /// different sequence positions onto the same slot for any capacity
-    /// that does not evenly divide the width such a counter wraps at, i.e.
-    /// any non-power-of-two capacity, the instant it wrapped. Seed both
-    /// indices to the last valid slot and push across the capacity boundary
-    /// to prove the wrap itself lands correctly, for a non-power-of-two
-    /// capacity (3) and a power-of-two one (4) alike.
-    #[test]
-    fn cursor_wraparound_is_correct_for_a_non_power_of_two_capacity() {
-        for capacity in [3, 4] {
-            let (producer, mut consumer) = ring_buffer(capacity);
-            *producer.shared.head.lock().unwrap() = capacity - 1;
-            consumer.tail = capacity - 1;
-
-            assert_eq!(producer.push(&[1.0, 2.0]), 2);
-            assert_eq!(consumer.available(), 2);
-
-            let mut out = [0.0; 2];
-            consumer.fill(&mut out);
-            assert_eq!(out, [1.0, 2.0], "capacity {capacity}");
-            assert_eq!(consumer.underruns(), 0);
-        }
-    }
-
-    /// The rollover this ring has no exposure to is the counter's own, at
-    /// `usize::MAX + 1`; it is unreachable because each cursor is reduced
-    /// `% capacity` on every advance. An unbounded-counter implementation
-    /// fails this on the second iteration for either capacity.
-    #[test]
-    fn cursors_stay_bounded_by_capacity_so_no_usize_rollover_exists() {
-        for capacity in [3usize, 4] {
-            let (producer, mut consumer) = ring_buffer(capacity);
-            for _ in 0..=(2 * capacity) {
-                assert_eq!(producer.push(&[1.0, 2.0]), 2);
-                let mut out = [0.0; 2];
-                consumer.fill(&mut out);
-                assert_eq!(out, [1.0, 2.0], "capacity {capacity}");
-                assert!(
-                    *lock_head(&producer.shared.head) < capacity,
-                    "head left unbounded at capacity {capacity}"
-                );
-                assert!(
-                    consumer.tail < capacity,
-                    "tail left unbounded at capacity {capacity}"
-                );
-            }
-            assert_eq!(consumer.underruns(), 0);
-        }
-    }
-}
+mod tests;

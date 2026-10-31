@@ -1,11 +1,12 @@
 //! Tests for the `play_song` example, split by seam.
 
 use super::{
-    build_song, classify_open_error, device_tail_wait, measured_drain_target, prefill_then_start,
-    push_frame, start_playback, usable_callback_in_span, wait_for_device_tail,
+    await_transport, await_transport_with, build_song, classify_open_error, classify_transport,
+    device_tail_wait, measured_drain_target, prefill_then_start, push_frame, settle_transport_once,
+    start_playback, usable_callback_in_span, wait_for_device_tail,
     wait_for_device_tail_or_measured, wait_for_drain, wait_for_frame_deadline,
-    wait_for_measured_tail, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
-    DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+    wait_for_measured_tail, DrainError, ErrorBaseline, OpenOutcome, PushError, RetryPolicy,
+    StartOutcome, TransportOutcome, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
 };
 use audio::Sequencer;
 use platform::audio::{PlaybackProgress, UsableReading};
