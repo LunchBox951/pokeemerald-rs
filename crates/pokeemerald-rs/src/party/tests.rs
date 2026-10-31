@@ -6,6 +6,7 @@ use super::encode_attacks;
 mod active_selection;
 mod codec;
 mod common;
+mod consumed_berry;
 mod create_mon;
 mod cute_charm_wild_gender;
 mod loaded_lead;

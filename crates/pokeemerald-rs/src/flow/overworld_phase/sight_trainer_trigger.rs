@@ -431,8 +431,8 @@ impl OverworldPhase {
     ///   [`crate::flow::npc_trainer_battle`] threads each member's item onto
     ///   its `BattlePokemon`, and the battle crate refuses only an item whose
     ///   effect it does not model ([`battle::ensure_held_item_playable`]).
-    ///   Miguel's Skitty holds an Oran Berry and is refused earlier still,
-    ///   for its selected Cute Charm.
+    ///   Miguel's Skitty holds an Oran Berry, which the battle crate admits,
+    ///   and is refused for its selected Cute Charm.
     /// - **Isabelle, Miguel and Amy & Liv** stop on a move, an
     ///   ability or (for Amy & Liv) a double battle this port does not field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
@@ -658,9 +658,8 @@ mod tests {
         }
     }
 
-    /// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder -- the
-    /// item the battle crate refuses by name -- so the refusal rows above
-    /// describe a party that really carries it.
+    /// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder, so the
+    /// refusal rows above describe a party that really carries it.
     #[test]
     fn miguel_carries_an_oran_berry_party() {
         let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
@@ -812,8 +811,8 @@ mod tests {
         // refusal its real extracted party currently produces. The move ids
         // are the first move in that trainer's own level-up-derived moveset
         // that some screen refuses. Miguel's Skitty is refused for its selected
-        // Cute Charm before the ability screen reaches its Attract or its Oran
-        // Berry, each of which the later screens would refuse in turn.
+        // Cute Charm before the ability screen reaches its Attract, which the
+        // later screens would refuse in turn.
         let expected = [
             (
                 "Amy & Liv",

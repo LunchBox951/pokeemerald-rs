@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
+use assets::items::ItemId;
 use assets::{AbilityId, MoveId, SpeciesId};
 
 use crate::error::BattleError;
@@ -616,6 +617,22 @@ pub enum BattleEvent {
         /// Whether the player's battler was healed.
         by_player: bool,
         /// HP actually gained, zero for a full-HP seeder.
+        healed: u32,
+    },
+    /// `STRINGID_PKMNSITEMRESTOREDHEALTH`,
+    /// `BattleScript_ItemHealHP_RemoveItem` (`data/battle_scripts_1.s:4356`-
+    /// `:4364`): a living holder at or below half HP regained its item's HP
+    /// in the end-turn item pass and consumed the item
+    /// (`ItemBattleEffects`' `ITEMEFFECT_NORMAL`,
+    /// `pokeemerald/src/battle_util.c:3331`-`:3346`). That pass precedes the
+    /// battler's [`BattleEvent::SappedByLeechSeed`] slot
+    /// (`:1442`-`:1461`).
+    ItemRestoredHealth {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// The item consumed.
+        item: ItemId,
+        /// HP actually gained, capped at the holder's maximum HP.
         healed: u32,
     },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`

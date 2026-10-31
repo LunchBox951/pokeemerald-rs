@@ -548,12 +548,12 @@ mod tests {
     fn a_berry_holding_lead_is_refused_before_any_ot_id_draw() {
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let lead = treecko_lead().with_held_item(ItemId::ORAN_BERRY);
+        let lead = treecko_lead().with_held_item(ItemId::SITRUS_BERRY);
         let result = start_npc_trainer_battle(lead, NUGGET_THEN_EMPTY_PARTY, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)
             ))
         );
         assert_eq!(
@@ -579,16 +579,17 @@ mod tests {
     }
 
     #[test]
-    fn a_berry_party_is_refused_before_any_ot_id_draw() {
+    fn an_oran_berry_party_is_refused_for_its_move_before_any_ot_id_draw() {
+        // The Berry no longer stops this party: its Taillow's Headbutt does.
         let mut rng = Rng::new(1);
         let before = rng.state();
         let result = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedMoveEffect(MoveId::HEADBUTT)
             ))
         );
-        assert_eq!(rng.state(), before, "the item screen precedes every draw");
+        assert_eq!(rng.state(), before, "the party screen precedes every draw");
     }
 }

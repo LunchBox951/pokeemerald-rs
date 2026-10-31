@@ -17,10 +17,12 @@
 //! through [`battle::BattlePokemon::with_held_item`], whatever its id.
 //! `battle` carries the item but models none of its effects, so
 //! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
-//! item has one; each flow's refusal is documented where it is made. A fresh
-//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
-//! backing record's item bytes alone, as nothing in the port changes a held
-//! item after load.
+//! item has one; each flow's refusal is documented where it is made. The battler
+//! owns the item afterwards: [`to_save_pokemon`] and
+//! [`merge_into_save_pokemon`] both file [`battle::BattlePokemon::held_item`],
+//! so a Berry consumed in battle leaves the save, as `Cmd_removeitem`'s
+//! `ITEM_NONE` does upstream (`pokeemerald/src/battle_script_commands.c:5901`
+//! -`:5909`, `src/load_save.c:196`-`:206`).
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
@@ -537,7 +539,8 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 ///
 /// Writes only the fields the battler owns; every retained field stays as
 /// the save wrote it, except EVs, which the merge writes back from
-/// [`battle::BattlePokemon::evs`].
+/// [`battle::BattlePokemon::evs`], and the held item, written from
+/// [`battle::BattlePokemon::held_item`].
 ///
 /// The cached stat block is kept when species and level are unchanged and
 /// recomputed EV-aware otherwise ([`compute_levelled_up_stats`]); current
@@ -576,6 +579,7 @@ pub(crate) fn merge_into_save_pokemon(
         stored_species == mon.species().0 && base.level == mon.level();
 
     substructures.growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    substructures.growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     substructures.growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     substructures.attacks = encode_attacks(mon);
