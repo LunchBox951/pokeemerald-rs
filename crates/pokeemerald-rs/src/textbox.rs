@@ -5,7 +5,7 @@
 //! with colors read from the loaded window palette `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
-use engine::text::render::{ClearedSpan, RevealedGlyph};
+use engine::text::render::{ClearedSpan, RevealedGlyph, TextColors};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
@@ -14,15 +14,26 @@ use rendering::{Bgr555, Framebuffer, Rgb888};
 /// (`pokeemerald/src/menu.c:191-201`,
 /// `pokeemerald/include/constants/characters.h:234-237`) -- indices into the
 /// palette `LoadMessageBoxGfx` loads for the window
-/// (`pokeemerald/src/text_window.c:93-97`).
-const MESSAGE_BOX_FOREGROUND_PALETTE_INDEX: usize = 2;
-const MESSAGE_BOX_SHADOW_PALETTE_INDEX: usize = 3;
+/// (`pokeemerald/src/text_window.c:93-97`). They are [`TextColors::default`]'s
+/// fields; a printer's inline `COLOR`/`SHADOW` controls override them per
+/// glyph through [`GlyphColors::Palette`].
+const MESSAGE_BOX_FOREGROUND_PALETTE_INDEX: usize = TextColors::MESSAGE_BOX.foreground as usize;
+const MESSAGE_BOX_SHADOW_PALETTE_INDEX: usize = TextColors::MESSAGE_BOX.shadow as usize;
+/// The window-interior palette index the message box is filled with before
+/// any text prints (`TEXT_COLOR_WHITE`).
+const MESSAGE_BOX_BACKGROUND_PALETTE_INDEX: u8 = TextColors::MESSAGE_BOX.background;
 
 /// Glyph-role color slots [`blit_glyphs_colored`] indexes a revealed glyph's
 /// pixel through -- distinct from the palette indices above.
 const GLYPH_COLOR_COUNT: usize = 4;
+const GLYPH_BACKGROUND_INDEX: usize = 0;
+/// Glyph value the real fonts use for the rest of a cell's background.
+const GLYPH_CELL_BACKGROUND_INDEX: usize = 3;
 const GLYPH_FOREGROUND_INDEX: usize = 1;
 const GLYPH_SHADOW_INDEX: usize = 2;
+
+mod glyph_colors;
+pub(crate) use glyph_colors::GlyphColors;
 
 const TILE_SIZE: usize = msgwin::TILE_SIZE as usize;
 const TILE_SIZE_PX: i32 = msgwin::TILE_SIZE.cast_signed();
@@ -142,12 +153,12 @@ pub(crate) fn blit_frame_tiles_tracked(
 }
 
 /// Draws revealed glyphs inside a window's content bounds using caller-supplied colors.
-pub(crate) fn blit_glyphs_colored(
+pub(crate) fn blit_glyphs_colored<'a>(
     fb: &mut Framebuffer,
     glyphs: &[RevealedGlyph],
     origin: (i32, i32),
     content_size: (i32, i32),
-    colors: &[Option<Rgb888>; 4],
+    colors: impl Into<GlyphColors<'a>>,
 ) {
     blit_glyphs_colored_tracked(
         fb,
@@ -160,21 +171,21 @@ pub(crate) fn blit_glyphs_colored(
 }
 
 /// Draws revealed glyphs and records their opaque pixels.
-pub(crate) fn blit_glyphs_colored_tracked(
+pub(crate) fn blit_glyphs_colored_tracked<'a>(
     fb: &mut Framebuffer,
     coverage: &mut Coverage,
     glyphs: &[RevealedGlyph],
     origin: (i32, i32),
     content_size: (i32, i32),
-    colors: &[Option<Rgb888>; 4],
+    colors: impl Into<GlyphColors<'a>>,
 ) {
+    let colors = colors.into();
     let (content_width, content_height) = content_size;
     for revealed in glyphs {
         for pixel_y in 0..GLYPH_SIZE {
             for pixel_x in 0..GLYPH_SIZE {
-                let palette_index =
-                    usize::from(revealed.glyph.pixels[pixel_y * GLYPH_SIZE + pixel_x]);
-                let Some(Some(color)) = colors.get(palette_index) else {
+                let value = revealed.glyph.pixels[pixel_y * GLYPH_SIZE + pixel_x];
+                let Some(color) = colors.resolve(revealed, value, pixel_x, pixel_y) else {
                     continue;
                 };
                 let (Ok(pixel_x), Ok(pixel_y)) = (i32::try_from(pixel_x), i32::try_from(pixel_y))
@@ -196,7 +207,7 @@ pub(crate) fn blit_glyphs_colored_tracked(
                 }
                 let screen_x = origin.0 + content_x;
                 let screen_y = origin.1 + content_y;
-                set_pixel_checked(fb, coverage, screen_x, screen_y, *color);
+                set_pixel_checked(fb, coverage, screen_x, screen_y, color);
             }
         }
     }
@@ -215,6 +226,34 @@ pub(crate) enum WindowOp {
     Glyph(Box<RevealedGlyph>),
     /// A span a `CLEAR`/`CLEAR_TO` control erased (`Printer::cleared_span`).
     ClearSpan(ClearedSpan),
+    /// The rows a window scroll exposed ([`scroll_window_ops`]), filled with
+    /// the background in force. Unlike a `ClearSpan`, a background of index 0
+    /// writes transparent pixels, as `ScrollWindow`'s `PIXEL_FILL(0)` does.
+    ScrollFill(ClearedSpan),
+}
+
+/// Scrolls a window's retained `ops` up by `dy` and fills the rows that
+/// scroll into view with `colors.background`, as `ScrollWindow` does with
+/// `PIXEL_FILL(bgColor)` (`pokeemerald/src/text.c:1196-1201`).
+///
+/// The fill is a [`WindowOp::ScrollFill`] across the content width at the
+/// bottom `dy` rows, so a later scroll carries it up with everything else.
+pub(crate) fn scroll_window_ops(
+    ops: &mut Vec<WindowOp>,
+    dy: i32,
+    colors: TextColors,
+    content_size: (i32, i32),
+) {
+    for op in ops.iter_mut() {
+        op.shift_y(-dy);
+    }
+    ops.push(WindowOp::ScrollFill(ClearedSpan {
+        x: 0,
+        y: content_size.1.saturating_sub(dy),
+        width: content_size.0,
+        height: dy,
+        colors,
+    }));
 }
 
 impl WindowOp {
@@ -222,7 +261,7 @@ impl WindowOp {
     pub(crate) fn shift_y(&mut self, dy: i32) {
         match self {
             Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
-            Self::ClearSpan(span) => span.y = span.y.saturating_add(dy),
+            Self::ClearSpan(span) | Self::ScrollFill(span) => span.y = span.y.saturating_add(dy),
         }
     }
 }
@@ -230,19 +269,37 @@ impl WindowOp {
 /// Replays ordered glyph and clear-span ops onto `fb`, which must already
 /// hold the window's frame tiles and nothing else.
 ///
-/// A `ClearSpan` restores its window-local rectangle from `fb`'s own
-/// pre-glyph pixels -- the window's already-composed background -- covering
-/// whatever an earlier op painted there, partial glyph included. Upstream
-/// paints the same span with the window's background before any later glyph
-/// lands (`pokeemerald/src/text.c:1063-1090`).
+/// Each glyph maps the [`TextColors`] it carries through `palette`, the
+/// window's loaded palette, so a `COLOR` or `SHADOW` control recolors only the
+/// glyphs revealed after it. `window_fill` is the colors the latest
+/// whole-window clear erased with (`Printer::cleared_window_colors`); `scene`
+/// is the framebuffer as it was before the frame tiles were drawn, which a
+/// transparent (index 0) fill or scroll fill shows ([`needs_scene`]).
+///
+/// A `ClearSpan` erases its window-local rectangle with its own background
+/// (see [`erase_with_background`]) before any later glyph lands, covering
+/// whatever an earlier op painted there, partial glyph included
+/// (`pokeemerald/src/text.c:649-674`, `:1063-1090`).
 pub(crate) fn compose_window_ops(
     fb: &mut Framebuffer,
     ops: &[WindowOp],
     origin: (i32, i32),
     content_size: (i32, i32),
-    colors: &[Option<Rgb888>; GLYPH_COLOR_COUNT],
+    palette: &[Rgb888],
+    window_fill: Option<TextColors>,
+    scene: Option<&Framebuffer>,
 ) {
     let background = fb.clone();
+    if let Some(fill) = window_fill {
+        let full = ClearedSpan {
+            x: 0,
+            y: 0,
+            width: content_size.0,
+            height: content_size.1,
+            colors: fill,
+        };
+        erase_with_background(fb, &background, scene, palette, full, origin, content_size);
+    }
     for op in ops {
         match op {
             WindowOp::Glyph(glyph) => {
@@ -251,26 +308,87 @@ pub(crate) fn compose_window_ops(
                     std::slice::from_ref(glyph.as_ref()),
                     origin,
                     content_size,
-                    colors,
+                    GlyphColors::Palette(palette),
                 );
             }
             WindowOp::ClearSpan(span) => {
-                restore_cleared_span(fb, &background, *span, origin, content_size);
+                erase_with_background(fb, &background, None, palette, *span, origin, content_size);
+            }
+            WindowOp::ScrollFill(span) => {
+                erase_with_background(fb, &background, scene, palette, *span, origin, content_size);
             }
         }
     }
 }
 
-/// Copies `span`'s window-local rectangle from `background` onto `fb`,
-/// clipped to the content bounds the same way [`blit_glyphs_colored_tracked`]
-/// clips a glyph. A pixel whose coordinate leaves the `i32` range lies outside
-/// the content and is skipped.
-fn restore_cleared_span(
+/// Whether composing `ops` and `window_fill` needs the pre-frame scene: a
+/// whole-window fill or a `ScrollFill` with background 0, which
+/// [`compose_window_ops`] restores from it.
+pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> bool {
+    window_fill.is_some_and(|fill| fill.background == 0)
+        || ops.iter().any(|op| match op {
+            WindowOp::ScrollFill(span) => span.colors.background == 0,
+            WindowOp::Glyph(_) | WindowOp::ClearSpan(_) => false,
+        })
+}
+
+/// Erases `span` with `span.colors.background`.
+///
+/// Index 0 is transparent. A scroll fill and a whole-window fill write pixel
+/// value 0 (`ScrollWindow`, `pokeemerald/src/text.c:1196-1201`), so they
+/// restore the `scene` beneath the window; with no `scene` there is nothing to
+/// restore and nothing is painted. A `CLEAR`/`CLEAR_TO` span never gets a
+/// `scene`: upstream's `ClearTextSpan` skips painting when the background is
+/// transparent (`pokeemerald/src/text.c:649-674`). Index
+/// `TEXT_COLOR_WHITE` is the window interior the frame tiles already drew, so
+/// it restores from `background`, the pre-glyph composed framebuffer. Any other
+/// index fills with that palette entry; a missing entry is skipped.
+fn erase_with_background(
     fb: &mut Framebuffer,
     background: &Framebuffer,
+    scene: Option<&Framebuffer>,
+    palette: &[Rgb888],
     span: ClearedSpan,
     origin: (i32, i32),
     content_size: (i32, i32),
+) {
+    match span.colors.background {
+        index if usize::from(index) == TRANSPARENT_PALETTE_INDEX => {
+            if let Some(scene) = scene {
+                restore_cleared_span(fb, scene, span, origin, content_size);
+            }
+        }
+        MESSAGE_BOX_BACKGROUND_PALETTE_INDEX => {
+            restore_cleared_span(fb, background, span, origin, content_size);
+        }
+        index => {
+            if let Some(&color) = palette.get(usize::from(index)) {
+                paint_cleared_span(fb, color, span, origin, content_size);
+            }
+        }
+    }
+}
+
+/// Fills `span`'s window-local rectangle with `color`, clipped the way
+/// [`restore_cleared_span`] clips.
+fn paint_cleared_span(
+    fb: &mut Framebuffer,
+    color: Rgb888,
+    span: ClearedSpan,
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    for_each_span_pixel(span, origin, content_size, |x, y| fb.set_pixel(x, y, color));
+}
+
+/// Calls `visit` with the framebuffer position of every pixel of `span` that
+/// lies inside the content bounds. A pixel whose coordinate leaves the `i32`
+/// range lies outside the content and is skipped.
+fn for_each_span_pixel(
+    span: ClearedSpan,
+    origin: (i32, i32),
+    content_size: (i32, i32),
+    mut visit: impl FnMut(usize, usize),
 ) {
     let (content_width, content_height) = content_size;
     for dy in 0..span.height {
@@ -292,11 +410,26 @@ fn restore_cleared_span(
             let (Ok(x), Ok(y)) = (usize::try_from(screen_x), usize::try_from(screen_y)) else {
                 continue;
             };
-            if let Some(color) = background.pixel(x, y) {
-                fb.set_pixel(x, y, color);
-            }
+            visit(x, y);
         }
     }
+}
+
+/// Copies `span`'s window-local rectangle from `background` onto `fb`,
+/// clipped to the content bounds the same way [`blit_glyphs_colored_tracked`]
+/// clips a glyph.
+fn restore_cleared_span(
+    fb: &mut Framebuffer,
+    background: &Framebuffer,
+    span: ClearedSpan,
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    for_each_span_pixel(span, origin, content_size, |x, y| {
+        if let Some(color) = background.pixel(x, y) {
+            fb.set_pixel(x, y, color);
+        }
+    });
 }
 
 /// Owned frame tile pixels and their decoded palette.
@@ -333,6 +466,11 @@ impl FrameAssets {
     /// the indices upstream's message printers select
     /// (`pokeemerald/src/menu.c:191-201`, `pokeemerald/src/text_window.c:93-97`).
     /// A palette shorter than the loaded index leaves that role transparent.
+    ///
+    /// These are fixed role slots for callers that blit glyphs with one
+    /// default color pair ([`GlyphColors::Roles`]); the message-box and intro
+    /// compositors instead map each glyph's carried inline `COLOR`/`SHADOW`
+    /// selection through the palette ([`compose_window_ops`]).
     pub(crate) fn glyph_colors(&self) -> [Option<Rgb888>; GLYPH_COLOR_COUNT] {
         let palette_color = |index: usize| self.palette.get(index).copied();
         let mut colors = [None; GLYPH_COLOR_COUNT];
@@ -415,7 +553,7 @@ mod tests {
         colors
     };
 
-    fn opaque_glyph_at(x: i32, y: i32) -> RevealedGlyph {
+    pub(super) fn opaque_glyph_at(x: i32, y: i32) -> RevealedGlyph {
         RevealedGlyph {
             x,
             y,
@@ -423,6 +561,9 @@ mod tests {
                 advance_width: u8::try_from(msgwin::TILE_SIZE).unwrap(),
                 pixels: [OPAQUE_GLYPH_PALETTE_INDEX; GLYPH_PIXELS],
             },
+            colors: TextColors::default(),
+            raster_height: 15,
+            paint_background: false,
         }
     }
 
@@ -553,6 +694,7 @@ mod tests {
             y: i32::MAX,
             width: 255,
             height: 14,
+            colors: TextColors::default(),
         };
 
         restore_cleared_span(&mut fb, &background, span, (0, 0), (200, 32));
@@ -644,3 +786,7 @@ mod tests {
         assert!(!coverage.is_painted(0, 0));
     }
 }
+
+#[cfg(test)]
+#[path = "textbox/color_tests.rs"]
+mod color_tests;
