@@ -60,6 +60,14 @@ pub enum PngError {
     MissingOrBadPalette,
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
     TooManyPaletteEntries(usize),
+    /// The `PLTE` chunk has more entries than the `IHDR` bit depth can index
+    /// (at most `2^bit_depth`).
+    PaletteExceedsBitDepth {
+        /// The number of `PLTE` entries.
+        count: usize,
+        /// The `IHDR` bit depth.
+        bit_depth: u8,
+    },
     /// A critical chunk appears out of the order, or more often than, PNG
     /// allows, or `IEND` carries data.
     MalformedChunkStructure([u8; 4]),
@@ -106,6 +114,11 @@ impl fmt::Display for PngError {
             Self::TooManyPaletteEntries(count) => write!(
                 f,
                 "PNG PLTE chunk declares {count} entries: the format allows at most 256"
+            ),
+            Self::PaletteExceedsBitDepth { count, bit_depth } => write!(
+                f,
+                "PNG PLTE chunk declares {count} entries: a {bit_depth}-bit indexed image can index at most {}",
+                1usize << bit_depth
             ),
         }
     }
@@ -154,6 +167,8 @@ const GRAYSCALE_INDEX_MAX: u8 = 15;
 const DEFLATE_COMPRESSION_METHOD: u8 = 0;
 const ADAPTIVE_FILTER_METHOD: u8 = 0;
 const NO_INTERLACE: u8 = 0;
+const ADAM7_INTERLACE: u8 = 1;
+const ONE_BIT_DEPTH: u8 = 1;
 const TWO_BIT_DEPTH: u8 = 2;
 const FOUR_BIT_DEPTH: u8 = 4;
 const EIGHT_BIT_DEPTH: u8 = 8;
@@ -318,6 +333,41 @@ impl Header {
             return Err(PngError::Unsupported("image is interlaced"));
         }
         scanline_layout(self.width as usize, self.height as usize, self.bit_depth)?;
+        Ok(())
+    }
+}
+
+impl Header {
+    /// The `IHDR` checks palette extraction needs. `decode_palette` reads no
+    /// pixels, so it skips the pixel decoder's shape limits (the 2, 4, and
+    /// 8-bit depths, Adam7 interlacing, scanline size) and, like pinned
+    /// `ReadPngPalette` (`tools/gbagfx/convert_png.c`), asks only for a
+    /// well-formed indexed image, which includes the 1-bit depth and Adam7
+    /// interlacing (interlace method 0 or 1).
+    fn validate_palette_source(&self) -> Result<(), PngError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(PngError::Unsupported("width or height is zero"));
+        }
+        if self.color_type != INDEXED_COLOR_TYPE {
+            return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
+        }
+        if !matches!(
+            self.bit_depth,
+            ONE_BIT_DEPTH | TWO_BIT_DEPTH | FOUR_BIT_DEPTH | EIGHT_BIT_DEPTH
+        ) {
+            return Err(PngError::Unsupported(
+                "indexed bit depth is not 1, 2, 4, or 8",
+            ));
+        }
+        if self.compression_method != DEFLATE_COMPRESSION_METHOD {
+            return Err(PngError::Unsupported("compression method is not 0"));
+        }
+        if self.filter_method != ADAPTIVE_FILTER_METHOD {
+            return Err(PngError::Unsupported("filter method is not 0"));
+        }
+        if !matches!(self.interlace_method, NO_INTERLACE | ADAM7_INTERLACE) {
+            return Err(PngError::Unsupported("interlace method is not 0 or 1"));
+        }
         Ok(())
     }
 }
@@ -558,20 +608,40 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 ///
 /// # Errors
 ///
-/// Returns [`PngError`] when framing, a parsed chunk's CRC, or the `PLTE`
-/// shape is invalid.
+/// Returns [`PngError`] when framing, a parsed chunk's CRC, the `IHDR`, or the
+/// `PLTE` shape is invalid, or when the image is not colour type 3 (indexed):
+/// pinned `ReadPngPalette` (`tools/gbagfx/convert_png.c`) reads `PLTE` only
+/// from an indexed image, so a suggested palette in a truecolour or grayscale
+/// PNG is not a game palette.
 pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
     let rest = data
         .strip_prefix(&SIGNATURE)
         .ok_or(PngError::BadSignature)?;
     let chunks = read_chunks(rest)?;
 
+    let ihdr = chunks
+        .iter()
+        .find(|chunk| chunk.kind == IHDR)
+        .ok_or(PngError::Truncated)?;
+    let header = Header::parse(ihdr.data)?;
+    header.validate_palette_source()?;
+
     let plte = chunks
         .iter()
         .find(|chunk| chunk.kind == PLTE)
         .ok_or(PngError::MissingOrBadPalette)?;
 
-    Ok(parse_plte(plte.data)?
+    let entries = parse_plte(plte.data)?;
+    // An indexed image of bit depth `d` can address `2^d` palette slots; the
+    // PNG specification forbids a longer `PLTE`.
+    if entries.len() > 1usize << header.bit_depth {
+        return Err(PngError::PaletteExceedsBitDepth {
+            count: entries.len(),
+            bit_depth: header.bit_depth,
+        });
+    }
+
+    Ok(entries
         .into_iter()
         .map(|[r, g, b]| Rgb888 { r, g, b })
         .collect())
@@ -1234,5 +1304,149 @@ pub(crate) mod tests {
         );
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
+    }
+    #[test]
+    fn decode_palette_rejects_a_truecolor_png_with_a_suggested_plte() {
+        const TRUECOLOR_TYPE: u8 = 2;
+
+        let png = png_of_color_type(
+            TRUECOLOR_TYPE,
+            super::EIGHT_BIT_DEPTH,
+            1,
+            1,
+            &[super::FILTER_NONE, 0, 0, 0],
+            Some(&[1, 2, 3]),
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("colour type is not 3 (indexed)"),
+            "pinned ReadPngPalette only reads PLTE from an indexed image"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_a_grayscale_png_with_a_suggested_plte() {
+        let png = png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            super::FOUR_BIT_DEPTH,
+            1,
+            1,
+            &[super::FILTER_NONE, 0],
+            Some(&[1, 2, 3]),
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("colour type is not 3 (indexed)"),
+            "a grayscale image decodes without a palette, so a PLTE is not its palette"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_empty_ihdr_body() {
+        let mut png = Vec::new();
+        png.extend_from_slice(&super::SIGNATURE);
+        png.extend_from_slice(&chunk(super::IHDR, &[]));
+        png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
+        assert_eq!(decode_palette(&png).unwrap_err(), PngError::Truncated);
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_unsupported_ihdr_shape() {
+        let png = indexed_png_from_raw_with_plte(
+            super::EIGHT_BIT_DEPTH,
+            0,
+            1,
+            &[super::FILTER_NONE],
+            &[1, 2, 3],
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("width or height is zero")
+        );
+    }
+    #[test]
+    fn decode_palette_accepts_a_one_bit_indexed_png() {
+        let png =
+            indexed_png_from_raw_with_plte(1, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(decode_palette(&png).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_indexed_bit_depth_the_png_spec_forbids() {
+        let png = indexed_png_from_raw_with_plte(3, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3]);
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("indexed bit depth is not 1, 2, 4, or 8")
+        );
+    }
+
+    #[test]
+    fn decode_palette_checks_the_ihdr_interlace_method() {
+        let with_interlace = |method: u8| {
+            let mut header = ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1);
+            *header.last_mut().unwrap() = method;
+            let mut png = Vec::new();
+            png.extend_from_slice(&super::SIGNATURE);
+            png.extend_from_slice(&chunk(super::IHDR, &header));
+            png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
+            png.extend_from_slice(&chunk(super::IEND, &[]));
+            png
+        };
+        assert_eq!(decode_palette(&with_interlace(0)).unwrap().len(), 1);
+        assert_eq!(
+            decode_palette(&with_interlace(1)).unwrap().len(),
+            1,
+            "Adam7 interlacing leaves the PLTE valid; decode_palette reads no pixels"
+        );
+        assert_eq!(
+            decode_palette(&with_interlace(2)).unwrap_err(),
+            PngError::Unsupported("interlace method is not 0 or 1")
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_more_plte_entries_than_the_bit_depth_indexes() {
+        let at_cap =
+            indexed_png_from_raw_with_plte(1, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(decode_palette(&at_cap).unwrap().len(), 2);
+
+        let over_cap = indexed_png_from_raw_with_plte(
+            1,
+            1,
+            1,
+            &[super::FILTER_NONE, 0],
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+        );
+        assert_eq!(
+            decode_palette(&over_cap).unwrap_err(),
+            PngError::PaletteExceedsBitDepth {
+                count: 3,
+                bit_depth: 1
+            }
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_a_nonzero_compression_or_filter_method() {
+        // IHDR bytes 10 and 11 (compression, filter) of the 13-byte body.
+        let with_method = |index: usize| {
+            let mut header = ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1);
+            header[index] = 1;
+            let mut png = Vec::new();
+            png.extend_from_slice(&super::SIGNATURE);
+            png.extend_from_slice(&chunk(super::IHDR, &header));
+            png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
+            png.extend_from_slice(&chunk(super::IEND, &[]));
+            png
+        };
+        assert_eq!(
+            decode_palette(&with_method(10)).unwrap_err(),
+            PngError::Unsupported("compression method is not 0")
+        );
+        assert_eq!(
+            decode_palette(&with_method(11)).unwrap_err(),
+            PngError::Unsupported("filter method is not 0")
+        );
     }
 }
