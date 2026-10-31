@@ -1017,3 +1017,152 @@ fn an_ancestor_retargeted_and_restored_mid_acquisition_cannot_bind_the_wrong_dir
     drop(rival.lock().expect("a's own slot was never locked"));
     drop(acquired);
 }
+
+/// The parent retargeted to a FIFO between the identity read and the slot's
+/// open must not block acquisition and must not yield a guard.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_parent_retargeted_to_a_fifo_mid_lock_does_not_block() {
+    let dir = TempDir::new("lock-acquire-fifo-race");
+    let real = dir.join("real");
+    std::fs::create_dir(&real).unwrap();
+    let fifo = dir.join("fifo");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (l, f) = (link.clone(), fifo.clone());
+    std::thread::spawn(move || {
+        let file = SaveFile::at(l.join(SAVE_FILE_NAME));
+        let mut step = 0;
+        let acquired = file.lock_observing(
+            |_| {},
+            || {
+                step += 1;
+                if step == 1 {
+                    std::fs::remove_file(&l).unwrap();
+                    std::os::unix::fs::symlink(&f, &l).unwrap();
+                }
+            },
+        );
+        let _ = tx.send(acquired.map(drop).map_err(|e| format!("{e:?}")));
+    });
+    let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+    if outcome.is_err() {
+        // Unblock a stuck open so the test process can exit; read+write
+        // never blocks on a FIFO, even if no reader is waiting.
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo);
+    }
+    let outcome = outcome.expect("acquisition blocked on a FIFO swapped in for the parent");
+    assert!(
+        outcome.is_err(),
+        "no guard may be issued over a FIFO parent"
+    );
+}
+
+/// A direct write at the lock path is refused before it stages anything, so
+/// the inode a live guard holds is never replaced and no second locker is
+/// admitted alongside it.
+#[cfg(unix)]
+#[test]
+fn a_direct_write_at_the_lock_path_is_refused_and_leaves_the_lock_inode_alone() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = TempDir::new("write-over-the-held-lock");
+    let guard = SaveFile::at(dir.join("game.sav"))
+        .lock()
+        .expect("A's guard");
+    let before = std::fs::metadata(dir.join(LOCK_FILE_NAME)).unwrap();
+    let entries_before = entry_names(&dir);
+
+    let at_lock = SaveFile::at(dir.join(LOCK_FILE_NAME));
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, at_lock.lock_path()),
+        other => panic!("a write at the lock path must be refused, got {other:?}"),
+    }
+
+    let after = std::fs::metadata(dir.join(LOCK_FILE_NAME)).unwrap();
+    assert_eq!(
+        (before.dev(), before.ino(), before.len()),
+        (after.dev(), after.ino(), after.len()),
+        "the lock entry must be the same untouched inode"
+    );
+    assert_eq!(entry_names(&dir), entries_before, "nothing may be staged");
+    let reopened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join(LOCK_FILE_NAME))
+        .unwrap();
+    assert!(
+        reopened.try_lock().is_err(),
+        "a second locker must still be excluded while A holds its guard"
+    );
+    drop(guard);
+}
+
+/// With no lock file yet there is nobody to exclude, but the write is still
+/// refused by name, and it creates neither the lock file nor a staged image.
+#[test]
+fn a_direct_write_at_an_absent_lock_path_is_refused_without_creating_anything() {
+    let dir = TempDir::new("write-at-an-absent-lock");
+    let at_lock = SaveFile::at(dir.join(LOCK_FILE_NAME));
+
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!("a write at the lock path must be refused, got {other:?}"),
+    }
+    assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}
+
+/// The refusal recognises the lock entry by identity as well as by name, as
+/// [`SaveFile::lock`] does: a hard link under another name resolves to it.
+#[cfg(unix)]
+#[test]
+fn a_direct_write_at_another_name_for_the_lock_file_is_refused_too() {
+    let dir = TempDir::new("write-at-a-lock-alias");
+    let guard = SaveFile::at(dir.join("game.sav"))
+        .lock()
+        .expect("A's guard");
+    let linked = SaveFile::at(dir.join("linked.sav"));
+    std::fs::hard_link(dir.join(LOCK_FILE_NAME), linked.path()).unwrap();
+    let entries_before = entry_names(&dir);
+
+    match linked.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, linked.lock_path()),
+        other => panic!("a write resolving to the lock file must be refused, got {other:?}"),
+    }
+    assert_eq!(entry_names(&dir), entries_before, "nothing may be staged");
+    drop(guard);
+}
+
+/// The names in `dir`, sorted.
+fn entry_names(dir: &TempDir) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(&dir.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A case-insensitive volume (macOS, Windows) treats `.EMERALD.LOCK` as the
+/// one `.emerald.lock` entry, so an absent ASCII-case alias of the lock name
+/// is refused before staging, as staging refuses case aliases of the save.
+#[test]
+fn a_direct_write_at_an_absent_case_folded_lock_path_is_refused() {
+    let dir = TempDir::new("write-at-a-case-folded-lock");
+    let at_lock = SaveFile::at(dir.join(&LOCK_FILE_NAME.to_ascii_uppercase()));
+
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!("a write at a case alias of the lock path must be refused, got {other:?}"),
+    }
+    assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}

@@ -4,8 +4,9 @@
 //! [`map_events::ObjectEvent::flag`](crate::map_events::ObjectEvent::flag)
 //! keeps the upstream `flagId` name from each map's `map.json`; [`resolve`]
 //! maps it to the ID in `pokeemerald/include/constants/flags.h`. The table
-//! covers exactly the names used by maps whose layouts the extraction
-//! pipeline bundles, not all of `flags.h`. Its IDs were looked up
+//! covers exactly the names used by the maps
+//! [`maps_with_bundled_layouts`](crate::bundled_overworld::maps_with_bundled_layouts)
+//! returns, not all of `flags.h`. Its IDs were looked up
 //! independently of [`RESET_MAP_FLAGS`](crate::new_game_flags::RESET_MAP_FLAGS),
 //! so a flag in both tables must agree.
 
@@ -60,6 +61,12 @@ const OBJECT_EVENT_FLAGS: &[(&str, u16)] = &[
     ("FLAG_HIDE_ROUTE_101_BOY", 0x3DF),
     ("FLAG_HIDE_ROUTE_101_ZIGZAGOON", 0x2EE),
     ("FLAG_HIDE_OLDALE_TOWN_RIVAL", 0x3D3),
+    ("FLAG_HIDE_POKEMON_CENTER_2F_MYSTERY_GIFT_MAN", 0x2BE),
+    ("FLAG_HIDE_EVER_GRANDE_POKEMON_CENTER_1F_SCOTT", 0x319),
+    ("FLAG_HIDE_FALLARBOR_POKEMON_CENTER_LANETTE", 0x367),
+    ("FLAG_HIDE_FALLARBOR_HOUSE_PROF_COZMO", 0x3A0),
+    ("FLAG_HIDE_MOSSDEEP_CITY_HOUSE_2_WINGULL", 0x3A6),
+    ("FLAG_HIDE_LILYCOVE_POKEMON_CENTER_CONTEST_LADY_MON", 0x3E1),
     ("FLAG_HIDE_ROUTE_103_BIRCH", 0x382),
     ("FLAG_HIDE_ROUTE_103_RIVAL", 0x2D3),
     ("FLAG_TEMP_12", 0x12),
@@ -129,35 +136,9 @@ pub const DECORATION_FLAGS: &[u16] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundled_overworld::maps_with_bundled_layouts;
     use crate::map_events::MapEventsTable;
-    use crate::map_headers::MapHeaderTable;
     use crate::new_game_flags::RESET_MAP_FLAGS;
-    use crate::wild_encounters::MapId;
-
-    /// Mirrors `crates/xtask/src/extract/mod.rs`'s `LAYOUTS`, which `assets`
-    /// cannot depend on. xtask's
-    /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
-    /// fails when that manifest changes, as the prompt to update this mirror.
-    const BUNDLED_LAYOUTS: [&str; 10] = [
-        "LAYOUT_LITTLEROOT_TOWN",
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-        "LAYOUT_ROUTE101",
-        "LAYOUT_OLDALE_TOWN",
-        "LAYOUT_ROUTE103",
-    ];
-
-    fn bundled_maps() -> Vec<MapId> {
-        MapHeaderTable::new()
-            .iter()
-            .filter(|header| BUNDLED_LAYOUTS.contains(&header.layout.name()))
-            .map(|header| header.id)
-            .collect()
-    }
 
     #[test]
     fn the_literal_no_flag_sentinel_resolves_to_the_tolerated_null_id() {
@@ -181,6 +162,22 @@ mod tests {
             resolve("FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM"),
             Some(0x2F6)
         );
+    }
+
+    #[test]
+    fn the_flags_of_the_shared_interior_maps_resolve_to_their_flags_h_ids() {
+        // include/constants/flags.h:751, 844, 922, 979, 985, 1044
+        let cases = [
+            ("FLAG_HIDE_POKEMON_CENTER_2F_MYSTERY_GIFT_MAN", 0x2BE),
+            ("FLAG_HIDE_EVER_GRANDE_POKEMON_CENTER_1F_SCOTT", 0x319),
+            ("FLAG_HIDE_FALLARBOR_POKEMON_CENTER_LANETTE", 0x367),
+            ("FLAG_HIDE_FALLARBOR_HOUSE_PROF_COZMO", 0x3A0),
+            ("FLAG_HIDE_MOSSDEEP_CITY_HOUSE_2_WINGULL", 0x3A6),
+            ("FLAG_HIDE_LILYCOVE_POKEMON_CENTER_CONTEST_LADY_MON", 0x3E1),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(resolve(name), Some(expected), "{name}");
+        }
     }
 
     #[test]
@@ -256,7 +253,7 @@ mod tests {
             .count();
         assert_eq!(
             (hide, decoration, other),
-            (37, 12, 4),
+            (43, 12, 4),
             "FLAG_HIDE_*, FLAG_DECORATION_*, and other entries"
         );
         assert_eq!(
@@ -264,17 +261,17 @@ mod tests {
             OBJECT_EVENT_FLAGS.len(),
             "every entry must be one of those three families"
         );
-        assert_eq!(OBJECT_EVENT_FLAGS.len(), 53);
+        assert_eq!(OBJECT_EVENT_FLAGS.len(), 59);
     }
 
     #[test]
     fn object_event_flag_table_exactly_covers_bundled_maps() {
         let table = MapEventsTable::new();
-        let maps = bundled_maps();
+        let maps = maps_with_bundled_layouts();
         assert_eq!(
             maps.len(),
-            9,
-            "the ten bundled layouts cover nine maps (the lab's \
+            76,
+            "the sixteen bundled layouts cover seventy-six maps (the lab's \
              `_WITH_TABLE` variant is an alternate layout for a map already \
              listed)"
         );

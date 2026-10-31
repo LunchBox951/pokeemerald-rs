@@ -949,9 +949,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     // is used because the fresh event data leaves a decoration placeholder
     // object on the north-edge tile.
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let runtime = scene.runtime();
     let mut walker = PlayerState::new((0, 5), 4, Direction::South);
     walker.step(Some(Direction::South), &runtime, &no_connections, &data);
     while walker.in_transit() {
