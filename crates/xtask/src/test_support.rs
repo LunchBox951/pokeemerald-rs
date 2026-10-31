@@ -57,7 +57,7 @@ impl Owned {
 
     #[cfg(windows)]
     fn still_ours(&self) -> bool {
-        use crate::windows_file_identity::WindowsFileIdentity;
+        use win_fs::WindowsFileIdentity;
         open_directory(&self.path).is_ok_and(|fresh| {
             WindowsFileIdentity::of(&fresh)
                 .and_then(|found| WindowsFileIdentity::of(&self.handle).map(|held| found == held))

@@ -3,8 +3,9 @@
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
+    opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
@@ -74,6 +75,11 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the field-message token table is present.
+pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
 pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
@@ -111,6 +117,78 @@ pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomP
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter-chooser image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `starter-chooser/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_starter_chooser(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = starter_chooser_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("starter-chooser/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's starter-chooser inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every opening-scene image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `opening-scene/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_opening_scene(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = opening_scene_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("opening-scene/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's opening-scene inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
+/// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
+/// the enemy shadow, and the two ball palettes are present, and with
+/// [`GenRomProfileError::StructMismatch`] for a pack `battle-interface/` entry outside the fixed
+/// inventory, which the locator, reading only the inventory, would otherwise silently leave out
+/// of the profile. The same holds for every health-box record the checkout extracts there.
+pub fn require_battle_interface(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected: Vec<String> = battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+        .collect();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("battle-interface/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's battle-interface inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every interface palette is present.
 pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfileError> {
     INTERFACE_PALETTE_IDS
@@ -129,6 +207,10 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battle_anims(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
+    require_field_messages(pack)?;
     require_interface_palettes(pack)?;
-    require_bag(pack, bag_ids)
+    require_bag(pack, bag_ids)?;
+    require_starter_chooser(pack)?;
+    require_opening_scene(pack)?;
+    require_battle_interface(pack)
 }

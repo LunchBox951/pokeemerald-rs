@@ -284,6 +284,13 @@ impl GenderRatio {
             Self::Ratio(n) => n,
         }
     }
+
+    /// Whether a member of the species can be either gender. A stored byte of
+    /// `0x00`, `0xFE` or `0xFF` pins the gender whatever the variant says.
+    #[must_use]
+    pub const fn permits_both_genders(self) -> bool {
+        !matches!(self.raw(), 0x00 | 0xFE | 0xFF)
+    }
 }
 
 /// Effort values awarded when the species is defeated.
@@ -12812,6 +12819,30 @@ mod tests {
     };
     use crate::error::AssetError;
     use crate::type_chart::Type;
+
+    #[test]
+    fn only_mixed_ratio_bytes_permit_both_genders() {
+        for ratio in [
+            GenderRatio::ONE_EIGHTH_FEMALE,
+            GenderRatio::ONE_QUARTER_FEMALE,
+            GenderRatio::HALF_FEMALE,
+            GenderRatio::THREE_QUARTERS_FEMALE,
+            GenderRatio::Ratio(1),
+            GenderRatio::Ratio(0xFD),
+        ] {
+            assert!(ratio.permits_both_genders(), "{ratio:?}");
+        }
+        for ratio in [
+            GenderRatio::Genderless,
+            GenderRatio::AlwaysMale,
+            GenderRatio::AlwaysFemale,
+            GenderRatio::Ratio(0),
+            GenderRatio::Ratio(0xFE),
+            GenderRatio::Ratio(0xFF),
+        ] {
+            assert!(!ratio.permits_both_genders(), "{ratio:?}");
+        }
+    }
 
     #[test]
     fn every_row_has_its_declared_species_identity() {

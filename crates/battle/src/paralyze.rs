@@ -34,7 +34,7 @@ use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Thunder Wave, Stun Spore, and Glare.
-pub const EFFECT_PARALYZE: MoveEffect = MoveEffect(67);
+pub const EFFECT_PARALYZE: MoveEffect = MoveEffect::PARALYZE;
 
 const TYPE_EFFECTIVENESS_PROBE_DAMAGE: u32 = 1;
 

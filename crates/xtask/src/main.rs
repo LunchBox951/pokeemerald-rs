@@ -38,8 +38,6 @@ mod scenario;
 mod staging_names;
 #[cfg(test)]
 mod test_support;
-#[cfg(windows)]
-mod windows_file_identity;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\

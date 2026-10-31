@@ -311,10 +311,15 @@ fn identical_templates_with_no_adjacent_neighbour_are_refused() {
     // pause stream elsewhere, so no candidate abuts it.
     let rom = with_default_specials(with_table(RomFixture::new().emerald_header()), &specials);
     let err = locate_in("bm-apart", rom, pack(payload(&specials))).unwrap_err();
-    assert!(
-        matches!(err, GenRomProfileError::StructMismatch { .. }),
-        "{err}"
-    );
+    // The template that failed to place is blamed; the anchor it was measured
+    // against is named only in the reason.
+    match err {
+        GenRomProfileError::StructMismatch { id, reason } => {
+            assert_eq!(id, "battle-message/table#sText_LegendaryPkmnAppeared");
+            assert!(reason.contains("sText_WildPkmnAppearedPause"), "{reason}");
+        }
+        other => panic!("expected StructMismatch, got {other:?}"),
+    }
 }
 
 #[test]

@@ -12,9 +12,11 @@
 //! a local pack. The room is sized to comfortably contain every
 //! elevation-3 sight trainer at once (Rhett, Marcos, Daisy, Liv, Amy,
 //! Andrew, Miguel); Isabelle and Pete are elevation 1 and so never trigger
-//! against this fixture's uniform elevation-3 ground (an honest fixture
-//! limitation, not a claim they are untestable -- `engine::overworld::trainer_sight`'s
-//! own test suite already pins the elevation-compatibility rule generically).
+//! against this fixture's uniform elevation-3 ground. `real_parties` raises
+//! the one cell Pete's player stands on to elevation 1
+//! (`synthetic_scene_with_cell_elevation`), which is all his one-tile approach
+//! needs; `engine::overworld::trainer_sight`'s own test suite pins the
+//! elevation-compatibility rule generically.
 //!
 //! # The stand-in party (`seed_battle`)
 //!
@@ -25,10 +27,12 @@
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
 //! them (pinned generically by
 //! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`).
-//! Andrew's and Rhett's real parties do construct. The `trigger` tests that
-//! need a refusal use Marcos's id (his party stops at Sonic Boom) in place of
-//! Rhett's at Rhett's cone through `synthetic_sight_trainer`, so the geometry
-//! stays Rhett's while the refused party is real.
+//! Andrew's, Rhett's, Marcos's and Pete's real parties do construct, and
+//! `real_parties` drives each from its own cone to its conclusion. The
+//! `trigger` tests that need a refusal use Isabelle's id (her party stops at
+//! Rollout) in place of Rhett's at Rhett's cone through
+//! `synthetic_sight_trainer`, so the geometry stays Rhett's while the refused
+//! party is real.
 //!
 //! The win/loss/defeated-flag *driver* half
 //! ([`OverworldPhase::advance_sight_trainer_battle_frame`][advance]) is a
@@ -54,6 +58,7 @@
 //!
 //! - `support`: the shared fixtures (Route 103 phase, stand-in battle and
 //!   approach seeds).
+//! - `real_parties`: the four fighting trainers, cone to conclusion.
 //! - `trigger`: cone geometry, refusals, honest cuts, real-pack terrain.
 //! - `battle`: frame ownership, win/loss outcomes, the defeated flag, abort.
 //! - `approach_timing`: the approach's tile timing, handoff and icon frames.
@@ -62,5 +67,6 @@
 mod approach_handoff;
 mod approach_timing;
 mod battle;
+mod real_parties;
 mod support;
 mod trigger;
