@@ -560,3 +560,40 @@ fn magnet_pull_does_not_refuse_a_non_steel_runner() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
     assert_eq!(battle.run_tries(), 1);
 }
+
+#[test]
+fn a_run_turn_escapes_on_a_draw_whose_high_byte_alone_would_fail_it() {
+    let dex = Dex::new();
+    let player = slow_runner_rattata(&dex);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let (player_speed, enemy_speed) = (player.stats().speed, enemy.stats().speed);
+    assert_eq!((player_speed, enemy_speed), (13, 85));
+    // 13 * 128 / 85 = 19 with no previous attempt.
+    let escape_threshold: u16 = 19;
+    assert_eq!(
+        u16::try_from(player_speed * 128 / enemy_speed).unwrap(),
+        escape_threshold
+    );
+
+    // `TryRunFromBattle` compares `Random() & 0xFF` (`battle_util.c:463`-
+    // `:470`). The low byte 18 beats 19, while the high byte 255 and the
+    // whole draw 0xFF12 are far above it, so only a low-byte comparison
+    // escapes.
+    let escape_roll_with_high_byte = 0xFF00 | (escape_threshold - 1);
+    let mut rng = SequenceRng::new([0, 0, 0, escape_roll_with_high_byte]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(battle.run_tries(), 1);
+    rng.assert_exhausted();
+}
