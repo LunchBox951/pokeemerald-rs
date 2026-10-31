@@ -374,6 +374,20 @@ pub struct BattleMessageRoots {
     pub specials: &'static [SpecialMessageRoot],
 }
 
+/// One field message and the upstream symbol it is.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldMessageRoot {
+    /// The upstream symbol, which must be the matching entry of
+    /// `assets::pack::FieldMessage::ALL`. Recorded so a profile whose roots
+    /// drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the message's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+}
+
 /// One battle-animation program: a label and where its commands start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimProgramRoot {
@@ -570,6 +584,8 @@ pub struct Roots {
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,
+    /// The field-message token table.
+    pub field_messages: &'static [FieldMessageRoot],
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -620,6 +636,7 @@ impl Roots {
             programmable_wave: &[],
         },
         battle_messages: BattleMessageRoots::NONE,
+        field_messages: &[],
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,

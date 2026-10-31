@@ -147,7 +147,7 @@ pub(crate) enum PartyError {
     /// later moves and PP on the next save.
     InteriorEmptyMove,
     /// The saved primary-status word is not one the battle model carries --
-    /// burn, freeze, bad poison (with or without its counter), several
+    /// freeze, bad poison (with or without its counter), several
     /// conditions at once, or bits outside `STATUS1_ANY`. Decoding it as
     /// healthy would let the next save erase the condition, so the record
     /// stays undecoded and its bytes untouched.
@@ -190,12 +190,13 @@ impl From<battle::BattleError> for PartyError {
     }
 }
 
-/// `STATUS1_SLEEP`, `STATUS1_POISON`, `STATUS1_PARALYSIS` -- the primary
-/// status word's encodings for the conditions `battle::Status1` carries
-/// (`pokeemerald/include/constants/battle.h:114-121`). The sleep bits are a
+/// `STATUS1_SLEEP`, `STATUS1_POISON`, `STATUS1_BURN`, `STATUS1_PARALYSIS` --
+/// the primary status word's encodings for the conditions `battle::Status1`
+/// carries (`pokeemerald/include/constants/battle.h:114-121`). The sleep bits are a
 /// three-bit remaining-turn count, not a flag.
 const STATUS1_SLEEP_MASK: u32 = 7;
 const STATUS1_POISON: u32 = 1 << 3;
+const STATUS1_BURN: u32 = 1 << 4;
 const STATUS1_PARALYSIS: u32 = 1 << 6;
 
 /// Decodes the save record's primary status word (`MON_DATA_STATUS`, copied
@@ -203,7 +204,7 @@ const STATUS1_PARALYSIS: u32 = 1 << 6;
 /// `pokeemerald/src/battle_controller_player.c:1636-1640`) into the battle
 /// model's [`battle::Status1`].
 ///
-/// Exactly one modelled condition decodes; burn, freeze, bad poison, any
+/// Exactly one modelled condition decodes; freeze, bad poison, any
 /// combination, the toxic counter bits, and anything above `STATUS1_ANY`
 /// (`battle.h:125`) fail closed rather than being masked into a neighbour.
 fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
@@ -214,6 +215,7 @@ fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
             turns: u8::try_from(word).unwrap_or(u8::MAX),
         }),
         STATUS1_POISON => Ok(battle::Status1::Poisoned),
+        STATUS1_BURN => Ok(battle::Status1::Burned),
         STATUS1_PARALYSIS => Ok(battle::Status1::Paralysed),
         unsupported => Err(PartyError::UnsupportedStatus(unsupported)),
     }
@@ -236,6 +238,7 @@ fn status1_to_word(status1: battle::Status1) -> u32 {
         battle::Status1::Healthy | battle::Status1::Asleep { turns: 0 } => 0,
         battle::Status1::Paralysed => STATUS1_PARALYSIS,
         battle::Status1::Poisoned => STATUS1_POISON,
+        battle::Status1::Burned => STATUS1_BURN,
         battle::Status1::Asleep { turns } => {
             let word = u32::from(turns);
             assert!(
