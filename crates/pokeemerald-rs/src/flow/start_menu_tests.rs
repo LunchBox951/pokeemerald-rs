@@ -15,7 +15,7 @@
 
 use platform::{ButtonState, Buttons, GBA_WIDTH};
 
-use super::overworld_phase::{ActiveBattle, OverworldPhase};
+use super::overworld_phase::{ActiveBattle, OverworldPhase, WildBattle};
 use super::save_continue_support::{new_game_phase, settle};
 use super::tests::{held, pressed, TempSave};
 use crate::new_game;
@@ -77,7 +77,7 @@ fn the_start_menu_does_not_open_mid_battle() {
         &mut rng,
     )
     .expect("a Wurmple encounter is fightable");
-    phase.active_battle = Some(ActiveBattle::Wild(battle));
+    phase.active_battle = Some(ActiveBattle::Wild(WildBattle::without_reserves(battle)));
     assert!(phase.in_battle());
 
     assert!(

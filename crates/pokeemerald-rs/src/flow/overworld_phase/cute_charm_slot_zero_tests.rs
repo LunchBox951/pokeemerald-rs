@@ -10,7 +10,7 @@ use engine::rng::Rng;
 use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, WildBattle};
 
 const WURMPLE: SpeciesId = SpeciesId(290);
 const CLEFAIRY: SpeciesId = SpeciesId(35);
@@ -59,7 +59,7 @@ fn wild_gender_and_lead_slot(party: [&BattlePokemon; 2], rng: Rng) -> (Gender, u
         level: 2,
         slot: 0,
     }));
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("a healthy lead must fight");
     };
     let ratio = dex.species(WURMPLE).unwrap().gender_ratio;
