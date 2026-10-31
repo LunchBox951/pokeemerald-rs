@@ -11,9 +11,9 @@ use engine::overworld::{Direction, PlayerState};
 
 use super::test_support::{
     image_meta, synthetic_overworld_pack_bytes_for, synthetic_overworld_pack_entries_for,
-    synthetic_scene, synthetic_scene_result, synthetic_scene_result_with_connections,
-    synthetic_scene_result_with_connections_and_events, write_synthetic_pack, Entry,
-    PALETTE_KIND_TAG,
+    synthetic_patterned_scene, synthetic_scene, synthetic_scene_result,
+    synthetic_scene_result_with_connections, synthetic_scene_result_with_connections_and_events,
+    write_synthetic_pack, Entry, PALETTE_KIND_TAG,
 };
 
 /// `DEFAULT_ROOM_MAP_ID` is a literal rather than an import of
@@ -2476,4 +2476,125 @@ fn a_scene_runtime_answers_for_the_room_it_owns() {
     assert_eq!(runtime.id(), header.id);
     assert_eq!(runtime.header(), &header);
     assert_eq!(scene.map_events(), events);
+}
+
+// -- BG mosaic hook ----------------------------------------------------------
+
+/// `REG_MOSAIC` values `Task_FieldPoisonEffect` writes while its `tMosaic`
+/// ramps 2, 4, 6, 8, 10 and back down to 0, as `(tMosaic << 4) | tMosaic`
+/// (`pokeemerald/src/fldeff_misc.c:1212-1226`).
+const POISON_SWEEP_REGISTERS: [u8; 10] =
+    [0x22, 0x44, 0x66, 0x88, 0xAA, 0x88, 0x66, 0x44, 0x22, 0x00];
+
+/// The BG size field of a `REG_MOSAIC` value: `MOSAIC_BG_H` in bits 0-3 and
+/// `MOSAIC_BG_V` in bits 4-7.
+fn bg_size_of_register(register: u8) -> rendering::MosaicSize {
+    rendering::MosaicSize::from_raw(register & 0x0F, register >> 4)
+}
+
+/// Whether `(x, y)` is inside the player avatar's 16x32 sprite footprint.
+fn in_player_footprint(x: usize, y: usize) -> bool {
+    let (left, top) = (
+        usize::from(super::avatar::PLAYER_OBJ_X),
+        usize::from(super::avatar::PLAYER_OBJ_Y),
+    );
+    (left..left + 16).contains(&x) && (top..top + 32).contains(&y)
+}
+
+fn patterned_frames(
+    bg_mosaic: Option<rendering::MosaicSize>,
+) -> (rendering::Framebuffer, rendering::Framebuffer) {
+    let scene = synthetic_patterned_scene(8, 8);
+    let player = PlayerState::new((2, 3), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let compose = |bg_mosaic| {
+        scene.compose_staged(
+            &player,
+            &event_data,
+            0,
+            rendering::PaletteStage::default(),
+            bg_mosaic,
+        )
+    };
+    (compose(None), compose(bg_mosaic))
+}
+
+#[test]
+fn no_bg_mosaic_composes_the_frame_the_unit_block_size_does() {
+    let (plain, unit) = patterned_frames(Some(rendering::MosaicSize::NONE));
+    assert_eq!(plain.pixels(), unit.pixels());
+    assert_eq!(
+        plain.pixels(),
+        patterned_frames(None).1.pixels(),
+        "the mosaic bits enabled on the overworld BGs are inert without a size"
+    );
+}
+
+#[test]
+fn a_register_derived_bg_size_flattens_native_bg_pixels_to_block_origins() {
+    for register in POISON_SWEEP_REGISTERS {
+        let size = bg_size_of_register(register);
+        let (plain, mosaicked) = patterned_frames(Some(size));
+        let mut flattened = 0;
+        for y in 0..rendering::Framebuffer::HEIGHT {
+            for x in 0..rendering::Framebuffer::WIDTH {
+                let (origin_x, origin_y) = size.snap(x, y);
+                if in_player_footprint(x, y) || in_player_footprint(origin_x, origin_y) {
+                    continue;
+                }
+                assert_eq!(
+                    mosaicked.pixel(x, y),
+                    plain.pixel(origin_x, origin_y),
+                    "register {register:#04x}: ({x}, {y}) must show its block origin \
+                     ({origin_x}, {origin_y})"
+                );
+                flattened += usize::from(mosaicked.pixel(x, y) != plain.pixel(x, y));
+            }
+        }
+        assert_eq!(
+            flattened > 0,
+            register != 0,
+            "register {register:#04x}: a block above one pixel must change the patterned BG"
+        );
+    }
+}
+
+#[test]
+fn the_horizontal_and_vertical_register_fields_size_the_bg_blocks_independently() {
+    for (h, v) in [(3u8, 0u8), (0, 3), (5, 2)] {
+        let size = rendering::MosaicSize::from_raw(h, v);
+        let (plain, mosaicked) = patterned_frames(Some(size));
+        for y in 0..rendering::Framebuffer::HEIGHT {
+            for x in 0..rendering::Framebuffer::WIDTH {
+                let (origin_x, origin_y) = size.snap(x, y);
+                if in_player_footprint(x, y) || in_player_footprint(origin_x, origin_y) {
+                    continue;
+                }
+                assert_eq!(
+                    mosaicked.pixel(x, y),
+                    plain.pixel(origin_x, origin_y),
+                    "fields ({h}, {v}): ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_bg_mosaic_leaves_the_player_sprite_unsampled_by_blocks() {
+    let size = bg_size_of_register(0xAA);
+    let left = usize::from(super::avatar::PLAYER_OBJ_X);
+    let top = usize::from(super::avatar::PLAYER_OBJ_Y);
+    assert!(
+        left % 11 != 0 && top % 11 != 0,
+        "the footprint must straddle block edges, or a leak onto the sprite would hide"
+    );
+    let (plain, mosaicked) = patterned_frames(Some(size));
+    let blue = rendering::Bgr555::from_raw(0x7C00).to_rgb888();
+    for y in top..top + 32 {
+        for x in left..left + 16 {
+            assert_eq!(mosaicked.pixel(x, y), plain.pixel(x, y), "({x}, {y})");
+            assert_eq!(mosaicked.pixel(x, y), Some(blue), "({x}, {y})");
+        }
+    }
 }

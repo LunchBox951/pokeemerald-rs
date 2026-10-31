@@ -53,7 +53,7 @@ use assets::{
 };
 use rendering::{
     compose_frame_with_effects, BgLayer, BgSlot, Bgr555, BitDepth, FrameEffects, Framebuffer,
-    Palette, PaletteStage, RenderError, SpriteLayer, Tileset,
+    MosaicConfig, MosaicSize, Palette, PaletteStage, RenderError, SpriteLayer, Tileset,
 };
 
 /// Selects the player avatar assets used to build an overworld scene.
@@ -564,13 +564,17 @@ impl OverworldScene {
     /// validates those bytes, and tile animation only patches existing byte ranges.
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
-        self.compose_staged(player, event_data, tick, PaletteStage::default())
+        self.compose_staged(player, event_data, tick, PaletteStage::default(), None)
     }
 
     /// [`Self::compose`] with `palette` applied to the BG and OBJ palette
     /// colours before composition, as upstream's palette fade blends the
     /// palette RAM the hardware samples (`pokeemerald/src/palette.c:407-509`).
     /// The default stage is the identity.
+    ///
+    /// `bg_mosaic` is the background block size the three overworld BG layers
+    /// sample at, decoded from a `REG_MOSAIC` value with [`MosaicSize::from_raw`];
+    /// sprites are not mosaicked. `None` composes with no mosaic.
     ///
     /// # Panics
     ///
@@ -582,15 +586,22 @@ impl OverworldScene {
         event_data: &EventData,
         tick: u32,
         palette: PaletteStage<'_>,
+        bg_mosaic: Option<MosaicSize>,
     ) -> Framebuffer {
         let player_first_oam_entries = self.sprites.entries(player, event_data);
-        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
+        self.compose_with_sprite_entries(
+            player,
+            tick,
+            &player_first_oam_entries,
+            palette,
+            bg_mosaic,
+        )
     }
 
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
     /// tile, facing, and elevation instead of the scene's authored templates,
-    /// under `palette` as [`Self::compose_staged`] applies it.
-    /// `objects` must be seeded from this scene's map events.
+    /// under `palette` and `bg_mosaic` as [`Self::compose_staged`] applies
+    /// them. `objects` must be seeded from this scene's map events.
     #[must_use]
     pub fn compose_live(
         &self,
@@ -599,9 +610,16 @@ impl OverworldScene {
         tick: u32,
         objects: &engine::overworld::object_event::ObjectEventCollection,
         palette: PaletteStage<'_>,
+        bg_mosaic: Option<MosaicSize>,
     ) -> Framebuffer {
         let player_first_oam_entries = self.sprites.live_entries(objects, player, event_data);
-        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
+        self.compose_with_sprite_entries(
+            player,
+            tick,
+            &player_first_oam_entries,
+            palette,
+            bg_mosaic,
+        )
     }
 
     /// [`Self::compose`] with every sprite layer empty: only the three
@@ -613,15 +631,27 @@ impl OverworldScene {
             tick,
             &[],
             PaletteStage::default(),
+            None,
         ))
     }
 
+    /// Composes the three overworld BG layers and `sprite_entries`.
+    ///
+    /// Every BG slot has its mosaic bit set, as `InitOverworldBgs` sets
+    /// `BG_ATTR_MOSAIC` on BG1 to BG3 (`pokeemerald/src/overworld.c:1404-1406`).
+    /// `bg_mosaic` is the size `Task_FieldPoisonEffect` writes to `REG_MOSAIC`
+    /// each frame (`pokeemerald/src/fldeff_misc.c:1226`), decoded through
+    /// [`MosaicSize::from_raw`]; it applies to those layers only. Sprites
+    /// follow the OBJ size, which stays [`MosaicSize::NONE`]. With `None` the
+    /// size is [`MosaicSize::NONE`], whose one-pixel blocks leave the frame
+    /// unchanged.
     fn compose_with_sprite_entries(
         &self,
         player: &PlayerState,
         tick: u32,
         sprite_entries: &[rendering::OamEntry],
         palette: PaletteStage<'_>,
+        bg_mosaic: Option<MosaicSize>,
     ) -> Framebuffer {
         let viewport::FrameViewport {
             bottom,
@@ -655,7 +685,8 @@ impl OverworldScene {
                 scroll_x,
                 scroll_y,
                 backgrounds_enabled,
-            ),
+            )
+            .with_mosaic(true),
             BgSlot::new(
                 middle_layer,
                 viewport::MIDDLE_BG_INDEX,
@@ -663,7 +694,8 @@ impl OverworldScene {
                 scroll_x,
                 scroll_y,
                 backgrounds_enabled,
-            ),
+            )
+            .with_mosaic(true),
             BgSlot::new(
                 top_layer,
                 viewport::TOP_BG_INDEX,
@@ -671,7 +703,8 @@ impl OverworldScene {
                 scroll_x,
                 scroll_y,
                 backgrounds_enabled,
-            ),
+            )
+            .with_mosaic(true),
         ];
 
         let sprites = SpriteLayer::new(
@@ -686,6 +719,10 @@ impl OverworldScene {
         let effects = FrameEffects {
             backdrop: self.world_palette.color(0).to_rgb888(),
             palette,
+            mosaic: MosaicConfig {
+                bg: bg_mosaic.unwrap_or(MosaicSize::NONE),
+                obj: MosaicSize::NONE,
+            },
             ..FrameEffects::default()
         };
         compose_frame_with_effects(&sprites, &background_slots, &effects)
