@@ -697,22 +697,14 @@ impl AssetPack {
         size: (u32, u32),
         colors: u16,
     ) -> Result<PalettedImage<'_>, PackError> {
-        let image = self.bag_sheet(image_id, size)?;
-        let palette = self.bag_palette(palette_id, colors)?;
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
-        {
-            return Err(malformed(
-                image_id,
-                format!(
-                    "has pixel index {pixel}: its palette only has {} colours",
-                    palette.color_count
-                ),
-            ));
-        }
-        Ok(PalettedImage { image, palette })
+        self.paired_image(
+            image_id,
+            palette_id,
+            size,
+            SOURCE_BIT_DEPTH,
+            colors,
+            |id, detail| PackError::MalformedBagAsset { id, detail },
+        )
     }
 }
 
