@@ -145,8 +145,8 @@ verify_pinned() {
     # replacement ref slipped past; fsmonitor off so no hook can assert
     # "nothing changed" on git's behalf.
     dirty="$(git --no-replace-objects -C "$dir" \
-        -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
-        -c core.fsmonitor=false -c core.attributesFile=/dev/null \
+        -c core.autocrlf=false -c core.eol=lf -c core.excludesFile= \
+        -c core.fsmonitor=false -c core.attributesFile= \
         -c core.checkStat=default \
         status --porcelain --ignored --untracked-files=all)"
     if [[ -n "$dirty" ]]; then

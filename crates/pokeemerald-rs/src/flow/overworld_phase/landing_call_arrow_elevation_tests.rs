@@ -11,13 +11,7 @@ const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F")
 const DOORMAT: (u16, u16) = (7, 8);
 
 fn center_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new()
-        .header(CENTER)
-        .expect("Oldale Town's Pokemon Center resolves in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(CENTER)
-        .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
-    scene.runtime(CENTER, header, events)
+    scene.runtime()
 }
 
 /// Asserted on [`super::step::PreMovementFieldInput`], since pack-free

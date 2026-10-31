@@ -24,7 +24,7 @@ fn a_phase_with_a_traded_lead() -> OverworldPhase {
     let mut phase = new_game_phase();
     phase.save2.player_trainer_id = PLAYER_OT_ID.to_le_bytes();
     let lead = crate::new_game::provisional_starter().with_original_trainer_id(TRADED_LEAD_OT_ID);
-    phase.party_lead = Some(lead);
+    phase.set_fresh_lead_for_test(lead);
     phase
 }
 
