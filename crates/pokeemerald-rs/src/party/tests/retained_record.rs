@@ -137,12 +137,14 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
 fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
     const STATUS1_NONE: u32 = 0;
     const STATUS1_POISON: u32 = 8;
+    const STATUS1_BURN: u32 = 16;
     const STATUS1_PARALYSIS: u32 = 64;
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();
     assert_eq!(stored.status, STATUS1_PARALYSIS, "fixture sanity");
     for (in_battle_status, expected_word) in [
         (battle::Status1::Poisoned, STATUS1_POISON),
+        (battle::Status1::Burned, STATUS1_BURN),
         (battle::Status1::Paralysed, STATUS1_PARALYSIS),
         (battle::Status1::Asleep { turns: 3 }, 3),
         (battle::Status1::Asleep { turns: 0 }, STATUS1_NONE),

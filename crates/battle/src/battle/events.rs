@@ -576,12 +576,23 @@ pub enum BattleEvent {
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
     },
+    /// `STRINGID_PKMNHURTBYBURN` (`data/battle_scripts_1.s:3750`-`:3753`): a
+    /// burned battler's `ENDTURN_BURN` tick, which follows its
+    /// [`BattleEvent::HurtByPoison`] slot (`pokeemerald/src/battle_util.c:1550`-
+    /// `:1560`).
+    HurtByBurn {
+        /// Whether the player's battler was hurt.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the tick.
+        damage: u32,
+    },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
     /// holder's end-turn draw cured its primary status, before that
-    /// battler's own [`BattleEvent::HurtByPoison`] tick would otherwise run
-    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON`,
-    /// `pokeemerald/src/battle_util.c:1494`-`:1535`).
+    /// battler's own [`BattleEvent::HurtByPoison`] or
+    /// [`BattleEvent::HurtByBurn`] tick would otherwise run
+    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON` and `ENDTURN_BURN`,
+    /// `pokeemerald/src/battle_util.c:1494`-`:1560`).
     ShedSkinCured {
         /// Whether the player's battler was cured.
         by_player: bool,
