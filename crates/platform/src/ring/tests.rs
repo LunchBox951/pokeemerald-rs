@@ -454,3 +454,57 @@ fn a_stop_after_the_first_read_claims_its_discard_keeps_what_queues_after_it() {
     );
     assert_eq!(consumer.available(), 2);
 }
+
+thread_local! {
+    /// Run inside a bounded first-read discard, after its queue snapshot
+    /// and before its count is settled, as a push racing the callback would.
+    static BETWEEN_BOUNDED_DISCARD_LOADS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn between_bounded_discard_loads() {
+    if let Some(hook) = BETWEEN_BOUNDED_DISCARD_LOADS.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[test]
+fn a_bounded_first_read_discard_drops_stale_history_despite_a_racing_push() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    consumer.discard_queued_at_first_read();
+    // The stop marks after the stale history and narrows the discard.
+    producer.keep_pushed_from_at_first_read(producer.pushed());
+    let racer = producer.clone();
+    BETWEEN_BOUNDED_DISCARD_LOADS.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            assert_eq!(racer.push(&[0.5; 4]), 4);
+        }));
+    });
+
+    let mut out = [0.0; 4];
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [0.5; 4],
+        "the stale samples before the mark are dropped"
+    );
+}
+
+#[test]
+fn a_bounded_discard_after_reads_counts_only_what_is_still_queued() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 4]), 4);
+    assert_eq!(consumer.try_pop(), Some(0.25));
+    assert_eq!(consumer.try_pop(), Some(0.25));
+    let mark = producer.pushed();
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    consumer.discard_queued_at_first_read();
+    producer.keep_pushed_from_at_first_read(mark);
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [0.5; 2],
+        "two stale samples were already read; only the other two are dropped"
+    );
+    assert_eq!(consumer.available(), 0);
+}

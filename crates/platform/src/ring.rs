@@ -56,6 +56,13 @@ struct Shared {
     /// while `head` is held, so it and the write index advance together;
     /// [`Producer::pushed`] reads it without the lock.
     pushed: AtomicU64,
+    /// Samples ever taken off the queue, read or discarded, wrapping.
+    /// Written only by the consumer side, so with `pushed` it fixes the
+    /// queue's position in push order: the queued samples pushed before a
+    /// [`Producer::pushed`] mark number `mark - consumed`, whatever the
+    /// producer pushes meanwhile. Kept here so a reclaimed consumer
+    /// continues the count.
+    consumed: AtomicU64,
     /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
     /// claimed after the previous one is dropped with its device stream.
     consumer_alive: AtomicBool,
@@ -98,6 +105,7 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
         pushed: AtomicU64::new(0),
+        consumed: AtomicU64::new(0),
         consumer_alive: AtomicBool::new(true),
         pending_discard: AtomicU64::new(NO_DISCARD),
     });
@@ -282,6 +290,7 @@ impl Consumer {
         let idx = self.tail % self.shared.capacity;
         let sample = f32::from_bits(self.shared.buffer[idx].load(Ordering::Relaxed));
         self.tail = (self.tail + 1) % self.shared.capacity;
+        self.shared.consumed.fetch_add(1, Ordering::Relaxed);
         // Release: publishes the freed slot to the producer's `Acquire`
         // load of `occupied`.
         self.shared.occupied.fetch_sub(1, Ordering::Release);
@@ -328,6 +337,10 @@ impl Consumer {
         }
         if drained > 0 {
             self.tail = (self.tail + drained) % self.shared.capacity;
+            self.shared.consumed.fetch_add(
+                u64::try_from(drained).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
             // Release: publishes the freed slots to the producer's `Acquire`
             // load of `occupied`.
             self.shared.occupied.fetch_sub(drained, Ordering::Release);
@@ -392,26 +405,23 @@ impl Consumer {
             NO_DISCARD => return,
             DISCARD_ALL => claimed,
             mark => {
-                // Narrowed before the claim: what is queued now, less what
-                // was pushed since the mark. The `occupied` load precedes the
-                // `pushed` one, which follows the producer's count of every
-                // sample it publishes, so a push landing between them is
-                // counted as pushed since the mark but not as queued: this
-                // errs toward keeping a sample, never toward dropping one
-                // after `mark`.
-                let queued = self.shared.occupied.load(Ordering::Acquire);
-                let since = self
-                    .shared
-                    .pushed
-                    .load(Ordering::Relaxed)
-                    .wrapping_sub(mark);
-                queued - queued.min(usize::try_from(since).unwrap_or(usize::MAX))
+                // Narrowed before the claim: the queued samples pushed
+                // before the mark. Both counts are fixed from this side,
+                // the mark by the producer's `stop` and `consumed` by this
+                // consumer, so a push landing meanwhile changes neither;
+                // `claimed` bounds it only against a mark past the queue.
+                #[cfg(test)]
+                tests::between_bounded_discard_loads();
+                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), claimed)
             }
         };
         if queued == 0 {
             return;
         }
         self.tail = (self.tail + queued) % self.shared.capacity;
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
         // Release: publishes the freed slots to the producer's `Acquire`
         // load of `occupied`.
         self.shared.occupied.fetch_sub(queued, Ordering::Release);
@@ -437,6 +447,18 @@ impl Drop for Consumer {
     }
 }
 
+/// How many of `queued` samples were pushed before `mark`: the samples
+/// numbered from `consumed` up to `mark` in push order, none if the mark
+/// predates the queue, and at most the queue if it lies past it.
+fn stale_before(mark: u64, consumed: u64, queued: usize) -> usize {
+    usize::try_from(
+        mark.wrapping_sub(consumed)
+            .min(u64::try_from(queued).unwrap_or(u64::MAX)),
+    )
+    .unwrap_or(usize::MAX)
+    .min(queued)
+}
+
 /// A [`Consumer`] whose producer is held off; see [`Consumer::hold_pushes`].
 pub(crate) struct HeldQueue<'a> {
     head: std::sync::MutexGuard<'a, usize>,
@@ -448,28 +470,29 @@ impl HeldQueue<'_> {
     /// Drop every queued sample, without counting an underrun.
     pub(crate) fn discard_all(&mut self) {
         *self.tail = *self.head;
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
         self.shared.occupied.store(0, Ordering::Release);
     }
 
     /// Drop the queued samples pushed before [`Producer::pushed`] returned
     /// `mark`, keeping those pushed since, without counting an underrun.
     ///
-    /// Queued samples are unread and in push order, so the newest
-    /// `pushed - mark` of them are the ones pushed after the mark.
+    /// Queued samples are unread and in push order, so the oldest
+    /// `mark - consumed` of them are the ones pushed before the mark.
     pub(crate) fn discard_pushed_before(&mut self, mark: u64) {
-        let since = self
-            .shared
-            .pushed
-            .load(Ordering::Relaxed)
-            .wrapping_sub(mark);
-        let since = usize::try_from(since).unwrap_or(usize::MAX);
         // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
         let queued = self.shared.occupied.load(Ordering::Acquire);
-        let stale = queued - queued.min(since);
+        let stale = stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), queued);
         if stale == 0 {
             return;
         }
         *self.tail = (*self.tail + stale) % self.shared.capacity;
+        self.shared
+            .consumed
+            .fetch_add(u64::try_from(stale).unwrap_or(u64::MAX), Ordering::Relaxed);
         // Release: publishes the freed slots to the producer's `Acquire`
         // load of `occupied`.
         self.shared.occupied.fetch_sub(stale, Ordering::Release);
