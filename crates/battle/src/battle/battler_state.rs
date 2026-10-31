@@ -53,15 +53,62 @@ pub enum LastLandedMove {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerishSongTurns(pub u8);
 
+/// `gDisableStructs[battler].isFirstTurn` when a battler has just entered the
+/// field: `BattleStartClearSetData`, `SwitchInClearSetData` and
+/// `FaintClearSetData` all write 2 (`battle_main.c:3051`, `:3220`, `:3312`).
+const FRESH_FIRST_TURN: u8 = 2;
+
 /// Everything the battle remembers about one battler's time on the field.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BattlerState {
     last_landed_move: LastLandedMove,
     last_hitter: Option<BattlerSide>,
     perish_song: Option<PerishSongTurns>,
+    /// `isFirstTurn`: 2 until the first end-of-turn cleanup after the battler
+    /// entered, then 1, then 0. Speed Boost is suppressed only while it is 2.
+    first_turn: u8,
+}
+
+impl Default for BattlerState {
+    /// A battler that has just entered the field (a send-out or a faint
+    /// clear), whose Speed Boost stays quiet until the turn after the next
+    /// end-turn cleanup.
+    fn default() -> Self {
+        Self {
+            last_landed_move: LastLandedMove::None,
+            last_hitter: None,
+            perish_song: None,
+            first_turn: FRESH_FIRST_TURN,
+        }
+    }
 }
 
 impl BattlerState {
+    /// An initial lead: `BattleStartClearSetData` sets `isFirstTurn` to 2 and
+    /// `TryDoEventsBeforeFirstTurn`'s `TurnValuesCleanUp(FALSE)` takes it to 1
+    /// before turn one (`battle_main.c:3051`, `:3901`, `:4875`-`:4876`), so a
+    /// lead's Speed Boost already acts at the end of turn one.
+    pub(super) const fn initial_lead() -> Self {
+        Self {
+            last_landed_move: LastLandedMove::None,
+            last_hitter: None,
+            perish_song: None,
+            first_turn: FRESH_FIRST_TURN - 1,
+        }
+    }
+
+    /// Whether `isFirstTurn` is 2, the only value Speed Boost refuses
+    /// (`battle_util.c:2643`).
+    pub(super) const fn suppresses_speed_boost(self) -> bool {
+        self.first_turn == FRESH_FIRST_TURN
+    }
+
+    /// `TurnValuesCleanUp(FALSE)`'s `isFirstTurn--` when nonzero
+    /// (`battle_main.c:4875`-`:4876`).
+    pub(super) fn tick_first_turn(&mut self) {
+        self.first_turn = self.first_turn.saturating_sub(1);
+    }
+
     /// Returns the last move that landed on this battler (`gLastLandedMoves`).
     #[must_use]
     pub const fn last_landed_move(&self) -> LastLandedMove {

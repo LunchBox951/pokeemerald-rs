@@ -21,7 +21,8 @@ use crate::escape::{ensure_admissible, try_run_from_battle};
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
-use crate::stat_change;
+use crate::stat_change::{self, ChangedStat};
+use crate::stat_stage::StatStage;
 use crate::status1::{
     burn_residual_damage, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
     tick_sleep, SleepTick, Status1,
@@ -121,6 +122,11 @@ pub struct Battle {
     /// Move history and Perish Song state per battler, `[player, enemy]`,
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
+    /// Whether the end-turn pass has started and `TurnValuesCleanUp(FALSE)`
+    /// (`pokeemerald/src/battle_main.c:3974`) has not yet run behind it: a
+    /// move-learn prompt raised by a residual faint holds the cleanup, and
+    /// the replacement it waits for, until the prompt is answered.
+    end_turn_cleanup_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -268,7 +274,7 @@ impl Battle {
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
-    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
+    /// Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
@@ -347,7 +353,8 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
-            battler_states: [BattlerState::default(); 2],
+            battler_states: [BattlerState::initial_lead(); 2],
+            end_turn_cleanup_pending: false,
         })
     }
 
@@ -491,7 +498,8 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
-            battler_states: [BattlerState::default(); 2],
+            battler_states: [BattlerState::initial_lead(); 2],
+            end_turn_cleanup_pending: false,
         })
     }
 
@@ -625,6 +633,7 @@ impl Battle {
                 self.residual_effects(chosen, &mut events, rng)?;
                 self.handle_fainted_mons(&mut events)?;
             }
+            self.finish_end_turn_cleanup();
         }
         Ok(events)
     }
@@ -978,7 +987,33 @@ impl Battle {
         // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
         self.last_move_used = MOVE_NONE;
         self.residual_effects(chosen, events, rng)?;
-        self.handle_fainted_mons(events)
+        self.handle_fainted_mons(events)?;
+        self.finish_end_turn_cleanup();
+        Ok(())
+    }
+
+    /// `BattleTurnPassed`'s closing `TurnValuesCleanUp(FALSE)`, which runs
+    /// after the end-turn effects and `HandleFaintedMonActions` have settled
+    /// and decrements every battler's `isFirstTurn`
+    /// (`pokeemerald/src/battle_main.c:3960`-`:3974`, `:4875`-`:4876`). A
+    /// replacement sent out behind the residual pass is therefore already past
+    /// its suppressed turn, while one sent out earlier this turn is not.
+    /// Waits while a move-learn prompt holds the replacement back.
+    fn finish_end_turn_cleanup(&mut self) {
+        if !self.end_turn_cleanup_pending {
+            return;
+        }
+        if self.outcome.is_some() {
+            self.end_turn_cleanup_pending = false;
+            return;
+        }
+        if self.player.pending_move_learn().is_some() {
+            return;
+        }
+        for state in &mut self.battler_states {
+            state.tick_first_turn();
+        }
+        self.end_turn_cleanup_pending = false;
     }
 
     fn residual_effects(
@@ -995,6 +1030,7 @@ impl Battle {
         // Speed, so a Speed-stage change or a surviving tie is re-decided
         // rather than inherited from the action phase
         // (`src/battle_util.c:1199`-`:1210`).
+        self.end_turn_cleanup_pending = true;
         let priorities = self.priorities_of(chosen, true)?;
         let order = resolve_order(
             priorities.player,
@@ -1004,7 +1040,7 @@ impl Battle {
             rng,
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
-        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
+        // ENDTURN_ABILITIES (Shed Skin, Speed Boost) before ENDTURN_POISON, and
         // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
         // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
@@ -1018,6 +1054,7 @@ impl Battle {
                 continue;
             }
             self.apply_shed_skin_residual(is_player, rng, events);
+            self.apply_speed_boost_residual(is_player, events);
             self.apply_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
@@ -1080,6 +1117,33 @@ impl Battle {
         events.push(BattleEvent::ShedSkinCured {
             by_player: is_player,
             status,
+        });
+    }
+
+    /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_SPEED_BOOST` case: a living holder
+    /// below +6 whose `isFirstTurn` is not 2 raises its own Speed stage by one,
+    /// with no RNG draw (`pokeemerald/src/battle_util.c:2601`-`:2602`,
+    /// `:2642`-`:2652`). Any other holder is silent.
+    fn apply_speed_boost_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let side = BattlerSide::from_is_player(is_player);
+        let suppressed = self.battler_states[side.index()].suppresses_speed_boost();
+        let battler = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if battler.is_fainted() || battler.ability() != AbilityId::SPEED_BOOST || suppressed {
+            return;
+        }
+        let stage = stat_change::stage_of(battler, ChangedStat::Speed);
+        if stage == StatStage::MAX {
+            return;
+        }
+        let new_stage = stage.saturating_add(1);
+        stat_change::set_stage(battler, ChangedStat::Speed, new_stage);
+        events.push(BattleEvent::SpeedBoostActivated {
+            by_player: is_player,
+            new_stage,
         });
     }
 
@@ -1610,7 +1674,8 @@ mod tests {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
-            battler_states: [BattlerState::default(); 2],
+            battler_states: [BattlerState::initial_lead(); 2],
+            end_turn_cleanup_pending: false,
         };
         (battle, player_max_hp, player_move_max_pp)
     }

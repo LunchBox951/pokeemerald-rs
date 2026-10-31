@@ -728,3 +728,103 @@ fn an_invalid_switch_does_not_cure_a_natural_cure_member() {
 
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
 }
+
+const NINJASK: SpeciesId = SpeciesId(302);
+
+/// A level-5 Meowth against a trainer party `[Treecko, Ninjask]`, both
+/// knowing only Splash.
+fn ninjask_bench_battle() -> Battle {
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::SPLASH]);
+    let party = vec![
+        mon(&dex, TREECKO, 50, &[MoveId::SPLASH]),
+        mon(&dex, NINJASK, 50, &[MoveId::SPLASH]),
+    ];
+    battle_with_party(party, player)
+}
+
+fn speed_boosts(events: &[BattleEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, BattleEvent::SpeedBoostActivated { .. }))
+        .count()
+}
+
+#[test]
+fn a_voluntary_switch_in_skips_that_turns_speed_boost_and_boosts_the_next() {
+    let mut battle = ninjask_bench_battle();
+    let mut rng = ScriptedRng::new(&[]);
+
+    let switch_turn = turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+    assert_eq!(battle.enemy().species(), NINJASK);
+    assert_eq!(speed_boosts(&switch_turn), 0, "{switch_turn:?}");
+    assert_eq!(
+        battle.enemy().stages(),
+        crate::pokemon::StatStages::default()
+    );
+
+    let next = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
+    assert!(
+        next.contains(&BattleEvent::SpeedBoostActivated {
+            by_player: false,
+            new_stage: StatStage::new(1).unwrap(),
+        }),
+        "{next:?}"
+    );
+}
+
+#[test]
+fn switching_a_boosted_holder_back_in_restores_the_first_turn_suppression() {
+    let mut battle = ninjask_bench_battle();
+    let mut rng = ScriptedRng::new(&[]);
+    turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+    let enemy = BattlerSide::Enemy.index();
+    let player = BattlerSide::Player.index();
+    battle.battler_states[enemy].tick_first_turn();
+    assert!(!battle.battler_states[enemy].suppresses_speed_boost());
+    let player_state = battle.battler_states[player];
+
+    let mut events = Vec::new();
+    battle.switch_enemy_to(0, &mut events).unwrap();
+    battle.switch_enemy_to(1, &mut events).unwrap();
+
+    assert!(
+        battle.battler_states[enemy].suppresses_speed_boost(),
+        "a switch resets the occupancy counter to 2"
+    );
+    assert_eq!(
+        battle.battler_states[player], player_state,
+        "the other battler's occupancy state is untouched"
+    );
+}
+
+#[test]
+fn a_fainted_holder_neither_boosts_nor_announces() {
+    for is_player in [true, false] {
+        let dex = Dex::new();
+        let player = mon(&dex, NINJASK, 5, &[MoveId::SPLASH]);
+        let party = vec![mon(&dex, NINJASK, 5, &[MoveId::SPLASH])];
+        let mut battle = battle_with_party(party, player);
+        for state in &mut battle.battler_states {
+            state.tick_first_turn();
+            assert!(!state.suppresses_speed_boost());
+        }
+        let holder = if is_player {
+            &mut battle.player
+        } else {
+            &mut battle.enemy
+        };
+        holder.apply_damage(holder.stats().max_hp);
+
+        let mut events = Vec::new();
+        battle.apply_speed_boost_residual(is_player, &mut events);
+
+        assert!(events.is_empty(), "{events:?}");
+        let holder = if is_player {
+            &battle.player
+        } else {
+            &battle.enemy
+        };
+        assert_eq!(holder.stages().speed, StatStage::NEUTRAL);
+    }
+}
