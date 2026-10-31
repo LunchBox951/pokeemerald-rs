@@ -258,7 +258,8 @@ impl Sequencer {
         Self::with_config(song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES)
     }
 
-    /// Build a sequencer with an explicit master volume and voice cap.
+    /// Build a sequencer with an explicit master volume and voice cap;
+    /// `master_volume` follows [`Mixer::new`]'s 0..=15 masking.
     ///
     /// Uses `song`'s own header reverb (`Song::reverb`, which collapses "no
     /// override" to `0`); [`Self::with_resolved_reverb`] instead lets a
@@ -277,6 +278,7 @@ impl Sequencer {
     ///
     /// `reverb_level` clamps to the same `SOUND_MODE_REVERB_VAL` bound
     /// [`Song::with_reverb`] enforces at the header-ingest boundary.
+    /// `master_volume` follows [`Mixer::new`]'s 0..=15 masking.
     #[must_use]
     pub fn with_resolved_reverb(
         song: Song,
