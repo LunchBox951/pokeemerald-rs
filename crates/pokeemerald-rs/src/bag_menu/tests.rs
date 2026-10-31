@@ -489,10 +489,12 @@ fn simultaneous_down_and_a_in_a_multi_row_context_moves_to_toss() {
         BagScreenTick::Open,
         "DOWN wins over A in the choice grid"
     );
-    let BagScreenTick::Action { action, .. } = screen.tick(press(Buttons::A)) else {
-        panic!("confirming returns the choice");
-    };
-    assert_eq!(action, BagAction::Toss);
+    // TOSS is the screen's own prompt, not a request to the host.
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    assert!(matches!(
+        screen.toss_stage(),
+        Some(super::toss::TossStage::Quantity { count: 1 })
+    ));
 }
 
 #[test]
@@ -595,3 +597,5 @@ mod move_data;
 mod scroll;
 mod swap;
 mod switch;
+mod toss;
+mod toss_window;
