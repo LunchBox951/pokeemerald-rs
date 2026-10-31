@@ -12,7 +12,7 @@
 //! (`src/battle_main.c:3140`, `:3852`-`:3861`, `:3923`, `:4013`).
 
 use assets::trainers::TrainerId;
-use assets::{AbilityId, MoveId, MoveTarget};
+use assets::{AbilityId, MoveEffect, MoveId, MoveTarget};
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
@@ -23,8 +23,8 @@ use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEV
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
-    burn_residual_damage, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
-    tick_sleep, SleepTick, Status1,
+    burn_residual_damage, draw_freeze_canceller, draws_full_paralysis, draws_shed_skin_cure,
+    poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
@@ -1349,12 +1349,14 @@ impl Battle {
         result
     }
 
-    /// Runs one battler's turn-order slot: the confusion decrement, the
-    /// full-paralysis draw, the Soundproof block, PP handling, then
+    /// Runs one battler's turn-order slot: the sleep decrement, the frozen
+    /// draw, the confusion decrement, the full-paralysis draw, the thaw-hit
+    /// thaw, the Soundproof block, PP handling, then
     /// execution.
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
     /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
+    #[allow(clippy::too_many_lines)] // one canceller chain, in upstream's `AtkCanceler_UnableToUseMove` order
     fn run_action(
         &mut self,
         player_is_attacker: bool,
@@ -1394,6 +1396,11 @@ impl Battle {
                 });
             }
         }
+        let Some(thaws_with_move) =
+            self.run_freeze_canceller(player_is_attacker, move_id, rng, events)?
+        else {
+            return Ok(());
+        };
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
         // A duration that survives the decrement draws once more before the
@@ -1429,6 +1436,9 @@ impl Battle {
             });
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
+        }
+        if thaws_with_move {
+            self.thaw_with_move(player_is_attacker, move_id, events);
         }
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
@@ -1477,6 +1487,68 @@ impl Battle {
             }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// `CANCELER_FROZEN` follows sleep and precedes confusion and paralysis
+    /// (`src/battle_util.c:2059`-`:2083`): a frozen attacker spends one draw
+    /// before its move is consulted.
+    ///
+    /// Returns `None` when the move is cancelled, otherwise whether a
+    /// thaw-hit move proceeded still frozen and must thaw in
+    /// [`Battle::thaw_with_move`] once the later cancellers let it through.
+    fn run_freeze_canceller(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<Option<bool>, BattleError> {
+        let thaw_hit = self.dex.move_data(move_id)?.effect == MoveEffect::THAW_HIT;
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match draw_freeze_canceller(attacker.status1(), thaw_hit, rng) {
+            FreezeCanceller::NotFrozen => Ok(Some(false)),
+            FreezeCanceller::Thawed => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::Thawed {
+                    by_player: player_is_attacker,
+                });
+                Ok(Some(false))
+            }
+            FreezeCanceller::FrozenSolid => {
+                events.push(BattleEvent::FrozenSolid {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                self.record_cancelled_move(player_is_attacker, move_id)?;
+                Ok(None)
+            }
+            FreezeCanceller::ThawsWithMove => Ok(Some(true)),
+        }
+    }
+
+    /// `CANCELER_THAW` thaws a battler whose thaw-hit move got past the
+    /// confusion and paralysis cancellers, with no further draw
+    /// (`src/battle_util.c:2250`-`:2262`).
+    fn thaw_with_move(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        attacker.set_status1(Status1::Healthy);
+        events.push(BattleEvent::ThawedByMove {
+            by_player: player_is_attacker,
+            move_id,
+        });
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one

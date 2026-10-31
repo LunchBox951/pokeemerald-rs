@@ -78,8 +78,8 @@ pub enum HitOutcome {
     },
     /// The target's Flash Fire took a Fire move (`battle_util.c:2703-2726`).
     ///
-    /// Upstream also lets a frozen holder be hit. `Status1` cannot represent
-    /// freeze yet, so that exemption has nothing to test.
+    /// Upstream also lets a frozen holder be hit, so a frozen Flash Fire
+    /// holder never produces this outcome.
     FlashFireBlocked {
         /// Whether this activation latches the boost for the first time.
         first_activation: bool,
@@ -415,10 +415,14 @@ fn absorbing_outcome(
         AbilityId::VOLT_ABSORB => move_type == Type::Electric,
         AbilityId::WATER_ABSORB => move_type == Type::Water,
         AbilityId::FLASH_FIRE => {
+            // `!(status1 & STATUS1_FREEZE)` (`battle_util.c:2704`): a frozen
+            // holder takes the Fire move like any other target.
             return Ok(
-                (move_type == Type::Fire).then_some(HitOutcome::FlashFireBlocked {
-                    first_activation: !defender.volatiles().flash_fire,
-                }),
+                (move_type == Type::Fire && !defender.status1().is_frozen()).then_some(
+                    HitOutcome::FlashFireBlocked {
+                        first_activation: !defender.volatiles().flash_fire,
+                    },
+                ),
             );
         }
         _ => return Ok(None),

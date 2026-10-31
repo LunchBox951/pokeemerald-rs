@@ -138,6 +138,7 @@ fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
     const STATUS1_NONE: u32 = 0;
     const STATUS1_POISON: u32 = 8;
     const STATUS1_BURN: u32 = 16;
+    const STATUS1_FREEZE: u32 = 32;
     const STATUS1_PARALYSIS: u32 = 64;
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();
@@ -145,6 +146,7 @@ fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
     for (in_battle_status, expected_word) in [
         (battle::Status1::Poisoned, STATUS1_POISON),
         (battle::Status1::Burned, STATUS1_BURN),
+        (battle::Status1::Frozen, STATUS1_FREEZE),
         (battle::Status1::Paralysed, STATUS1_PARALYSIS),
         (battle::Status1::Asleep { turns: 3 }, 3),
         (battle::Status1::Asleep { turns: 0 }, STATUS1_NONE),
@@ -249,6 +251,31 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
     let mut reloaded = LoadedLead::load(&dex, std::slice::from_ref(&merged))
         .expect("the re-saved record must decode");
     assert_eq!(reloaded.merge_and_save(&dex).to_bytes(), stored.to_bytes());
+}
+
+/// An untouched frozen lead (`STATUS1_FREEZE`, `0x20`) re-saves as the same
+/// 100 bytes; a thaw changes the status word and nothing else.
+#[test]
+fn a_frozen_record_re_saves_byte_for_byte_and_a_thaw_writes_only_a_zero_word() {
+    let dex = Dex::new();
+    let mut stored = stored_record_with_retained_fields();
+    stored.status = 0x20;
+    let mut loaded =
+        LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("a frozen record decodes");
+    assert_eq!(loaded.battler().status1(), battle::Status1::Frozen);
+
+    assert_eq!(loaded.merge_and_save(&dex).to_bytes(), stored.to_bytes());
+
+    loaded.battler_mut().set_status1(battle::Status1::Healthy);
+    let thawed = loaded.merge_and_save(&dex);
+    let mut expected = stored;
+    expected.status = 0;
+    assert_eq!(thawed.status, 0);
+    assert_eq!(
+        thawed.to_bytes(),
+        expected.to_bytes(),
+        "a thaw changes the status word and no other byte"
+    );
 }
 
 #[test]
