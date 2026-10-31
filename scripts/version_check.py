@@ -60,6 +60,10 @@ What transition mode checks:
 
    the ``Approved version`` must equal the proposed VERSION exactly.
 
+9. Require a new or updated dated CHANGELOG.md entry with patch-note bullets
+   for a FINAL, MAJOR, or MINOR bump. PATCH bumps and cumulative comparisons
+   do not require changelog updates.
+
 Exit status: ``0`` on success (prints a clear OK line), non-zero with a clear
 message on any rejection or read/parse error.
 
@@ -554,6 +558,72 @@ def check_transition(
         # head[i] == base[i]: tier unchanged, inspect the next tier down.
 
 
+def changelog_text(raw: str) -> str:
+    uncommented = re.sub(r"<!--.*?-->", "", raw, flags=re.DOTALL)
+    visible_lines = []
+    fence = ""
+    for line in uncommented.splitlines():
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if (
+                marker and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence) and not marker[2].strip()
+            ):
+                fence = ""
+        elif marker and (marker[1][0] != "`" or "`" not in marker[2]):
+            fence = marker[1]
+        else:
+            visible_lines.append(line)
+    return "\n".join(visible_lines)
+
+
+def changelog_entries(raw: str, version: Version) -> list[str]:
+    sections = re.split(r"(?=^## )", changelog_text(raw), flags=re.MULTILINE)
+    heading = f"## [{fmt(version)}]"
+    return [
+        section.strip() for section in sections
+        if section.splitlines() and section.splitlines()[0].startswith(heading)
+    ]
+
+
+def check_changelog(
+    base: Version,
+    head: Version,
+    base_notes: Optional[str],
+    head_notes: Optional[str],
+) -> None:
+    if head[:3] == base[:3]:
+        return
+    entries = changelog_entries(head_notes or "", head)
+    if len(entries) != 1:
+        raise VersionError(
+            f"CHANGELOG.md must contain exactly one entry for {fmt(head)} "
+            "when FINAL, MAJOR, or MINOR changes"
+        )
+    entry = entries[0]
+    heading = re.fullmatch(
+        rf"## \[{re.escape(fmt(head))}\] - (\d{{4}}-\d{{2}}-\d{{2}})",
+        entry.splitlines()[0],
+    )
+    if heading is None:
+        raise VersionError(
+            f"CHANGELOG.md entry must start with '## [{fmt(head)}] - YYYY-MM-DD'"
+        )
+    try:
+        _date.fromisoformat(heading[1])
+    except ValueError:
+        raise VersionError(f"CHANGELOG.md entry for {fmt(head)} has an invalid date")
+    if not re.search(r"^- \S", entry, flags=re.MULTILINE):
+        raise VersionError(
+            f"CHANGELOG.md entry for {fmt(head)} needs at least one patch-note bullet"
+        )
+    if entry in changelog_entries(base_notes or "", head):
+        raise VersionError(
+            f"CHANGELOG.md entry for {fmt(head)} is unchanged from the base; "
+            "add or update it for this bump"
+        )
+
+
 def check_cumulative(
     base: Version, head: Version, *, require_bump: bool = False
 ) -> None:
@@ -674,6 +744,12 @@ def main(argv: Optional[list] = None) -> int:
                 marker_unchanged=unchanged,
                 marker_rel=args.final_gate_marker,
                 require_bump=args.require_bump,
+            )
+            check_changelog(
+                base_version,
+                head_version,
+                git_show_file(args.base, "CHANGELOG.md", root),
+                read_ref_file(args.head, "CHANGELOG.md", root),
             )
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)

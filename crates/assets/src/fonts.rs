@@ -127,6 +127,17 @@ impl FontId {
         }
     }
 
+    /// This font's position in [`FontId::ALL`].
+    const fn index(self) -> usize {
+        match self {
+            Self::Small => 0,
+            Self::Normal => 1,
+            Self::Short => 2,
+            Self::Narrow => 3,
+            Self::SmallNarrow => 4,
+        }
+    }
+
     /// The advance width of `glyph_id` in pixels, or `None` if
     /// `glyph_id >= GLYPH_COUNT`.
     #[must_use]
@@ -381,6 +392,99 @@ impl GlyphSource for OwnedFontGlyphSheet {
     }
 }
 
+/// A validated set of glyph sources holding exactly one source for every
+/// [`FontId`], so a printer that carries one can later select any modelled
+/// Latin font.
+///
+/// Each source is stored under the font it reports through
+/// [`GlyphSource::font`]; since [`FontGlyphSheet`] and
+/// [`OwnedFontGlyphSheet`] bind their font to the width table at
+/// construction, a collection never pairs one font's pixels with another
+/// font's widths. [`new`](Self::new) refuses a missing or repeated font.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlyphSources<S> {
+    /// One source per font, in [`FontId::ALL`] order.
+    sources: Vec<S>,
+}
+
+/// [`GlyphSources`] over owned sheets, for a scene that outlives its pack.
+pub type OwnedGlyphSources = GlyphSources<OwnedFontGlyphSheet>;
+
+impl<S: GlyphSource> GlyphSources<S> {
+    /// Collect `sources`, which must name every [`FontId`] exactly once, in
+    /// any order.
+    ///
+    /// # Errors
+    ///
+    /// [`AssetError::FontSourceDuplicate`] if two sources report the same
+    /// font; [`AssetError::FontSourceMissing`] if some font has none.
+    pub fn new(sources: impl IntoIterator<Item = S>) -> Result<Self, AssetError> {
+        let mut slots: [Option<S>; FontId::ALL.len()] = std::array::from_fn(|_| None);
+        for source in sources {
+            let font = source.font();
+            let slot = &mut slots[font.index()];
+            if slot.is_some() {
+                return Err(AssetError::FontSourceDuplicate(font.pack_name()));
+            }
+            *slot = Some(source);
+        }
+        let mut ordered = Vec::with_capacity(FontId::ALL.len());
+        for (font, slot) in FontId::ALL.into_iter().zip(slots) {
+            ordered.push(slot.ok_or(AssetError::FontSourceMissing(font.pack_name()))?);
+        }
+        Ok(Self { sources: ordered })
+    }
+
+    /// Build the collection by loading each [`FontId`] through `load`.
+    ///
+    /// # Errors
+    ///
+    /// The first error `load` returns, or the [`new`](Self::new) failure
+    /// (converted) if `load` returned a source for a different font.
+    pub fn try_from_fn<E: From<AssetError>>(
+        load: impl FnMut(FontId) -> Result<S, E>,
+    ) -> Result<Self, E> {
+        let loaded = FontId::ALL
+            .into_iter()
+            .map(load)
+            .collect::<Result<Vec<_>, E>>()?;
+        Ok(Self::new(loaded)?)
+    }
+
+    /// The source for `font`.
+    #[must_use]
+    pub fn get(&self, font: FontId) -> &S {
+        &self.sources[font.index()]
+    }
+
+    /// Every source, in [`FontId::ALL`] order.
+    pub fn iter(&self) -> impl Iterator<Item = &S> {
+        self.sources.iter()
+    }
+
+    /// Split into `initial`'s source and the other four sources (in
+    /// [`FontId::ALL`] order), for a holder that selects among them.
+    #[must_use]
+    pub fn split(mut self, initial: FontId) -> (S, Vec<S>) {
+        let selected = self.sources.remove(initial.index());
+        (selected, self.sources)
+    }
+}
+
+impl GlyphSources<OwnedFontGlyphSheet> {
+    /// Borrowed views over every owned sheet, for a short-lived printer.
+    #[must_use]
+    pub fn sheets(&self) -> GlyphSources<FontGlyphSheet<'_>> {
+        GlyphSources {
+            sources: self
+                .sources
+                .iter()
+                .map(OwnedFontGlyphSheet::sheet)
+                .collect(),
+        }
+    }
+}
+
 // Transcribed from upstream's `gFont*LatinGlyphWidths` arrays
 // (`pokeemerald/src/fonts.c`), one entry per glyph id in the same order.
 
@@ -490,8 +594,8 @@ static SMALL_NARROW_WIDTHS: [u8; GLYPH_COUNT] = [
 #[cfg(test)]
 mod tests {
     use super::{
-        FontGlyphSheet, FontId, FontImageRef, GlyphSource, OwnedFontGlyphSheet, GLYPH_COUNT,
-        GLYPH_PIXELS, GLYPH_SIZE, MAX_PALETTE_INDEX, SHEET_HEIGHT, SHEET_WIDTH,
+        FontGlyphSheet, FontId, FontImageRef, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
+        GLYPH_COUNT, GLYPH_PIXELS, GLYPH_SIZE, MAX_PALETTE_INDEX, SHEET_HEIGHT, SHEET_WIDTH,
     };
     use crate::error::AssetError;
     use crate::pack::ImageRef;
@@ -761,5 +865,133 @@ mod tests {
         let borrowed = FontGlyphSheet::new(synthetic_font_image(FontId::Narrow, &pixels)).unwrap();
         let owned = borrowed.to_owned_sheet();
         assert_eq!(first_glyph_width(&borrowed), first_glyph_width(&owned));
+    }
+
+    /// A sheet whose every pixel is `fill`, so two fonts built with
+    /// different fills are told apart by their decoded glyphs alone.
+    fn filled_sheet(font: FontId, fill: u8) -> OwnedFontGlyphSheet {
+        let pixels = vec![fill; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+        OwnedFontGlyphSheet::new(synthetic_font_image(font, &pixels)).unwrap()
+    }
+
+    fn fill_of(source: &OwnedFontGlyphSheet) -> u8 {
+        source.glyph(0).unwrap().pixels[0]
+    }
+
+    #[test]
+    fn a_collection_keeps_each_fonts_pixels_and_widths_separate() {
+        // Handed over in scrambled order; each font gets a distinct fill.
+        let sources = GlyphSources::new([
+            filled_sheet(FontId::SmallNarrow, 0),
+            filled_sheet(FontId::Normal, 1),
+            filled_sheet(FontId::Small, 2),
+            filled_sheet(FontId::Narrow, 3),
+            filled_sheet(FontId::Short, 1),
+        ])
+        .unwrap();
+        for (font, fill) in [
+            (FontId::Small, 2),
+            (FontId::Normal, 1),
+            (FontId::Short, 1),
+            (FontId::Narrow, 3),
+            (FontId::SmallNarrow, 0),
+        ] {
+            let source = sources.get(font);
+            assert_eq!(source.font(), font);
+            assert_eq!(fill_of(source), fill, "{font:?} pixels");
+            assert_eq!(
+                source.glyph(1).unwrap().advance_width,
+                font.glyph_width(1).unwrap(),
+                "{font:?} advance comes from its own width table"
+            );
+        }
+        let order: Vec<_> = sources.iter().map(GlyphSource::font).collect();
+        assert_eq!(order, FontId::ALL);
+    }
+
+    #[test]
+    fn a_collection_refuses_a_missing_font() {
+        let err = GlyphSources::new([
+            filled_sheet(FontId::Small, 0),
+            filled_sheet(FontId::Normal, 0),
+            filled_sheet(FontId::Short, 0),
+            filled_sheet(FontId::Narrow, 0),
+        ])
+        .unwrap_err();
+        assert_eq!(err, AssetError::FontSourceMissing("small_narrow"));
+    }
+
+    #[test]
+    fn a_collection_refuses_a_repeated_font() {
+        let mut sheets: Vec<_> = FontId::ALL
+            .into_iter()
+            .map(|font| filled_sheet(font, 0))
+            .collect();
+        sheets.push(filled_sheet(FontId::Normal, 1));
+        let err = GlyphSources::new(sheets).unwrap_err();
+        assert_eq!(err, AssetError::FontSourceDuplicate("normal"));
+    }
+
+    #[test]
+    fn try_from_fn_loads_each_font_and_propagates_a_load_failure() {
+        let loaded = GlyphSources::try_from_fn(|font| {
+            Ok::<_, AssetError>(filled_sheet(
+                font,
+                if font == FontId::Short { 2 } else { 0 },
+            ))
+        })
+        .unwrap();
+        assert_eq!(fill_of(loaded.get(FontId::Short)), 2);
+        assert_eq!(fill_of(loaded.get(FontId::Normal)), 0);
+
+        let err = GlyphSources::<OwnedFontGlyphSheet>::try_from_fn(|font| {
+            if font == FontId::Narrow {
+                Err(AssetError::FontSheetWrongShape("narrow", 1, 1))
+            } else {
+                Ok(filled_sheet(font, 0))
+            }
+        })
+        .unwrap_err();
+        assert_eq!(err, AssetError::FontSheetWrongShape("narrow", 1, 1));
+
+        // A loader returning the wrong font's sheet is caught by validation.
+        let mismatched = GlyphSources::<OwnedFontGlyphSheet>::try_from_fn(|_| {
+            Ok::<_, AssetError>(filled_sheet(FontId::Normal, 0))
+        })
+        .unwrap_err();
+        assert_eq!(mismatched, AssetError::FontSourceDuplicate("normal"));
+    }
+
+    #[test]
+    fn split_separates_the_initial_source_from_the_other_four() {
+        let sources =
+            GlyphSources::try_from_fn(|font| Ok::<_, AssetError>(filled_sheet(font, 0))).unwrap();
+        let (initial, rest) = sources.split(FontId::Short);
+        assert_eq!(initial.font(), FontId::Short);
+        let others: Vec<_> = rest.iter().map(GlyphSource::font).collect();
+        assert_eq!(
+            others,
+            [
+                FontId::Small,
+                FontId::Normal,
+                FontId::Narrow,
+                FontId::SmallNarrow
+            ]
+        );
+    }
+
+    #[test]
+    fn borrowed_views_of_owned_sources_preserve_each_font() {
+        let sources = GlyphSources::try_from_fn(|font| {
+            Ok::<_, AssetError>(filled_sheet(
+                font,
+                if font == FontId::Small { 3 } else { 1 },
+            ))
+        })
+        .unwrap();
+        let views = sources.sheets();
+        assert_eq!(views.get(FontId::Small).glyph(0).unwrap().pixels[0], 3);
+        assert_eq!(views.get(FontId::Normal).glyph(0).unwrap().pixels[0], 1);
+        assert_eq!(views.get(FontId::Normal).font(), FontId::Normal);
     }
 }

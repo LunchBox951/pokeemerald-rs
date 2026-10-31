@@ -97,8 +97,16 @@ pub struct DamageInput {
     pub attacker_pinch_boost: bool,
 }
 
-fn nonzero_stage_adjusted_stat(stat: u32, stage: StatStage) -> u128 {
+/// Stage-scaled divisor, clamped to one; upstream would divide by zero here
+/// (`src/pokemon.c:3308-3313`).
+fn nonzero_stage_adjusted_divisor(stat: u32, stage: StatStage) -> u128 {
     stage.apply_widened(stat).max(1)
+}
+
+/// Stage-scaled attack numerator, left unfloored like `APPLY_STAT_MOD`
+/// (`src/pokemon.c:3100-3104`, `:3298-3315`).
+fn stage_adjusted_attack(stat: u32, stage: StatStage) -> u128 {
+    stage.apply_widened(stat)
 }
 
 fn apply_weather(damage: u128, move_type: Type, weather: Weather, is_solar_beam: bool) -> u128 {
@@ -129,7 +137,8 @@ fn apply_weather(damage: u128, move_type: Type, weather: Weather, is_solar_beam:
 ///
 /// STAB, type effectiveness, and the random roll are later stages; use
 /// [`calculate_damage`] for the complete single-effectiveness pipeline.
-/// Stage-adjusted zero stats are clamped to one before division.
+/// A stage-adjusted zero defense is clamped to one before division; a
+/// stage-adjusted zero attack stays zero, as in upstream.
 ///
 /// The stage-scaled stat, power, and level chain widens through `u128`
 /// end to end (see [`StatStage::apply_widened`]), since three `u32` factors
@@ -149,8 +158,8 @@ pub fn base_damage(input: &DamageInput) -> u32 {
 #[must_use]
 pub(crate) fn base_damage_with_flash_fire(input: &DamageInput, flash_fire_latched: bool) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
-    let attack = nonzero_stage_adjusted_stat(input.attack_stat, input.attack_stage);
-    let defense = nonzero_stage_adjusted_stat(input.defense_stat, input.defense_stage);
+    let attack = stage_adjusted_attack(input.attack_stat, input.attack_stage);
+    let defense = nonzero_stage_adjusted_divisor(input.defense_stat, input.defense_stage);
 
     let effective_power = if input.attacker_pinch_boost {
         150 * u128::from(input.power) / 100
@@ -431,6 +440,30 @@ mod tests {
             is_solar_beam: false,
             attacker_pinch_boost: false,
         }
+    }
+
+    /// `src/pokemon.c:3100-3104`, `:3298-3315`: `3 * 10 / 40 == 0` stays zero.
+    #[test]
+    fn a_stage_adjusted_special_attack_of_zero_stays_zero() {
+        let mut input = neutral_input(Type::Ice, 3, 2, 70, 5);
+        input.attack_stage = StatStage::MIN;
+        assert_eq!(base_damage(&input), 2);
+    }
+
+    /// Physical moves floor only the final damage (`src/pokemon.c:3279-3281`).
+    #[test]
+    fn a_stage_adjusted_physical_attack_of_zero_reaches_the_post_formula_floor() {
+        let mut input = neutral_input(Type::Normal, 3, 2, 70, 5);
+        input.attack_stage = StatStage::MIN;
+        assert_eq!(base_damage(&input), 3);
+    }
+
+    /// A zero stage-adjusted defense is clamped to one instead of dividing by zero.
+    #[test]
+    fn a_stage_adjusted_defense_of_zero_is_clamped_to_one_for_the_divisor() {
+        let mut input = neutral_input(Type::Ice, 3, 2, 70, 5);
+        input.defense_stage = StatStage::MIN;
+        assert_eq!(base_damage(&input), 18);
     }
 
     #[test]

@@ -33,7 +33,7 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
         &grass,
     );
     phase.rng = Rng::new(SEED);
-    phase.party_lead = Some(new_game::provisional_starter());
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
     // Four steps spend the immunity window, so the fifth onto the tile would roll.
     walk_east(&mut phase, 4);
     assert_eq!(
@@ -96,7 +96,7 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
         .var_set(VAR_ROUTE101_STATE, 2)
         .expect("VAR_ROUTE101_STATE is an ordinary var id");
     control.rng = Rng::new(SEED);
-    control.party_lead = Some(new_game::provisional_starter());
+    control.set_fresh_lead_for_test(new_game::provisional_starter());
     walk_east(&mut control, 5);
     assert!(
         !control.is_first_battle_active(),
@@ -124,7 +124,7 @@ fn a_forced_movement_landing_on_the_trigger_tile_must_not_fire_the_coord_event()
         PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
         &[(trigger_tile_cell(), MB_MUDDY_SLOPE)],
     );
-    phase.party_lead = Some(new_game::provisional_starter());
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
     walk_one_tile_east(&mut phase);
 
@@ -163,7 +163,7 @@ fn route_101_has_no_warp_events_so_the_trigger_can_never_race_one() {
             &[(trigger_tile_cell(), behavior)],
         );
         phase.rng = Rng::new(4242);
-        phase.party_lead = Some(new_game::provisional_starter());
+        phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
         walk_one_tile_east(&mut phase);
 
@@ -201,7 +201,7 @@ fn the_prevent_exit_coord_events_never_start_a_battle() {
         .event_data
         .var_set(VAR_ROUTE101_STATE, 2)
         .expect("VAR_ROUTE101_STATE is an ordinary var id");
-    phase.party_lead = Some(new_game::provisional_starter());
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
     let rng_before = phase.rng.state();
     for _ in 0..WALK_FRAMES_PER_TILE {

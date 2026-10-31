@@ -1,5 +1,6 @@
 //! Failures reported by battle data, construction, and turn operations.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerId};
 use assets::{AbilityId, MoveId, SpeciesId};
 use std::error::Error;
@@ -63,6 +64,16 @@ pub enum BattleError {
     /// reported by the pre-turn and constructor screens before any draw.
     UnportedAbilityInteraction(AbilityId),
 
+    /// A participant holds an item whose in-battle effect no pipeline models,
+    /// reported by the pre-turn and constructor screens before any draw.
+    UnsupportedHeldItem(ItemId),
+
+    /// A trainer's bag holds an item its AI would use mid-battle
+    /// (`ShouldUseItem`, `battle_ai_switch_items.c`). Trainer action
+    /// selection has no item use, so the battle is refused before any draw
+    /// instead of silently playing out without the item.
+    UnsupportedTrainerBagItem(ItemId),
+
     /// A species was an empty or compatibility placeholder:
     /// [`crate::pokemon::SPECIES_NONE`] or
     /// [`crate::pokemon::SPECIES_OLD_UNOWN_B`]`..=`
@@ -88,6 +99,10 @@ pub enum BattleError {
 
     /// A trainer ID was outside the extracted trainer table.
     UnknownTrainer(TrainerId),
+
+    /// A trainer switch named a party slot that is not a healthy non-active
+    /// member: the active slot, a slot past the party, or a fainted member.
+    InvalidTrainerSwitch(usize),
 
     /// A trainer knew a move that the turn engine could execute but the
     /// trainer AI could not score. Trainer-battle construction rejects it
@@ -159,6 +174,16 @@ impl fmt::Display for BattleError {
                 "ability `{}` alters this battle in an unmodelled way",
                 id.0
             ),
+            Self::UnsupportedHeldItem(id) => write!(
+                f,
+                "held item `{}` has a battle effect no pipeline models",
+                id.0
+            ),
+            Self::UnsupportedTrainerBagItem(id) => write!(
+                f,
+                "trainer bag item `{}` would be used by an AI that never uses items here",
+                id.0
+            ),
             Self::PlaceholderSpecies => {
                 write!(
                     f,
@@ -177,6 +202,9 @@ impl fmt::Display for BattleError {
                 write!(f, "running is forbidden in trainer battles")
             }
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{}`", id.0),
+            Self::InvalidTrainerSwitch(slot) => {
+                write!(f, "party slot `{slot}` is not a healthy non-active member")
+            }
             Self::UnscoreableMoveEffect(id) => write!(
                 f,
                 "move `{}` has a battle effect the trainer AI does not score",
