@@ -11,8 +11,8 @@ use rom_import::Encoding;
 use super::super::error::GenRomProfileError;
 use super::super::images::{locate_images, ImageQuery};
 use super::super::palettes::locate_unique;
-use super::super::plan::{Resolution, SymbolExpectation};
-use super::{distinctive_tiles, lz77_literals, scratch, with_context};
+use super::super::plan::{ReportLine, Resolution, SymbolExpectation};
+use super::{assert_survives_ld_map, distinctive_tiles, lz77_literals, scratch, with_context};
 
 #[test]
 fn a_planted_sheet_is_found_once_with_the_shape_it_was_written_in() {
@@ -118,6 +118,58 @@ fn two_ids_sharing_art_take_one_copy_each() {
             "{report:?}"
         );
     });
+}
+
+/// More ids than the ordinary locator hit cap, each sharing one sheet.
+const SHARING_IDS: usize = super::super::search::MATCH_LIMIT + 1;
+
+/// Locate [`SHARING_IDS`] ids sharing one sheet planted once per id, by
+/// `encoding`, and require each to take its own copy in address order.
+fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
+    let tiles = distinctive_tiles(4);
+    let stored = match encoding {
+        Encoding::Raw => tiles.clone(),
+        Encoding::Lz77 => lz77_literals(&tiles),
+    };
+    let mut fixture = RomFixture::new().emerald_header();
+    let mut entries = Vec::new();
+    let mut queries = Vec::new();
+    for slot in 0..SHARING_IDS {
+        fixture = fixture.write(0x20_0000 + slot * 0x100, &stored);
+        let id = format!("sprite/{slot:02}");
+        entries.push(image_entry_from_tiles(id.clone(), &tiles, 4, 16, 16, None).expect("entry"));
+        queries.push(match encoding {
+            Encoding::Raw => ImageQuery::raw(id),
+            Encoding::Lz77 => ImageQuery::lz77(id),
+        });
+    }
+    let rom = fixture.finish();
+
+    with_context(name, &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plans = locate_images(ctx, &queries, &mut report).expect("every id has a copy");
+        let addrs: Vec<u32> = plans.iter().map(|plan| plan.addr).collect();
+        let expected: Vec<u32> = (0..SHARING_IDS)
+            .map(|slot| 0x0820_0000 + u32::try_from(slot).expect("small") * 0x100)
+            .collect();
+        assert_eq!(addrs, expected);
+        assert!(
+            report
+                .iter()
+                .all(|line| line.resolution == Resolution::ArbitraryAmongIdentical),
+            "{report:?}"
+        );
+    });
+}
+
+#[test]
+fn more_raw_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-raw-over-cap", Encoding::Raw);
+}
+
+#[test]
+fn more_compressed_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-lz77-over-cap", Encoding::Lz77);
 }
 
 #[test]
@@ -306,6 +358,31 @@ fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not()
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// Upstream `main_menu.c:406` declares `sMainMenuBgPal` `static`, so a GNU
+/// ld map lists nothing at its address.
+#[test]
+fn the_static_main_menu_bg_palette_survives_a_real_ld_map() {
+    let id = "interface/palette/main_menu_bg";
+    let mut lines = [ReportLine::unique(id, 0x0850_0000, 32)
+        .with_symbol(super::super::interface_palette_symbol(id))];
+    assert_survives_ld_map("main-menu-static-map", 0x0850_0000, &mut lines);
+    assert_eq!(
+        super::super::interface_palette_symbol(id),
+        SymbolExpectation::Local("sMainMenuBgPal".to_owned())
+    );
+}
+
+/// `main_menu.c:407` makes the text palette `static` as well, but extraction
+/// emits no pack entry for it, so an id outside the one fixed palette keeps
+/// the any-symbol check rather than an unverified `Local` claim.
+#[test]
+fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
+    assert_eq!(
+        super::super::interface_palette_symbol("interface/palette/other"),
+        SymbolExpectation::Unnamed
+    );
+}
+
 #[cfg(feature = "rom-drift")]
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM, a pokeemerald/ checkout, and an extracted pack"]
@@ -407,6 +484,34 @@ fn a_two_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
             "{err}"
         );
     });
+}
+
+/// Locates `sprite/x` built from a payload-shaped raster, and returns the error.
+fn locate_malformed_raster(name: &str, width: u32, height: u32) -> GenRomProfileError {
+    let pixels = vec![1u8; width as usize * height as usize];
+    let entry = image_entry("sprite/x".into(), width, height, 4, pixels).expect("entry");
+    let rom = RomFixture::new().emerald_header().finish();
+    let mut error = None;
+    with_context(name, &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        error = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report).err();
+    });
+    error.expect("a raster without whole 8x8 tiles is malformed, not located")
+}
+
+/// A payload-shaped raster that is empty or not a whole number of 8x8 tiles
+/// is a malformed pack: it must surface as `EntryShape` naming the dimensions,
+/// not as `NotFound` blaming art missing from the ROM.
+#[test]
+fn a_raster_that_is_not_whole_eight_pixel_tiles_is_an_entry_shape_error() {
+    for (width, height) in [(4, 8), (7, 8), (8, 7), (12, 8), (0, 8), (8, 0), (0, 0)] {
+        let err = locate_malformed_raster("malformed-raster", width, height);
+        assert!(
+            matches!(&err, GenRomProfileError::EntryShape { id, reason }
+                if id == "sprite/x" && reason.contains(&format!("{width}x{height}"))),
+            "{width}x{height}: {err:?}"
+        );
+    }
 }
 
 /// A pack entry outside every domain this file tests, so a refusal proves

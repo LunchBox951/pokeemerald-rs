@@ -7,6 +7,7 @@ use crate::save::store::{SaveStatus, SaveStore, FLASH_IMAGE_LEN};
 mod ancestor_durability;
 mod path_resolution;
 mod persistence;
+mod sync_root_retry;
 #[cfg(windows)]
 mod windows_cloud_files;
 

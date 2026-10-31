@@ -11,8 +11,9 @@ use std::path::PathBuf;
 
 use pack_format::{image_entry, PackWriter};
 
+use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
-use super::plan::ReportLine;
+use super::plan::{ReportLine, SymbolExpectation};
 use super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::Context;
 
@@ -46,6 +47,51 @@ pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [Report
     let _ = std::fs::remove_file(&map_path);
     let _ = std::fs::remove_dir(&dir);
     result.expect("a correctly located static table must survive a real GNU ld map");
+}
+
+/// Run a whole domain's report `lines` through [`super::cross_check`]
+/// against a map shaped like GNU ld `-Map` output: a global symbol at every
+/// root a linker map can list, nothing at a root marked
+/// [`SymbolExpectation::Local`], and nothing at a root named in `unlisted`.
+///
+/// Returns the cross-check's result so a caller can assert either that a
+/// correct ROM/map pair passes or that a missing global symbol is refused.
+pub(super) fn cross_check_ld_map(
+    name: &str,
+    lines: &mut [ReportLine],
+    unlisted: &[&str],
+) -> Result<super::MapCheck, GenRomProfileError> {
+    use std::fmt::Write as _;
+
+    let mut map = String::from(".rodata         0x0000000008000000     0x100000\n");
+    for (index, line) in lines.iter().enumerate() {
+        if matches!(
+            line.symbol,
+            SymbolExpectation::Local(_) | SymbolExpectation::Interior
+        ) || unlisted.contains(&line.id.as_str())
+        {
+            continue;
+        }
+        let symbol = match &line.symbol {
+            SymbolExpectation::Exact(name) => name.clone(),
+            SymbolExpectation::Contains(fragments) => fragments.concat(),
+            _ => format!("gRoot{index}"),
+        };
+        writeln!(
+            map,
+            "{}0x{:016x}                {symbol}",
+            " ".repeat(15),
+            line.addr
+        )
+        .expect("write to a String");
+    }
+    let dir = scratch(name);
+    let map_path = dir.join("pokeemerald.map");
+    std::fs::write(&map_path, map).expect("write map");
+    let result = super::cross_check(Some(&map_path), lines);
+    let _ = std::fs::remove_file(&map_path);
+    let _ = std::fs::remove_dir(&dir);
+    result
 }
 
 /// Tile bytes that are distinctive enough to anchor a search.
