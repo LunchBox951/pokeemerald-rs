@@ -543,9 +543,15 @@ impl CgbVoice {
 
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
     /// and emits its latch (`mgba/src/gb/audio.c:606-641,782`), a square keeps
-    /// its duty running, and wave is unchanged.
+    /// its duty running, and a wave stops clocking but keeps emitting its held
+    /// sample on the last committed route, since `NR30 = 0` clears neither the
+    /// sample nor `NR51` (`mgba/src/gb/audio.c:246-253,768-774`).
     pub(crate) fn render_idle_hardware(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
-        if self.oscillator.noise_mut().is_some() {
+        if let Some(contribution) = self.oscillator.held_wave_contribution() {
+            for output in acc.iter_mut() {
+                self.routing.accumulate(contribution, output);
+            }
+        } else if self.oscillator.noise_mut().is_some() {
             let volume = self.hardware_envelope_volume.volume();
             for output in acc.iter_mut() {
                 let contribution = self.oscillator.frame_contribution(0, volume, 0);
