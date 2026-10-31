@@ -8,6 +8,7 @@ use crate::pokedex::PokedexError;
 use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
+use super::field_message::FieldMessageError;
 use crate::battle_anim::BattleAnimationError;
 use crate::TrainerPicId;
 
@@ -128,6 +129,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A battle-effect sprite entry differs from the upstream graphic's shape.
+    MalformedBattleEffectAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A naming-screen entry differs from the upstream graphic's shape.
     MalformedNamingScreenAsset {
         /// Asset id.
@@ -155,6 +163,13 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: BattleMessageError,
+    },
+    /// The field-message table failed its schema's structural decode.
+    FieldMessageDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: FieldMessageError,
     },
     /// The `battle-anim/catalog` entry failed its schema's decode.
     BattleAnimationDecode {
@@ -283,6 +298,9 @@ impl fmt::Display for PackError {
             Self::MalformedBattleInterfaceAsset { id, detail } => {
                 write!(f, "asset pack: battle interface entry `{id}` {detail}")
             }
+            Self::MalformedBattleEffectAsset { id, detail } => {
+                write!(f, "asset pack: battle-effect entry `{id}` {detail}")
+            }
             Self::MalformedNamingScreenAsset { id, detail } => {
                 write!(f, "asset pack: naming-screen entry `{id}` {detail}")
             }
@@ -299,6 +317,12 @@ impl fmt::Display for PackError {
                 write!(
                     f,
                     "asset pack: battle-message entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::FieldMessageDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: field-message entry `{id}` failed to decode: {source}"
                 )
             }
             Self::BattleAnimationDecode { id, source } => {
@@ -322,6 +346,7 @@ impl std::error::Error for PackError {
         match self {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
+            Self::FieldMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
             Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)
@@ -344,6 +369,7 @@ impl std::error::Error for PackError {
             | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
+            | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
             | Self::MalformedBagAsset { .. } => None,
         }

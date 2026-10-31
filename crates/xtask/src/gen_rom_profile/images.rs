@@ -25,6 +25,7 @@ use super::error::GenRomProfileError;
 use super::locate::to_addr;
 use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
+use super::search::MATCH_LIMIT;
 use super::Context;
 
 /// One image to locate.
@@ -72,7 +73,7 @@ struct Variant {
 /// cannot list it), or `None` for a global root.
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
-/// `text_window.c:10-28`, `naming_screen.c:185-186`.
+/// `list_menu.c:290`, `text_window.c:10-28`, `naming_screen.c:185-186`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         return super::text_window::is_static_frame(stem)
@@ -88,6 +89,7 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
         "naming-screen/image/pc_icon_on" => Some("sPCIconOn_Gfx".to_owned()),
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
         _ => None,
     }
 }
@@ -134,8 +136,16 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         };
         return vec![format!("gNamingScreen{name}_Gfx")];
     }
-    if id == "battle-interface/image/textbox" {
-        return vec!["gBattleTextboxTiles".to_owned()];
+    match id {
+        "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
+        "battle-interface/image/healthbox_singles_player" => {
+            return vec!["gHealthboxSinglesPlayerGfx".to_owned()];
+        }
+        "battle-interface/image/healthbox_singles_opponent" => {
+            return vec!["gHealthboxSinglesOpponentGfx".to_owned()];
+        }
+        "battle-interface/image/enemy_mon_shadow" => return vec!["gEnemyMonShadow_Gfx".to_owned()],
+        _ => {}
     }
     Vec::new()
 }
@@ -256,8 +266,9 @@ fn locate_images_with(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Validates the dimensions against the payload before they drive packing.
-        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
+        // Validates the dimensions against the payload, and that they hold a whole
+        // tile, before they drive packing: a raster with no tile has no candidates.
+        let (_, width, height, pack_bit_depth) = asset.tiled_image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
@@ -300,8 +311,12 @@ fn locate_images_with(
         }
     }
 
-    let raw_hits = ctx.raw.find_all(&raw_needles);
-    let lz_hits = ctx.lz77.find_all(&lz_needles);
+    // `assign` gives each id sharing art its own copy, so every copy up to
+    // one per query must survive the search; the ordinary cap would reject
+    // more identical-art ids than it. No more ids than queries can share.
+    let hit_limit = queries.len().max(MATCH_LIMIT);
+    let raw_hits = ctx.raw.find_all_up_to(&raw_needles, hit_limit);
+    let lz_hits = ctx.lz77.find_all_up_to(&lz_needles, hit_limit);
 
     // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
@@ -488,6 +503,18 @@ mod tests {
         assert_eq!(
             symbol_fragments("naming-screen/image/page_swap_frame"),
             ["gNamingScreenPageSwapFrame_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_player"),
+            ["gHealthboxSinglesPlayerGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_opponent"),
+            ["gHealthboxSinglesOpponentGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/enemy_mon_shadow"),
+            ["gEnemyMonShadow_Gfx"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());

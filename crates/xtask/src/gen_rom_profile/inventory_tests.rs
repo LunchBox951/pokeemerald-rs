@@ -7,15 +7,16 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, fonts, inventory, layouts,
-    locate_profile, naming_screen, opening_scene, sprites, starter_chooser, text_window, tilesets,
-    title,
+    bag, battle_anims, battle_interface, battle_messages, battlers, field_messages, fonts,
+    inventory, layouts, locate_profile, naming_screen, opening_scene, sprites, starter_chooser,
+    text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
-    naming_screen_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
-    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
+    healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids, sprite_palette_ids,
+    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
+    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -35,6 +36,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
+            rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
@@ -42,6 +44,8 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(opening_scene_ids())
         .chain(battle_interface_ids())
         .chain(naming_screen_ids())
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -86,6 +90,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_anims::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
             battle_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "field_messages" {
+            field_messages::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -277,6 +283,12 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
 }
 
 #[test]
+fn a_pack_missing_the_field_message_table_is_refused() {
+    let id = rom_import::FIELD_MESSAGE_PACK_ID;
+    assert_refused("no-field-message-table", without(id), id, "field_messages");
+}
+
+#[test]
 fn a_pack_missing_the_battle_animation_catalog_is_refused() {
     let id = rom_import::BATTLE_ANIM_PACK_ID;
     assert_refused("no-battle-anim-catalog", without(id), id, "battle_anims");
@@ -377,7 +389,11 @@ fn a_surplus_opening_scene_entry_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_battle_interface_entry_is_refused() {
-    for id in battle_interface_ids() {
+    for id in battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+    {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battle_interface");
     }
@@ -450,30 +466,38 @@ fn a_surplus_naming_screen_entry_is_refused_by_id() {
 }
 
 #[test]
-fn the_extracted_health_box_records_pass_preflight_unclaimed() {
-    let mut entries = complete_inventory();
-    entries.extend(
-        healthbox_element_ids()
-            .into_iter()
-            .map(|id| raw_entry(id, vec![0])),
-    );
+fn the_health_box_element_records_are_part_of_the_required_inventory() {
+    let elements = healthbox_element_ids();
+    assert_eq!(elements.len(), 14, "{elements:?}");
+    // Thirteen table rows in table order, then the battle bar.
+    assert_eq!(&elements[..13], healthbox_table_ids());
+    assert_eq!(elements[13], healthbox_battle_bar_id());
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox ids.
     let rom = RomFixture::new().emerald_header().finish();
-    with_context("health-box-unclaimed", &rom, entries, |ctx| {
-        inventory::preflight(ctx.pack, &ctx.bag_ids)
-            .expect("the health-box records are extracted beside the textbox");
+    with_context("health-box-required", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
     });
 }
 
 #[test]
-fn the_extracted_health_box_frame_records_pass_preflight_unclaimed() {
+fn the_health_box_frame_records_are_part_of_the_required_inventory() {
     let frames = healthbox_frame_ids();
-    assert_eq!(frames.len(), 5, "{frames:?}");
-    let mut entries = complete_inventory();
-    entries.extend(frames.into_iter().map(|id| raw_entry(id, vec![0])));
+    assert_eq!(
+        frames,
+        [
+            "battle-interface/image/healthbox_singles_player",
+            "battle-interface/image/healthbox_singles_opponent",
+            "battle-interface/image/enemy_mon_shadow",
+            "battle-interface/palette/ball_status_bar",
+            "battle-interface/palette/ball_display",
+        ]
+    );
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox and element ids.
     let rom = RomFixture::new().emerald_header().finish();
-    with_context("health-box-frames-unclaimed", &rom, entries, |ctx| {
-        inventory::preflight(ctx.pack, &ctx.bag_ids)
-            .expect("the health-box frame records are extracted beside the textbox");
+    with_context("health-box-frames", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
     });
 }
 

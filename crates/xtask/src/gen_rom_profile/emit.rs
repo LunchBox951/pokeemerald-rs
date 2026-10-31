@@ -4,8 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    ImagePlan, MapLayoutPlan, NamingScreenPlan, OpeningScenePlan, PalettePlan, ProfilePlan,
-    ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    FieldMessagePlan, ImagePlan, MapLayoutPlan, NamingScreenPlan, OpeningScenePlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -70,7 +70,8 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots,
+    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    NamingScreenRoots,
     OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
@@ -126,6 +127,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
+    field_message_roots(&mut out, &plan.field_messages);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -169,11 +171,22 @@ fn opening_scene_roots(out: &mut String, scene: &OpeningScenePlan) {
 }
 
 fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
-    graphics_family(
+    let _ = writeln!(out, "    battle_interface: BattleInterfaceRoots {{");
+    graphics_fields(
         out,
-        ("battle_interface", "BattleInterfaceRoots"),
         (&interface.images, &interface.palettes, &interface.tilemaps),
     );
+    let _ = writeln!(out, "        healthbox_elements: &[");
+    for blob in &interface.healthbox_elements {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(
+        out,
+        "        battle_bar: Some({}),",
+        blob_root(&interface.battle_bar)
+    );
+    let _ = writeln!(out, "    }},");
 }
 
 fn naming_screen_roots(out: &mut String, naming: &NamingScreenPlan) {
@@ -189,9 +202,18 @@ fn naming_screen_roots(out: &mut String, naming: &NamingScreenPlan) {
 fn graphics_family(
     out: &mut String,
     (field, type_name): (&str, &str),
-    (images, palettes, tilemaps): (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+    lists: (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
 ) {
     let _ = writeln!(out, "    {field}: {type_name} {{");
+    graphics_fields(out, lists);
+    let _ = writeln!(out, "    }},");
+}
+
+/// The three slices a graphics family opens with, at struct-field indent.
+fn graphics_fields(
+    out: &mut String,
+    (images, palettes, tilemaps): (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+) {
     image_slice(out, "        ", "images", images);
     palette_slice(out, "        ", palettes);
     let _ = writeln!(out, "        tilemaps: &[");
@@ -199,7 +221,6 @@ fn graphics_family(
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
     let _ = writeln!(out, "        ],");
-    let _ = writeln!(out, "    }},");
 }
 
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
@@ -346,6 +367,19 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     }
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
+}
+
+fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
+    let _ = writeln!(out, "    field_messages: &[");
+    for message in &messages.messages {
+        let _ = writeln!(
+            out,
+            "        FieldMessageRoot {{ symbol: {:?}, addr: {} }},",
+            message.symbol,
+            gba_ptr_expression(message.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
 }
 
 fn battle_anim_roots(out: &mut String, anims: &BattleAnimationPlan) {
@@ -761,8 +795,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
-        BattlerPlan, BlobPlan, ImagePlan, NamingScreenPlan, OpeningScenePlan, PalettePlan,
-        ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
+        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, NamingScreenPlan, OpeningScenePlan,
+        PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -887,6 +921,26 @@ mod bag_field_tests {
                 encoding: Encoding::Lz77,
                 len: 4096,
             }],
+            healthbox_elements: vec![
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/hpbar".to_owned(),
+                    addr: 0x081C_0000,
+                    encoding: Encoding::Raw,
+                    len: 384,
+                },
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/expbar".to_owned(),
+                    addr: 0x081C_0180,
+                    encoding: Encoding::Raw,
+                    len: 288,
+                },
+            ],
+            battle_bar: BlobPlan {
+                id: "battle-interface/raw/battle_bar".to_owned(),
+                addr: 0x081D_0000,
+                encoding: Encoding::Lz77,
+                len: 1312,
+            },
         }
     }
 
@@ -958,6 +1012,14 @@ mod bag_field_tests {
         );
         assert!(
             module.contains("BlobRoot { id: \"battle-interface/raw/textbox_map\", addr: GbaPtr::at(0x081B_0000), encoding: Encoding::Lz77, len: 4096 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        healthbox_elements: &[\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/hpbar\", addr: GbaPtr::at(0x081C_0000), encoding: Encoding::Raw, len: 384 },\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/expbar\", addr: GbaPtr::at(0x081C_0180), encoding: Encoding::Raw, len: 288 },\n        ],"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        battle_bar: Some(BlobRoot { id: \"battle-interface/raw/battle_bar\", addr: GbaPtr::at(0x081D_0000), encoding: Encoding::Lz77, len: 1312 }),"),
             "{module}"
         );
         assert!(!module.contains("BattleInterfaceRoots::NONE"), "{module}");
@@ -1039,6 +1101,7 @@ mod bag_field_tests {
                 table: base,
                 specials: vec![],
             },
+            field_messages: FieldMessagePlan { messages: vec![] },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],

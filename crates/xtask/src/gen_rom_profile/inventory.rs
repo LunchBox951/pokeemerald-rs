@@ -76,6 +76,11 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the field-message token table is present.
+pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
 pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
@@ -180,24 +185,24 @@ pub fn require_naming_screen(pack: &PackSource) -> Result<(), GenRomProfileError
 }
 
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
-/// three palettes, and its tilemap are present, and with [`GenRomProfileError::StructMismatch`]
-/// for a pack `battle-interface/` entry outside the fixed inventory, which the locator, reading
-/// only the inventory, would otherwise silently leave out of the profile. The health-box
-/// elements, battle bar, singles health-box frames, their palettes, and the enemy shadow the
-/// checkout extracts beside them are left unclaimed: no ROM root imports them until #2178.
+/// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
+/// the enemy shadow, and the two ball palettes are present, and with
+/// [`GenRomProfileError::StructMismatch`] for a pack `battle-interface/` entry outside the fixed
+/// inventory, which the locator, reading only the inventory, would otherwise silently leave out
+/// of the profile. The same holds for every health-box record the checkout extracts there.
 pub fn require_battle_interface(pack: &PackSource) -> Result<(), GenRomProfileError> {
-    let expected = battle_interface_ids();
+    let expected: Vec<String> = battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
+        .collect();
     expected
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))?;
-    let unclaimed: Vec<String> = healthbox_element_ids()
-        .into_iter()
-        .chain(healthbox_frame_ids())
-        .collect();
     if let Some(surplus) = pack
         .ids_with_prefix("battle-interface/")
         .into_iter()
-        .find(|id| !expected.contains(id) && !unclaimed.contains(id))
+        .find(|id| !expected.contains(id))
     {
         return Err(GenRomProfileError::StructMismatch {
             id: surplus,
@@ -225,6 +230,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battle_anims(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
+    require_field_messages(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;
     require_starter_chooser(pack)?;
