@@ -84,6 +84,19 @@ const TILEMAPS: [TilemapSource; 2] = [
     },
 ];
 
+/// Every pack id [`extract_starter_chooser`] emits, images first, then
+/// palettes, then tilemaps. The profile generator reads this as its fixed
+/// inventory so extraction and generation cannot drift apart.
+pub(crate) fn pack_ids() -> Vec<String> {
+    SHEETS
+        .iter()
+        .map(|sheet| sheet.image_id)
+        .chain(SHEETS.iter().map(|sheet| sheet.palette_id))
+        .chain(TILEMAPS.iter().map(|tilemap| tilemap.id))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Extracts the starter chooser's fixed manifest: three image and palette pairs
 /// and two raw tilemaps.
 pub(super) fn extract_starter_chooser(

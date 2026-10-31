@@ -269,6 +269,83 @@ impl SaveFile {
         Ok(save == lock)
     }
 
+    /// Refuses a save path that is this directory's lock entry, by name (ASCII
+    /// case folded) and, where the host allows, by identity, before a write
+    /// stages anything: [`SaveFile::write`] renames an image over the save
+    /// path, so a write at the lock entry would replace the inode every
+    /// locker holds. No guard is needed to ask, and nothing is opened,
+    /// created, or locked to answer.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::LockPathIsSave`] if the save path is the lock entry
+    /// or resolves to the same file; [`SaveFileError::Lock`] if either could
+    /// not be inspected.
+    pub(super) fn refuse_the_lock_entry(&self) -> Result<(), SaveFileError> {
+        let lock = self.lock_path();
+        // The name is compared with ASCII case folded, as staging does for
+        // the save: a case-insensitive volume names the one lock entry by
+        // every spelling, and an absent spelling has no identity to compare.
+        let names_the_lock = match (self.path.file_name(), lock.file_name()) {
+            (Some(save), Some(lock)) => save
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(lock.as_encoded_bytes()),
+            _ => false,
+        };
+        let is_lock = names_the_lock || self.resolves_to_lock_entry(&lock)?;
+        if is_lock {
+            return Err(SaveFileError::LockPathIsSave { path: lock });
+        }
+        Ok(())
+    }
+
+    /// Whether this save path is the inode of the entry at `lock`, by
+    /// `st_dev`/`st_ino` as the `unix` [`SaveFile::resolves_to`] does but
+    /// from the unopened entry. Either one missing means they are not the
+    /// same file.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if either entry exists but could not be
+    /// inspected.
+    #[cfg(unix)]
+    fn resolves_to_lock_entry(&self, lock: &Path) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(save) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
+        match std::fs::symlink_metadata(lock) {
+            Ok(slot) => Ok((slot.dev(), slot.ino()) == (save.dev(), save.ino())),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(SaveFileError::Lock {
+                path: lock.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    /// As the `unix` [`SaveFile::resolves_to_lock_entry`], comparing
+    /// canonical paths as the non-`unix` [`SaveFile::resolves_to`] does.
+    #[cfg(not(unix))]
+    fn resolves_to_lock_entry(&self, lock: &Path) -> Result<bool, SaveFileError> {
+        let Some(_) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
+        let canonical = |path: &Path| match std::fs::canonicalize(path) {
+            Ok(resolved) => Ok(Some(resolved)),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(SaveFileError::Lock {
+                path: path.to_path_buf(),
+                source,
+            }),
+        };
+        Ok(match (canonical(&self.path)?, canonical(lock)?) {
+            (Some(save), Some(lock)) => save == lock,
+            _ => false,
+        })
+    }
+
     /// This save's metadata, following a final symlink, or `None` when no
     /// file is there yet.
     ///
@@ -602,11 +679,11 @@ pub(super) struct LockedDirectory {
 #[cfg(unix)]
 type DirectoryIdentity = (u64, u64);
 #[cfg(windows)]
-type DirectoryIdentity = super::open::WindowsFileIdentity;
+type DirectoryIdentity = win_fs::WindowsFileIdentity;
 #[cfg(unix)]
 type SlotIdentity = (u64, u64);
 #[cfg(windows)]
-type SlotIdentity = super::open::WindowsFileIdentity;
+type SlotIdentity = win_fs::WindowsFileIdentity;
 
 impl LockedDirectory {
     /// Binds `identity`, which [`Self::identity_at`] read from `directory`
@@ -655,7 +732,7 @@ impl LockedDirectory {
 
     #[cfg(windows)]
     fn slot_identity_of(slot: &std::fs::File) -> std::io::Result<SlotIdentity> {
-        super::open::WindowsFileIdentity::of(slot)
+        win_fs::WindowsFileIdentity::of(slot)
     }
 
     /// Opens the slot entry itself (`FILE_FLAG_OPEN_REPARSE_POINT`) for
@@ -679,7 +756,7 @@ impl LockedDirectory {
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(other) => return Err(other),
         };
-        super::open::WindowsFileIdentity::of(&handle).map(Some)
+        win_fs::WindowsFileIdentity::of(&handle).map(Some)
     }
 
     /// Unix reads the identity by `stat`, which neither needs list
@@ -696,7 +773,7 @@ impl LockedDirectory {
     #[cfg(windows)]
     fn identity_at(directory: &Path) -> std::io::Result<DirectoryIdentity> {
         let handle = Self::open_handle(directory)?;
-        super::open::WindowsFileIdentity::of(&handle)
+        win_fs::WindowsFileIdentity::of(&handle)
     }
 
     #[cfg(windows)]

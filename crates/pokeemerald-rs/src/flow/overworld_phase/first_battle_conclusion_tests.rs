@@ -164,9 +164,9 @@ fn conclude_first_battle_heals_the_lead_on_a_win() {
         Direction::East,
     ));
     phase.rng = Rng::new(WINNING_SEED);
-    phase.party_lead = Some(new_game::provisional_starter());
-    let max_hp = phase.party_lead.as_ref().unwrap().stats().max_hp;
-    let base_pp = phase.party_lead.as_ref().unwrap().moves()[0].pp;
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    let max_hp = phase.lead_for_test().unwrap().stats().max_hp;
+    let base_pp = phase.lead_for_test().unwrap().moves()[0].pp;
 
     play_first_battle_to_conclusion(&mut phase);
 
@@ -175,10 +175,7 @@ fn conclude_first_battle_heals_the_lead_on_a_win() {
         Some(BattleOutcome::PlayerWon),
         "setup: this seed/lead combination must really win"
     );
-    let lead = phase
-        .party_lead
-        .as_ref()
-        .expect("the lead is still present");
+    let lead = phase.lead_for_test().expect("the lead is still present");
     assert!(!lead.is_fainted());
     assert_eq!(
         lead.current_hp(),
@@ -214,7 +211,7 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
             Direction::East,
         ));
         phase.rng = Rng::new(seed);
-        phase.party_lead = Some(lead);
+        phase.set_fresh_lead_for_test(lead);
         // Treecko's encoding equals the fresh default, so a non-default start
         // is needed to show the write ran.
         phase
@@ -272,7 +269,7 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
             Direction::East,
         ));
         phase.rng = Rng::new(seed);
-        phase.party_lead = Some(lead);
+        phase.set_fresh_lead_for_test(lead);
         // This fixture bypasses `new_game::init_save_blocks`, so seed the
         // flag that a new save starts with.
         phase
@@ -335,7 +332,7 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
         Direction::East,
     ));
     phase.rng = Rng::new(LOSING_SEED);
-    phase.party_lead = Some(fragile_treecko_lead());
+    phase.set_fresh_lead_for_test(fragile_treecko_lead());
     phase.save1.money = STARTING_MONEY;
 
     play_first_battle_to_conclusion(&mut phase);
@@ -386,7 +383,7 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
         Direction::East,
     ));
     phase.rng = Rng::new(WINNING_SEED);
-    phase.party_lead = Some(unplayable_treecko_lead());
+    phase.set_fresh_lead_for_test(unplayable_treecko_lead());
 
     walk_one_tile_east(&mut phase);
     assert!(
@@ -441,7 +438,7 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         Direction::East,
     ));
     phase.rng = Rng::new(LOSING_SEED);
-    phase.party_lead = Some(fragile_treecko_lead());
+    phase.set_fresh_lead_for_test(fragile_treecko_lead());
 
     play_first_battle_to_conclusion(&mut phase);
 
@@ -450,10 +447,7 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         Some(BattleOutcome::PlayerLost),
         "setup: this seed/lead combination must really lose"
     );
-    let lead = phase
-        .party_lead
-        .as_ref()
-        .expect("healed lead still present");
+    let lead = phase.lead_for_test().expect("healed lead still present");
     assert!(
         !lead.is_fainted(),
         "healed even against the real pack's own dex data"
@@ -489,7 +483,7 @@ fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before
         Direction::East,
     ));
     phase.rng = Rng::new(WINNING_SEED);
-    phase.party_lead = Some(new_game::provisional_starter());
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
     play_first_battle_to_conclusion(&mut phase);
 

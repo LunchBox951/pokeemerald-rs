@@ -9,6 +9,7 @@ use assets::{
 };
 
 use super::direction::Direction;
+use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 
 /// Number of metatiles whose attributes belong to the primary tileset.
 pub const NUM_METATILES_IN_PRIMARY: u16 = 512;
@@ -67,6 +68,7 @@ pub struct MapRuntime<'a> {
     grid: LayoutGrid<'a>,
     primary_attrs: MetatileAttributeTable<'a>,
     secondary_attrs: MetatileAttributeTable<'a>,
+    object_events: Option<&'a ObjectEventCollection>,
 }
 
 impl<'a> MapRuntime<'a> {
@@ -87,7 +89,16 @@ impl<'a> MapRuntime<'a> {
             grid,
             primary_attrs,
             secondary_attrs,
+            object_events: None,
         }
+    }
+
+    /// Binds the map's live object events, so [`Self::object_events_at`]
+    /// queries live position and elevation instead of authored templates.
+    #[must_use]
+    pub const fn with_object_events(mut self, events: &'a ObjectEventCollection) -> Self {
+        self.object_events = Some(events);
+        self
     }
 
     /// Returns the bound map id.
@@ -153,25 +164,38 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns static object events at `(x, y, elevation)` in declaration
-    /// order.
+    /// Returns object events at `(x, y, elevation)` in declaration order.
     ///
-    /// Either the event or query elevation may be
-    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not filter
-    /// hidden templates; [`super::object_event::visible_object_event_at`]
+    /// With a bound collection ([`Self::with_object_events`]) the position
+    /// and elevation are each object's live ones and every result is its
+    /// authored template, whose own coordinates are not current; a bound
+    /// collection never falls back to authored coordinates. Unbound, the
+    /// authored coordinates are scanned. Either the event or query elevation
+    /// may be [`super::collision::ELEVATION_TRANSITION`]. This query does not
+    /// filter hidden templates; [`super::object_event::visible_object_event_at`]
     /// composes visibility with the ordered scan.
     pub fn object_events_at(
         &self,
         x: i32,
         y: i32,
         elevation: u8,
-    ) -> impl Iterator<Item = &'static ObjectEvent> {
-        let objects = self.events.object_events;
-        objects.iter().filter(move |o| {
+    ) -> impl Iterator<Item = &'static ObjectEvent> + 'a {
+        let live = self.object_events.map(|events| {
+            events
+                .object_events_at(x, y, elevation)
+                .map(LiveObjectEvent::template)
+        });
+        let authored = if self.object_events.is_none() {
+            self.events.object_events
+        } else {
+            &[]
+        };
+        let authored = authored.iter().filter(move |o| {
             i32::from(o.x) == x
                 && i32::from(o.y) == y
                 && super::collision::elevations_compatible(o.elevation, elevation)
-        })
+        });
+        live.into_iter().flatten().chain(authored)
     }
 
     /// Returns the first warp at `(x, y, elevation)`.

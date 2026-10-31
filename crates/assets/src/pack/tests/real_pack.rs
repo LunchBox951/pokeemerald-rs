@@ -56,6 +56,10 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         "petalburg",
         "brendans_mays_house",
         "lab",
+        "generic_building",
+        "pokemon_center",
+        "shop",
+        "inside_of_truck",
     ] {
         pack.tileset(name)
             .unwrap_or_else(|e| panic!("tileset `{name}` should load: {e}"));
@@ -68,6 +72,32 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     let brendan_palette = pack.sprite_palette("brendan").expect("brendan palette");
     assert_eq!(brendan_palette.color_count, EXPECTED_PALETTE_COLOR_COUNT);
     pack.sprite_palette("may").expect("may palette");
+    for sheet in [
+        "berry_trees/cheri",
+        "berry_trees/dirt_pile",
+        "berry_trees/leppa",
+        "berry_trees/sprout",
+        "dolls/pichu_doll",
+        "dolls/swablu_doll",
+        "misc/birchs_bag",
+        "misc/cuttable_tree",
+        "misc/item_ball",
+        "misc/moving_box",
+        "misc/truck",
+        "pokemon/enemy_zigzagoon",
+        "pokemon/vigoroth",
+    ] {
+        let image = pack
+            .sprite(sheet)
+            .unwrap_or_else(|e| panic!("sprite `{sheet}` should be in the pack: {e}"));
+        assert!(image.width > 0 && image.height > 0, "{sheet}");
+    }
+    for palette in ["enemy_zigzagoon", "moving_box", "truck", "vigoroth"] {
+        let bank = pack
+            .sprite_palette(palette)
+            .unwrap_or_else(|e| panic!("sprite palette `{palette}` should be in the pack: {e}"));
+        assert_eq!(bank.color_count, EXPECTED_PALETTE_COLOR_COUNT, "{palette}");
+    }
 
     let logo = pack
         .image("title/image/pokemon_logo")
@@ -114,6 +144,12 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         ("LAYOUT_ROUTE101", "route101"),
         ("LAYOUT_OLDALE_TOWN", "oldale_town"),
         ("LAYOUT_ROUTE103", "route103"),
+        ("LAYOUT_INSIDE_OF_TRUCK", "inside_of_truck"),
+        ("LAYOUT_HOUSE1", "house1"),
+        ("LAYOUT_HOUSE2", "house2"),
+        ("LAYOUT_MART", "mart"),
+        ("LAYOUT_POKEMON_CENTER_1F", "pokemon_center_1f"),
+        ("LAYOUT_POKEMON_CENTER_2F", "pokemon_center_2f"),
     ] {
         let layout = table
             .layout(LayoutId(layout_id))
