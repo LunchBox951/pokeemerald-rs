@@ -4,8 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    CryPlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine,
-    Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    CryPlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -70,9 +70,10 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots,
-    PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots,
-    TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    Encoding, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -125,6 +126,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
+    field_message_roots(&mut out, &plan.field_messages);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -387,6 +389,19 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     }
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
+}
+
+fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
+    let _ = writeln!(out, "    field_messages: &[");
+    for message in &messages.messages {
+        let _ = writeln!(
+            out,
+            "        FieldMessageRoot {{ symbol: {:?}, addr: {} }},",
+            message.symbol,
+            gba_ptr_expression(message.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
 }
 
 fn battle_anim_roots(out: &mut String, anims: &BattleAnimationPlan) {
@@ -802,8 +817,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
-        BattlerPlan, BlobPlan, ImagePlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
+        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, OpeningScenePlan, PalettePlan,
+        ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -1060,6 +1075,7 @@ mod bag_field_tests {
                 table: base,
                 specials: vec![],
             },
+            field_messages: FieldMessagePlan { messages: vec![] },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],

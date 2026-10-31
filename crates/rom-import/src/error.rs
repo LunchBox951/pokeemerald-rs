@@ -402,6 +402,14 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::pack::BattleMessageError,
     },
+    /// The field-message schema refused what the ROM holds: a stream with no
+    /// well-formed terminator, or roots the inventory cannot be filled from.
+    FieldMessage {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::FieldMessageError,
+    },
     /// The battle-animation schema refused what the ROM holds: a program
     /// whose shape or operands the catalog cannot carry, or roots it cannot
     /// be assembled from.
@@ -596,6 +604,7 @@ impl fmt::Display for ImportError {
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
+            Self::FieldMessage { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleAnimation { id, source } => write!(f, "`{id}`: {}", OneLineText(source)),
             Self::AnimationOpcode { at, opcode } => write!(
                 f,
@@ -660,6 +669,7 @@ impl std::error::Error for ImportError {
             Self::EntryShape { source, .. } => Some(source),
             Self::Audio { source, .. } => Some(source),
             Self::BattleMessage { source, .. } => Some(source),
+            Self::FieldMessage { source, .. } => Some(source),
             Self::BattleAnimation { source, .. } => Some(source),
             _ => None,
         }
@@ -872,6 +882,10 @@ mod tests {
             ImportError::BattleMessage {
                 id: "battle-message/table",
                 source: assets::pack::BattleMessageError::Truncated,
+            },
+            ImportError::FieldMessage {
+                id: "field-message/table",
+                source: assets::pack::FieldMessageError::Truncated,
             },
             ImportError::BattleAnimation {
                 id: "battle-anim/catalog",

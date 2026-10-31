@@ -8,6 +8,7 @@ use crate::pokedex::PokedexError;
 use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
+use super::field_message::FieldMessageError;
 use crate::battle_anim::BattleAnimationError;
 use crate::TrainerPicId;
 
@@ -163,6 +164,13 @@ pub enum PackError {
         /// Underlying schema error.
         source: BattleMessageError,
     },
+    /// The field-message table failed its schema's structural decode.
+    FieldMessageDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: FieldMessageError,
+    },
     /// The `battle-anim/catalog` entry failed its schema's decode.
     BattleAnimationDecode {
         /// Catalog asset id.
@@ -311,6 +319,12 @@ impl fmt::Display for PackError {
                     "asset pack: battle-message entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::FieldMessageDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: field-message entry `{id}` failed to decode: {source}"
+                )
+            }
             Self::BattleAnimationDecode { id, source } => {
                 write!(
                     f,
@@ -332,6 +346,7 @@ impl std::error::Error for PackError {
         match self {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
+            Self::FieldMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
             Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)

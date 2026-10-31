@@ -111,6 +111,7 @@ pub use domains::battle_interface::{
 pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };
+pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
 pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
@@ -124,9 +125,10 @@ pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots,
-    PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots,
-    TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    Encoding, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 };
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 
