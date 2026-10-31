@@ -17,7 +17,7 @@
 //! (`m4a_1.s:308..339`, `395..416`). CGB output is still clipped, not wrapped.
 
 use crate::cgb_envelope::CgbEnvelopeCadence;
-use crate::cgb_voice::CgbVoice;
+use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::psg::FrameSequencer128Hz;
 use crate::reverb::Reverb;
@@ -83,7 +83,19 @@ impl Mixer {
         Self {
             direct_sound_slots: std::iter::repeat_with(|| None).take(max_voices).collect(),
             cgb_slots: [None, None, None, None],
-            idle_cgb_hardware: [None, None, None, None],
+            // `MPlayExtender` triggers both squares at frequency 0 before any
+            // note (`pokeemerald/src/m4a.c:268-273`), so their duty index
+            // already free-runs when the first note arrives.
+            idle_cgb_hardware: [
+                Some(CgbVoice::initialized_square_hardware(
+                    CgbChannelNumber::Square1,
+                )),
+                Some(CgbVoice::initialized_square_hardware(
+                    CgbChannelNumber::Square2,
+                )),
+                None,
+                None,
+            ],
             master_volume,
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
