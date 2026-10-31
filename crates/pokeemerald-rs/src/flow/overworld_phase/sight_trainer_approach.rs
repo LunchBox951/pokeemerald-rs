@@ -47,7 +47,7 @@
 //!   the observable half of both; there are no other moving object events to
 //!   freeze, and the one control this port's own lock does not reach -- the
 //!   start menu -- is [`super::start_menu`]'s to gate, not this module's.
-//!   [`OverworldPhase::party_lead`] is therefore left in place until the
+//!   the loaded lead is therefore left in place until the
 //!   battle actually starts, so a save taken mid-approach persists an honest
 //!   pre-battle overworld and simply replays the approach on reload.
 
@@ -211,6 +211,12 @@ impl SightApproach {
     #[cfg(test)]
     pub(super) const fn trainer(&self) -> &ObjectEventState {
         &self.trainer
+    }
+
+    /// The already-constructed fight, for tests that pin its party.
+    #[cfg(test)]
+    pub(super) const fn battle(&self) -> &battle::Battle {
+        &self.battle
     }
 
     /// Test-only: jump straight to the intro message's

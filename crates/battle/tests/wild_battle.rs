@@ -37,8 +37,16 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         0, // discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
     assert_eq!(enemy.nature(), Nature::Hardy);
     assert_eq!(enemy.ivs().hp, 0);
 
@@ -138,8 +146,16 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
         0,  // enemy's discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
     assert_eq!(
         player.stats().speed,
         13,
@@ -198,8 +214,16 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     // Draw order: five wild-construction draws, battle-start turn number,
     // turn number, then opponent move selection; guaranteed escape rolls nothing.
     let mut rng = ScriptedRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
 
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
@@ -240,7 +264,7 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     let dex = Dex::new();
     // Horn Drill has nonzero power but an unsupported OHKO effect, so a
     // power-only check would admit it to the wrong damage/RNG path.
-    let horn_drill_ohko_effect = MoveEffect(38);
+    let horn_drill_ohko_effect = MoveEffect::OHKO;
     let horn_drill_token_power = 1;
     let horn_drill = dex.move_data(MoveId::HORN_DRILL).unwrap();
     assert_eq!(horn_drill.effect, horn_drill_ohko_effect);

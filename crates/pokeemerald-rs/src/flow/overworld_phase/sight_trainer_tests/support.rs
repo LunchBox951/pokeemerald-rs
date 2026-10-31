@@ -26,9 +26,9 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// `TRAINER_MARCOS` (`include/constants/opponents.h`): his party fails to
-/// construct (`MOVE_SONIC_BOOM`), so tests use his id as the refused party.
-pub(super) const TRAINER_MARCOS: u16 = 702;
+/// `TRAINER_ISABELLE` (`include/constants/opponents.h`): her party fails to
+/// construct (`MOVE_ROLLOUT`), so tests use her id as the refused party.
+pub(super) const TRAINER_ISABELLE: u16 = 736;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
@@ -49,9 +49,9 @@ pub(super) const RHETT_TILE: (i32, i32) = (67, 5);
 pub(super) const ANDREW_TILE: (i32, i32) = (50, 8);
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
-/// `TrainerParty::ItemDefaultMoves` party (`begin_sight_trainer_approach_if_seen`'s
-/// own "Refusals cost nothing, forever") --
-/// [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
+/// `TrainerParty::ItemDefaultMoves` Skitty holding an Oran Berry
+/// (`begin_sight_trainer_approach_if_seen`'s own "Refusals cost nothing,
+/// forever") -- [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
 /// event stands at `(56, 13)`, elevation 3, facing east, sight range 5.
 pub(super) const MIGUEL_TILE: (i32, i32) = (56, 13);
 

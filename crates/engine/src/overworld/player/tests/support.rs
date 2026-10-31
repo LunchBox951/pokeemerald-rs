@@ -248,13 +248,25 @@ pub(super) fn runtime_with_objects(object_events: &'static [ObjectEvent]) -> Map
     runtime_with_events(events, |_, _| 0)
 }
 
-pub(super) fn slide_east_runtime() -> MapRuntime<'static> {
+/// A 5x5 runtime with `behavior` at its center `(2, 2)` and every other
+/// tile plain ground, optionally with a collision bit set on the tile
+/// `direction` of center -- the tile `behavior`'s own mover would
+/// dispatch onto.
+pub(super) fn forced_mover_runtime(
+    behavior: u8,
+    direction: Direction,
+    block_destination: bool,
+) -> MapRuntime<'static> {
+    let (dx, dy) = direction.delta();
+    let destination: (i32, i32) = (2 + dx, 2 + dy);
     let mut bytes = Vec::new();
     for y in 0..5u16 {
         for x in 0..5u16 {
+            let is_center = (x, y) == (2, 2);
+            let is_destination = (i32::from(x), i32::from(y)) == destination;
             let raw = MetatileCell {
-                metatile_id: u16::from((x, y) == (2, 2)),
-                collision: 0,
+                metatile_id: u16::from(is_center),
+                collision: u8::from(block_destination && is_destination),
                 elevation: 3,
             }
             .pack();
@@ -263,7 +275,7 @@ pub(super) fn slide_east_runtime() -> MapRuntime<'static> {
     }
     let attrs = [
         u16::from(MB_NORMAL).to_le_bytes(),
-        u16::from(MB_SLIDE_EAST).to_le_bytes(),
+        u16::from(behavior).to_le_bytes(),
     ]
     .concat();
     let layout = assets::MapLayout {
@@ -287,91 +299,21 @@ pub(super) fn slide_east_runtime() -> MapRuntime<'static> {
         MetatileAttributeTable::new(attrs),
         MetatileAttributeTable::new(&[]),
     )
+}
+
+pub(super) fn slide_east_runtime() -> MapRuntime<'static> {
+    forced_mover_runtime(MB_SLIDE_EAST, Direction::East, false)
 }
 
 /// A walk-east tile, for proving facing follows dispatch on a family
 /// that never locks it (unlike [`slide_east_runtime`]).
 pub(super) fn walk_east_runtime() -> MapRuntime<'static> {
-    let mut bytes = Vec::new();
-    for y in 0..5u16 {
-        for x in 0..5u16 {
-            let raw = MetatileCell {
-                metatile_id: u16::from((x, y) == (2, 2)),
-                collision: 0,
-                elevation: 3,
-            }
-            .pack();
-            bytes.extend_from_slice(&raw.to_le_bytes());
-        }
-    }
-    let attrs = [
-        u16::from(MB_NORMAL).to_le_bytes(),
-        u16::from(MB_WALK_EAST).to_le_bytes(),
-    ]
-    .concat();
-    let layout = assets::MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width: 5,
-        height: 5,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    };
-    let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
-    let bytes = Box::leak(bytes.into_boxed_slice());
-    let attrs = Box::leak(attrs.into_boxed_slice());
-    let header = Box::leak(Box::new(header));
-    let events = Box::leak(Box::new(events));
-    MapRuntime::new(
-        assets::MapId("MAP_TEST"),
-        header,
-        events,
-        layout.grid(bytes).unwrap(),
-        MetatileAttributeTable::new(attrs),
-        MetatileAttributeTable::new(&[]),
-    )
+    forced_mover_runtime(MB_WALK_EAST, Direction::East, false)
 }
 
 /// A slide-east tile whose eastward destination is impassable.
 pub(super) fn blocked_slide_east_runtime() -> MapRuntime<'static> {
-    let mut bytes = Vec::new();
-    for y in 0..5u16 {
-        for x in 0..5u16 {
-            let raw = MetatileCell {
-                metatile_id: u16::from((x, y) == (2, 2)),
-                collision: u8::from((x, y) == (3, 2)),
-                elevation: 3,
-            }
-            .pack();
-            bytes.extend_from_slice(&raw.to_le_bytes());
-        }
-    }
-    let attrs = [
-        u16::from(MB_NORMAL).to_le_bytes(),
-        u16::from(MB_SLIDE_EAST).to_le_bytes(),
-    ]
-    .concat();
-    let layout = assets::MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width: 5,
-        height: 5,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    };
-    let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
-    let bytes = Box::leak(bytes.into_boxed_slice());
-    let attrs = Box::leak(attrs.into_boxed_slice());
-    let header = Box::leak(Box::new(header));
-    let events = Box::leak(Box::new(events));
-    MapRuntime::new(
-        assets::MapId("MAP_TEST"),
-        header,
-        events,
-        layout.grid(bytes).unwrap(),
-        MetatileAttributeTable::new(attrs),
-        MetatileAttributeTable::new(&[]),
-    )
+    forced_mover_runtime(MB_SLIDE_EAST, Direction::East, true)
 }
 
 /// `MAP_SOUTH`'s landing tile carries a southward current (Route

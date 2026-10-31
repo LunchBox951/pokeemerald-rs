@@ -217,9 +217,7 @@ fn slope_onto_the_southward_warp_phase() -> OverworldPhase {
 /// scene rather than `phase.scene` -- Brendan's House 1F's real
 /// header/events stay the same either way.
 fn arrow_probe_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
-    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
-    scene.runtime(ONE_F, header, events)
+    scene.runtime()
 }
 
 /// The arrow-warp half of the gate: `poll_open`'s own
@@ -261,7 +259,8 @@ fn a_forced_landing_suppresses_the_arrow_poll_until_the_next_call() {
         10,
         (9, 8),
         MB_SOUTH_ARROW_WARP,
-    );
+    )
+    .in_room_for_test(ONE_F);
 
     let landing_pre: PreMovementFieldInput = {
         let runtime = arrow_probe_runtime(&probe_scene);

@@ -32,17 +32,27 @@
 //!   here instead of shipping a pack with a hole in it. A domain slice adds
 //!   its prefix when it lands.
 //!
+//! [`staged_cry_ids`] names the one domain under a complete prefix whose ROM
+//! producer has not landed: the species-cry table and exactly the
+//! [`CRY_TABLE_LEN`] distinct samples it names, read from the checkout's own
+//! table. Only those ids are not required of the ROM backend; any other
+//! `audio/` id, including a stray one under the cry prefixes, stays required.
+//! The staging fails as soon as the ROM backend writes any staged id, so the
+//! producer's slice must remove it. Every other `audio/` id stays compared.
+//!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
 //! empty: `title/palette/pokemon_logo` was the one candidate, and it was
 //! resolved by making both backends honour upstream's own `-num_colors`
 //! cut rather than by writing the difference down here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use assets::{Song, VoiceEntry, VoiceGroup};
+use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
+use assets::{CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
+use rom_import::FIELD_MESSAGE_PACK_ID;
 
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
@@ -62,11 +72,77 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "text-window/",
     "audio/",
     "battle-message/",
+    "field-message/",
     "battle-anim/",
     "bag/",
     "starter-chooser/",
     "opening-scene/",
 ];
+
+/// The battle textbox and menu text entries, the thirteen health-box elements
+/// in `gHealthboxElementsGfxTable` order, the battle bar, the singles
+/// health-box frames, the enemy shadow, and the two ball palettes: 24 ids the
+/// ROM backend must write although `battle-interface/` is not in
+/// [`COMPLETE_PREFIXES`]. They are every `battle-interface/` entry the checkout
+/// extracts, so a narrow pin of these ids stands in for the prefix.
+const BATTLE_INTERFACE_IDS: [&str; 24] = [
+    "battle-interface/image/textbox",
+    "battle-interface/palette/textbox",
+    "battle-interface/palette/window_text",
+    "battle-interface/palette/pp_text",
+    "battle-interface/raw/textbox_map",
+    "battle-interface/raw/healthbox_element/hpbar",
+    "battle-interface/raw/healthbox_element/expbar",
+    "battle-interface/raw/healthbox_element/status",
+    "battle-interface/raw/healthbox_element/misc",
+    "battle-interface/raw/healthbox_element/hpbar_anim",
+    "battle-interface/raw/healthbox_element/misc_frameend",
+    "battle-interface/raw/healthbox_element/ball_display",
+    "battle-interface/raw/healthbox_element/ball_caught_indicator",
+    "battle-interface/raw/healthbox_element/status2",
+    "battle-interface/raw/healthbox_element/status3",
+    "battle-interface/raw/healthbox_element/status4",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend_bar",
+    "battle-interface/raw/battle_bar",
+    "battle-interface/image/healthbox_singles_player",
+    "battle-interface/image/healthbox_singles_opponent",
+    "battle-interface/image/enemy_mon_shadow",
+    "battle-interface/palette/ball_status_bar",
+    "battle-interface/palette/ball_display",
+];
+
+/// The checkout ids under a [`COMPLETE_PREFIXES`] entry whose ROM producer
+/// (#1853) has not landed, read from the checkout's `audio/cry/table`
+/// payload: the table itself and exactly the samples it names.
+///
+/// This is staging, not a reviewed difference. The set is pinned to
+/// `1 + CRY_TABLE_LEN` ids, so a table that repeats or drops a sample fails
+/// instead of widening or narrowing the exemption, and the main test fails
+/// once the ROM backend writes any of them, so the producer's slice removes
+/// the staging and the cry ids are then required like every other `audio/`
+/// id.
+///
+/// # Errors
+///
+/// A description of why the payload cannot define the staged set.
+fn staged_cry_ids(table_payload: &[u8]) -> Result<BTreeSet<String>, String> {
+    let table = CryTable::decode(table_payload)
+        .map_err(|err| format!("{CRY_TABLE_PACK_ID} does not decode: {err}"))?;
+    let mut staged: BTreeSet<String> = table
+        .samples()
+        .iter()
+        .map(|SampleId(id)| id.clone())
+        .collect();
+    if staged.len() != CRY_TABLE_LEN {
+        return Err(format!(
+            "{CRY_TABLE_PACK_ID} names {} distinct samples, not {CRY_TABLE_LEN}",
+            staged.len()
+        ));
+    }
+    staged.insert(CRY_TABLE_PACK_ID.to_owned());
+    Ok(staged)
+}
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
 /// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
@@ -148,6 +224,14 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
+/// `field-message/table` as both backends must write it: schema header, then
+/// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
+/// through `charmap.txt`.
+const FIELD_MESSAGE_TABLE: [u8; 28] = [
+    b'F', b'M', b'S', b'G', 1, 0, 1, 0, 0, 0, 14, 0, 0, 0, 0xFD, 0x02, 0x00, 0xDA, 0xD5, 0xDD,
+    0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -187,6 +271,22 @@ fn the_rom_backend_matches_the_checkout_pack() {
     let reviewed: BTreeMap<&str, &str> = REVIEWED_DIFFERENCES.iter().copied().collect();
     let mut differences = Vec::new();
 
+    let table = checkout
+        .get(CRY_TABLE_PACK_ID)
+        .unwrap_or_else(|| panic!("the checkout pack has no {CRY_TABLE_PACK_ID}"));
+    let staged = staged_cry_ids(&checkout_bytes[table.offset..table.offset + table.length])
+        .unwrap_or_else(|err| panic!("the checkout pack: {err}"));
+    for id in &staged {
+        if !checkout.contains_key(id) {
+            differences.push(format!("{id}: the checkout pack wrote no such entry"));
+        }
+        if imported.contains_key(id) {
+            differences.push(format!(
+                "{id}: the ROM backend now writes this staged cry id; remove the staging (#1853)"
+            ));
+        }
+    }
+
     for (id, entry) in &imported {
         if let Some(reason) = reviewed.get(id.as_str()) {
             eprintln!("reviewed difference: {id}: {reason}");
@@ -205,7 +305,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
         let claimed = COMPLETE_PREFIXES
             .iter()
             .any(|prefix| id.starts_with(prefix));
-        if claimed && !imported.contains_key(id) && !reviewed.contains_key(id.as_str()) {
+        if claimed
+            && !staged.contains(id)
+            && !imported.contains_key(id)
+            && !reviewed.contains_key(id.as_str())
+        {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }
@@ -213,6 +317,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
     // `pokemon/` is not a complete prefix while only the starters exist, so
     // their entries are pinned by id: a dropped root fails here.
     for id in STARTER_BATTLER_IDS {
+        if !imported.contains_key(id) {
+            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
+    // `battle-interface/` is not a complete prefix, so the textbox, element,
+    // battle-bar, frame, shadow, and ball-palette entries are pinned by id.
+    for id in BATTLE_INTERFACE_IDS {
         if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
@@ -230,6 +342,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
+    differences.extend(field_message_differences(
+        (&rom_bytes, &imported),
+        (&checkout_bytes, &checkout),
+    ));
+
     for difference in &differences {
         eprintln!("difference: {difference}");
     }
@@ -244,6 +361,164 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+/// A cry table payload naming `samples` in order.
+fn cry_table_payload(samples: Vec<String>) -> Vec<u8> {
+    CryTable::new(samples.into_iter().map(SampleId).collect())
+        .expect("a valid cry table")
+        .encode()
+}
+
+/// The staged set is the table and exactly the samples it names; no other id
+/// under a cry prefix, and no instrument sample, is staged.
+#[test]
+fn only_the_cry_table_and_its_samples_are_staged() {
+    let samples: Vec<String> = (0..CRY_TABLE_LEN)
+        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
+        .collect();
+    let staged = staged_cry_ids(&cry_table_payload(samples)).expect("388 distinct samples");
+    assert_eq!(staged.len(), CRY_TABLE_LEN + 1);
+    for id in ["audio/cry/table", "audio/sample/direct-sound/cry/c0"] {
+        assert!(staged.contains(id), "{id}");
+    }
+    for id in [
+        "audio/cry/table_reverse",
+        "audio/sample/direct-sound/cry/unnamed",
+        "audio/sample/direct-sound/sc88pro_flute",
+        "audio/sample/direct-sound/cryptic",
+        "audio/sample/programmable-wave/01",
+        "audio/voicegroup/title",
+        "audio/song/mus_title",
+        "title/image/pokemon_logo",
+    ] {
+        assert!(!staged.contains(id), "{id}");
+    }
+}
+
+/// A table that repeats a sample cannot shrink the pinned staged count.
+#[test]
+fn a_cry_table_with_a_repeated_sample_does_not_define_the_staged_set() {
+    let mut samples: Vec<String> = (0..CRY_TABLE_LEN)
+        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
+        .collect();
+    samples[1] = samples[0].clone();
+    let err = staged_cry_ids(&cry_table_payload(samples)).unwrap_err();
+    assert!(err.contains("387 distinct samples"), "{err}");
+}
+
+/// The pinned battle-interface ids are exactly the profile's roots, with the
+/// thirteen elements in table order and each starting where the last ends, the
+/// two frames keeping their own metatile shapes, and no complete prefix
+/// claiming any of them.
+#[test]
+fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
+    let roots = &rom_import::EMERALD_US_REV0.roots.battle_interface;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .chain(roots.healthbox_elements.iter().map(|root| root.id))
+        .chain(roots.battle_bar.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut pinned = BATTLE_INTERFACE_IDS;
+    pinned.sort_unstable();
+    assert_eq!(profiled, pinned);
+
+    // The table is one run: the pinned order, each root's length, and each
+    // address the previous root's end.
+    let elements: Vec<&str> = roots.healthbox_elements.iter().map(|r| r.id).collect();
+    assert_eq!(elements, BATTLE_INTERFACE_IDS[5..18]);
+    for pair in roots.healthbox_elements.windows(2) {
+        assert_eq!(
+            pair[0].addr.raw() + pair[0].len,
+            pair[1].addr.raw(),
+            "{} ends where {} starts",
+            pair[0].id,
+            pair[1].id
+        );
+    }
+    assert_eq!(
+        roots.healthbox_elements.iter().map(|r| r.len).sum::<u32>(),
+        118 * 32
+    );
+    assert_eq!(
+        roots.battle_bar.map(|bar| bar.id),
+        Some(BATTLE_INTERFACE_IDS[18])
+    );
+
+    // The singles frames keep the metatile cut each is built with
+    // (`src/graphics.c:628-629`), the shadow and ball palettes their roots.
+    let image = |id: &str| {
+        roots
+            .images
+            .iter()
+            .find(|root| root.id == id)
+            .unwrap_or_else(|| panic!("{id} is not an image root"))
+    };
+    let player = image("battle-interface/image/healthbox_singles_player");
+    let opponent = image("battle-interface/image/healthbox_singles_opponent");
+    assert_eq!(
+        (
+            player.width,
+            player.height,
+            player.metatile(),
+            player.tile_count
+        ),
+        (128, 64, (8, 8), 128)
+    );
+    assert_eq!(
+        (
+            opponent.width,
+            opponent.height,
+            opponent.metatile(),
+            opponent.tile_count
+        ),
+        (128, 32, (8, 4), 64)
+    );
+    let shadow = image("battle-interface/image/enemy_mon_shadow");
+    assert_eq!((shadow.width, shadow.height, shadow.tile_count), (32, 8, 4));
+    for root in [player, opponent, shadow] {
+        assert_eq!(
+            (root.encoding, root.rom_bit_depth, root.pack_bit_depth),
+            (rom_import::Encoding::Lz77, 4, 4),
+            "{}",
+            root.id
+        );
+    }
+    for id in [
+        "battle-interface/palette/ball_status_bar",
+        "battle-interface/palette/ball_display",
+    ] {
+        let root = roots
+            .palettes
+            .iter()
+            .find(|root| root.id == id)
+            .unwrap_or_else(|| panic!("{id} is not a palette root"));
+        assert_eq!(
+            (root.color_count, root.encoding),
+            (16, rom_import::Encoding::Raw),
+            "{id}"
+        );
+    }
+
+    for id in [
+        "battle-interface/raw/battle_bar",
+        "battle-interface/raw/healthbox_element/hpbar",
+        "battle-interface/palette/ball_display",
+        "battle-interface/image/healthbox_singles_player",
+        "battle-interface/image/enemy_mon_shadow",
+    ] {
+        assert!(
+            !COMPLETE_PREFIXES
+                .iter()
+                .any(|prefix| id.starts_with(prefix)),
+            "{id} must stay pinned by id, not claimed by a prefix"
+        );
+    }
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is
@@ -318,6 +593,33 @@ fn rom_path() -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(value))
+}
+
+/// The `field-message/table` pin applied to each backend's pack, given as
+/// `(bytes, index)` pairs: named by id and bytes so a message both backends
+/// drop or misencode together still fails.
+fn field_message_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for (what, (bytes, entries)) in [
+        ("the ROM backend", imported),
+        ("the checkout pack", checkout),
+    ] {
+        let Some(entry) = entries.get(FIELD_MESSAGE_PACK_ID) else {
+            differences.push(format!(
+                "{FIELD_MESSAGE_PACK_ID}: {what} wrote no such entry"
+            ));
+            continue;
+        };
+        if bytes[entry.offset..entry.offset + entry.length] != FIELD_MESSAGE_TABLE {
+            differences.push(format!(
+                "{FIELD_MESSAGE_PACK_ID}: {what} wrote a payload other than gText_PkmnFainted_FldPsn"
+            ));
+        }
+    }
+    differences
 }
 
 /// Parse a pack's directory into an id-keyed map.

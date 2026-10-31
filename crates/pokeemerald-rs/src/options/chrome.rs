@@ -1,7 +1,7 @@
 //! Draws the Options screen's two windows and seven rows
 //! (`pokeemerald/src/option_menu.c:90-109,374-395,421-441,618-665`).
 
-use assets::fonts::{FontId, OwnedFontGlyphSheet};
+use assets::fonts::{FontGlyphSheet, FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use engine::save::{BattleStyle, ButtonMode, SoundMode};
 use engine::settings::GameSettings;
@@ -104,7 +104,7 @@ pub(super) struct Label {
 /// The font and every selectable window frame, so a frame change previews
 /// without reloading (`option_menu.c:520-523`).
 pub(super) struct OptionsChrome {
-    font_sheet: OwnedFontGlyphSheet,
+    font_sources: OwnedGlyphSources,
     frames: Vec<FrameAssets>,
 }
 
@@ -114,16 +114,30 @@ impl OptionsChrome {
             .map(|id| Ok(FrameAssets::from_handle(pack.text_window_frame(id)?)))
             .collect::<Result<Vec<_>, PackError>>()?;
         Ok(Self {
-            font_sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
+            font_sources: GlyphSources::try_from_fn(|font| {
+                Ok::<_, OptionsChromeError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
+            })?,
             frames,
         })
+    }
+
+    /// The instant Normal-font printer for `tokens`, carrying every modelled
+    /// Latin source.
+    pub(super) fn label_printer(&self, tokens: Vec<Token>) -> Printer<FontGlyphSheet<'_>> {
+        Printer::with_sources(
+            tokens,
+            self.font_sources.sheets(),
+            FontId::Normal,
+            TextSpeed::Instant,
+            (0, 0),
+        )
     }
 
     pub(super) fn label(&self, text: &str) -> Label {
         let mut tokens: Vec<Token> = text.chars().map(Token::Char).collect();
         tokens.push(Token::End);
         let ticks = tokens.len();
-        let mut printer = Printer::new(tokens, self.font_sheet.sheet(), TextSpeed::Instant, (0, 0));
+        let mut printer = self.label_printer(tokens);
         let mut glyphs = Vec::new();
         for _ in 0..=ticks {
             match printer.tick(PrinterInput::none()) {
@@ -435,9 +449,10 @@ impl OptionsChrome {
             bit_depth: 2,
             pixels: &pixels,
         };
-        let font_sheet =
-            OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-                .expect("this is the exact real glyph-sheet shape");
+        let font_sources = GlyphSources::try_from_fn(|font| {
+            OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+        })
+        .expect("this is the exact real glyph-sheet shape");
         let frames = (0..super::WINDOW_FRAMES_COUNT)
             .map(|id| {
                 let mut palette = vec![Rgb888::BLACK; 16];
@@ -450,7 +465,10 @@ impl OptionsChrome {
                 }
             })
             .collect();
-        Self { font_sheet, frames }
+        Self {
+            font_sources,
+            frames,
+        }
     }
 
     pub(super) const fn synthetic_frame_color(id: u8) -> Rgb888 {
@@ -459,5 +477,63 @@ impl OptionsChrome {
             g: 200,
             b: 100,
         }
+    }
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::OptionsChrome;
+    use crate::pack_test_support::{
+        assert_carries_every_font, claim_scratch_exclusive, image_entry, pack_bytes_with_fonts,
+        palette_entry,
+    };
+    use assets::pack::AssetPack;
+    use std::io::Write as _;
+
+    /// A pack with the frames and every font sheet `OptionsChrome::from_pack`
+    /// reads, written to a scratch path removed on drop.
+    struct ScratchPack(std::path::PathBuf);
+
+    impl ScratchPack {
+        fn new() -> Self {
+            let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+            let mut entries = Vec::new();
+            for id in 0..super::super::WINDOW_FRAMES_COUNT {
+                entries.push(image_entry(
+                    leak(format!("text-window/image/{}", id + 1)),
+                    24,
+                    24,
+                    4,
+                    1,
+                ));
+                entries.push(palette_entry(
+                    leak(format!("text-window/palette/{}", id + 1)),
+                    16,
+                ));
+            }
+            let path = std::env::temp_dir().join(format!(
+                "pokeemerald-rs-options-chrome-fonts-{}-{:?}.pack",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let mut file = claim_scratch_exclusive(&path);
+            let guard = Self(path);
+            file.write_all(&pack_bytes_with_fonts(entries)).unwrap();
+            guard
+        }
+    }
+
+    impl Drop for ScratchPack {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_label_printer_built_from_a_pack_carries_every_font() {
+        let scratch = ScratchPack::new();
+        let pack = AssetPack::load(&scratch.0).unwrap();
+        let chrome = OptionsChrome::from_pack(&pack).expect("the pack carries all five fonts");
+        assert_carries_every_font(&chrome.label_printer(Vec::new()));
     }
 }

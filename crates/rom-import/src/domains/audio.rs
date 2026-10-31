@@ -25,7 +25,9 @@
 //! synthesized `0`, unless `size` is a multiple of four: then the ROM byte
 //! is whatever the linker placed next and the two backends can differ. This
 //! reader does not detect that case and uses `0` only when the read would
-//! run off the image.
+//! run off the image. An `agbl` past the sampler end is the same case: the
+//! extractor zero-fills the logical positions wav2agb's payload omits, while
+//! the ROM holds whatever follows the padding.
 //!
 //! A programmable wave is the bare 16-byte table CGB channel 3 plays.
 //!

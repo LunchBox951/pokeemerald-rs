@@ -1,13 +1,12 @@
 //! Binary schema for the normalized species-cry table, the species-to-cry lookup, and the
 //! `PlayCryInternal` mode settings.
 //!
-//! Upstream plays a species cry from `gCryTable`/`gCryTable_Reverse` (`sound/cry_tables.inc`), two
-//! 388-entry `ToneData` tables whose position `n` names the same `DirectSound` sample, differing
-//! only in the reverse flag of the tone type. The pack keeps one table of [`SampleId`]s and
-//! derives the reverse variant from the resolved mode, so the two upstream tables cannot disagree.
+//! Upstream's `gCryTable` and `gCryTable_Reverse` (`sound/cry_tables.inc`) name the same
+//! `DirectSound` sample at each of 388 positions and differ only in the tone type's reverse flag,
+//! so the pack keeps one table and takes the reverse flag from the resolved mode.
 //!
-//! The payload is the `audio/cry/table` raw entry: [`CRY_TABLE_LEN`] length-prefixed sample ids,
-//! in table order, with nothing after them.
+//! The `audio/cry/table` payload is [`CRY_TABLE_LEN`] length-prefixed sample ids in table order,
+//! with nothing after them.
 
 use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
@@ -15,7 +14,7 @@ use super::sample::SampleId;
 use super::voicegroup::DirectSoundMode;
 use crate::species::SpeciesId;
 
-/// The pack id of the one cry table entry.
+/// Pack id of the one entry holding the [`CryTable`] payload.
 pub const CRY_TABLE_PACK_ID: &str = "audio/cry/table";
 
 /// The number of positions in `gCryTable` (`sound/cry_tables.inc`).
@@ -56,25 +55,25 @@ const HOENN_CRY_IDS: [u16; 135] = [
     386, 387,
 ];
 
-/// Resolves a species to its cry-table position as `PlayCryInternal` does (`sound.c:369-495`):
-/// it decrements the species, then applies `SpeciesToCryId` (`pokemon.c:5701-5710`).
+/// Resolves a species to its cry position: `PlayCryInternal` decrements the species
+/// (`sound.c:369-495`), then `SpeciesToCryId` maps it (`pokemon.c:5701-5710`).
 ///
 /// Species up to Celebi map to their own position, the placeholder species between Celebi and
-/// Treecko share Unown's cry, and Hoenn species use the remap table. Species zero
-/// and species past Chimecho have no cry; upstream indexes outside its table for them.
+/// Treecko share Unown's cry, and Hoenn species use the remap table. Species zero and species
+/// past Chimecho have no cry; upstream indexes outside its table for them.
 #[must_use]
 pub fn cry_id(species: SpeciesId) -> Option<CryId> {
     let zero_based = species.index().checked_sub(1)?;
-    let last_gen_two = SpeciesId::CELEBI.index() - 1;
-    let first_hoenn = SpeciesId::TREECKO.index() - 1;
-    if zero_based <= last_gen_two {
+    let celebi = SpeciesId::CELEBI.index() - 1;
+    let treecko = SpeciesId::TREECKO.index() - 1;
+    if zero_based <= celebi {
         return Some(CryId(zero_based));
     }
-    if zero_based < first_hoenn {
+    if zero_based < treecko {
         return Some(CryId(SpeciesId::UNOWN.index() - 1));
     }
     HOENN_CRY_IDS
-        .get(usize::from(zero_based - first_hoenn))
+        .get(usize::from(zero_based - treecko))
         .copied()
         .map(CryId)
 }
@@ -128,7 +127,8 @@ impl CrySettings {
 }
 
 impl CryMode {
-    /// Applies `PlayCryInternal`'s mode `switch` to the caller's `pan`, `volume`, and `priority`.
+    /// The settings `PlayCryInternal` selects for this mode, given the caller's `pan`, `volume`, and
+    /// `priority`.
     #[must_use]
     pub fn settings(self, pan: i8, volume: i8, priority: u8) -> CrySettings {
         let mut settings = CrySettings {
@@ -210,7 +210,7 @@ impl CryMode {
     }
 }
 
-/// A resolved cry: the sample to play and the settings to play it with.
+/// What `PlayCryInternal` starts for one species: its table sample under the mode's settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedCry<'a> {
     pub sample: &'a SampleId,

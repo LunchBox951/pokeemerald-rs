@@ -25,21 +25,40 @@ fn default_room_map_id_matches_new_games_spawn_map_id() {
 }
 
 #[test]
-fn resolve_tileset_pack_name_covers_every_bundled_tileset() {
-    assert_eq!(resolve_tileset_pack_name("gTileset_General"), Ok("general"));
+fn resolve_tileset_pack_name_maps_each_bundled_symbol_to_its_pack_name() {
+    let expected = [
+        ("gTileset_General", "general"),
+        ("gTileset_Building", "building"),
+        ("gTileset_Petalburg", "petalburg"),
+        ("gTileset_BrendansMaysHouse", "brendans_mays_house"),
+        ("gTileset_Lab", "lab"),
+        ("gTileset_GenericBuilding", "generic_building"),
+        ("gTileset_PokemonCenter", "pokemon_center"),
+        ("gTileset_Shop", "shop"),
+        ("gTileset_InsideOfTruck", "inside_of_truck"),
+    ];
+    for (symbol, pack_name) in expected {
+        assert_eq!(resolve_tileset_pack_name(symbol), Ok(pack_name), "{symbol}");
+    }
     assert_eq!(
-        resolve_tileset_pack_name("gTileset_Building"),
-        Ok("building")
+        assets::bundled_overworld::BUNDLED_TILESETS.len(),
+        expected.len(),
+        "a newly bundled tileset needs its expected pack name here"
     );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_Petalburg"),
-        Ok("petalburg")
-    );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_BrendansMaysHouse"),
-        Ok("brendans_mays_house")
-    );
-    assert_eq!(resolve_tileset_pack_name("gTileset_Lab"), Ok("lab"));
+}
+
+#[test]
+fn resolve_tileset_pack_name_resolves_both_tilesets_of_every_bundled_layout() {
+    let layouts = assets::LayoutTable::new();
+    for id in assets::bundled_overworld::BUNDLED_LAYOUT_IDS {
+        let layout = layouts.layout(*id).unwrap();
+        for symbol in [layout.primary_tileset, layout.secondary_tileset] {
+            assert!(
+                resolve_tileset_pack_name(symbol).is_ok(),
+                "{id:?} names unresolved tileset {symbol}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -133,6 +152,22 @@ impl Drop for TempPackGuard {
     }
 }
 
+/// Claims `path` through `claim` and writes `bytes` through the handle it
+/// returns, yielding the guard that removes `path` on drop. The guard is
+/// built only once `claim` has succeeded, so a failed claim never removes an
+/// entry the guard does not own; a write panic after it still cleans up.
+fn claim_pack_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+) -> TempPackGuard {
+    use std::io::Write as _;
+    let mut file = claim(path);
+    let guard = TempPackGuard(path.to_path_buf());
+    file.write_all(bytes).unwrap();
+    guard
+}
+
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
@@ -149,6 +184,21 @@ fn with_palette_at(
     color_count: u16,
     check: impl FnOnce(assets::PaletteRef<'_>),
 ) {
+    with_palette_claimed(
+        path,
+        color_count,
+        crate::pack_test_support::claim_scratch_exclusive,
+        check,
+    );
+}
+
+/// [`with_palette_at`], claiming `path` through `claim`.
+fn with_palette_claimed(
+    path: &std::path::Path,
+    color_count: u16,
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+    check: impl FnOnce(assets::PaletteRef<'_>),
+) {
     let payload: Vec<u8> = (0..color_count)
         .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
         .collect();
@@ -158,8 +208,7 @@ fn with_palette_at(
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let _guard = TempPackGuard(path.to_path_buf());
-    super::test_support::write_scratch_exclusive(path, &bytes);
+    let _guard = claim_pack_with(path, &bytes, claim);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -169,6 +218,32 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
         "pokeemerald-rs-palette-bank-{name}-{}.pack",
         std::process::id()
     ))
+}
+
+#[test]
+fn a_failed_claim_leaves_the_unowned_entry_in_place() {
+    let path = regression_pack_path("failed-claim-unowned");
+    let _ = std::fs::remove_file(&path);
+    let outcome = std::panic::catch_unwind(|| {
+        with_palette_claimed(
+            &path,
+            3,
+            |path| {
+                // Another owner holds `path`, so this claim loses.
+                std::fs::write(path, b"not ours").unwrap();
+                panic!("the claim lost the path");
+            },
+            |_| unreachable!("a lost claim never loads the pack"),
+        );
+    });
+    let survivor = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(outcome.is_err(), "the failed claim must propagate");
+    assert_eq!(
+        survivor.ok().as_deref(),
+        Some(&b"not ours"[..]),
+        "a guard must not remove an entry it never claimed"
+    );
 }
 
 #[test]
@@ -526,7 +601,7 @@ fn hblank_budget_regression_fixture() -> (
     });
     let object_events: &'static [ObjectEvent] = Box::leak(object_events.into_boxed_slice());
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-        id: assets::MapId("MAP_TEST"),
+        id: assets::MapId("MAP_ROUTE122"),
         shared_events_map: None,
         object_events,
         warp_events: &[],
@@ -1646,9 +1721,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     // is used because the fresh event data leaves a decoration placeholder
     // object on the north-edge tile.
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let runtime = scene.runtime();
     let mut walker = PlayerState::new((0, 5), 4, Direction::South);
     walker.step(Some(Direction::South), &runtime, &no_connections, &data);
     while walker.in_transit() {
@@ -2099,7 +2172,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             flag: "0",
         }]));
         let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-            id: assets::MapId("MAP_TEST"),
+            id: assets::MapId("MAP_ROUTE122"),
             shared_events_map: None,
             object_events,
             warp_events: &[],
@@ -2289,22 +2362,118 @@ fn layout_pack_writers_refuse_a_planted_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
-    let path = regression_pack_path("planted-symlink-replaced");
-    let bytes = b"fresh scratch pack".to_vec();
-    let mut completed = false;
+fn scratch_writer_refuses_a_planted_symlink_and_keeps_the_link() {
+    let path = regression_pack_path("planted-symlink-kept");
     super::test_support::assert_planted_symlink_untouched(&path, || {
-        super::test_support::write_scratch_exclusive(&path, &bytes);
-        let meta = std::fs::symlink_metadata(&path).unwrap();
-        assert!(
-            meta.file_type().is_file(),
-            "the stale link is replaced by a regular file"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        completed = true;
+        super::test_support::write_scratch_exclusive(&path, b"fresh scratch pack");
     });
-    assert!(
-        completed,
-        "the writer completed instead of rejecting the stale entry"
+}
+
+/// The inputs of a room that is internally coherent: Route 122's header and
+/// events over a 4x4 synthetic petalburg layout.
+fn route_122_room_inputs() -> (
+    assets::MapHeader,
+    assets::MapLayout,
+    &'static assets::MapEvents,
+) {
+    let map = assets::MapId("MAP_ROUTE122");
+    let layout = assets::MapLayout {
+        id: LayoutId("LAYOUT_MAP_TEST"),
+        name: "MapTest",
+        width: 4,
+        height: 4,
+        primary_tileset: "gTileset_Petalburg",
+        secondary_tileset: "gTileset_Petalburg",
+    };
+    let header = assets::MapHeader {
+        layout: layout.id,
+        connections: &[],
+        ..*assets::MapHeaderTable::new().header(map).unwrap()
+    };
+    let events = assets::MapEventsTable::new().resolve(map).unwrap();
+    (header, layout, events)
+}
+
+fn build_route_122_scene(
+    header: &assets::MapHeader,
+    layout: &assets::MapLayout,
+    events: &assets::MapEvents,
+) -> Result<super::OverworldScene, OverworldSceneError> {
+    let path = super::test_support::scene_scratch_pack_path();
+    super::test_support::write_scratch_exclusive(
+        &path,
+        synthetic_overworld_pack_bytes_for("petalburg", 4, 4),
     );
+    let pack = AssetPack::load(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    super::OverworldScene::from_pack(
+        &pack,
+        header,
+        layout,
+        super::PlayerCharacter::Brendan,
+        events,
+        &engine::event_data::EventData::new(),
+    )
+}
+
+/// Control for the two mismatch regressions below: the coherent inputs load,
+/// so a refusal there is the mismatch and not the fixture.
+#[test]
+fn from_pack_loads_a_coherent_room() {
+    let (header, layout, events) = route_122_room_inputs();
+    build_route_122_scene(&header, &layout, events).expect("coherent inputs load");
+}
+
+/// A layout the header does not name is another room's grid: collision and
+/// rendering would answer for one room under another's connections.
+#[test]
+fn from_pack_rejects_a_layout_the_header_does_not_name() {
+    let (header, layout, events) = route_122_room_inputs();
+    let foreign = assets::MapHeader {
+        layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+        ..header
+    };
+    let err = build_route_122_scene(&foreign, &layout, events)
+        .expect_err("a header naming another layout must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::LayoutNotOfHeader {
+            map: header.id,
+            header_layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+            layout: layout.id,
+        }
+    );
+}
+
+/// Events owned by another map put that map's NPCs, warps, and triggers in
+/// this room.
+#[test]
+fn from_pack_rejects_events_owned_by_another_map() {
+    let (header, layout, _) = route_122_room_inputs();
+    let other = assets::MapEventsTable::new()
+        .resolve(assets::MapId("MAP_EVER_GRANDE_CITY"))
+        .unwrap();
+    let err = build_route_122_scene(&header, &layout, other)
+        .expect_err("another map's events must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::EventsNotOfHeader {
+            map: header.id,
+            owner: assets::MapId("MAP_ROUTE122"),
+            events: other.id,
+        }
+    );
+}
+
+/// An aliased map's events resolve to their owner, and the scene's runtime
+/// answers for the map it was loaded for, not the owner.
+#[test]
+fn a_scene_runtime_answers_for_the_room_it_owns() {
+    let (header, layout, events) = route_122_room_inputs();
+    let scene = build_route_122_scene(&header, &layout, events).unwrap();
+    let runtime = scene.runtime();
+    assert_eq!(scene.map_id(), header.id);
+    assert_eq!(runtime.id(), header.id);
+    assert_eq!(runtime.header(), &header);
+    assert_eq!(scene.map_events(), events);
 }

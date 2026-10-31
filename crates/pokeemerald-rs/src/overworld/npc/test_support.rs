@@ -29,23 +29,13 @@ pub(super) fn object(
     }
 }
 
-const EXTRACTED_MAPS: [&str; 9] = [
-    "MAP_LITTLEROOT_TOWN",
-    "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-    "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-    "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-    "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-    "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-    "MAP_ROUTE101",
-    "MAP_OLDALE_TOWN",
-    "MAP_ROUTE103",
-];
-
-pub(super) fn extracted_map_graphics_ids() -> Vec<&'static str> {
+/// The sorted, de-duplicated graphics ids of every object event on every map
+/// whose layout is bundled.
+pub(super) fn bundled_map_graphics_ids() -> Vec<&'static str> {
     let table = assets::MapEventsTable::new();
     let mut ids: Vec<&'static str> = Vec::new();
-    for map in EXTRACTED_MAPS {
-        let events = table.resolve(assets::MapId(map)).unwrap();
+    for map in assets::bundled_overworld::maps_with_bundled_layouts() {
+        let events = table.resolve(map).unwrap();
         for event in events.object_events {
             if !ids.contains(&event.graphics_id) {
                 ids.push(event.graphics_id);

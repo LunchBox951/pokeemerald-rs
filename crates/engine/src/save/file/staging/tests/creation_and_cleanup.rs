@@ -697,4 +697,6 @@ fn a_save_written_under_an_owner_stripping_umask_is_owner_readable() {
         mode, 0o622,
         "owner read is restored and group and other keep the umask's mode: {mode:o}"
     );
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
 }

@@ -29,9 +29,8 @@
 //! into a flat, time-ordered event list; [`compile`] is the semantic
 //! translation (tick/velocity scaling, note-off pairing, tie-splitting,
 //! sort order, controller mapping) into [`event::SongEvent`]; [`encode`]
-//! serializes that to the schema's exact wire bytes, duplicated rather than
-//! shared — see [`encode`]'s module docs, mirroring
-//! `xtask::extract::voicegroups::encode`'s documented rationale. [`mod@cfg`]
+//! maps that onto `assets`' song schema, which canonicalizes the waits and
+//! writes the wire bytes. [`mod@cfg`]
 //! resolves `midi.cfg`'s per-song compile flags this pipeline needs
 //! (voicegroup label, priority, reverb, master volume, `-E`/`-X`).
 //!
@@ -78,9 +77,9 @@ pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 /// [`ExtractError::ReadFailed`] if `midi.cfg` or the `.mid` source is
 /// missing; [`ExtractError::MidiCfg`] if `midi.cfg` has no entry for
 /// [`SONG_MIDI_FILENAME`] or that entry is malformed; [`ExtractError::Midi`]
-/// if compiling the `.mid` source itself fails, or if the compiled song
-/// carries more tracks than the wire format's `u8` count can describe (see
-/// [`error::MidiError`]'s variants).
+/// if compiling the `.mid` source itself fails;
+/// [`ExtractError::InvalidSongSchema`] if `assets` rejects the compiled song
+/// as outside the pack schema's domain.
 pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let cfg_path = upstream.join("sound/songs/midi/midi.cfg");
     let cfg_text = read_text(&cfg_path)?;
@@ -95,7 +94,10 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
     let player = song_table::player_for(&read_text(&table_path)?, SONG_TABLE_SYMBOL)
         .map_err(|e| ExtractError::Midi(table_path.clone(), e))?;
     let payload =
-        encode::encode_song(&song, player).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
+        encode::encode_song(&song, player).map_err(|source| ExtractError::InvalidSongSchema {
+            path: midi_path.clone(),
+            source,
+        })?;
 
     writer.push(pack_format::raw_entry(SONG_PACK_ID.to_owned(), payload));
     Ok(())

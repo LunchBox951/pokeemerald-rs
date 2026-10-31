@@ -44,7 +44,9 @@
 //! would have retained. Otherwise (no override, or an override at or past
 //! that natural boundary) wav2agb's own payload has nothing left to retain
 //! there; this decoder documents that boundary as `0`, matching wav2agb's
-//! zero alignment padding. Every `sound/direct_sound_samples/*.wav`
+//! zero alignment padding. An `agbl` past the sampler end likewise never
+//! imports raw samples the payload omits: every logical position from the
+//! sampler end on is `0`. Every `sound/direct_sound_samples/*.wav`
 //! upstream ships sets `agbl` below its raw sample count, so the pack never
 //! exercises that fallback.
 //!
@@ -558,21 +560,12 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
     // wav2agb's binary payload writer runs to the unoverridden sampler end
     // regardless of `agbl` (converter.cpp:77-90); retain that one extra
     // encoded sample when it exists so `data` matches the compiled binary
-    // the mixer actually interpolates against (m4a_1.s:399-407).
-    let has_natural_guard = sample_count < metadata.unoverridden_sample_count;
-    let retained_len = if has_natural_guard {
-        sample_count + 1
-    } else {
-        sample_count
-    };
+    // the mixer actually interpolates against (m4a_1.s:399-407). Raw samples
+    // past the sampler end never reach the payload, so any logical position
+    // beyond it, and the final guard, is zero as upstream's alignment padding.
+    let retained_len = (sample_count + 1).min(metadata.unoverridden_sample_count);
     let mut sample_data = decode_pcm(format, data, retained_len);
-    if !has_natural_guard {
-        // No natural sample exists past the logical end (no override, or an
-        // override at/past the unoverridden boundary); wav2agb's own payload
-        // has nothing there but zero alignment padding, so this decoder
-        // documents that boundary the same way.
-        sample_data.push(0);
-    }
+    sample_data.resize(sample_count as usize + 1, 0);
 
     Ok(WavSample {
         base_frequency,

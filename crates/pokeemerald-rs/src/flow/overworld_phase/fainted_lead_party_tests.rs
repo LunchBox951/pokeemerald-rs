@@ -48,7 +48,7 @@ fn continued_phase_with_trailing_member(member: &BattlePokemon) -> OverworldPhas
     seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &fainted_starter());
     seed.save1.player_party[1] = crate::party::to_save_pokemon(&dex, member);
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -201,7 +201,7 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     ));
     seed.save1.player_party[1] = crate::party::to_save_pokemon(&dex, &fainted_starter());
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -230,7 +230,7 @@ fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -263,7 +263,7 @@ fn a_zero_stored_count_still_resumes_with_no_lead() {
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -273,10 +273,6 @@ fn a_zero_stored_count_still_resumes_with_no_lead() {
         phase.lead_for_test().is_none(),
         "a stored count of zero must resume with no lead even though slot 1 still holds a \
          healthy, decodable record"
-    );
-    assert_eq!(
-        phase.party_lead_slot, 0,
-        "the no-lead default slot is left unchanged"
     );
     assert_eq!(
         phase.save1.player_party_count, 0,
@@ -325,10 +321,13 @@ fn a_white_out_with_a_zero_stored_count_skips_reselecting_the_lead() {
     // ineligible even after the unconditional zero-count heal below
     // (`merge_into_save_pokemon` retains the egg bit), so if the reselect
     // ran despite the zero count, it would move on to slot 1 instead.
-    phase.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter()));
     phase.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
-    phase.set_fresh_lead_for_test(fainted_starter());
+    phase.set_backed_lead_for_test(
+        0,
+        as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter())),
+        fainted_starter(),
+    );
 
     phase.white_out();
 
@@ -356,7 +355,7 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -454,7 +453,7 @@ fn a_white_out_heals_every_occupied_party_member() {
     );
 
     let continued = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(phase.map_id),
         phase.map_id,
         phase.save1.clone(),
         phase.save2.clone(),
@@ -469,7 +468,7 @@ fn a_white_out_heals_every_occupied_party_member() {
 /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]
 /// since both share
 /// [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`]
-/// rather than each healing only [`super::OverworldPhase::party_lead`].
+/// rather than each healing only the loaded lead.
 #[test]
 fn the_first_battle_conclusion_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
@@ -502,8 +501,7 @@ fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party
     let mut stored = crate::party::to_save_pokemon(&Dex::new(), &lead);
     stored.status = STORED_STATUS;
     phase.save1.player_party_count = 1;
-    phase.save1.player_party[0] = stored;
-    phase.set_fresh_lead_for_test(lead);
+    phase.set_backed_lead_for_test(0, stored, lead);
     assert_ne!(
         phase.save1.player_party[0].status, 0,
         "setup: the saved record is statused"
@@ -517,6 +515,67 @@ fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party
         "the first-battle conclusion's HealPlayerParty must clear a single member's stored \
          status too"
     );
+}
+
+/// `PickWildMonNature` consults `gPlayerParty[0]` even when it is fainted
+/// (`pokeemerald/src/wild_encounter.c:367-372`), not the battle lead behind it.
+#[test]
+fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
+    let dex = Dex::new();
+    let ivs = Ivs {
+        hp: battle::MAX_IV,
+        attack: battle::MAX_IV,
+        defense: battle::MAX_IV,
+        speed: battle::MAX_IV,
+        sp_attack: battle::MAX_IV,
+        sp_defense: battle::MAX_IV,
+    };
+    // Mew, personality 0: Synchronize, Hardy.
+    let mut mew = BattlePokemon::new(&dex, SpeciesId(151), 50, ivs, 0, vec![MoveId::POUND])
+        .expect("Mew is in the dex");
+    mew.apply_damage(u32::MAX);
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 2;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &mew);
+    seed.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(1),
+        "setup: slot 1 is the battle lead"
+    );
+
+    // A winning coin flip where neither a missing flip nor a plain draw yields Hardy.
+    let mut probe = phase.rng.clone();
+    let mut found = None;
+    for _ in 0..4096 {
+        let mut trial = probe.clone();
+        let coin = trial.next_u16();
+        let random_nature = trial.next_u16();
+        if coin.is_multiple_of(2) && !coin.is_multiple_of(25) && !random_nature.is_multiple_of(25) {
+            found = Some(probe.clone());
+            break;
+        }
+        let _ = probe.next_u16();
+    }
+    phase.rng = found.expect("a winning-flip state exists within the scan");
+
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("the healthy lead must fight");
+    };
+    assert_eq!(battle.enemy().nature(), battle::Nature::Hardy);
 }
 
 /// A white-out that reselects a different slot while the old lead is still
