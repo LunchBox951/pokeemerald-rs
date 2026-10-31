@@ -48,13 +48,12 @@
 //!   attach keeps the queue: that is the producer's startup prefill,
 //!   whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
-//!   application to report. At most [`MAX_PENDING_EVENTS`] unpolled
+//!   application to report. At most [`shared::MAX_PENDING_EVENTS`] unpolled
 //!   transitions are kept; a caller that never polls loses the oldest, and
 //!   [`Shared::state`] always holds the latest.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::error::PlatformError;
@@ -65,14 +64,15 @@ use super::playback::PlaybackClock;
 use super::source_for_device;
 use super::stream::{build_stream, OutputDevice, OutputStream, StreamHealth};
 
+mod shared;
 mod worker;
+pub(in crate::audio) use shared::Shared;
+pub use shared::{TransportFailure, TransportState};
 pub(super) use worker::{CpalHost, Worker};
 
 #[cfg(test)]
 mod tests;
 
-/// Most transitions kept for a caller that does not poll; older ones drop.
-pub(super) const MAX_PENDING_EVENTS: usize = 8;
 /// How often a healthy stream's failure flag and play intent are checked.
 pub(super) const HEALTH_POLL: Duration = Duration::from_millis(20);
 /// How often the OS default output is re-discovered, attached or not.
@@ -85,125 +85,6 @@ pub(super) const RETRY_BASE: Duration = Duration::from_millis(100);
 pub(super) const COOLDOWN: Duration = Duration::from_secs(5);
 /// How long a stream must stay healthy before a failure counts as new.
 pub(super) const STABLE_AFTER: Duration = Duration::from_secs(5);
-
-/// Where the output transport currently stands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransportState {
-    /// No stream has been attempted yet.
-    Connecting,
-    /// A stream is attached to the default output.
-    Ready,
-    /// No stream is attached; the transport keeps retrying. The producer
-    /// contract is unchanged meanwhile: pushes are accepted until the ring is
-    /// full and then dropped.
-    Unavailable(TransportFailure),
-    /// The headless backend, which has no transport to fail.
-    Null,
-}
-
-/// Why no stream is attached.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransportFailure {
-    /// There is no default output device, or the audio host is unreachable.
-    NoOutput,
-    /// The default output changed; the stream is being rebuilt for the new
-    /// one.
-    DefaultChanged,
-    /// The attached stream reported a failure that needs a rebuild.
-    StreamLost,
-    /// The default output has no configuration this crate can drive.
-    Unsupported,
-    /// The device was reachable but a stream could not be built or started.
-    ConnectFailed,
-}
-
-/// State shared by the game-loop facade, the worker, and the callbacks.
-/// Everything here is an atomic except `state`, which only the worker and the
-/// facade lock, never a callback.
-pub(super) struct Shared {
-    /// Playback intent set by `start`/`stop`.
-    pub(super) running: AtomicBool,
-    /// [`Producer::pushed`] at the latest `stop` of a started transport:
-    /// what was queued after it is a stopped queue.
-    stopped_at: AtomicU64,
-    /// How many times playback has been started, so the worker sees a
-    /// `start` even when a `stop` overwrote it before the next step.
-    starts: AtomicU64,
-    pub(super) shutdown: AtomicBool,
-    pub(super) stream_errors: Arc<AtomicU64>,
-    pub(super) playback_clock: Arc<PlaybackClock>,
-    pub(super) device_sample_rate: AtomicU32,
-    /// `0` when no concrete range is advertised.
-    pub(super) max_callback_frames: AtomicUsize,
-    pub(super) settle_margin_frames: AtomicU64,
-    state: Mutex<TransportState>,
-    /// Transitions not yet polled; bounded by [`MAX_PENDING_EVENTS`].
-    events: Mutex<VecDeque<TransportState>>,
-}
-
-impl Shared {
-    pub(super) fn new(
-        state: TransportState,
-        device_sample_rate: u32,
-        settle_margin_frames: u64,
-    ) -> Self {
-        Self {
-            running: AtomicBool::new(false),
-            stopped_at: AtomicU64::new(0),
-            starts: AtomicU64::new(0),
-            shutdown: AtomicBool::new(false),
-            stream_errors: Arc::new(AtomicU64::new(0)),
-            playback_clock: Arc::new(PlaybackClock::new()),
-            device_sample_rate: AtomicU32::new(device_sample_rate),
-            max_callback_frames: AtomicUsize::new(0),
-            settle_margin_frames: AtomicU64::new(settle_margin_frames),
-            state: Mutex::new(state),
-            events: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    /// Record playback intent. A stop of a started transport first marks
-    /// where it landed in `producer`'s queue, so a re-attach that discards
-    /// history keeps what is queued after it. A start of a stopped transport
-    /// is counted, so one the worker never saw running is still history.
-    pub(super) fn set_running(&self, running: bool, producer: &Producer) {
-        let was_running = self.running.load(Ordering::Acquire);
-        if running && !was_running {
-            self.starts.fetch_add(1, Ordering::Relaxed);
-        }
-        if !running && was_running {
-            let mark = producer.pushed();
-            self.stopped_at.store(mark, Ordering::Relaxed);
-            // A started stream that has not read yet still holds its
-            // first-read discard; what is queued after this stop is a
-            // stopped queue that discard must keep.
-            producer.keep_pushed_from_at_first_read(mark);
-        }
-        // Release: a worker that reads this stop also reads its mark.
-        self.running.store(running, Ordering::Release);
-    }
-
-    /// Queue a transition for the application, discarding the oldest pending
-    /// one when an unpolled queue is full. The latest state always survives.
-    fn push_event(&self, state: TransportState) {
-        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
-        if events.len() >= MAX_PENDING_EVENTS {
-            events.pop_front();
-        }
-        events.push_back(state);
-    }
-
-    pub(super) fn pop_event(&self) -> Option<TransportState> {
-        self.events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front()
-    }
-
-    pub(super) fn state(&self) -> TransportState {
-        *self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
 
 /// Discovery of the current OS default output.
 pub(super) trait OutputHost: Send + 'static {
@@ -629,12 +510,7 @@ impl<H: OutputHost> Transport<H> {
             return;
         }
         self.state = state;
-        *self
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = state;
-        self.shared.push_event(state);
+        self.shared.publish(state);
     }
 }
 
