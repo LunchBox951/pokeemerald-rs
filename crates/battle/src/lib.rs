@@ -154,7 +154,14 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them. The paralysis pipeline still reads Limber and the accuracy
+//! them. [`ability::burn_halves_damage`] feeds the hit pipeline's,
+//! the trainer AI estimate's and the forced-replacement selector's
+//! `attacker_burned` input (the confusion self-hit still passes `false`): a burned attacker's physical damage halves unless
+//! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and
+//! `Battle::residual_effects` deals the burn tick after poison's
+//! ([`status1::burn_residual_damage`]). A burned participant with Water Veil
+//! is refused at admission, as a poisoned Immunity holder is, because the
+//! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
 //! `Battle::residual_effects`.
@@ -221,10 +228,10 @@
 //! and the secondary Speed drop) —
 //! the effect of any held item (a mon carries one, and [`ensure_held_item_playable`]
 //! refuses every item that has an effect), every primary status but [`status1::Status1::Paralysed`],
-//! [`status1::Status1::Poisoned`], and [`status1::Status1::Asleep`] (freeze,
-//! burn, toxic — see [`status1`]'s module docs; no modelled move inflicts
-//! sleep yet, so it arrives only through
-//! [`pokemon::BattlePokemon::set_status1`]), every
+//! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`], and
+//! [`status1::Status1::Asleep`] (freeze, toxic — see [`status1`]'s module
+//! docs; no modelled move inflicts sleep or burn yet, so they arrive only
+//! through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
