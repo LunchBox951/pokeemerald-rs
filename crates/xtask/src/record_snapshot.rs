@@ -577,13 +577,50 @@ fn git_sha(repo_root: &Path) -> Option<String> {
     }
 }
 
+/// Git variables that redirect which repository, worktree, index, object
+/// store, or configuration a command reads. Inherited from a caller such as a
+/// git hook, they would attribute a capture to another repository.
+const GIT_ROUTING_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_GRAFT_FILE",
+    "GIT_SHALLOW_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+];
+
+/// A `git -C <repo_root>` command isolated from inherited repository routing.
+fn git_command(repo_root: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(repo_root);
+    for name in GIT_ROUTING_ENV {
+        command.env_remove(name);
+    }
+    // `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` are numbered.
+    for (name, _) in std::env::vars_os() {
+        let numbered_config = name.to_str().is_some_and(|name| {
+            name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_")
+        });
+        if numbered_config {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
 fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .ok()?;
+    let output = git_command(repo_root).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
