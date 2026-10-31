@@ -480,8 +480,14 @@ impl<H: OutputHost> Transport<H> {
     /// publishing: a refused pause replaces the stream at once, and only a
     /// failed replacement is a transition the application should see.
     fn detach(&mut self) {
-        // Starts so far landed while this stream was attached.
-        self.seen_starts = self.shared.starts.load(Ordering::Acquire);
+        // Starts so far landed while this stream was attached. One this
+        // stream never applied, landing after it died and before this poll,
+        // still meant playback to advance: what queued since is history.
+        let starts = self.shared.starts.load(Ordering::Acquire);
+        if starts != self.seen_starts {
+            self.stale_queue = true;
+        }
+        self.seen_starts = starts;
         self.live = None;
         // A stream that never read still owes its first-read discard,
         // bounded by any stop that landed; reclaiming the consumer drops

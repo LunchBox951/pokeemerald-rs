@@ -224,3 +224,32 @@ fn a_resume_that_fails_after_a_racing_stop_discards_history_through_the_stop() {
         "history queued while started is discarded; the stopped queue is kept"
     );
 }
+
+#[test]
+fn a_start_and_stop_that_land_after_a_paused_stream_dies_discard_history_through_the_stop() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    // A paused stream, attached stopped.
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+
+    // It dies; before the worker polls, the caller starts, queues, and stops.
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.shared.set_running(true, &rig.producer);
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(20));
+    assert_eq!(
+        rig.events(),
+        [TransportState::Unavailable(TransportFailure::StreamLost)]
+    );
+    // Queued after the stop: a stopped queue for the next start.
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2);
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 2,
+        "history queued while started is discarded; the stopped queue is kept"
+    );
+}
