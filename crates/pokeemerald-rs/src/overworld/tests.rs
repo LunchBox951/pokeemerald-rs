@@ -1226,15 +1226,15 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
 
     // Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west
     // stand frame h-flipped (`avatar::stand_frame_for`). Her sheet is packed
-    // first (`object_events[0]`), one `FRAME_BLOCK_TILES` stride after the
-    // player's block.
+    // first (`object_events[0]`), right after the player's block, and every
+    // cell a facing can show is packed (south, north, west: her live facing
+    // changes when she turns to the player), so her west frame is third.
     let block = super::avatar::FRAME_BLOCK_TILES;
-    let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
 
     let mom = entries[1];
     assert_eq!(mom.palette_bank(), 4, "OBJ_EVENT_PAL_TAG_NPC_4 (mom.pal)");
-    assert_eq!(mom.tile_index(), block + west_stand);
+    assert_eq!(mom.tile_index(), block + 2 * super::avatar::FRAME_TILES);
     assert!(mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
     assert!(mom.enabled());
     assert_eq!(mom.dimensions(), (16, 32));
@@ -1267,15 +1267,27 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
 
     // Bindings follow the packing order `npc::resolve_bindings` walks.
     let bindings = scene.sprites.bindings();
-    assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
+    assert_eq!(
+        bindings.len(),
+        7,
+        "mom, woman_4, norman, the rival, ninja boy and both Vigoroths"
+    );
     assert!(
         bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
         "the rival is bound to the player's own sheet even though \
          RESET_MAP_FLAGS hides him: bindings are per `graphics_id`, not per \
          visibility"
     );
-    assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
-    assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
+    for hidden_but_bound in [
+        "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+        "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+        "OBJ_EVENT_GFX_NINJA_BOY",
+    ] {
+        assert!(
+            bindings.contains_key(hidden_but_bound),
+            "{hidden_but_bound}"
+        );
+    }
 }
 
 /// `SceneSprites::bindings` binds the opposite-gender rival for either
@@ -1484,11 +1496,11 @@ fn assert_background_npc_draws_an_oam_entry(
     );
     let entries = scene.sprites.entries(&player, data);
 
-    let block = super::avatar::FRAME_BLOCK_TILES;
     let drawn: Vec<_> = entries
         .iter()
         .filter(|entry| {
-            (binding.base_tile()..binding.base_tile() + block).contains(&entry.tile_index())
+            (binding.base_tile()..binding.base_tile() + binding.packed_tiles())
+                .contains(&entry.tile_index())
         })
         .collect();
     assert_eq!(

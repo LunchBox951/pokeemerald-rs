@@ -1,33 +1,47 @@
-//! Renders live object events backed by supported 16x32 people sprites.
+//! Renders live object events backed by supported object graphics.
 //!
-//! [`resolve_sprite_source`] is the complete graphics-id binding table. Hidden
-//! events are filtered through [`visible_object_events`], the same visibility
-//! used for interaction. A visible unsupported event remains interaction-ready
-//! but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds only when its
-//! event variable contains one of the two Route 103 rival ids; decoration slots
-//! remain unsupported. Code that clears a `FLAG_DECORATION_n`
+//! [`resolve_sprite_source`] is the complete graphics-id binding table: the
+//! protagonist sheets, the 16x32 people sheets, and the [`sheets`] rows for
+//! the other 16x16, 16x32, 32x32 and 48x48 graphics the checkpoint maps place.
+//! Hidden events are filtered through `engine::overworld::object_event_is_visible`,
+//! the same visibility used for interaction. A visible unsupported event remains
+//! interaction-ready but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds
+//! only when its event variable contains one of the two Route 103 rival ids;
+//! decoration slots remain unsupported. Code that clears a `FLAG_DECORATION_n`
 //! hide flag must first write that slot's `VAR_OBJ_GFX_ID_0 + n`, or the
 //! persistent rival id resolves the decoration to a rival sprite.
+//! `OBJ_EVENT_GFX_BERRY_TREE` binds per event, by its berry tree id, to the
+//! fresh-save stage ([`sheets::initial_berry_sheet`]).
 //!
-//! Each object draws its live tile and the standing frame of its live facing. Positions
-//! share [`super::viewport::camera_lag_px`] with the background during a step.
+//! Each object draws its live tile and the standing frame of its live facing.
+//! Positions share [`super::viewport::camera_lag_px`] with the background during a
+//! step, and each sprite's bottom edge sits on its tile's bottom edge, centred on
+//! the tile (`event_object_movement.c:1459-1464`).
 //!
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
-//! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
-//! [`rendering::SpriteLayer`] has no subpriority, so [`order_by_depth`]
-//! reproduces it by giving the lower-on-screen object the lower OAM index.
+//! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`)
+//! taken from the sprite's bottom edge. [`rendering::SpriteLayer`] has no
+//! subpriority, so [`order_sprites`] reproduces it by giving the
+//! lower-on-screen object the lower OAM index. The 48x48 truck is twelve
+//! horizontal OBJs (`sOamTable_48x48`) that sort as one object by the parent's
+//! priority and subpriority and all draw at priority 2.
 
 use std::collections::HashMap;
 
 use assets::pack::{AssetPack, PaletteRef};
 use assets::ObjectEvent;
 use engine::event_data::EventData;
-use engine::overworld::object_event::{tile_is_in_view, ObjectEventCollection};
-use engine::overworld::{object_event_is_visible, PlayerState};
-use rendering::{Bgr555, BitDepth, OamEntry, Palette};
+use rendering::{Bgr555, Palette};
+#[cfg(test)]
+use rendering::{BitDepth, OamEntry};
 
-use super::avatar::{self, PlayerCharacter};
-use super::{fill_palette_bank, OverworldSceneError, METATILE_PX};
+use super::avatar::PlayerCharacter;
+#[cfg(test)]
+use super::{avatar, METATILE_PX};
+use super::{fill_palette_bank, OverworldSceneError};
+
+mod sheets;
+use sheets::{Facing, ObjectSheet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NpcPaletteTag {
@@ -73,6 +87,8 @@ enum NpcSpriteSource {
         sprite_path: &'static str,
         palette_bank: u8,
     },
+    /// Every other fixed graphic: its own frame geometry and sheet layout.
+    Object(ObjectSheet),
 }
 
 /// `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`).
@@ -84,18 +100,73 @@ const RIVAL_BRENDAN_NORMAL_GFX_ID: u16 = 100;
 /// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL` (`event_objects.h:112`).
 const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 
+/// The 16x32 nine-frame people sheets: graphics id, pack sprite path, and the
+/// generic NPC palette tag (`object_event_graphics_info.h`).
+const PEOPLE_SHEETS: [(&str, &str, NpcPaletteTag); 26] = [
+    ("OBJ_EVENT_GFX_MOM", "mom", NpcPaletteTag::Npc4),
+    ("OBJ_EVENT_GFX_TWIN", "twin", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_FAT_MAN", "fat_man", NpcPaletteTag::Npc1),
+    ("OBJ_EVENT_GFX_BOY_2", "boy_2", NpcPaletteTag::Npc1),
+    (
+        "OBJ_EVENT_GFX_PROF_BIRCH",
+        "prof_birch",
+        NpcPaletteTag::Npc3,
+    ),
+    ("OBJ_EVENT_GFX_WOMAN_4", "woman_4", NpcPaletteTag::Npc1),
+    (
+        "OBJ_EVENT_GFX_NORMAN",
+        "gym_leaders/norman",
+        NpcPaletteTag::Npc4,
+    ),
+    (
+        "OBJ_EVENT_GFX_SCIENTIST_1",
+        "scientist_1",
+        NpcPaletteTag::Npc3,
+    ),
+    (
+        "OBJ_EVENT_GFX_MART_EMPLOYEE",
+        "mart_employee",
+        NpcPaletteTag::Npc1,
+    ),
+    ("OBJ_EVENT_GFX_GIRL_3", "girl_3", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_MANIAC", "maniac", NpcPaletteTag::Npc4),
+    ("OBJ_EVENT_GFX_MAN_3", "man_3", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_WOMAN_2", "woman_2", NpcPaletteTag::Npc3),
+    ("OBJ_EVENT_GFX_BOY_1", "boy_1", NpcPaletteTag::Npc3),
+    ("OBJ_EVENT_GFX_POKEFAN_M", "pokefan_m", NpcPaletteTag::Npc2),
+    (
+        "OBJ_EVENT_GFX_BLACK_BELT",
+        "black_belt",
+        NpcPaletteTag::Npc3,
+    ),
+    ("OBJ_EVENT_GFX_MAN_5", "man_5", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_SWIMMER_F", "swimmer_f", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_SWIMMER_M", "swimmer_m", NpcPaletteTag::Npc1),
+    ("OBJ_EVENT_GFX_FISHERMAN", "fisherman", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_GENTLEMAN", "gentleman", NpcPaletteTag::Npc3),
+    ("OBJ_EVENT_GFX_POKEFAN_F", "pokefan_f", NpcPaletteTag::Npc2),
+    (
+        "OBJ_EVENT_GFX_SCHOOL_KID_M",
+        "school_kid_m",
+        NpcPaletteTag::Npc1,
+    ),
+    ("OBJ_EVENT_GFX_TEALA", "teala", NpcPaletteTag::Npc1),
+    ("OBJ_EVENT_GFX_WOMAN_5", "woman_5", NpcPaletteTag::Npc2),
+    ("OBJ_EVENT_GFX_YOUNGSTER", "youngster", NpcPaletteTag::Npc1),
+];
+
 /// Returns how to draw `graphics_id`, or `None` for one that is not drawn.
 ///
-/// Only the people sheets with a `NpcSpriteSource::People16x32` binding (and
-/// the protagonist sheets) are drawn; every non-people object sheet, the
-/// `OBJ_EVENT_GFX_VAR_*` slots whose variable is unset, and the people without
-/// a binding stay undrawn even though their sheets are extracted.
+/// The protagonist sheets, the people with a `NpcSpriteSource::People16x32`
+/// binding and the [`sheets::object_sheet`] rows are drawn. Berry trees bind
+/// per event ([`berry_sheet_for`]), so `OBJ_EVENT_GFX_BERRY_TREE` is undrawn
+/// here, as are the `OBJ_EVENT_GFX_VAR_*` slots whose variable is unset and
+/// every graphic outside the checkpoint maps.
 fn resolve_sprite_source(
     graphics_id: &str,
     player: PlayerCharacter,
     event_data: &EventData,
 ) -> Option<NpcSpriteSource> {
-    use NpcPaletteTag::{Npc1, Npc2, Npc3, Npc4};
     use NpcSpriteSource::People16x32;
 
     match graphics_id {
@@ -112,87 +183,14 @@ fn resolve_sprite_source(
             }
             _ => None,
         },
-        "OBJ_EVENT_GFX_MOM" => Some(People16x32 {
-            sprite_path: "mom",
-            palette_bank: Npc4.bank(),
-        }),
-        "OBJ_EVENT_GFX_TWIN" => Some(People16x32 {
-            sprite_path: "twin",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_FAT_MAN" => Some(People16x32 {
-            sprite_path: "fat_man",
-            palette_bank: Npc1.bank(),
-        }),
-        "OBJ_EVENT_GFX_BOY_2" => Some(People16x32 {
-            sprite_path: "boy_2",
-            palette_bank: Npc1.bank(),
-        }),
-        "OBJ_EVENT_GFX_PROF_BIRCH" => Some(People16x32 {
-            sprite_path: "prof_birch",
-            palette_bank: Npc3.bank(),
-        }),
-        "OBJ_EVENT_GFX_WOMAN_4" => Some(People16x32 {
-            sprite_path: "woman_4",
-            palette_bank: Npc1.bank(),
-        }),
-        "OBJ_EVENT_GFX_NORMAN" => Some(People16x32 {
-            sprite_path: "gym_leaders/norman",
-            palette_bank: Npc4.bank(),
-        }),
-        "OBJ_EVENT_GFX_SCIENTIST_1" => Some(People16x32 {
-            sprite_path: "scientist_1",
-            palette_bank: Npc3.bank(),
-        }),
-        "OBJ_EVENT_GFX_MART_EMPLOYEE" => Some(People16x32 {
-            sprite_path: "mart_employee",
-            palette_bank: Npc1.bank(),
-        }),
-        "OBJ_EVENT_GFX_GIRL_3" => Some(People16x32 {
-            sprite_path: "girl_3",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_MANIAC" => Some(People16x32 {
-            sprite_path: "maniac",
-            palette_bank: Npc4.bank(),
-        }),
-        "OBJ_EVENT_GFX_MAN_3" => Some(People16x32 {
-            sprite_path: "man_3",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_WOMAN_2" => Some(People16x32 {
-            sprite_path: "woman_2",
-            palette_bank: Npc3.bank(),
-        }),
-        "OBJ_EVENT_GFX_BOY_1" => Some(People16x32 {
-            sprite_path: "boy_1",
-            palette_bank: Npc3.bank(),
-        }),
-        "OBJ_EVENT_GFX_POKEFAN_M" => Some(People16x32 {
-            sprite_path: "pokefan_m",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_BLACK_BELT" => Some(People16x32 {
-            sprite_path: "black_belt",
-            palette_bank: Npc3.bank(),
-        }),
-        "OBJ_EVENT_GFX_MAN_5" => Some(People16x32 {
-            sprite_path: "man_5",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_SWIMMER_F" => Some(People16x32 {
-            sprite_path: "swimmer_f",
-            palette_bank: Npc2.bank(),
-        }),
-        "OBJ_EVENT_GFX_SWIMMER_M" => Some(People16x32 {
-            sprite_path: "swimmer_m",
-            palette_bank: Npc1.bank(),
-        }),
-        "OBJ_EVENT_GFX_FISHERMAN" => Some(People16x32 {
-            sprite_path: "fisherman",
-            palette_bank: Npc2.bank(),
-        }),
-        _ => None,
+        other => PEOPLE_SHEETS
+            .iter()
+            .find(|(id, _, _)| *id == other)
+            .map(|&(_, sprite_path, tag)| People16x32 {
+                sprite_path,
+                palette_bank: tag.bank(),
+            })
+            .or_else(|| sheets::object_sheet(other).map(NpcSpriteSource::Object)),
     }
 }
 
@@ -210,11 +208,56 @@ fn protagonist_source(who: PlayerCharacter, player: PlayerCharacter) -> NpcSprit
     }
 }
 
-/// Tile and palette location for a resolved graphics id.
+/// Tile, palette and frame layout of a resolved graphic.
+///
+/// Only the sheet cells some facing of some event of the scene can show
+/// ([`Facing::reachable_cells`]) are packed, in ascending cell order: a frame's tile offset is the number of packed cells
+/// before it ([`Self::frame_tile`]).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpriteBinding {
     base_tile: u16,
     palette_bank: u8,
+    /// Frame size in pixels (`.width`, `.height`).
+    width: u16,
+    height: u16,
+    facing: Facing,
+    /// Bit `n` is set when sheet cell `n` is packed.
+    packed_cells: u16,
+}
+
+impl SpriteBinding {
+    /// A 16x32 nine-frame people sheet whose block starts at tile 0, every
+    /// frame packed.
+    const PEOPLE_16X32: Self = Self {
+        base_tile: 0,
+        palette_bank: PLAYER_PALETTE_BANK,
+        width: 16,
+        height: 32,
+        facing: Facing::PEOPLE,
+        packed_cells: 0x1FF,
+    };
+
+    const fn people(base_tile: u16, palette_bank: u8) -> Self {
+        Self {
+            base_tile,
+            palette_bank,
+            ..Self::PEOPLE_16X32
+        }
+    }
+
+    const fn frame_tiles(self) -> u16 {
+        (self.width / 8) * (self.height / 8)
+    }
+
+    /// The first tile of sheet `cell`, which must be packed.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a cell index below 16 has fewer than 16 packed cells before it"
+    )]
+    const fn frame_tile(self, cell: u16) -> u16 {
+        let before = (self.packed_cells & ((1 << cell) - 1)).count_ones() as u16;
+        self.base_tile + before * self.frame_tiles()
+    }
 }
 
 #[cfg(test)]
@@ -228,15 +271,60 @@ impl SpriteBinding {
     pub(super) const fn palette_bank(self) -> u8 {
         self.palette_bank
     }
+
+    /// Returns how many tiles this binding's packed frames span from
+    /// [`Self::base_tile`].
+    pub(super) const fn packed_tiles(self) -> u16 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a sheet has at most sixteen cells"
+        )]
+        let cells = self.packed_cells.count_ones() as u16;
+        cells * self.frame_tiles()
+    }
 }
 
-/// Resolves distinct object graphics and appends their packed frames after
-/// the player frames already in `sprite_bytes`.
+/// The OBJ tile budget one-dimensional mapping addresses (ten tile-index
+/// bits, `rendering::OamEntry`).
+pub(super) const MAX_OBJ_TILES: usize = 1024;
+
+/// The key a binding for `event` is stored and found under: its graphics id,
+/// except a berry tree, whose stage and species belong to the tree.
+fn binding_key(event: &ObjectEvent) -> &'static str {
+    if event.graphics_id == BERRY_TREE_GRAPHICS_ID {
+        event.trainer_sight_or_berry_tree_id
+    } else {
+        event.graphics_id
+    }
+}
+
+/// `OBJ_EVENT_GFX_BERRY_TREE`.
+const BERRY_TREE_GRAPHICS_ID: &str = "OBJ_EVENT_GFX_BERRY_TREE";
+
+/// How to draw a berry tree event, or `None` for a tree this port draws no
+/// fresh-save stage for.
+fn berry_sheet_for(event: &ObjectEvent) -> Option<ObjectSheet> {
+    (event.graphics_id == BERRY_TREE_GRAPHICS_ID)
+        .then(|| sheets::initial_berry_sheet(event.trainer_sight_or_berry_tree_id))
+        .flatten()
+}
+
+/// A graphic to pack and the sheet cells the scene's events show.
+struct WantedSheet {
+    key: &'static str,
+    sheet: ObjectSheet,
+    cells: u16,
+}
+
+/// Resolves distinct object graphics and appends the packed frames some event
+/// of the scene can show after the player frames already in `sprite_bytes`.
 ///
 /// # Errors
 ///
 /// Returns an asset, sprite-dimension, pixel-count, or tile-alignment error
-/// when a resolved sheet cannot be loaded and packed.
+/// when a resolved sheet cannot be loaded and packed, and
+/// [`OverworldSceneError::SpriteTilesExceedObjSpace`] when the scene's sheets
+/// would not fit the OBJ tile space.
 pub(super) fn resolve_bindings(
     pack: &AssetPack,
     player: PlayerCharacter,
@@ -245,51 +333,59 @@ pub(super) fn resolve_bindings(
     event_data: &EventData,
 ) -> Result<HashMap<&'static str, SpriteBinding>, OverworldSceneError> {
     let mut bindings = HashMap::new();
+    let mut wanted: Vec<WantedSheet> = Vec::new();
     for event in object_events {
-        if bindings.contains_key(event.graphics_id) {
-            continue;
-        }
-        match resolve_sprite_source(event.graphics_id, player, event_data) {
+        let key = binding_key(event);
+        let source = berry_sheet_for(event)
+            .map(NpcSpriteSource::Object)
+            .or_else(|| resolve_sprite_source(event.graphics_id, player, event_data));
+        let sheet = match source {
             Some(NpcSpriteSource::PlayerCharacter) => {
-                bindings.insert(
-                    event.graphics_id,
-                    SpriteBinding {
-                        base_tile: 0,
-                        palette_bank: PLAYER_PALETTE_BANK,
-                    },
-                );
+                bindings.insert(key, SpriteBinding::people(0, PLAYER_PALETTE_BANK));
+                continue;
             }
             Some(NpcSpriteSource::People16x32 {
                 sprite_path,
                 palette_bank,
-            }) => {
-                let base_bytes = sprite_bytes.len();
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "a scene contains only a small number of NPC sheets"
-                )]
-                let base_tile = (base_bytes / TILE_BYTES) as u16;
-                debug_assert!(
-                    base_tile.is_multiple_of(avatar::FRAME_BLOCK_TILES),
-                    "each packed people sheet must occupy a whole frame block"
-                );
-                let image = pack.sprite(sprite_path)?;
-                sprite_bytes.extend(avatar::pack_people_sheet_frames(sprite_path, image)?);
-                bindings.insert(
-                    event.graphics_id,
-                    SpriteBinding {
-                        base_tile,
-                        palette_bank,
-                    },
-                );
-            }
-            None => {}
+            }) => ObjectSheet::people(sprite_path, palette_bank),
+            Some(NpcSpriteSource::Object(sheet)) => sheet,
+            None => continue,
+        };
+        let cells = sheet.facing.reachable_cells();
+        match wanted.iter_mut().find(|candidate| candidate.key == key) {
+            Some(known) => known.cells |= cells,
+            None => wanted.push(WantedSheet { key, sheet, cells }),
         }
+    }
+    for WantedSheet { key, sheet, cells } in wanted {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the tile-space guard below rejects any scene past 1024 tiles"
+        )]
+        let base_tile = (sprite_bytes.len() / TILE_BYTES) as u16;
+        sprite_bytes.extend(sheet.pack(pack, cells)?);
+        let tiles = sprite_bytes.len() / TILE_BYTES;
+        if tiles > MAX_OBJ_TILES {
+            return Err(OverworldSceneError::SpriteTilesExceedObjSpace { tiles });
+        }
+        bindings.insert(
+            key,
+            SpriteBinding {
+                base_tile,
+                palette_bank: sheet.palette_bank,
+                width: sheet.width,
+                height: sheet.height,
+                facing: sheet.facing,
+                packed_cells: cells,
+            },
+        );
     }
     Ok(bindings)
 }
 
-/// Loads the player, four generic NPC, and other-protagonist palette banks.
+/// Loads the player, four generic NPC, and other-protagonist palette banks,
+/// then each object palette ([`sheets::OBJECT_PALETTES`]) that some resolved
+/// binding draws with.
 ///
 /// # Errors
 ///
@@ -298,6 +394,7 @@ pub(super) fn build_combined_palette(
     pack: &AssetPack,
     player: PlayerCharacter,
     player_bank0: PaletteRef<'_>,
+    bindings: &HashMap<&'static str, SpriteBinding>,
 ) -> Result<Palette, OverworldSceneError> {
     let mut colors = [Bgr555::default(); Palette::LEN];
     fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
@@ -312,145 +409,38 @@ pub(super) fn build_combined_palette(
     }
     let other = pack.sprite_palette(player.other().palette_name())?;
     fill_palette_bank(&mut colors, usize::from(OTHER_PROTAGONIST_BANK), other);
+    for (name, bank) in sheets::OBJECT_PALETTES {
+        if bindings
+            .values()
+            .any(|binding| binding.palette_bank == bank)
+        {
+            let raw = pack.sprite_palette(name)?;
+            fill_palette_bank(&mut colors, usize::from(bank), raw);
+        }
+    }
     Ok(Palette::new(colors))
 }
 
-const OAM_X_MODULUS: i32 = 512;
-const OAM_Y_MODULUS: i32 = 256;
-
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "rem_euclid bounds the result to the nine-bit OAM x range"
-)]
-fn wrap_oam_x(x: i32) -> u16 {
-    x.rem_euclid(OAM_X_MODULUS) as u16
-}
-
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "rem_euclid bounds the result to the eight-bit OAM y range"
-)]
-fn wrap_oam_y(y: i32) -> u8 {
-    y.rem_euclid(OAM_Y_MODULUS) as u8
-}
-
-fn object_screen_position(
-    object_pos: (i32, i32),
-    player_pos: (i32, i32),
-    camera_lag: (i32, i32),
-) -> (u16, u8) {
-    let dx = (object_pos.0 - player_pos.0) * METATILE_PX + camera_lag.0;
-    let dy = (object_pos.1 - player_pos.1) * METATILE_PX + camera_lag.1;
-    let x = i32::from(avatar::PLAYER_OBJ_X) + dx;
-    let y = i32::from(avatar::PLAYER_OBJ_Y) + dy;
-    (wrap_oam_x(x), wrap_oam_y(y))
-}
-
-/// Height of every bound object event's 16x32 OBJ.
-const SPRITE_H_PX: u16 = 32;
-
-/// `sElevationToSubpriority` (`event_object_movement.c:7691-7693`). Elevations
-/// sharing an OBJ priority still differ here, so it is part of the draw order.
-const ELEVATION_TO_SUBPRIORITY: [u16; 16] = [
-    115, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 0, 0, 115,
-];
-
-/// Upstream's subpriority for an OBJ at `elevation` whose rendered top is `y`:
-/// `sElevationToSubpriority[elevation] + (16 - (((y + 8) & 0xFF) >> 4)) * 2 + 1`
-/// (`SetObjectSubpriorityByElevation`, `:7739-7745`, called with subpriority 1),
-/// where upstream's `y` is the sprite bottom, so the 32px height is added.
-fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
-    let bottom_plus_bias = (u16::from(entry.y()) + SPRITE_H_PX + 8) & 0xFF;
-    let base = ELEVATION_TO_SUBPRIORITY
-        .get(usize::from(elevation))
-        .copied()
-        .unwrap_or(ELEVATION_TO_SUBPRIORITY[0]);
-    base + (16 - (bottom_plus_bias >> 4)) * 2 + 1
-}
-
-/// Orders pairs as upstream emits OAM: ascending OBJ priority, then subpriority,
-/// then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`); ties keep input order.
-pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
-    let mut ordered = entries.to_vec();
-    ordered.sort_by_key(|&(entry, elevation)| {
-        (
-            entry.priority(),
-            subpriority(entry, elevation),
-            std::cmp::Reverse(entry.y()),
-        )
-    });
-    ordered.into_iter().map(|(entry, _)| entry).collect()
-}
-
-/// Builds OAM entries for visible events with resolved sprite bindings.
+mod oam;
 #[cfg(test)]
-#[must_use]
-pub(super) fn oam_entries(
-    objects: &ObjectEventCollection,
-    bindings: &HashMap<&'static str, SpriteBinding>,
-    player: &PlayerState,
-    event_data: &EventData,
-) -> Vec<OamEntry> {
-    elevated_oam_entries(objects, bindings, player, event_data)
-        .into_iter()
-        .map(|(entry, _)| entry)
-        .collect()
-}
-
-/// [`oam_entries`] with each entry's elevation, which selects its upstream
-/// subpriority base.
-///
-/// Position, facing, and elevation come from each entry's live state; the
-/// template keeps the graphics id and hide flag. The standing frame follows
-/// the live facing (`GetFaceDirectionAnimNum`, `event_object_movement.c`), and
-/// the spawn window is evaluated at the live tile.
-#[must_use]
-pub(super) fn elevated_oam_entries(
-    objects: &ObjectEventCollection,
-    bindings: &HashMap<&'static str, SpriteBinding>,
-    player: &PlayerState,
-    event_data: &EventData,
-) -> Vec<(OamEntry, u8)> {
-    let player_pos = player.position();
-    let camera_lag = super::viewport::camera_lag_px(player);
-    objects
-        .iter()
-        .filter(|live| object_event_is_visible(live.template(), event_data))
-        .filter_map(|live| {
-            bindings
-                .get(live.template().graphics_id)
-                .map(|binding| (live, binding))
-        })
-        .filter(|(live, _)| tile_is_in_view(live.state().position(), player_pos))
-        .map(|(live, binding)| {
-            let state = live.state();
-            let (frame, h_flip) = avatar::stand_frame_for(state.facing());
-            let tile_index = binding.base_tile + frame * avatar::FRAME_TILES;
-            let (x, y) = object_screen_position(state.position(), player_pos, camera_lag);
-            let entry = OamEntry::new(
-                x,
-                y,
-                tile_index,
-                binding.palette_bank,
-                BitDepth::Bpp4,
-                h_flip,
-                false,
-                avatar::PLAYER_OBJ_SHAPE,
-                avatar::PLAYER_OBJ_SIZE,
-                avatar::priority_for_elevation(state.elevation()),
-                true,
-            );
-            (entry, state.elevation())
-        })
-        .collect()
-}
+use engine::overworld::PlayerState;
+#[cfg(test)]
+use oam::OAM_Y_MODULUS;
+pub(super) use oam::{elevated_oam_entries, order_sprites, DepthSprite};
+#[cfg(test)]
+use oam::{
+    oam_entries, object_origin, object_screen_position, order_by_depth, subpriority,
+    subpriority_from_bottom, truck_entries,
+};
 
 #[cfg(test)]
 mod binding_tests;
 #[cfg(test)]
+mod checkpoint_pack_tests;
+#[cfg(test)]
 mod draw_order_tests;
+#[cfg(test)]
+mod geometry_tests;
 #[cfg(test)]
 mod live_state_tests;
 #[cfg(test)]
