@@ -714,6 +714,9 @@ impl Battle {
             attack_stage,
             defense_stat,
             defense_stage,
+            // A burned battler's self-hit should halve like any physical
+            // hit (`pokeemerald/src/pokemon.c:3262`-`:3264`); that call site
+            // is tracked by #2850.
             attacker_burned: false,
             reflect: false,
             light_screen: false,
