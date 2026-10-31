@@ -244,10 +244,7 @@ mod tests {
     }
 
     /// `TryRunFromBattle` compares `Random() & 0xFF`
-    /// (`pokeemerald/src/battle_util.c:463`-`:470`): the high byte of the
-    /// 16-bit draw never reaches the comparison. Each case pairs one low
-    /// byte with several high bytes, so comparing the whole `u16` or the
-    /// high byte changes at least one outcome.
+    /// (`pokeemerald/src/battle_util.c:463`-`:470`).
     const HIGH_BYTES: [u16; 3] = [0x0000, 0x0100, 0xFF00];
 
     #[test]

@@ -575,10 +575,7 @@ fn a_run_turn_escapes_on_a_draw_whose_high_byte_alone_would_fail_it() {
         escape_threshold
     );
 
-    // `TryRunFromBattle` compares `Random() & 0xFF` (`battle_util.c:463`-
-    // `:470`). The low byte 18 beats 19, while the high byte 255 and the
-    // whole draw 0xFF12 are far above it, so only a low-byte comparison
-    // escapes.
+    // `TryRunFromBattle` compares `Random() & 0xFF` (`battle_util.c:463`-`:470`).
     let escape_roll_with_high_byte = 0xFF00 | (escape_threshold - 1);
     let mut rng = SequenceRng::new([0, 0, 0, escape_roll_with_high_byte]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
