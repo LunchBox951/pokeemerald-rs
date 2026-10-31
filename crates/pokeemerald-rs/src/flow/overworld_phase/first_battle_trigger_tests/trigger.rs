@@ -511,7 +511,7 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
     phase.assert_lead_at_slot_for_test(0);
 }
 
-/// A loaded lead holding Oran Berry leaves the rescue armed, draws nothing and stays home
+/// A loaded lead holding Sitrus Berry leaves the rescue armed, draws nothing and stays home
 /// -- the item's refusal is as free as an inadmissible lead's.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing() {
@@ -522,7 +522,7 @@ fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing()
         Direction::East,
     ));
     phase.rng = Rng::new(4242);
-    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
 
     walk_one_tile_east(&mut phase);

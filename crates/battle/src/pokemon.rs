@@ -2,8 +2,8 @@
 //! move slots.
 //!
 //! [`BattlePokemon`] carries its held item ([`BattlePokemon::held_item`]); a
-//! battle admits it only when the item's hold effect is none
-//! ([`crate::ensure_held_item_playable`]). It carries primary status
+//! battle admits it only when the item's hold effect is none or it is Oran
+//! Berry ([`crate::ensure_held_item_playable`]). It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
 //! see `calc_max_hp`.
@@ -663,6 +663,12 @@ impl BattlePokemon {
     pub const fn with_held_item(mut self, held_item: ItemId) -> Self {
         self.held_item = held_item;
         self
+    }
+
+    /// Empties the hand after the item is consumed in battle, mirroring
+    /// `Cmd_removeitem` (`src/battle_script_commands.c:5901`-`:5909`).
+    pub(crate) const fn consume_held_item(&mut self) {
+        self.held_item = ItemId::NONE;
     }
 
     /// Species types captured at construction.
