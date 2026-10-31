@@ -9,10 +9,10 @@ use crate::damage::{BattleRng, MoveCategory};
 use crate::stat_stage::StatStage;
 
 /// The move effect for attacks that bypass accuracy rolls.
-pub const EFFECT_ALWAYS_HIT: MoveEffect = MoveEffect(17);
+pub const EFFECT_ALWAYS_HIT: MoveEffect = MoveEffect::ALWAYS_HIT;
 
 /// Vital Throw's always-hit move effect.
-pub const EFFECT_VITAL_THROW: MoveEffect = MoveEffect(78);
+pub const EFFECT_VITAL_THROW: MoveEffect = MoveEffect::VITAL_THROW;
 
 /// Whether this move effect bypasses the accuracy roll and its RNG draw.
 #[must_use]
@@ -158,7 +158,6 @@ mod tests {
     use crate::stat_stage::StatStage;
     use assets::{AbilityId, MoveEffect, MoveType, Type};
 
-    const ORDINARY_HIT_EFFECT: MoveEffect = MoveEffect(0);
     const ORDINARY_MOVE_TYPE: MoveType = MoveType::Battle(Type::Normal);
     const NO_ABILITY: AbilityId = AbilityId::NONE;
 
@@ -183,9 +182,9 @@ mod tests {
     #[test]
     fn always_hits_covers_swift_and_vital_throw_only() {
         assert!(always_hits(EFFECT_ALWAYS_HIT));
-        assert_eq!(EFFECT_VITAL_THROW, MoveEffect(78));
+        assert_eq!(EFFECT_VITAL_THROW, MoveEffect::VITAL_THROW);
         assert!(always_hits(EFFECT_VITAL_THROW));
-        assert!(!always_hits(ORDINARY_HIT_EFFECT));
+        assert!(!always_hits(MoveEffect::HIT));
     }
 
     #[test]
@@ -239,7 +238,7 @@ mod tests {
         let mut rng = CountingRng { value: 0, draws: 0 };
         let _ = accuracy_check(
             95,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             ORDINARY_MOVE_TYPE,
             NO_ABILITY,
             StatStage::NEUTRAL,
@@ -255,7 +254,7 @@ mod tests {
             let mut rng = FixedRng(draw);
             assert!(accuracy_check(
                 100,
-                ORDINARY_HIT_EFFECT,
+                MoveEffect::HIT,
                 ORDINARY_MOVE_TYPE,
                 NO_ABILITY,
                 StatStage::NEUTRAL,
@@ -271,7 +270,7 @@ mod tests {
         let mut rng = FixedRng(first_miss_draw);
         assert!(!accuracy_check(
             50,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             ORDINARY_MOVE_TYPE,
             NO_ABILITY,
             StatStage::NEUTRAL,
@@ -282,7 +281,7 @@ mod tests {
         let mut rng = FixedRng(last_hit_draw);
         assert!(accuracy_check(
             50,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             ORDINARY_MOVE_TYPE,
             NO_ABILITY,
             StatStage::NEUTRAL,
@@ -298,7 +297,7 @@ mod tests {
             let mut rng = FixedRng(draw);
             assert!(accuracy_check(
                 50,
-                ORDINARY_HIT_EFFECT,
+                MoveEffect::HIT,
                 ORDINARY_MOVE_TYPE,
                 NO_ABILITY,
                 plus_six,
@@ -331,7 +330,7 @@ mod tests {
             assert!(
                 accuracy_check(
                     base_accuracy,
-                    ORDINARY_HIT_EFFECT,
+                    MoveEffect::HIT,
                     ORDINARY_MOVE_TYPE,
                     NO_ABILITY,
                     stage,
@@ -344,7 +343,7 @@ mod tests {
             assert!(
                 !accuracy_check(
                     base_accuracy,
-                    ORDINARY_HIT_EFFECT,
+                    MoveEffect::HIT,
                     ORDINARY_MOVE_TYPE,
                     NO_ABILITY,
                     stage,
@@ -364,7 +363,7 @@ mod tests {
             let mut rng = FixedRng(draw);
             assert!(accuracy_check(
                 75,
-                ORDINARY_HIT_EFFECT,
+                MoveEffect::HIT,
                 ORDINARY_MOVE_TYPE,
                 AbilityId::COMPOUND_EYES,
                 StatStage::NEUTRAL,
@@ -375,7 +374,7 @@ mod tests {
         let mut rng = FixedRng(97);
         assert!(!accuracy_check(
             75,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             ORDINARY_MOVE_TYPE,
             AbilityId::COMPOUND_EYES,
             StatStage::NEUTRAL,
@@ -391,7 +390,7 @@ mod tests {
             let mut rng = FixedRng(draw);
             assert!(!accuracy_check(
                 75,
-                ORDINARY_HIT_EFFECT,
+                MoveEffect::HIT,
                 ORDINARY_MOVE_TYPE,
                 AbilityId::HUSTLE,
                 StatStage::NEUTRAL,
@@ -402,7 +401,7 @@ mod tests {
         let mut rng = FixedRng(59);
         assert!(accuracy_check(
             75,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             ORDINARY_MOVE_TYPE,
             AbilityId::HUSTLE,
             StatStage::NEUTRAL,
@@ -417,7 +416,7 @@ mod tests {
         let mut rng = FixedRng(65);
         assert!(accuracy_check(
             75,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             special_move_type,
             AbilityId::HUSTLE,
             StatStage::NEUTRAL,
@@ -431,7 +430,7 @@ mod tests {
         let mut rng = FixedRng(65);
         assert!(accuracy_check(
             75,
-            ORDINARY_HIT_EFFECT,
+            MoveEffect::HIT,
             MoveType::Mystery,
             AbilityId::HUSTLE,
             StatStage::NEUTRAL,

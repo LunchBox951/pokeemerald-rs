@@ -14,13 +14,13 @@
 //! The pack contains:
 //!
 //! - every tile image and animation, all 16 palettes, and both raw metatile
-//!   tables for the primary `general` and `building` tilesets and the secondary
-//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//!   tables for each tileset in `TILESETS`;
 //! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
 //!   palettes for `emerald_version` and `press_start` and the upstream colour
 //!   limit applied to `pokemon_logo`;
-//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
-//!   generic `npc_1` through `npc_4` palettes;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, the four
+//!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
+//!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
@@ -40,12 +40,21 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
+//! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
+//!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
 //!   templates `BufferStringBattle` selects); and
+//! - the naming screen's 15 sheets (the three cursors cut to their first five
+//!   tiles), seven palettes, and four decoded tilemaps;
+//! - the battle-animation catalog (`data/battle_anim_scripts.s`);
+//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
 //! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
 //!   sheet.
+//!
+//! The battle interface also contributes the player and opponent singles health-box
+//! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
 //!
 //! # Asset id scheme
 //!
@@ -62,13 +71,20 @@
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
-//! - `battle-interface/{image,palette,raw}/<name>`
+//! - `battle-interface/{image,palette,raw}/<name>` and
+//!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
-//! - `audio/sample/{direct-sound,programmable-wave}/<name>`
+//! - `audio/sample/{direct-sound,programmable-wave}/<name>` and
+//!   `audio/sample/direct-sound/cry/<stem>`
+//! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `poke-ball/{image,palette}/<name>`
+//! - `field-message/table`
+//! - `naming-screen/{image,palette,raw}/<stem>`
+//! - `battle-anim/catalog`
+//! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -76,12 +92,17 @@
 mod audio_samples;
 mod bag;
 mod battle_anim;
+mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
 #[cfg(test)]
+mod bundled_inventory_tests;
+#[cfg(test)]
 mod checkpoint_maps_tests;
+pub(crate) mod cry;
 mod error;
+mod field_message;
 mod fonts;
 pub mod inflate;
 mod interface;
@@ -89,6 +110,7 @@ pub mod jasc_pal;
 mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
+mod naming_screen;
 mod opening_scene;
 pub mod png;
 pub(crate) mod poke_ball;
@@ -97,6 +119,7 @@ mod publish;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;
+mod text_source;
 mod text_window;
 mod tilesets;
 mod title;
@@ -178,11 +201,17 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
+    cry::extract_cries(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
-    battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    field_message::extract_field_message(&upstream, &mut writer)?;
+    let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
+    battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
+    naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
 
     let entry_count = writer.len();

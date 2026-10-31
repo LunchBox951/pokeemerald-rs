@@ -7,19 +7,19 @@
 use super::Fault;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Tok {
+pub(in crate::extract) enum Tok {
     Ident(String),
     Str(String),
     Punct(char),
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Token {
-    pub(super) tok: Tok,
-    pub(super) line: usize,
+pub(in crate::extract) struct Token {
+    pub(in crate::extract) tok: Tok,
+    pub(in crate::extract) line: usize,
 }
 
-pub(super) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
+pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
     let c: Vec<char> = src.chars().collect();
     let mut out = Vec::new();
     let (mut i, mut line, mut line_start) = (0, 1, true);

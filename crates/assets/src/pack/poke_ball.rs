@@ -6,8 +6,7 @@
 //! strings, and every lookup re-validates shapes, since a hand-built or
 //! corrupt pack can bypass extraction.
 
-use super::starter_chooser::PalettedImage;
-use super::{AssetPack, ImageRef, PackError};
+use super::{AssetPack, ImageRef, PackError, PalettedImage};
 
 const SHEET_ID: &str = "poke-ball/image/poke";
 const PALETTE_ID: &str = "poke-ball/palette/poke";

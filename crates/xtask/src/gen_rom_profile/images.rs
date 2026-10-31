@@ -25,6 +25,7 @@ use super::error::GenRomProfileError;
 use super::locate::to_addr;
 use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
+use super::search::MATCH_LIMIT;
 use super::Context;
 
 /// One image to locate.
@@ -71,8 +72,13 @@ struct Variant {
 /// The upstream name of an image root declared `static` (so a linker map
 /// cannot list it), or `None` for a global root.
 ///
-/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`.
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `list_menu.c:290`, `text_window.c:10-28`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
+    if let Some(stem) = id.strip_prefix("text-window/image/") {
+        return super::text_window::is_static_frame(stem)
+            .then(|| format!("sTextWindowFrame{stem}_Gfx"));
+    }
     if let Some(name) = id.strip_prefix("title/image/") {
         let camel = super::locate::camel_case(name);
         return matches!(camel.as_str(), "Rayquaza" | "LogoShine" | "Clouds")
@@ -81,6 +87,7 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     match id {
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
         _ => None,
     }
 }
@@ -119,10 +126,19 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
     match id {
-        "poke-ball/image/poke" => vec!["gBallGfx_Poke".to_owned()],
-        "poke-ball/image/open" => vec!["gOpenPokeballGfx".to_owned()],
-        _ => Vec::new(),
+        "poke-ball/image/poke" => return vec!["gBallGfx_Poke".to_owned()],
+        "poke-ball/image/open" => return vec!["gOpenPokeballGfx".to_owned()],
+        "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
+        "battle-interface/image/healthbox_singles_player" => {
+            return vec!["gHealthboxSinglesPlayerGfx".to_owned()];
+        }
+        "battle-interface/image/healthbox_singles_opponent" => {
+            return vec!["gHealthboxSinglesOpponentGfx".to_owned()];
+        }
+        "battle-interface/image/enemy_mon_shadow" => return vec!["gEnemyMonShadow_Gfx".to_owned()],
+        _ => {}
     }
+    Vec::new()
 }
 
 /// The ROM bit depths a pack entry of `pack_bit_depth` may be stored at,
@@ -203,8 +219,9 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Validates the dimensions against the payload before they drive packing.
-        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
+        // Validates the dimensions against the payload, and that they hold a whole
+        // tile, before they drive packing: a raster with no tile has no candidates.
+        let (_, width, height, pack_bit_depth) = asset.tiled_image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
@@ -247,8 +264,12 @@ pub fn locate_images(
         }
     }
 
-    let raw_hits = ctx.raw.find_all(&raw_needles);
-    let lz_hits = ctx.lz77.find_all(&lz_needles);
+    // `assign` gives each id sharing art its own copy, so every copy up to
+    // one per query must survive the search; the ordinary cap would reject
+    // more identical-art ids than it. No more ids than queries can share.
+    let hit_limit = queries.len().max(MATCH_LIMIT);
+    let raw_hits = ctx.raw.find_all_up_to(&raw_needles, hit_limit);
+    let lz_hits = ctx.lz77.find_all_up_to(&lz_needles, hit_limit);
 
     // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
@@ -396,6 +417,22 @@ mod tests {
         assert_eq!(
             symbol_fragments("text-window/image/message_box"),
             ["gMessageBox_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/textbox"),
+            ["gBattleTextboxTiles"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_player"),
+            ["gHealthboxSinglesPlayerGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_opponent"),
+            ["gHealthboxSinglesOpponentGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/enemy_mon_shadow"),
+            ["gEnemyMonShadow_Gfx"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
