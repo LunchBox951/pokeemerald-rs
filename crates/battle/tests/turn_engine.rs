@@ -18,6 +18,8 @@ mod effect_spore_contact;
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
 mod first_battle;
+#[path = "turn_engine/leech_seed/mod.rs"]
+mod leech_seed;
 #[path = "turn_engine/lifecycle.rs"]
 mod lifecycle;
 #[path = "turn_engine/move_resolution.rs"]

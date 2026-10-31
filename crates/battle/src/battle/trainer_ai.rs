@@ -191,6 +191,8 @@ enum ScoreableEffect {
     Confuse,
     /// `AI_CBM_FocusEnergy` (`data/battle_ai_scripts.s:382-384`).
     FocusEnergy,
+    /// `AI_CBM_LeechSeed` (`data/battle_ai_scripts.s:410-416`).
+    LeechSeed,
     /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
     /// (`data/battle_ai_scripts.s:177,368-376`).
     HighRiskForDamage,
@@ -216,6 +218,8 @@ impl ScoreableEffect {
             Some(Self::Confuse)
         } else if effect == MoveEffect::FOCUS_ENERGY {
             Some(Self::FocusEnergy)
+        } else if effect == MoveEffect::LEECH_SEED {
+            Some(Self::LeechSeed)
         } else if effect == MoveEffect::SONICBOOM {
             Some(Self::HighRiskForDamage)
         } else if let Some(label) = ai_stat_label(effect) {
@@ -227,10 +231,10 @@ impl ScoreableEffect {
         }
     }
 
-    /// `AI_CheckViability` branches on Paralyze and Confuse
-    /// (`data/battle_ai_scripts.s:687,704`), and `AI_SetupFirstTurn` rolls for
-    /// all three (`:2667,2668,2685`); neither is ported. Focus Energy has no
-    /// viability branch.
+    /// `AI_CheckViability` branches on Paralyze, Confuse and Leech Seed
+    /// (`data/battle_ai_scripts.s:687,704,711`), and `AI_SetupFirstTurn` rolls
+    /// for all four (`:2667,2668,2685,2687`); neither is ported. Focus Energy
+    /// has no viability branch.
     const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
         let viability_branch = !matches!(self, Self::FocusEnergy);
         !(flags.contains(AiFlags::SETUP_FIRST_TURN)
@@ -244,7 +248,7 @@ impl ScoreableEffect {
     /// Whether every enabled script has a ported branch for this effect.
     fn supported_by(self, flags: AiFlags) -> bool {
         let effect = match self {
-            Self::Paralyze | Self::Confuse | Self::FocusEnergy => {
+            Self::Paralyze | Self::Confuse | Self::FocusEnergy | Self::LeechSeed => {
                 return self.supported_with_status_handler(flags);
             }
             Self::UnchangedAfterPrologue(effect) => effect,
@@ -860,6 +864,7 @@ fn score_bad_move(
         ScoreableEffect::FocusEnergy => {
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
+        ScoreableEffect::LeechSeed => leech_seed_penalty(target),
         ScoreableEffect::HighRiskForDamage => {
             high_risk_for_damage_penalty(dex, move_id, user, target)?
         }
@@ -951,6 +956,14 @@ fn confuse_penalty(target: &BattlePokemon) -> Result<Option<i8>, BattleError> {
     }
 }
 
+/// `AI_CBM_LeechSeed`: an already-seeded target or a target with Grass in
+/// either type slot ends at `-10` (`data/battle_ai_scripts.s:410-416`). It
+/// draws nothing.
+fn leech_seed_penalty(target: &BattlePokemon) -> Option<i8> {
+    (target.volatiles().seeded() || target.types().contains(&Type::Grass))
+        .then_some(STRONGLY_DISCOURAGE)
+}
+
 fn score_try_to_faint(
     dex: &Dex,
     scores: &mut MoveScores,
@@ -1009,7 +1022,10 @@ fn score_viability(
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
-        ScoreableEffect::Paralyze | ScoreableEffect::Confuse | ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::Paralyze
+        | ScoreableEffect::Confuse
+        | ScoreableEffect::LeechSeed
+        | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -2122,6 +2138,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod leech_seed_tests;
 #[cfg(test)]
 mod prologue_tests;
 #[cfg(test)]

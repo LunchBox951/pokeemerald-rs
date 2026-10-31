@@ -1,12 +1,12 @@
-//! Focus Energy, Charge, Defense Curl, and Confusion state carried by one
-//! battler.
+//! Focus Energy, Charge, Defense Curl, Confusion, Flash Fire, and Leech Seed
+//! state carried by one battler.
 //!
-//! Ordinary switches clear all four. Baton Pass preserves Focus Energy but
+//! Ordinary switches clear every one of them. Baton Pass preserves Focus Energy but
 //! clears Charge's timer and Defense Curl's flag: its `status2` mask keeps
 //! `STATUS2_FOCUS_ENERGY` but omits `STATUS2_DEFENSE_CURL`
 //! (`src/battle_main.c:3173`-`:3217`), the opposite of how Focus Energy
 //! itself survives the pass. Baton Pass is not modelled, so every switch
-//! clears all four (`Battle::switch_enemy_to` and the player's reserve
+//! clears every one of them (`Battle::switch_enemy_to` and the player's reserve
 //! send-out call `BattlePokemon::clear_battle_scratch`).
 //!
 //! Charge's timer is also its active flag because upstream raises and clears
@@ -19,6 +19,7 @@
 //! [`draws_confusion_self_hit`] is the coin draw for a duration that is
 //! still active after that decrement.
 
+use crate::battle::BattlerSide;
 use crate::damage::BattleRng;
 
 /// The transient conditions carried by one battler.
@@ -37,6 +38,12 @@ pub struct Volatiles {
     /// own Fire moves (`RESOURCE_FLAG_FLASH_FIRE`, `src/battle_util.c:2703-2726`).
     /// Cleared with the rest of the battle scratch on switch or faint.
     pub flash_fire: bool,
+    /// The field slot that planted Leech Seed on this battler, or `None` when
+    /// it is not seeded. Upstream stores the seeder's battler id beside
+    /// `STATUS3_LEECHSEED` (`Cmd_setseeded`, `src/battle_script_commands.c:6733`
+    /// -`:6734`), so the drain's receiver is whoever occupies that slot at
+    /// end of turn, not the Pokémon that seeded.
+    pub leech_seed_source: Option<BattlerSide>,
 }
 
 impl Volatiles {
@@ -67,6 +74,19 @@ impl Volatiles {
         let first = !self.flash_fire;
         self.flash_fire = true;
         first
+    }
+
+    /// Whether Leech Seed is draining this battler.
+    #[must_use]
+    pub const fn seeded(self) -> bool {
+        self.leech_seed_source.is_some()
+    }
+
+    /// Records `seeder` as the slot Leech Seed heals (`STATUS3_LEECHSEED`
+    /// with the seeder's battler id, `src/battle_script_commands.c:6733`-
+    /// `:6734`).
+    pub const fn set_seeded_by(&mut self, seeder: BattlerSide) {
+        self.leech_seed_source = Some(seeder);
     }
 
     /// Activates or refreshes Charge.
@@ -122,6 +142,7 @@ pub fn draws_confusion_self_hit(rng: &mut impl BattleRng) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{draws_confusion_self_hit, Volatiles};
+    use crate::battle::BattlerSide;
     use crate::damage::BattleRng;
 
     struct FixedRng(u16);
@@ -166,6 +187,16 @@ mod tests {
         assert!(!volatiles.defense_curl);
         assert!(!volatiles.confused());
         assert_eq!(volatiles.confusion_turns, 0);
+        assert!(!volatiles.seeded());
+        assert_eq!(volatiles.leech_seed_source, None);
+    }
+
+    #[test]
+    fn leech_seed_remembers_its_seeder_slot() {
+        let mut volatiles = Volatiles::default();
+        volatiles.set_seeded_by(BattlerSide::Enemy);
+        assert!(volatiles.seeded());
+        assert_eq!(volatiles.leech_seed_source, Some(BattlerSide::Enemy));
     }
 
     #[test]

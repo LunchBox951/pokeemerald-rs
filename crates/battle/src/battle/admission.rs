@@ -31,6 +31,8 @@ const fn always_refused(ability: AbilityId) -> bool {
 /// Trace's ability copy (`:2575-2580`, `:3017-3073`), Flame Body (`:2836-2850`; burn infliction by a contact hit is
 /// unmodelled), Cute Charm (`:2851-2870`; infatuation is unmodelled), or the switch-in weather setters
 /// Drizzle, Sand Stream, and Drought (`:2532-2558`), whose weather lifecycle is unmodelled.
+/// A seeded Liquid Ooze holder is refused too: the inverted drain
+/// (`data/battle_scripts_1.s:3275`-`:3276`) is unmodelled.
 ///
 /// # Errors
 ///
@@ -39,11 +41,13 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
     let ability = participant.ability();
     let status = participant.status1();
     let confused = participant.volatiles().confused();
+    let seeded = participant.volatiles().seeded();
     let unported_interaction = match ability {
         AbilityId::LIMBER => status == Status1::Paralysed,
         AbilityId::IMMUNITY => status == Status1::Poisoned,
         AbilityId::WATER_VEIL => status == Status1::Burned,
         AbilityId::OWN_TEMPO => confused,
+        AbilityId::LIQUID_OOZE => seeded,
         AbilityId::INSOMNIA | AbilityId::VITAL_SPIRIT => status.is_asleep(),
         _ => always_refused(ability),
     };
