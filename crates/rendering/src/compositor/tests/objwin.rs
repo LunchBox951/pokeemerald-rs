@@ -23,7 +23,7 @@ fn objwin_sprite_hole_must_not_upgrade_obj_order_inside_win0() {
     // Tile 0: solid index 15 (the normal sprite). Tile 1: columns 0..4
     // transparent, columns 4..8 index 14 (the OBJWIN mask sprite).
     let mut tile_bytes = [0xFFu8; 64];
-    for row in tile_bytes[32..].chunks_exact_mut(4) {
+    for row in tile_bytes[32..].as_chunks_mut::<4>().0.iter_mut() {
         row.copy_from_slice(&[0x00, 0x00, 0xEE, 0xEE]);
     }
     let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
@@ -101,7 +101,7 @@ fn objwin_mask_never_changes_the_uncovered_backdrop_variant() {
     // (`effects::backdrop_variant`), not per OBJWIN-masked pixel: WINOUT
     // enables effects here while OBJWIN doesn't, so both columns brighten.
     let mut mask_tile = [0u8; 32];
-    for row in mask_tile.chunks_exact_mut(4) {
+    for row in mask_tile.as_chunks_mut::<4>().0.iter_mut() {
         row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]); // columns 4..8 opaque
     }
     let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();

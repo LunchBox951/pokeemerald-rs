@@ -34,7 +34,7 @@ fn ball_pixels(fb: &Framebuffer, color: Rgb888) -> Vec<(usize, usize)> {
 #[test]
 fn the_ball_turns_left_over_sixteen_ticks_of_a_pocket_switch() {
     let mut screen = open_screen(BagScreenMode::Field, &sample_bag());
-    assert!(ball_pixels(&frame_of(&screen), BALL_A).is_empty());
+    assert_eq!(ball_pixels(&frame_of(&screen), BALL_A).len(), 0);
 
     // N is the number of ticks after the press: the press tick is N = 0.
     switch_for(&mut screen, Buttons::LEFT, 0);

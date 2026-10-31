@@ -232,7 +232,7 @@ fn metatile_layers(
     let offset = usize::from(local_id) * METATILE_ENTRY_BYTES;
     let raw = bytes.get(offset..offset + METATILE_ENTRY_BYTES)?;
     let mut entries = [ScreenEntry::new(0, false, false, 0); TILES_PER_METATILE];
-    for (entry, chunk) in entries.iter_mut().zip(raw.chunks_exact(2)) {
+    for (entry, chunk) in entries.iter_mut().zip(raw.as_chunks::<2>().0.iter()) {
         *entry = ScreenEntry::from_raw(u16::from_le_bytes([chunk[0], chunk[1]]));
     }
     Some((entries, layer_type))

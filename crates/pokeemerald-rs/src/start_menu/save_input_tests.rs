@@ -258,7 +258,7 @@ fn declining_the_first_question_never_reaches_the_save_medium() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     let mut menu = synthetic_start_menu();
     drive(&mut menu, &mut target, &[false]);
-    assert!(target.writes.is_empty());
+    assert_eq!(target.writes.len(), 0);
     assert!(!menu.saving());
 }
 
@@ -283,7 +283,7 @@ fn b_on_a_prompt_answers_no_even_with_the_cursor_on_yes() {
         StartMenuOutcome::Open
     );
     assert!(!menu.saving(), "B cancelled the save");
-    assert!(target.writes.is_empty());
+    assert_eq!(target.writes.len(), 0);
 }
 
 /// A failed write still closes the start menu -- the player returns to the

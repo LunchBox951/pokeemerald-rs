@@ -513,7 +513,7 @@ mod tests {
     fn full_heal_has_no_arguments_and_scans_to_the_argument_start() {
         let full_heal = effect(ItemId::FULL_HEAL);
         assert_eq!(full_heal.bytes(), [0, 0, 0, 0x3F, 0, 0]);
-        assert!(full_heal.arguments().is_empty());
+        assert_eq!(full_heal.arguments(), []);
         assert_eq!(full_heal.heal_hp_param_offset(), 6);
     }
 

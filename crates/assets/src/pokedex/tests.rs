@@ -100,8 +100,8 @@ fn full_entry_set_round_trips() {
 #[test]
 fn empty_payload_decodes_to_empty_data() {
     let decoded = PokedexData::decode(&EMPTY_PAYLOAD).unwrap();
-    assert!(decoded.entries().is_empty());
-    assert!(decoded.orders().height().is_empty());
+    assert_eq!(decoded.entries(), []);
+    assert_eq!(decoded.orders().height(), []);
 }
 
 #[test]

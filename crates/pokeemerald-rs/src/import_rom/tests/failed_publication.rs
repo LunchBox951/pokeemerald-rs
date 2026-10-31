@@ -32,7 +32,7 @@ fn a_failed_import_leaves_neither_a_pack_nor_a_partial_file() {
         }
     ));
     assert!(!pack_path.exists());
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn a_failed_import_removes_the_directory_it_created() {
     // A failed import leaves no trace: not even an empty data directory
     // that would look like a half-installed game.
     assert!(!created.exists());
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }
 
 #[cfg(unix)]
@@ -155,7 +155,7 @@ fn a_failed_import_removes_every_level_it_created() {
         !outer.exists(),
         "every created level goes, not just the leaf"
     );
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn a_failed_directory_creation_removes_the_levels_it_created() {
 
     assert!(matches!(err, ImportRomError::CreateDirFailed { .. }));
     assert!(!outer.exists(), "the level the failed creation made goes");
-    assert!(file_names(&dir.path).is_empty());
+    assert_eq!(file_names(&dir.path).len(), 0);
 }
 
 #[test]

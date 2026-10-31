@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(roots.images().count(), 0);
         assert_eq!(roots.palettes().count(), 0);
         assert_eq!(Roots::default(), Roots::NONE);
-        assert!(roots.battle_messages.specials.is_empty());
+        assert_eq!(roots.battle_messages.specials, []);
         assert_eq!(roots.battle_anims, BattleAnimationRoots::NONE);
     }
 

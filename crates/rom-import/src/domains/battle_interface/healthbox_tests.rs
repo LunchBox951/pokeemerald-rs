@@ -77,7 +77,7 @@ fn assert_table_mismatch(roots: &Roots, field: &str) {
         "{field}: {err}"
     );
     let bytes = writer.finish().expect("an empty pack");
-    assert!(parse_directory(&bytes).expect("a valid pack").is_empty());
+    assert_eq!(parse_directory(&bytes).expect("a valid pack").len(), 0);
 }
 
 #[test]

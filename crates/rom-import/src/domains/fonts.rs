@@ -91,7 +91,7 @@ pub(crate) fn font(reader: &RomReader<'_>, root: &FontRoot) -> Result<PackEntry,
 /// `packed` must be exactly [`SHEET_BYTES`] long; [`font`] checks that.
 fn unpack(packed: &[u8]) -> Vec<u8> {
     let mut pixels = vec![0u8; SHEET_WIDTH * SHEET_HEIGHT];
-    let mut bytes = packed.chunks_exact(TILE_ROW_BYTES);
+    let mut bytes = packed.as_chunks::<TILE_ROW_BYTES>().0.iter();
     for row in 0..ROWS {
         for column in 0..COLUMNS {
             for glyph_tile in 0..4 {

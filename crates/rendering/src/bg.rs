@@ -273,7 +273,12 @@ mod tests {
         const PIXELS_PER_BYTE: usize = 2;
         const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
         let mut bytes = [0u8; BitDepth::TILE_DIM * BYTES_PER_ROW];
-        for (row, packed_row) in bytes.chunks_exact_mut(BYTES_PER_ROW).enumerate() {
+        for (row, packed_row) in bytes
+            .as_chunks_mut::<BYTES_PER_ROW>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             for (packed_x, packed_pixels) in packed_row.iter_mut().enumerate() {
                 let first_index =
                     ((row % 2) * BitDepth::TILE_DIM + packed_x * PIXELS_PER_BYTE) as u8;

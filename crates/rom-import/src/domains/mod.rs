@@ -137,7 +137,9 @@ pub(crate) fn palette(
         usize::from(root.color_count) * 2,
     )?;
     let colors: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     pack_format::palette_entry(root.id.to_owned(), &colors).map_err(|source| {

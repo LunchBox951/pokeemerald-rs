@@ -159,7 +159,9 @@ impl PokemonSubstructures {
         .into_iter()
         .fold(0u16, |sum, substructure| {
             substructure
-                .chunks_exact(std::mem::size_of::<u16>())
+                .as_chunks::<{ std::mem::size_of::<u16>() }>()
+                .0
+                .iter()
                 .fold(sum, |subtotal, word| {
                     subtotal.wrapping_add(u16::from_le_bytes([word[0], word[1]]))
                 })
@@ -317,7 +319,9 @@ impl BoxPokemon {
 
         let mut secure = [0u8; SECURE_REGION_LEN];
         for (destination, source) in secure
-            .chunks_exact_mut(SUBSTRUCTURE_LEN)
+            .as_chunks_mut::<SUBSTRUCTURE_LEN>()
+            .0
+            .iter_mut()
             .zip(physical.iter())
         {
             destination.copy_from_slice(source);
@@ -344,7 +348,7 @@ impl BoxPokemon {
         let mut physical = [[0u8; SUBSTRUCTURE_LEN]; SUBSTRUCTURE_COUNT];
         for (destination, source) in physical
             .iter_mut()
-            .zip(secure.chunks_exact(SUBSTRUCTURE_LEN))
+            .zip(secure.as_chunks::<SUBSTRUCTURE_LEN>().0.iter())
         {
             destination.copy_from_slice(source);
         }
@@ -421,7 +425,7 @@ impl Pokemon {
 }
 
 fn xor_secure_region(bytes: &mut [u8; SECURE_REGION_LEN], key: u32) {
-    for word in bytes.chunks_exact_mut(std::mem::size_of::<u32>()) {
+    for word in bytes.as_chunks_mut::<{ std::mem::size_of::<u32>() }>().0 {
         let transformed = read_u32(word, 0) ^ key;
         write_u32(word, 0, transformed);
     }

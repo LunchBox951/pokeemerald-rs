@@ -1693,7 +1693,7 @@ fn title_confirm_freezes_clouds_but_not_sprites_on_the_press_frame() {
         &mut save_slot,
         &crate::pack_source::PackSource::Repo,
     );
-    assert!(!wait_frames.is_empty());
+    assert_ne!(wait_frames, [] as [std::boxed::Box<[u32; 38400]>; 0]);
     for frame in &wait_frames {
         fade.update();
         let expected = crate::frame::to_platform_frame(&scene13.compose_split_with_palette(

@@ -131,7 +131,7 @@ fn tiles_4bpp(image: &IndexedImage) -> Vec<u8> {
         for tile_x in 0..width / side {
             for row in 0..side {
                 let start = (tile_y * side + row) * width + tile_x * side;
-                for pair in image.pixels[start..start + side].chunks_exact(2) {
+                for pair in image.pixels[start..start + side].as_chunks::<2>().0 {
                     let (left, right) = (pair[0] & NIBBLE_MASK, pair[1] & NIBBLE_MASK);
                     out.push(left | (right << HIGH_NIBBLE_SHIFT));
                 }
@@ -480,7 +480,7 @@ mod tests {
             assert_pixels(sheet, tiles);
             rest = tail;
         }
-        assert!(rest.is_empty());
+        assert_eq!(rest, []);
         assert_eq!(bar.tiles.len(), 41 * TILE_BYTES);
         let _ = std::fs::remove_file(path);
     }

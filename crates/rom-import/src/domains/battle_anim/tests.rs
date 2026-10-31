@@ -245,7 +245,7 @@ fn a_profile_without_battle_animations_writes_nothing() {
     let mut writer = PackWriter::new();
     write(&rom, &Roots::NONE, &mut writer).expect("no roots is no work");
     let bytes = writer.finish().expect("an empty pack is valid");
-    assert!(parse_directory(&bytes).expect("the pack parses").is_empty());
+    assert_eq!(parse_directory(&bytes).expect("the pack parses").len(), 0);
 }
 
 #[test]

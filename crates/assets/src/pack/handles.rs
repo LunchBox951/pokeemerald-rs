@@ -52,7 +52,9 @@ impl<'a> PaletteRef<'a> {
     /// Iterates over the palette's BGR555 colours in storage order.
     pub fn colors(&self) -> impl Iterator<Item = u16> + 'a {
         self.raw
-            .chunks_exact(BYTES_PER_PALETTE_COLOR)
+            .as_chunks::<BYTES_PER_PALETTE_COLOR>()
+            .0
+            .iter()
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
     }
 }

@@ -366,7 +366,7 @@ fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot() {
 
 #[test]
 fn an_unknown_species_yields_no_moves_and_is_rejected_downstream() {
-    assert!(initial_moveset(UNKNOWN_SPECIES, 5).is_empty());
+    assert_eq!(initial_moveset(UNKNOWN_SPECIES, 5).len(), 0);
     let dex = Dex::new();
     let mut rng = SequenceRng::new([]);
     assert_eq!(

@@ -95,7 +95,7 @@ fn the_payload_reader_and_the_domain_agree() {
 fn a_profile_without_field_messages_writes_nothing() {
     let rom = rom_of(fixture());
     let entries = written(&rom, &[]).expect("no roots is no work");
-    assert!(entries.is_empty());
+    assert_eq!(entries.len(), 0);
     let err = decode_field_message_payload(&rom.reader(), &[]).unwrap_err();
     assert!(
         matches!(

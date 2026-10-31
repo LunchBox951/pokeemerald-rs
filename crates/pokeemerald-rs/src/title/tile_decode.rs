@@ -48,7 +48,9 @@ pub(super) fn regular_tilemap_from_raw(raw: &[u8]) -> Result<Tilemap, TitleScene
         }));
     }
     let entries: Vec<ScreenEntry> = raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| ScreenEntry::from_raw(u16::from_le_bytes([b[0], b[1]])))
         .collect();
     Tilemap::new(BG_DIM_TILES, BG_DIM_TILES, entries).map_err(TitleSceneError::from)

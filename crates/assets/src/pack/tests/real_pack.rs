@@ -47,8 +47,8 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         assert_eq!(palette.color_count, EXPECTED_PALETTE_COLOR_COUNT);
         assert_eq!(palette.colors().count(), EXPECTED_PALETTE_COLOR_COUNT_USIZE);
     }
-    assert!(!general.metatiles.is_empty());
-    assert!(!general.metatile_attributes.is_empty());
+    assert_ne!(general.metatiles, []);
+    assert_ne!(general.metatile_attributes, []);
 
     for name in [
         "general",

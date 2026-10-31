@@ -129,7 +129,7 @@ fn the_domain_list_dispatches_the_bag() {
 
 #[test]
 fn an_empty_family_writes_nothing() {
-    assert!(written(&Roots::NONE).expect("nothing to read").is_empty());
+    assert_eq!(written(&Roots::NONE).expect("nothing to read").len(), 0);
     assert_eq!(Roots::NONE.bag, BagRoots::NONE);
 }
 
@@ -165,7 +165,7 @@ fn a_root_past_the_rom_fails_closed() {
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
     // The good image read before the bad palette was not queued.
     let bytes = writer.finish().expect("an empty pack");
-    assert!(parse_directory(&bytes).expect("a valid pack").is_empty());
+    assert_eq!(parse_directory(&bytes).expect("a valid pack").len(), 0);
 }
 
 #[test]

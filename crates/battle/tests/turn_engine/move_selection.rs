@@ -444,7 +444,7 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
             .take_turn(PlayerAction::UseMove(1), &mut rng)
             .unwrap_err();
         assert_eq!(rejected.error(), expected, "choosing move {}", bad_move.0);
-        assert!(rejected.events().is_empty());
+        assert_eq!(rejected.events(), []);
         assert_eq!(
             rng.draws(),
             1,
@@ -652,7 +652,7 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
         .take_turn(PlayerAction::UseMove(4), &mut rng)
         .unwrap_err();
     assert_eq!(rejected.error(), BattleError::InvalidMoveSlot(4));
-    assert!(rejected.events().is_empty());
+    assert_eq!(rejected.events(), []);
     assert_eq!(rng.draws(), 1, "a rejected slot draws nothing");
     assert_eq!(battle.player().moves()[0].pp, full_pp);
     assert_eq!(battle.enemy().moves()[0].pp, enemy_pp);
@@ -765,7 +765,7 @@ fn an_out_of_range_slot_is_rejected_even_when_every_move_is_spent() {
         .unwrap_err();
 
     assert_eq!(rejected.error(), BattleError::InvalidMoveSlot(1));
-    assert!(rejected.events().is_empty());
+    assert_eq!(rejected.events(), []);
     assert_eq!(rng.draws(), 1, "a rejected slot draws nothing");
     assert_eq!(battle.enemy().current_hp(), enemy_hp);
     assert_eq!(
