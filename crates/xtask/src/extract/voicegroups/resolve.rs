@@ -38,8 +38,8 @@ const PROGRAMMABLE_WAVE_SAMPLE_PREFIX: &str = "ProgrammableWaveData_";
 
 /// One fully-resolved voicegroup slot: every reference (sample, child
 /// group) has been turned into a stable pack id. The shape mirrors
-/// `crates/assets`'s `VoiceEntry`, duplicated rather than shared since this
-/// crate never depends on `crates/assets`.
+/// `crates/assets`'s `VoiceEntry`; `super::encode` maps each slot onto it so
+/// `assets` owns the wire encoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum VoiceSlot {
     DirectSound {
