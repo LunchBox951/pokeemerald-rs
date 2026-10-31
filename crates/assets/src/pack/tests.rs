@@ -10,6 +10,7 @@ mod battle_message;
 mod battler;
 mod container;
 mod field_message;
+mod fixture;
 mod layout;
 mod naming_screen;
 mod opening_scene;

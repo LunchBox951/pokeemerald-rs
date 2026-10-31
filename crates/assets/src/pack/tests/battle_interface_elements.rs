@@ -54,9 +54,9 @@ fn fixture_entries() -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(entry: Entry) -> Vec<Entry> {
@@ -70,7 +70,7 @@ fn replaced(entry: Entry) -> Vec<Entry> {
 
 #[test]
 fn healthbox_elements_keep_the_upstream_table_order() {
-    let (pack, path) = load("healthbox-elements", fixture_entries());
+    let pack = load("healthbox-elements", fixture_entries());
     let handle = pack.healthbox_elements().unwrap();
 
     assert!(HealthboxElement::TABLE
@@ -91,13 +91,11 @@ fn healthbox_elements_keep_the_upstream_table_order() {
         handle.sheet(HealthboxElement::HealthboxDoublesFrameEndBar),
         vec![13; TILE_BYTES].as_slice()
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn table_tiles_are_indexed_across_constituents() {
-    let (pack, path) = load("healthbox-elements-tiles", fixture_entries());
+    let pack = load("healthbox-elements-tiles", fixture_entries());
     let handle = pack.healthbox_elements().unwrap();
 
     let first_tile_of_each_sheet = [0, 12, 21, 36, 47, 65, 66, 70, 71, 86, 101, 116, 117];
@@ -116,8 +114,6 @@ fn table_tiles_are_indexed_across_constituents() {
         Some(TILE_BYTES)
     );
     assert_eq!(handle.tile(TABLE_TILES), None);
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -129,11 +125,9 @@ fn battle_bar_is_the_raw_assembled_blob() {
         payload: blob.clone(),
         ..raw(BATTLE_BAR_ID, 0, 0)
     });
-    let (pack, path) = load("battle-bar", entries);
+    let pack = load("battle-bar", entries);
 
     assert_eq!(pack.battle_bar().unwrap().tiles, blob.as_slice());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -149,19 +143,17 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
         AssetPack::load(&path).unwrap().battle_bar().unwrap_err(),
         PackError::UnknownAsset(id) if id == BATTLE_BAR_ID
     ));
-    let _ = std::fs::remove_file(path);
 
     for (missing, _) in UPSTREAM_TABLE {
         let entries: Vec<Entry> = fixture_entries()
             .into_iter()
             .filter(|e| e.id != missing)
             .collect();
-        let (pack, path) = load("healthbox-elements-missing", entries);
+        let pack = load("healthbox-elements-missing", entries);
         assert!(matches!(
             pack.healthbox_elements().unwrap_err(),
             PackError::UnknownAsset(id) if id == missing
         ));
-        let _ = std::fs::remove_file(path);
     }
 
     for id in [UPSTREAM_TABLE[4].0, BATTLE_BAR_ID] {
@@ -171,7 +163,7 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
             meta: image_meta(8, 8, TEXT_WINDOW_BIT_DEPTH),
             payload: vec![0; 64],
         };
-        let (pack, path) = load("healthbox-elements-wrong-kind", replaced(wrong_kind));
+        let pack = load("healthbox-elements-wrong-kind", replaced(wrong_kind));
         let error = if id == BATTLE_BAR_ID {
             pack.battle_bar().unwrap_err()
         } else {
@@ -180,7 +172,6 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
         assert!(
             matches!(error, PackError::WrongKind { id: bad, expected: "raw blob", .. } if bad == id)
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -189,7 +180,7 @@ fn sheets_of_the_wrong_length_are_rejected() {
     for &(id, tiles) in &UPSTREAM_TABLE {
         let right = tiles * TILE_BYTES;
         for len in [0, right - 1, right + 1, right + TILE_BYTES] {
-            let (pack, path) = load("healthbox-elements-malformed", replaced(raw(id, len, 0)));
+            let pack = load("healthbox-elements-malformed", replaced(raw(id, len, 0)));
             assert!(
                 matches!(
                     pack.healthbox_elements().unwrap_err(),
@@ -197,12 +188,11 @@ fn sheets_of_the_wrong_length_are_rejected() {
                 ),
                 "`{id}` at {len} bytes"
             );
-            let _ = std::fs::remove_file(path);
         }
     }
 
     for len in [0, BATTLE_BAR_BYTES - 1, BATTLE_BAR_BYTES + 1] {
-        let (pack, path) = load("battle-bar-malformed", replaced(raw(BATTLE_BAR_ID, len, 0)));
+        let pack = load("battle-bar-malformed", replaced(raw(BATTLE_BAR_ID, len, 0)));
         assert!(
             matches!(
                 pack.battle_bar().unwrap_err(),
@@ -210,6 +200,5 @@ fn sheets_of_the_wrong_length_are_rejected() {
             ),
             "{len} bytes"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

@@ -49,9 +49,9 @@ fn fixture_entries() -> Vec<Entry> {
     ]
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(entry: Entry) -> Vec<Entry> {
@@ -65,7 +65,7 @@ fn replaced(entry: Entry) -> Vec<Entry> {
 
 #[test]
 fn battle_interface_bundles_the_textbox_and_text_palettes() {
-    let (pack, path) = load("battle-interface", fixture_entries());
+    let pack = load("battle-interface", fixture_entries());
 
     let handle = pack.battle_interface().unwrap();
     assert_eq!(
@@ -79,8 +79,6 @@ fn battle_interface_bundles_the_textbox_and_text_palettes() {
     assert_eq!(handle.window_text_palette.color(0), Some(0x0202));
     assert_eq!(handle.pp_text_palette.color_count, 16);
     assert_eq!(handle.pp_text_palette.color(0), Some(0x0303));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -96,24 +94,22 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
             .into_iter()
             .filter(|e| e.id != missing)
             .collect();
-        let (pack, path) = load("battle-interface-missing", entries);
+        let pack = load("battle-interface-missing", entries);
         assert!(matches!(
             pack.battle_interface().unwrap_err(),
             PackError::UnknownAsset(id) if id == missing
         ));
-        let _ = std::fs::remove_file(path);
     }
 
     let wrong_kind = Entry {
         id: TILEMAP_ID,
         ..image(2, 2, TEXT_WINDOW_BIT_DEPTH, 0)
     };
-    let (pack, path) = load("battle-interface-wrong-kind", replaced(wrong_kind));
+    let pack = load("battle-interface-wrong-kind", replaced(wrong_kind));
     assert!(matches!(
         pack.battle_interface().unwrap_err(),
         PackError::WrongKind { id, expected: "raw blob", .. } if id == TILEMAP_ID
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -133,7 +129,7 @@ fn malformed_entries_are_rejected_on_read() {
         (TILEMAP_ID, tilemap(4097)),
     ];
     for (n, (id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("battle-interface-malformed-{n}"), replaced(entry));
+        let pack = load(&format!("battle-interface-malformed-{n}"), replaced(entry));
         assert!(
             matches!(
                 pack.battle_interface().unwrap_err(),
@@ -141,7 +137,6 @@ fn malformed_entries_are_rejected_on_read() {
             ),
             "wrong error for malformed case {n} (`{id}`)"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -149,7 +144,7 @@ fn malformed_entries_are_rejected_on_read() {
 fn a_pixel_outside_one_bank_is_rejected() {
     // A 4bpp tile selects within one 16-colour bank; the tilemap picks the bank.
     for pixel in [16, 31, 32] {
-        let (pack, path) = load(
+        let pack = load(
             "battle-interface-pixel",
             replaced(image(128, 128, TEXT_WINDOW_BIT_DEPTH, pixel)),
         );
@@ -160,6 +155,5 @@ fn a_pixel_outside_one_bank_is_rejected() {
             ),
             "pixel {pixel}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

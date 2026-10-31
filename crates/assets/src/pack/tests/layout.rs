@@ -33,8 +33,6 @@ fn layout_map_and_border_are_raw_blobs() {
         border_bytes,
         &[0x01u8, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -59,8 +57,6 @@ fn layout_map_bytes_decode_through_map_layouts_layout_grid() {
         cells,
         vec![MetatileCell::from_raw(1), MetatileCell::from_raw(2)]
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -82,8 +78,6 @@ fn layout_border_bytes_decode_through_map_layouts_border_grid() {
             MetatileCell::from_raw(4),
         ]
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -101,8 +95,6 @@ fn font_accessor_reaches_the_glyph_sheet_image() {
 
     let err = pack.font(FontId::Small).unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "font/small/glyphs"));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -137,8 +129,6 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
 
     let far_out_of_range = pack.text_window_frame(u8::MAX).unwrap();
     assert_eq!(far_out_of_range.tiles.pixels, frame.tiles.pixels);
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -153,8 +143,6 @@ fn message_box_bundles_its_own_tiles_and_palette() {
     assert_eq!(handle.palette.color_count, TEXT_WINDOW_PALETTE_COLOR_COUNT);
     assert_eq!(handle.palette.color(0), Some(0x0033));
     assert_eq!(handle.palette.color(1), Some(0x0044));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -202,8 +190,6 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
 
     assert!(pack.palette("text-window/palette/2").is_ok());
     assert!(pack.image("text-window/image/3").is_ok());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -217,8 +203,6 @@ fn text_window_extra_palette_reaches_the_sibling_pal_files() {
 
     let err = pack.text_window_extra_palette(9).unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/palette/text_pal9"));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -227,7 +211,6 @@ fn unknown_layout_name_reports_missing_asset() {
     let pack = AssetPack::load(&path).unwrap();
     let err = pack.layout_map("does_not_exist").unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "layout/does_not_exist/map"));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -260,5 +243,4 @@ fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
             .unwrap();
         assert_eq!(attr, MetatileAttribute::from_raw(raw).unwrap());
     }
-    let _ = std::fs::remove_file(path);
 }
