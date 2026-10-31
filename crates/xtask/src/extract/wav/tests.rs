@@ -529,3 +529,29 @@ fn each_sample_format_reports_its_encoded_width() {
 }
 
 mod repeated_chunks;
+
+#[test]
+fn agbl_past_the_sampler_end_does_not_pull_in_excluded_samples() {
+    // smpl inclusive end 2 => wav2agb payload is samples 0..3 then zero
+    // alignment padding (converter.cpp:77-90); agbl=4 only changes the header.
+    let data = [128u8, 129, 130, 255, 255, 255];
+    let smpl = smpl_chunk(60, 0, 1, 2);
+    let agbl = u32_chunk(4);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 4);
+    assert_eq!(sample.data, [0, 1, 2, 0, 0]);
+}
+
+#[test]
+fn agbl_beyond_the_alignment_padding_is_zero_filled() {
+    // The payload ends after sample 2 plus one alignment byte; logical
+    // positions up to `agbl` stay zero rather than reading raw samples 4-5.
+    let data = [128u8, 129, 130, 255, 255, 255];
+    let smpl = smpl_chunk(60, 0, 1, 2);
+    let agbl = u32_chunk(6);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 6);
+    assert_eq!(sample.data, [0, 1, 2, 0, 0, 0, 0]);
+}

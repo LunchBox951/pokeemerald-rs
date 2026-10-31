@@ -93,6 +93,67 @@ fn window_gates_a_bg_layer_by_region_even_though_its_own_enable_bit_is_on() {
 }
 
 #[test]
+fn carried_vertical_latch_selects_the_window_region_on_line_zero() {
+    let (tiles_r, palette_r, map_r) = opaque_bg_fixture(9);
+    let (tiles_b, _palette_b, map_b) = opaque_bg_fixture(0);
+    let layer_r = crate::bg::BgLayer::new(&tiles_r, &palette_r, &map_r);
+    let mut blue_colors = [Bgr555::default(); Palette::LEN];
+    blue_colors[15] = Bgr555::from_channels(0, 0, 9);
+    let blue_palette = Palette::new(blue_colors);
+    let layer_b = crate::bg::BgLayer::new(&tiles_b, &blue_palette, &map_b);
+    let slots = [
+        BgSlot::new(layer_r, 0, 0, 0, 0, true),
+        BgSlot::new(layer_b, 1, 1, 0, 0, true),
+    ];
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+    let mut bg0_only = WindowLayerEnable::NONE;
+    bg0_only.bg[0] = true;
+    let mut bg1_only = WindowLayerEnable::NONE;
+    bg1_only.bg[1] = true;
+
+    // WIN0V = (100, 240): the first frame starts closed, the second inherits
+    // the latch opened at line 100 (`video-software.c:763-764,885-886`).
+    let vertical = WindowRange::new(100, 240);
+    let render = |incoming: bool| {
+        let rect = WindowRect::new(
+            WindowRange::new(0, 4),
+            vertical.with_vertical_latch(incoming),
+        );
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((rect, bg0_only)),
+                win1: None,
+                obj_window: None,
+                winout: bg1_only,
+            },
+            ..FrameEffects::default()
+        };
+        compose_frame_with_effects(&sprites, &slots, &effects)
+    };
+
+    let first = render(false);
+    let second = render(vertical.next_frame_latch(false));
+    assert_eq!(
+        first.pixel(0, 0),
+        Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+        "first frame: line 0 is outside the window"
+    );
+    assert_eq!(
+        second.pixel(0, 0),
+        Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
+        "second frame: the carried latch keeps line 0 inside WIN0"
+    );
+    assert_eq!(
+        render(true).pixels(),
+        second.pixels(),
+        "composition is deterministic and does not advance the latch"
+    );
+}
+
+#[test]
 fn objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color() {
     let (tiles, palette, map) = opaque_bg_fixture(9);
     let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);

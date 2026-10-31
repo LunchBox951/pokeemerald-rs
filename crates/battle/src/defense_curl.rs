@@ -11,7 +11,7 @@ use crate::stat_change::{
 use crate::stat_stage::StatStage;
 
 /// Defense Curl's move effect.
-pub const EFFECT_DEFENSE_CURL: MoveEffect = MoveEffect(156);
+pub const EFFECT_DEFENSE_CURL: MoveEffect = MoveEffect::DEFENSE_CURL;
 
 /// Returns whether this module supports `effect`.
 #[must_use]

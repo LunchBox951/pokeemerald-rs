@@ -73,7 +73,7 @@ fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
 #[test]
 fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed() {
     use crate::pack_source::PackSource;
-    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
 
     const MESSAGE_BOX_WIDTH: u32 = 56;
     const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -88,7 +88,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
     const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
     const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 
-    let pack_bytes_blob = pack_bytes(vec![
+    let pack_bytes_blob = pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/message_box",
             MESSAGE_BOX_WIDTH,
@@ -164,7 +164,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
 #[test]
 fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     use crate::pack_source::PackSource;
-    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
 
     const MESSAGE_BOX_WIDTH: u32 = 56;
     const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -183,7 +183,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
     const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 
-    let pack_bytes_blob = pack_bytes(vec![
+    let pack_bytes_blob = pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/message_box",
             MESSAGE_BOX_WIDTH,

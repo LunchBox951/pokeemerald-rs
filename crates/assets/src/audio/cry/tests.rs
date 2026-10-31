@@ -1,6 +1,7 @@
 use super::*;
 
 const FIRST_ID_BYTE: usize = size_of::<u16>();
+const CALLER_VOLUME: i8 = 100;
 
 fn sample_id(position: usize) -> SampleId {
     SampleId(format!("{DIRECT_SOUND_ID_PREFIX}cry_{position}"))
@@ -180,14 +181,14 @@ fn echo_start_plays_reversed_with_its_overrides() {
 
 #[test]
 fn growl_start_plays_reversed_and_keeps_the_caller_volume() {
-    let settings = CryMode::Growl1.settings(3, 100, CRY_PRIORITY_AMBIENT);
+    let settings = CryMode::Growl1.settings(3, CALLER_VOLUME, CRY_PRIORITY_AMBIENT);
     assert!(settings.is_reverse());
     assert_eq!(
         settings,
         CrySettings {
             direct_sound_mode: DirectSoundMode::Reverse,
             pan: 3,
-            volume: 100,
+            volume: CALLER_VOLUME,
             pitch: 15200,
             length: 15,
             release: 125,
@@ -259,24 +260,23 @@ fn resolve_pairs_the_species_sample_with_the_mode_settings() {
 
 #[test]
 fn every_mode_applies_its_upstream_settings() {
-    // (mode, length, release, pitch, chorus, volume); volume is the caller's 100 unless overridden.
     let expected = [
-        (CryMode::Normal, 140, 0, 15360, 0, 100),
-        (CryMode::Doubles, 20, 225, 15360, 0, 100),
+        (CryMode::Normal, 140, 0, 15360, 0, CALLER_VOLUME),
+        (CryMode::Doubles, 20, 225, 15360, 0, CALLER_VOLUME),
         (CryMode::Encounter, 140, 225, 15600, 20, 90),
         (CryMode::HighPitch, 50, 200, 15800, 20, 90),
         (CryMode::EchoStart, 25, 100, 15600, 192, 90),
-        (CryMode::Faint, 140, 200, 14440, 0, 100),
+        (CryMode::Faint, 140, 200, 14440, 0, CALLER_VOLUME),
         (CryMode::EchoEnd, 140, 220, 15555, 192, 70),
-        (CryMode::Roar1, 10, 100, 14848, 0, 100),
-        (CryMode::Roar2, 60, 225, 15616, 0, 100),
-        (CryMode::Growl1, 15, 125, 15200, 0, 100),
-        (CryMode::Growl2, 100, 225, 15200, 0, 100),
-        (CryMode::Weak, 140, 0, 15000, 0, 100),
-        (CryMode::WeakDoubles, 20, 225, 15000, 0, 100),
+        (CryMode::Roar1, 10, 100, 14848, 0, CALLER_VOLUME),
+        (CryMode::Roar2, 60, 225, 15616, 0, CALLER_VOLUME),
+        (CryMode::Growl1, 15, 125, 15200, 0, CALLER_VOLUME),
+        (CryMode::Growl2, 100, 225, 15200, 0, CALLER_VOLUME),
+        (CryMode::Weak, 140, 0, 15000, 0, CALLER_VOLUME),
+        (CryMode::WeakDoubles, 20, 225, 15000, 0, CALLER_VOLUME),
     ];
     for (mode, length, release, pitch, chorus, volume) in expected {
-        let settings = mode.settings(-7, 100, CRY_PRIORITY_AMBIENT);
+        let settings = mode.settings(-7, CALLER_VOLUME, CRY_PRIORITY_AMBIENT);
         assert_eq!(
             (
                 settings.length,

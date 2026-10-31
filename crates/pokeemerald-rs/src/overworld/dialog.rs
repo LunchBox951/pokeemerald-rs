@@ -16,7 +16,7 @@
 //! `pokeemerald/src/scrcmd.c:1323-1336`). [`NpcDialog::with_waitbuttonpress`]
 //! models that separate wait without clearing the final printed frame.
 
-use assets::fonts::{FontId, OwnedFontGlyphSheet};
+use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
@@ -103,13 +103,19 @@ impl NpcDialog {
     /// NPC and save messages share this type because both use the standard field
     /// message resources. Holding A or B accelerates printing.
     pub(crate) fn new(
-        sheet: OwnedFontGlyphSheet,
+        sources: OwnedGlyphSources,
         frame: FrameAssets,
         tokens: Vec<Token>,
         text_speed: TextSpeed,
     ) -> Self {
-        let printer = Printer::new(tokens, sheet, text_speed, textbox::STANDARD_PRINTER_ORIGIN)
-            .with_ab_speed_up_print();
+        let printer = Printer::with_sources(
+            tokens,
+            sources,
+            FontId::Normal,
+            text_speed,
+            textbox::STANDARD_PRINTER_ORIGIN,
+        )
+        .with_ab_speed_up_print();
         Self {
             frame,
             printer,
@@ -138,9 +144,11 @@ impl NpcDialog {
         tokens: Vec<Token>,
         text_speed: TextSpeed,
     ) -> Result<Self, NpcDialogError> {
-        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
+        let sources = GlyphSources::try_from_fn(|font| {
+            Ok::<_, NpcDialogError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
+        })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, tokens, text_speed).with_waitbuttonpress())
+        Ok(Self::new(sources, frame, tokens, text_speed).with_waitbuttonpress())
     }
 
     /// Loads an asset pack and opens a confirm-to-close dialog, at a
@@ -278,15 +286,17 @@ fn synthetic_dialog_at_speed(tokens: Vec<Token>, speed: TextSpeed) -> NpcDialog 
         bit_depth: SHEET_BIT_DEPTH,
         pixels: &pixels,
     };
-    let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-        .expect("this is the exact real glyph-sheet shape");
+    let sources = GlyphSources::try_from_fn(|font| {
+        OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+    })
+    .expect("this is the exact real glyph-sheet shape");
     let frame = FrameAssets {
         pixels: vec![0u8; (FRAME_WIDTH * FRAME_HEIGHT) as usize],
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; FRAME_PALETTE_SIZE],
     };
-    NpcDialog::new(sheet, frame, tokens, speed)
+    NpcDialog::new(sources, frame, tokens, speed)
 }
 
 #[cfg(test)]
@@ -556,8 +566,10 @@ mod tests {
             bit_depth: FONT_SHEET_BIT_DEPTH,
             pixels: &pixels,
         };
-        let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-            .expect("this is the exact real glyph-sheet shape");
+        let sources = GlyphSources::try_from_fn(|font| {
+            OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+        })
+        .expect("this is the exact real glyph-sheet shape");
         let frame = FrameAssets {
             // Every frame pixel is palette index 0, i.e. transparent, so only
             // glyph pixels reach the framebuffer.
@@ -567,7 +579,7 @@ mod tests {
             palette,
         };
         NpcDialog::new(
-            sheet,
+            sources,
             frame,
             vec![Token::Char('A'), Token::End],
             TextSpeed::Mid,
@@ -687,8 +699,10 @@ mod tests {
             bit_depth: SHEET_BIT_DEPTH,
             pixels: &pixels,
         };
-        let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-            .expect("this is the exact real glyph-sheet shape");
+        let sources = GlyphSources::try_from_fn(|font| {
+            OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+        })
+        .expect("this is the exact real glyph-sheet shape");
 
         let mut palette = vec![Rgb888::BLACK; FRAME_PALETTE_SIZE];
         palette[usize::from(FRAME_INTERIOR_PALETTE_INDEX)] = FRAME_INTERIOR_COLOR;
@@ -699,7 +713,7 @@ mod tests {
             height: FRAME_HEIGHT,
             palette,
         };
-        NpcDialog::new(sheet, frame, tokens, TextSpeed::Instant)
+        NpcDialog::new(sources, frame, tokens, TextSpeed::Instant)
     }
 
     /// Screen pixel for a window-local content coordinate in the standard box.
@@ -822,7 +836,7 @@ mod tests {
     /// `crate::start_menu::pack_fixture::synthetic_start_menu_pack_bytes`'s own
     /// fixture.
     fn synthetic_field_dialog_pack_bytes() -> Vec<u8> {
-        use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+        use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
 
         const MESSAGE_BOX_WIDTH: u32 = 56;
         const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -830,7 +844,7 @@ mod tests {
         const FONT_BIT_DEPTH: u8 = 2;
         const PALETTE_COLOUR_COUNT: u16 = 16;
 
-        pack_bytes(vec![
+        pack_bytes_with_fonts(vec![
             image_entry(
                 "text-window/image/message_box",
                 MESSAGE_BOX_WIDTH,
@@ -919,6 +933,7 @@ mod tests {
             NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(0))
                 .expect("the synthetic pack carries the dialog's font and message box");
 
+        crate::pack_test_support::assert_carries_every_font(&fast_dialog.printer);
         let fast = frames_to_reveal(&mut fast_dialog, MESSAGE_GLYPHS);
         let slow = frames_to_reveal(&mut slow_dialog, MESSAGE_GLYPHS);
 
