@@ -337,6 +337,9 @@ impl Header {
     }
 }
 
+/// The largest width or height a PNG `IHDR` may carry (PNG 1.2 §11.2.2).
+const PNG_MAX_DIMENSION: u32 = i32::MAX as u32;
+
 impl Header {
     /// The `IHDR` checks palette extraction needs. `decode_palette` reads no
     /// pixels, so it skips the pixel decoder's shape limits (the 2, 4, and
@@ -347,6 +350,11 @@ impl Header {
     fn validate_palette_source(&self) -> Result<(), PngError> {
         if self.width == 0 || self.height == 0 {
             return Err(PngError::Unsupported("width or height is zero"));
+        }
+        // PNG 1.2 §11.2.2 caps both dimensions at 2^31 - 1; libpng rejects a
+        // larger IHDR before it reads PLTE, so the palette path must too.
+        if self.width > PNG_MAX_DIMENSION || self.height > PNG_MAX_DIMENSION {
+            return Err(PngError::Unsupported("width or height exceeds 2^31 - 1"));
         }
         if self.color_type != INDEXED_COLOR_TYPE {
             return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
@@ -1448,5 +1456,24 @@ pub(crate) mod tests {
             decode_palette(&with_method(11)).unwrap_err(),
             PngError::Unsupported("filter method is not 0")
         );
+    }
+
+    #[test]
+    fn decode_palette_rejects_ihdr_dimensions_above_png_maximum() {
+        let plte = [0u8; 16 * 3];
+        for (width, height) in [(0x8000_0000u32, 1u32), (1, 0x8000_0000), (u32::MAX, 1)] {
+            let png = indexed_png_from_raw_with_plte(
+                super::FOUR_BIT_DEPTH,
+                width,
+                height,
+                &[super::FILTER_NONE, 0],
+                &plte,
+            );
+            assert_eq!(
+                decode_palette(&png).unwrap_err(),
+                PngError::Unsupported("width or height exceeds 2^31 - 1"),
+                "IHDR {width}x{height} exceeds PNG's 2^31-1 limit"
+            );
+        }
     }
 }
