@@ -59,6 +59,7 @@
 //! - `support`: the shared fixtures (Route 103 phase, stand-in battle and
 //!   approach seeds).
 //! - `real_parties`: the four fighting trainers, cone to conclusion.
+//! - `live_selection`: selection from the live object-event collection.
 //! - `trigger`: cone geometry, refusals, honest cuts, real-pack terrain.
 //! - `battle`: frame ownership, win/loss outcomes, the defeated flag, abort.
 //! - `approach_timing`: the approach's tile timing, handoff and icon frames.
@@ -67,6 +68,7 @@
 mod approach_handoff;
 mod approach_timing;
 mod battle;
+mod live_selection;
 mod real_parties;
 mod support;
 mod trigger;
