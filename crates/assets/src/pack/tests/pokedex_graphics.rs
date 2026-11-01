@@ -159,9 +159,9 @@ fn fixture_entries() -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
@@ -180,7 +180,7 @@ fn contract_has_forty_nine_entries() {
 
 #[test]
 fn pokedex_graphics_bundles_every_handle_group() {
-    let (pack, path) = load("pokedex-graphics", fixture_entries());
+    let pack = load("pokedex-graphics", fixture_entries());
 
     let graphics = pack.pokedex_graphics().unwrap();
     let sheets = [
@@ -258,8 +258,6 @@ fn pokedex_graphics_bundles_every_handle_group() {
             "`{name}` raw entry of {len} bytes"
         );
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -269,15 +267,14 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
         .into_iter()
         .filter(|e| e.id != missing)
         .collect();
-    let (pack, path) = load("pokedex-graphics-missing", entries);
+    let pack = load("pokedex-graphics-missing", entries);
     assert!(matches!(
         pack.pokedex_graphics().unwrap_err(),
         PackError::UnknownAsset(id) if id == missing
     ));
-    let _ = std::fs::remove_file(path);
 
     let id = raw_id("list");
-    let (pack, path) = load(
+    let pack = load(
         "pokedex-graphics-wrong-kind",
         replaced(id, image(id, (2, 2), 0)),
     );
@@ -285,7 +282,6 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
         pack.pokedex_graphics().unwrap_err(),
         PackError::WrongKind { id: bad, expected: "raw blob", .. } if bad == id
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 const EXPECTED_MENU_WIDTH: u32 = 128;
@@ -307,7 +303,7 @@ const MAX_8BPP_INDEX: u8 = 255;
 
 #[test]
 fn every_sheet_keeps_its_declared_depth_and_byte_lengths() {
-    let (pack, path) = load("pokedex-graphics-sheet-shapes", fixture_entries());
+    let pack = load("pokedex-graphics-sheet-shapes", fixture_entries());
     let graphics = pack.pokedex_graphics().unwrap();
     let sheets = [
         ("menu", graphics.menu),
@@ -355,12 +351,11 @@ fn every_sheet_keeps_its_declared_depth_and_byte_lengths() {
             "`{handle_name}` accepts its highest palette index"
         );
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn standalone_palettes_keep_their_payload_length() {
-    let (pack, path) = load("pokedex-graphics-palette-bytes", fixture_entries());
+    let pack = load("pokedex-graphics-palette-bytes", fixture_entries());
     let graphics = pack.pokedex_graphics().unwrap();
     let palettes = [
         ("bg_hoenn", graphics.bg_hoenn_palette),
@@ -376,7 +371,6 @@ fn standalone_palettes_keep_their_payload_length() {
         assert_eq!(name, expected_name);
         assert_eq!(palette.raw.len(), expected_bytes, "`{name}` palette bytes");
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -392,7 +386,7 @@ fn each_entry_group_reports_a_missing_or_wrong_kind_entry() {
             .into_iter()
             .filter(|e| e.id != id)
             .collect();
-        let (pack, path) = load(&format!("pokedex-graphics-group-missing-{n}"), missing);
+        let pack = load(&format!("pokedex-graphics-group-missing-{n}"), missing);
         assert!(
             matches!(
                 pack.pokedex_graphics().unwrap_err(),
@@ -400,14 +394,13 @@ fn each_entry_group_reports_a_missing_or_wrong_kind_entry() {
             ),
             "missing {group} entry `{id}`"
         );
-        let _ = std::fs::remove_file(path);
 
         let other_kind = if group == "raw" {
             image(id, (2, 2), 0)
         } else {
             raw(id, 1, 0)
         };
-        let (pack, path) = load(
+        let pack = load(
             &format!("pokedex-graphics-group-wrong-kind-{n}"),
             replaced(id, other_kind),
         );
@@ -418,7 +411,6 @@ fn each_entry_group_reports_a_missing_or_wrong_kind_entry() {
             ),
             "wrong-kind {group} entry `{id}`"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -528,12 +520,11 @@ fn off_by_one_cases() -> Vec<OffByOneCase> {
 #[test]
 fn off_by_one_lengths_depth_and_indices_are_rejected() {
     for (n, (label, id, entry, expected_detail)) in off_by_one_cases().into_iter().enumerate() {
-        let (pack, path) = load(
+        let pack = load(
             &format!("pokedex-graphics-off-by-one-{n}"),
             replaced(id, entry),
         );
         let error = pack.pokedex_graphics().unwrap_err();
-        let _ = std::fs::remove_file(path);
         let PackError::MalformedPokedexGraphic { id: bad, detail } = error else {
             panic!("{label}: wrong error {error:?}");
         };
@@ -592,7 +583,7 @@ fn malformed_entries_are_rejected_on_read() {
         ),
     ];
     for (n, (label, id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(
+        let pack = load(
             &format!("pokedex-graphics-malformed-{n}"),
             replaced(id, entry),
         );
@@ -603,16 +594,14 @@ fn malformed_entries_are_rejected_on_read() {
             ),
             "wrong error for malformed `{id}` ({label})"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
 #[test]
 fn malformed_sheet_reports_the_shared_validation_order_and_wording() {
     let detail_of = |n: usize, id: &'static str, entry: Entry| {
-        let (pack, path) = load(&format!("pokedex-graphics-detail-{n}"), replaced(id, entry));
+        let pack = load(&format!("pokedex-graphics-detail-{n}"), replaced(id, entry));
         let error = pack.pokedex_graphics().unwrap_err();
-        let _ = std::fs::remove_file(path);
         match error {
             PackError::MalformedPokedexGraphic { id: bad, detail } if bad == id => detail,
             other => panic!("wrong error for malformed `{id}`: {other:?}"),

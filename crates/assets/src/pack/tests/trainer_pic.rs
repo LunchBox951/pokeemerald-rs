@@ -55,14 +55,14 @@ fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 #[test]
 fn each_identity_resolves_its_own_image_and_palette() {
-    let (pack, path) = load("trainer-pic-all", entries());
+    let pack = load("trainer-pic-all", entries());
     for (index, (id, _)) in PICS.iter().enumerate() {
         let tag = u8::try_from(index).unwrap() + 1;
         let handle = pack.trainer_pic(*id).unwrap();
@@ -73,12 +73,11 @@ fn each_identity_resolves_its_own_image_and_palette() {
         assert_eq!(handle.art.palette.color_count, 16);
         assert_eq!(handle.art.palette.color(0), Some(u16::from(tag) << 8));
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn identities_without_a_published_picture_are_unsupported() {
-    let (pack, path) = load("trainer-pic-unsupported", entries());
+    let pack = load("trainer-pic-unsupported", entries());
     for id in [
         TrainerPicId::HIKER,
         TrainerPicId::RS_BRENDAN,
@@ -90,7 +89,6 @@ fn identities_without_a_published_picture_are_unsupported() {
             PackError::UnsupportedTrainerPic(id)
         );
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -99,13 +97,12 @@ fn missing_and_wrong_kind_entries_are_named() {
         .into_iter()
         .filter(|e| e.id != "trainer-pic/may/palette")
         .collect();
-    let (pack, path) = load("trainer-pic-missing", without);
+    let pack = load("trainer-pic-missing", without);
     assert!(pack.trainer_pic(TrainerPicId::BRENDAN).is_ok());
     assert!(matches!(
         pack.trainer_pic(TrainerPicId::MAY).unwrap_err(),
         PackError::UnknownAsset(id) if id == "trainer-pic/may/palette"
     ));
-    let _ = std::fs::remove_file(path);
 
     let raw = Entry {
         id: "trainer-pic/may/front",
@@ -113,7 +110,7 @@ fn missing_and_wrong_kind_entries_are_named() {
         meta: vec![],
         payload: vec![0; 4],
     };
-    let (pack, path) = load(
+    let pack = load(
         "trainer-pic-wrong-kind",
         replaced("trainer-pic/may/front", raw),
     );
@@ -121,7 +118,6 @@ fn missing_and_wrong_kind_entries_are_named() {
         pack.trainer_pic(TrainerPicId::MAY).unwrap_err(),
         PackError::WrongKind { id, expected: "image", .. } if id == "trainer-pic/may/front"
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -154,7 +150,7 @@ fn malformed_entries_are_rejected_on_read() {
         ),
     ];
     for (index, (entry_id, pic, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(
+        let pack = load(
             &format!("trainer-pic-bad-{index}"),
             replaced(entry_id, entry),
         );
@@ -165,6 +161,5 @@ fn malformed_entries_are_rejected_on_read() {
             ),
             "case {index}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

@@ -41,9 +41,7 @@ fn pack_with(tag: &str, kind_tag: u8, meta: Vec<u8>, payload: Vec<u8>) -> AssetP
         payload,
     }]);
     let path = write_pack(tag, &bytes);
-    let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(path);
-    pack
+    AssetPack::load(&path).unwrap()
 }
 
 #[test]
@@ -59,7 +57,6 @@ fn catalog_accessor_decodes_the_raw_payload() {
 fn catalog_accessor_reports_a_missing_entry() {
     let path = write_pack("anim-missing", &pack_bytes(vec![]));
     let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(path);
     let missing = PackError::UnknownAsset(ID.to_owned());
     assert_eq!(pack.battle_animation_catalog(), Err(missing));
 }
