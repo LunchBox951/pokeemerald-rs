@@ -471,7 +471,7 @@ impl OverworldPhase {
         // (`crate::flow::wild_encounter`'s module docs, "Lead-health
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
-        let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
+        let tile_center = observe_tile(&mut self.pending_turn, &mut self.player, &runtime, landed);
         let encounter = wild_encounter::roll_for_step(
             &mut self.wild,
             &mut self.rng,

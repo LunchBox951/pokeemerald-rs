@@ -2,7 +2,7 @@
 
 use super::test_support::*;
 use super::{OverworldPhase, SyntheticStartMenu};
-use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
@@ -470,5 +470,82 @@ fn a_forced_movement_landing_must_not_run_the_wild_encounter_check() {
          upstream, so `CheckStandardWildEncounter` never runs and the \
          immunity counter and remembered behaviour stay exactly as the \
          previous step left them"
+    );
+}
+
+/// A phase standing on a cracked floor (a forced-movement input tile) facing
+/// north, with a turn toward the south started and drained to the call
+/// before its tile-centre observation.
+fn cracked_floor_phase_with_a_drained_turn() -> OverworldPhase {
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 5),
+        engine::overworld::metatile_behavior::MB_CRACKED_FLOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..TURN_IN_PLACE_FRAMES {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "setup: turn drained"
+    );
+    assert_eq!(phase.player.position(), (6, 5), "setup: turned in place");
+    phase
+}
+
+/// A completed turn is a `T_TILE_CENTER` frame on a forced tile, where
+/// `FieldGetPlayerInput` sets no `pressedStartButton`
+/// (`field_control_avatar.c:93-113`); the next frame is `T_NOT_MOVING`.
+#[test]
+fn a_completed_turn_on_a_forced_tile_refuses_start_for_that_frame_only() {
+    let mut phase = cracked_floor_phase_with_a_drained_turn();
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_none(),
+        "the completed turn's tile-centre frame on a forced tile admits no START"
+    );
+
+    phase.step(ButtonState::new());
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_some(),
+        "a fresh press after the neutral frame is a T_NOT_MOVING press"
+    );
+}
+
+#[test]
+fn a_turn_in_progress_on_a_forced_tile_still_admits_start() {
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 5),
+        engine::overworld::metatile_behavior::MB_CRACKED_FLOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    phase.step(held(Buttons::DOWN));
+    assert!(phase.player.turn_frames_remaining() > 0, "setup: mid-turn");
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_some(),
+        "a turn's earlier frames are T_NOT_MOVING, which admits START"
     );
 }
