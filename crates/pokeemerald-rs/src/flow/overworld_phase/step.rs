@@ -1,78 +1,59 @@
 //! The per-frame input -> movement -> warp/interaction/encounter pipeline
-//! (a submodule of [`crate::flow::overworld_phase`], `oop-boundaries`): [`OverworldPhase::step`] is the single per-frame entry
-//! point [`crate::flow`] drives. NPC-interaction lookup
-//! ([`OverworldPhase::interaction_tokens_this_frame`]) lives in the sibling
-//! [`super::interaction`]. Held-direction resolution and the single-frame movement mechanics
-//! [`OverworldPhase::step`] drives live in the sibling [`super::input`]
-//! (pulled out purely to keep both files under the `oop-boundaries` size
-//! guideline -- see that module's own docs). Warp/connection *execution*
-//! lives in [`super::connections`]; the wild-battle and dialog
-//! frame-ownership checks [`OverworldPhase::step`] defers to live in
-//! [`super::wild_battle`] and [`super::frame`] respectively. The Route 103
-//! sight-trainer check [`OverworldPhase::step`] runs ahead of
+//! (a submodule of [`crate::flow::overworld_phase`], `oop-boundaries`):
+//! [`OverworldPhase::step`] is the single per-frame entry point
+//! [`crate::flow`] drives, and sequences the frame. It owns the order of the
+//! stages, not their bodies:
+//!
+//! - held-direction resolution and the single-frame movement mechanics live
+//!   in [`super::input`];
+//! - the pre-movement field-input branches (arrow warp, interaction,
+//!   animated door, `START`) live in [`super::pre_movement`];
+//! - warp/interaction/battle precedence for the events a frame decided
+//!   lives in [`super::step_events`], and the dialog it opens (with its
+//!   text speed) in [`super::field_dialog`];
+//! - NPC-interaction lookup
+//!   ([`OverworldPhase::interaction_tokens_this_frame`]) lives in
+//!   [`super::interaction`];
+//! - warp/connection *execution* lives in [`super::connections`]; the
+//!   wild-battle and dialog frame-ownership checks [`OverworldPhase::step`]
+//!   defers to live in [`super::wild_battle`] and [`super::frame`].
+//!
+//! The Route 103 sight-trainer check [`OverworldPhase::step`] runs ahead of
 //! everything else lives in [`super::sight_trainer_trigger`], and the
-//! approach cutscene it starts (S-5) in
-//! [`super::sight_trainer_approach`] -- both report what they did to this
-//! module as a named [`SightTrainerOutcome`] rather than as a bare "was the
-//! frame taken" flag.
+//! approach cutscene it starts (S-5) in [`super::sight_trainer_approach`] --
+//! both report what they did to this module as a named
+//! [`SightTrainerOutcome`] rather than as a bare "was the frame taken" flag.
 //! [`crate::flow::wild_encounter`]'s predicates already model the
 //! wild-encounter half of this pipeline's precedence rules.
 
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
-use engine::overworld::{
-    trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, WarpTrigger,
-};
+use engine::overworld::{trigger_door_warp, PlayerState};
 use engine::save::Coords16;
-use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
 use crate::flow::wild_encounter;
-use crate::overworld::NpcDialog;
-use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
 use super::input::{advance_or_skip_for_preempt, held_direction, observe_tile, settle_outcome};
+#[cfg(test)]
 pub(super) use super::interaction::InteractionOutcome;
+#[cfg(test)]
+pub(super) use super::pre_movement::PreMovementFieldInput;
 use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::OverworldPhase;
 
-/// [`OverworldPhase::tick`]'s overflow target (issue #852): every configured
+/// [`OverworldPhase::tick`]'s overflow target: every configured
 /// tileset-animation cadence divides upstream's 256-tick counter period
 /// (wrap at `pokeemerald/src/tileset_anims.c:589-590`, set to 256 by
 /// `:621`/`:628`), so this tick already reads as latched to every region,
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 
-/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid; upstream
-/// treats them exactly like `OPTIONS_TEXT_SPEED_MID`
-/// (`pokeemerald/include/constants/global.h:127-129`). Duplicated from
-/// `super::start_menu`'s own private copy: same upstream constant, two
-/// independent field-message call sites (this module and the SAVE prompt).
-const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
-
-/// The saved value `GetPlayerTextSpeedDelay` repairs an out-of-range
-/// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
-/// (`pokeemerald/src/menu.c:483-484`).
-const OPTIONS_TEXT_SPEED_MID: u8 = 1;
-
-/// This frame's pre-movement field-input decisions.
-pub(super) struct PreMovementFieldInput {
-    pub(super) arrow_trigger: Option<WarpTrigger>,
-    /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
-    /// against the tile the player *faces*, not one they stand on -- see
-    /// [`OverworldPhase::step`]'s "Warp timing" section.
-    pub(super) animated_door_trigger: Option<WarpTrigger>,
-    pub(super) interaction: Option<InteractionOutcome>,
-    /// The menu a fresh `START` press built, if
-    /// [`OverworldPhase::start_menu_may_open`] allowed it.
-    start_menu: Option<StartMenu>,
-}
-
 impl OverworldPhase {
     /// Advance [`OverworldPhase::tick`] by one frame, wrapping past
     /// `u32::MAX` to [`TILESET_ANIM_WRAP_PERIOD`] rather than 0 (see that
     /// constant's own doc comment). Shared by [`OverworldPhase::step`] and
-    /// [`OverworldPhase::advance_start_menu_frame`] (issue #852) so a second,
+    /// [`OverworldPhase::advance_start_menu_frame`] so a second,
     /// independent `wrapping_add` at either call site can never reintroduce
     /// this same bug.
     pub(super) fn advance_tileset_anim_tick(&mut self) {
@@ -122,7 +103,7 @@ impl OverworldPhase {
     /// stepped onto is ever tested, never one they were already standing
     /// on.
     ///
-    /// **Arrow warps (issue #174): polled every frame the player is between
+    /// **Arrow warps: polled every frame the player is between
     /// steps, at the tile the player currently stands on.** `TryArrowWarp`
     /// is *not* behind `tookStep` upstream; its gate is
     /// `input->heldDirection && input->dpadDirection == playerDirection`
@@ -136,8 +117,8 @@ impl OverworldPhase {
     /// *pre-movement* [`PlayerState::facing`] — upstream reads
     /// `playerDirection` before `PlayerStep` has turned the player, so a
     /// held frame that only turns can never satisfy the gate it is itself
-    /// creating (review finding on #191) — and it feeds
-    /// [`trigger_arrow_warp`] at the pre-movement position rather than at
+    /// creating — and it feeds
+    /// [`engine::overworld::trigger_arrow_warp`] at the pre-movement position rather than at
     /// `pending_landing`. Two consequences worth naming, both properties an
     /// earlier revision of this method got wrong by routing arrows through
     /// the door path:
@@ -166,7 +147,7 @@ impl OverworldPhase {
     ///
     /// Door before arrow, matching upstream's own order within
     /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
-    /// frame. The animated-door check (issue #851) is decided later still,
+    /// frame. The animated-door check is decided later still,
     /// mirroring `TryDoorWarp`'s own later position in that same function
     /// (`:170-178`). Since the completed-step work and the at-rest polls
     /// now share a call, that precedence is load-bearing rather than
@@ -193,14 +174,14 @@ impl OverworldPhase {
     /// `'static` tables (unreachable for
     /// [`crate::new_game::SPAWN_MAP_ID`] against a real extraction).
     ///
-    /// **Animated doors (issue #851): polled pre-movement, at rest, against
+    /// **Animated doors: polled pre-movement, at rest, against
     /// the tile the player faces, and never after movement.**
     /// [`super::animated_door`] owns that decision and the upstream frame
     /// identity behind it; this method only sequences the outcome. A
     /// resolved trigger preempts this frame's movement the same way a
     /// preempting arrow warp does, below.
     ///
-    /// # Field input before movement (issue #194)
+    /// # Field input before movement
     ///
     /// Upstream runs `ProcessPlayerFieldInput` *before* `PlayerStep` every
     /// frame and skips the step entirely once it consumes the input
@@ -229,11 +210,11 @@ impl OverworldPhase {
     /// map has a walkable arrow direction, the doormat's `(8, 9)` being
     /// off-map, as the "Arrow warps" section notes.
     ///
-    /// # NPC dialog routing (issue #161)
+    /// # NPC dialog routing
     ///
     /// While [`OverworldPhase::dialog`] is `Some`,
     /// this method does nothing else: `buttons`' confirm edge is forwarded
-    /// straight to [`NpcDialog::tick`], and the dialog is dropped once that
+    /// straight to [`crate::overworld::NpcDialog::tick`], and the dialog is dropped once that
     /// reports [`crate::overworld::DialogOutcome::Closed`] -- freezing
     /// ordinary movement/warp processing for as long as the box is open,
     /// mirroring upstream's own `lock` script command (the player's
@@ -260,14 +241,14 @@ impl OverworldPhase {
     /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
     /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
     /// `overworld.c:1444-1455`). A script [`crate::overworld::npc_scripts::script_text`]
-    /// recognizes opens an [`NpcDialog`], after running its `faceplayer` on the
+    /// recognizes opens an [`crate::overworld::NpcDialog`], after running its `faceplayer` on the
     /// selected live object when it has one
     /// ([`OverworldPhase::start_script_dialog`]); any other selected target still
     /// preempts the frame, and only a press that selects nothing falls through
-    /// to movement ([`InteractionOutcome`]). Gated on the player being between steps --
+    /// to movement ([`super::interaction::InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
     ///
-    /// # Wild encounters (issue #169)
+    /// # Wild encounters
     ///
     /// A completed step — the same drained landing the door-warp check
     /// consumes — is this port's counterpart to upstream's
@@ -298,7 +279,7 @@ impl OverworldPhase {
     /// of a facing animated door) with the matching direction held, and no
     /// bundled map's grass shares a tile with one.
     ///
-    /// # Map-edge connection crossing (issue #177)
+    /// # Map-edge connection crossing
     ///
     /// [`super::input::advance_player_one_frame`] feeds [`PlayerState::step`] a real
     /// [`MapConnections`] resolver, so a
@@ -332,7 +313,7 @@ impl OverworldPhase {
             return;
         }
 
-        // A sight trainer's approach cutscene (S-5, issue #300,
+        // A sight trainer's approach cutscene (S-5,
         // `super::sight_trainer_approach`) owns every frame between the cone
         // check below and the battle above, and drives its own intro message
         // box -- hence *ahead* of the generic dialog tick, which would
@@ -354,7 +335,7 @@ impl OverworldPhase {
             return;
         }
 
-        // Sight-trainer detection (issue #264, `super::sight_trainer_trigger`'s
+        // Sight-trainer detection (`super::sight_trainer_trigger`'s
         // own module docs): upstream's `CheckForTrainersWantingBattle` runs
         // unconditionally at the very top of `ProcessPlayerFieldInput`,
         // itself called every field frame *before* `PlayerStep`
@@ -378,8 +359,7 @@ impl OverworldPhase {
             // the frame that *starts* the approach would be the one frame in
             // the whole sequence that ticked on neither path -- neither here
             // nor in `advance_sight_trainer_approach_frame` above, which ran
-            // before `self.sight_approach` existed and returned `None`
-            // (PR #407 review).
+            // before `self.sight_approach` existed and returned `None`.
             let player_was_moving = self.player.in_transit();
             self.tick_player_under_approach_lock();
             if player_was_moving {
@@ -442,8 +422,16 @@ impl OverworldPhase {
         // a fainting poison drain claims this frame before the roll below.
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
+        //
+        // The flag test sits beside the tile test: a forced crossing's
+        // landing on ordinary ground still has `PLAYER_AVATAR_FLAG_FORCED_MOVE`
+        // set here, because only the later `PlayerStep` clears it
+        // (`field_control_avatar.c:547-553`). The flag also gates the
+        // egg-hatch and later step-count scripts of that block; this port
+        // models none of them.
         let poison_step = landed
             .filter(|_| door_warp.is_none())
+            .filter(|_| !self.player.forced_move_flag())
             .filter(|&(x, y)| {
                 !is_forced_movement_input_tile(runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL))
             })
@@ -458,16 +446,11 @@ impl OverworldPhase {
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
         // fightable map (`wild_table_fightable`), and only with a lead the
-        // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
-        // used to sit here too, for the one loss path issue #261's
-        // white-out could not yet cover (a lost Route 101 first battle --
-        // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
-        // #251's `first_battle_conclusion` now heals that lead the
-        // instant the battle ends, on every outcome, and a pre-#251 save
-        // that *serialized* the residual state is healed at load
-        // (`from_saved`'s migration, PR #291 review), so no path can
-        // leave a fainted lead standing here any more and the filter
-        // was removed
+        // turn engine admits (`wild_lead_admissible`). No fainted-lead
+        // filter is needed: `first_battle_conclusion` heals the lead the
+        // instant a Route 101 first battle ends, on every outcome
+        // (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch), and
+        // `from_saved` heals a saved fainted lead at load
         // (`crate::flow::wild_encounter`'s module docs, "Lead-health
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
@@ -514,7 +497,7 @@ impl OverworldPhase {
         let pre =
             self.resolve_pre_movement_field_input(buttons, direction, &runtime, landing_claimed);
 
-        // Latched here (issue #177), tested only on a later call -- see
+        // Latched here, tested only on a later call -- see
         // `advance_or_skip_for_preempt`'s own doc comment for why a
         // crossing can't be applied to `self` right away. A free
         // function, not a method, so this call only takes disjoint
@@ -525,10 +508,9 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
         };
-        // `interaction` preempts movement too (issue #435), and so do a
-        // claimed fresh `START`, the pre-movement animated-door check
-        // (issue #851), and every completed-step event above
-        // (`landing_claimed`).
+        // `interaction` preempts movement too, and so do a
+        // claimed fresh `START`, the pre-movement animated-door check,
+        // and every completed-step event above (`landing_claimed`).
         let pre_step_player = self.player;
         let outcome = advance_or_skip_for_preempt(
             &mut self.player,
@@ -549,10 +531,8 @@ impl OverworldPhase {
         // (`TryStartStepBasedScript`, `:155-161`), then the arrow poll
         // (`TryArrowWarp`, `:164-168`), then the animated door
         // (`TryDoorWarp`, `:170-178`). All three are decided from this
-        // call's frame-start stance, so `or` is the whole precedence:
-        // the post-movement arrow re-poll this method used to fall
-        // through to is gone along with the drain-frame compression it
-        // existed to patch up (issue #1039).
+        // call's frame-start stance, so `or` is the whole precedence;
+        // there is no post-movement arrow re-poll.
         let warp_trigger = door_warp
             .or(pre.arrow_trigger)
             .or(pre.animated_door_trigger);
@@ -568,7 +548,7 @@ impl OverworldPhase {
             pre.start_menu,
         );
 
-        // Map-edge connection crossing (issue #177): deferred to here,
+        // Map-edge connection crossing: deferred to here,
         // `runtime`'s last use above (method docs' own section on this).
         // Never coincides with `warp_fired`: a crossing leaves
         // `self.player.in_transit()` true, the same gate that already
@@ -589,102 +569,6 @@ impl OverworldPhase {
             x: i16::try_from(x).unwrap_or(i16::MAX),
             y: i16::try_from(y).unwrap_or(i16::MAX),
         };
-    }
-
-    /// This call's pre-movement field-input decisions: the frame-start
-    /// stance ([`Self::step`]'s "Warp timing" section), the arrow-warp
-    /// poll, the same-frame interaction, the animated-door poll (issue
-    /// #851), and a fresh `START` press's menu, already built if it claims
-    /// the frame -- `TryArrowWarp` (`field_control_avatar.c:164-168`),
-    /// `TryStartInteractionScript` (`:172`), `TryDoorWarp` (`:170-178`) and
-    /// `pressedStartButton` (`:182`), in that order, each skipped once one
-    /// above it has claimed the frame.
-    ///
-    /// `landing_claimed` is [`Self::step`]'s answer for the three branches
-    /// that sit *above* all four upstream -- the completed step's coordinate
-    /// event and door-shaped warp (`TryStartStepBasedScript`, `:155-161`)
-    /// and its encounter roll (`CheckStandardWildEncounter`, `:162`) -- each
-    /// of which returns TRUE out of `ProcessPlayerFieldInput` before `:164`
-    /// is ever reached. Since issue #1039 moved that completed-step work to
-    /// the start of the call after the walk animation drains, a ready
-    /// landing and an at-rest field poll land on the *same* call, so this
-    /// gate is load-bearing rather than the vacuous one it would have been
-    /// while the two were mutually exclusive.
-    ///
-    /// A forced tile closes the `T_TILE_CENTER` half of that same gate
-    /// (`:95`), holding the four branches for the landing call alone
-    /// ([`engine::overworld::PlayerState::field_input_suppressed`]).
-    pub(super) fn resolve_pre_movement_field_input(
-        &self,
-        buttons: ButtonState,
-        direction: Option<Direction>,
-        runtime: &MapRuntime<'_>,
-        landing_claimed: bool,
-    ) -> PreMovementFieldInput {
-        let facing = self.player.facing();
-        let position = self.player.position();
-        // `PlayerGetElevation()`'s retained `previousElevation`, not the
-        // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
-        let previous_elevation = self.player.previous_elevation();
-        // Upstream only sets `input->heldDirection`/`input->pressedAButton`
-        // /`input->pressedStartButton` at all while `tileTransitionState` is
-        // `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), and reaches none of
-        // the four branches below on a frame the completed step already
-        // claimed -- one predicate for both halves of that, plus the
-        // forced-movement tile that closes the first of those two states
-        // (method doc, issue #926).
-        let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
-        let arrow_direction = direction.filter(|held| *held == facing);
-
-        // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
-        let arrow_trigger = poll_open
-            .then_some(arrow_direction)
-            .flatten()
-            .and_then(|d| {
-                let (x, y) = position;
-                trigger_arrow_warp(runtime, x, y, previous_elevation, d)
-            });
-
-        // NPC interaction, resolved before `advance_or_skip_for_preempt`
-        // can turn or step the player (contract: `step`'s "NPC dialog
-        // routing" section). Skipped when `arrow_trigger` already fired, as
-        // `TryArrowWarp` returns ahead of the interaction check, and while
-        // forced movement is armed, as `FieldGetPlayerInput` never reaches
-        // `TryStartInteractionScript` either (method doc). The tokens
-        // belong to the pre-warp map, so a same-frame warp drops them
-        // rather than opening the departed map's dialog on the destination.
-        let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
-                .then(|| self.interaction_tokens_this_frame(buttons, runtime))
-                .flatten();
-
-        // Upstream reaches `TryDoorWarp` only after the arrow check and the
-        // A-button interaction lookup have both fallen through
-        // (`field_control_avatar.c:164-178`), same as its early `return
-        // TRUE`s ahead of it.
-        let animated_door_trigger = (poll_open && arrow_trigger.is_none() && interaction.is_none())
-            .then_some(arrow_direction)
-            .flatten()
-            .and_then(|d| super::animated_door::trigger(runtime, position, previous_elevation, d));
-
-        let start_menu = self
-            .start_menu_may_open(
-                buttons,
-                landing_claimed
-                    || arrow_trigger.is_some()
-                    || interaction.is_some()
-                    || animated_door_trigger.is_some(),
-            )
-            .then(|| self.build_start_menu())
-            .flatten();
-
-        PreMovementFieldInput {
-            arrow_trigger,
-            animated_door_trigger,
-            interaction,
-            start_menu,
-        }
     }
 
     /// Latches a started turn, then applies [`Self::step`]'s deferred map-edge
@@ -709,102 +593,5 @@ impl OverworldPhase {
             // `warp_to` documents for its own failure cases.
             self.player = pre_step_player;
         }
-    }
-
-    /// Commits a built menu and takes the field lock on this frame, as
-    /// `ShowStartMenu` reaches `PlayerFreeze` inline (`start_menu.c:581-591`).
-    fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
-        if let Some(menu) = ready {
-            self.take_field_lock();
-            // `ShowStartMenu` also runs `StopPlayerAvatar`, which resets
-            // movementDirection to facingDirection before any save can copy
-            // it (`start_menu.c:581-588`, `field_player_avatar.c:1223-1228`).
-            self.player.reset_movement_direction_to_facing();
-            self.start_menu = Some(menu);
-        }
-    }
-
-    /// [`Self::step`]'s warp/interaction/battle precedence, once every input
-    /// to it has already been decided against this frame's `runtime` (pulled
-    /// out of that method purely to stay under `clippy::too_many_lines` --
-    /// every parameter here is an owned value, not a borrow of `runtime`, so
-    /// this method needs nothing from it).
-    ///
-    /// A resolved `warp_trigger` executes first ([`Self::warp_to`]).
-    /// Same-frame interaction outcomes act only if neither a warp nor a
-    /// `field_event_fired` event (an encounter or the Route 101
-    /// first-battle trigger -- [`Self::step`]'s own single definition of
-    /// that) already consumed the frame's field input: upstream never
-    /// reaches `TryStartInteractionScript` (`:172`) on a frame anything
-    /// above it returned TRUE. A [`InteractionOutcome::Dialog`] opens a
-    /// message box; a [`InteractionOutcome::RivalBattle`] (issue #248,
-    /// `super::route103_rival_trigger`) starts the Route 103 rival battle
-    /// instead -- exactly the same gate, one extra branch. The battle this
-    /// frame earned -- if any -- starts next ([`Self::begin_step_battle`]).
-    /// Commits the frame's owner in `ProcessPlayerFieldInput` order; an
-    /// interaction claiming the frame takes the field lock on that frame.
-    fn resolve_step_events(
-        &mut self,
-        warp_trigger: Option<WarpTrigger>,
-        encounter: Option<engine::overworld::WildEncounter>,
-        field_event_fired: bool,
-        first_battle_triggered: bool,
-        interaction: Option<InteractionOutcome>,
-        start_menu: Option<StartMenu>,
-    ) {
-        match warp_trigger {
-            Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
-            Some(WarpTrigger::Unsupported) => eprintln!(
-                "warp: destination at the player's tile can't be resolved by this port \
-                 (dynamic map/warp id) -- staying put"
-            ),
-            None => {}
-        }
-
-        let input_consumed = wild_encounter::field_input_consumed(field_event_fired, warp_trigger);
-        if input_consumed {
-            if interaction.is_some() {
-                eprintln!(
-                    "npc dialog: discarding a same-frame interaction the warp, the wild \
-                     encounter, or the Route 101 first-battle trigger takes precedence over"
-                );
-            }
-        } else {
-            if interaction.is_some() {
-                self.take_field_lock();
-            }
-            match interaction {
-                Some(InteractionOutcome::Dialog(script)) => {
-                    let tokens = self.start_script_dialog(script);
-                    let text_speed = self.field_dialog_text_speed();
-                    match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
-                        Ok(dialog) => self.dialog = Some(dialog),
-                        Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
-                    }
-                }
-                Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
-                // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
-                // own doc comment) -- fail closed, nothing to render.
-                Some(InteractionOutcome::Unmodelled(target)) => {
-                    eprintln!("interaction: no launcher for {target:?} -- frame consumed");
-                }
-                None => {}
-            }
-        }
-
-        self.begin_step_battle(first_battle_triggered, encounter);
-        self.commit_start_menu(start_menu);
-    }
-
-    /// The saved `optionsTextSpeed`, repaired and read exactly as upstream's
-    /// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-488`) --
-    /// mirroring `start_menu`'s `player_text_speed` write-back for the SAVE
-    /// prompt. Shared with [`super::sight_trainer_approach`]'s intro speech,
-    /// which prints through the same field message box.
-    pub(super) fn field_dialog_text_speed(&mut self) -> TextSpeed {
-        if self.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
-            self.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
-        }
-        TextSpeed::from_raw_option(self.save2.options_text_speed)
     }
 }
