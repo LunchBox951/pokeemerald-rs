@@ -229,6 +229,47 @@ fn free_space_is_per_the_has_species_sanity_bit() {
         }
     }
     assert!(!storage.has_free_space());
+    for box_id in 0..TOTAL_BOXES_COUNT {
+        assert_eq!(storage.first_free_slot(box_id), None);
+    }
+
+    // Imported inconsistent record: a stored species whose `hasSpecies`
+    // sanity bit is clear. `CheckFreePokemonStorageSpace` reads only the bit,
+    // so the free-space check opens while the secure-species occupancy
+    // (`first_free_slot`) still sees the slot as held.
+    let last_box = TOTAL_BOXES_COUNT - 1;
+    let last_slot = IN_BOX_COUNT - 1;
+    let mut species_without_flag = mon(25);
+    species_without_flag.set_has_species(false);
+    assert!(holds_pokemon(&species_without_flag));
+    storage.boxes[last_box * IN_BOX_COUNT + last_slot] = species_without_flag;
+    assert!(
+        storage.has_free_space(),
+        "a clear hasSpecies bit reads as free space even over a stored species"
+    );
+    assert_eq!(storage.first_free_slot(last_box), None);
+}
+
+#[test]
+fn free_space_counts_flag_only_records_as_full() {
+    // The converse: every `hasSpecies` bit set on a record that holds no
+    // species. The sanity bit alone says "full", though every slot is empty
+    // by secure-species occupancy.
+    let mut flag_only = BoxPokemon::default();
+    flag_only.set_has_species(true);
+    assert!(!holds_pokemon(&flag_only));
+    let mut storage = PokemonStorage::new_game();
+    assert!(storage.has_free_space());
+    for box_id in 0..TOTAL_BOXES_COUNT {
+        for slot in 0..IN_BOX_COUNT {
+            storage.boxes[box_id * IN_BOX_COUNT + slot] = flag_only;
+        }
+    }
+    assert!(
+        !storage.has_free_space(),
+        "every hasSpecies bit set: no free space though no slot holds a species"
+    );
+    assert_eq!(storage.first_free_slot(0), Some(0));
 }
 
 const fn at(box_id: usize, slot: usize) -> BoxSlot {
