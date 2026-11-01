@@ -1,7 +1,7 @@
-//! Typed battle interface graphics (upstream `graphics/battle_interface/`).
+//! Typed access to the battle-interface graphics (upstream `graphics/battle_interface/`).
 //!
-//! Pack ids stay private so scene code composes no strings. Every lookup
-//! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
+//! Pack IDs stay private, and each [`AssetPack::battle_interface`] call
+//! re-validates every entry's shape.
 
 use super::{AssetPack, ImageRef, PackError, PaletteRef};
 
@@ -11,47 +11,49 @@ const RAW_PREFIX: &str = "battle-interface/raw";
 
 const TEXTBOX_SIZE: u32 = 128;
 const TEXTBOX_BIT_DEPTH: u8 = 4;
-const TEXTBOX_PALETTE_COLORS: u16 = 32;
-/// A 4bpp bank, the size of both text palettes.
-const BANK_COLORS: u16 = 16;
-const PALETTE_ENTRY_BYTES: usize = 2;
-/// `textbox_map.bin`: a 64x32 tilemap of 2-byte entries.
-const TEXTBOX_TILEMAP_BYTES: usize = 64 * 32 * 2;
+const COLORS_PER_4BPP_BANK: u16 = 1 << TEXTBOX_BIT_DEPTH;
+const TEXTBOX_PALETTE_BANKS: u16 = 2;
+const TEXTBOX_PALETTE_COLORS: u16 = TEXTBOX_PALETTE_BANKS * COLORS_PER_4BPP_BANK;
+const PALETTE_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
+const TILEMAP_BLOCK_SIDE_TILES: usize = 32;
+const TEXTBOX_TILEMAP_BLOCKS: usize = 2;
+const TILEMAP_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
+const TEXTBOX_TILEMAP_BYTES: usize = TEXTBOX_TILEMAP_BLOCKS
+    * TILEMAP_BLOCK_SIDE_TILES
+    * TILEMAP_BLOCK_SIDE_TILES
+    * TILEMAP_ENTRY_BYTES;
 
-/// The battle textbox `LoadBattleTextboxAndBackground` loads, borrowing the
-/// pack for `'a`.
+/// Textbox pixels address one palette bank; tilemap entries select the bank.
+/// Upstream: `src/graphics.c:4-6`, `src/battle_bg.c:1216-1223`.
 #[derive(Debug, Clone, Copy)]
 pub struct BattleTextboxHandle<'a> {
-    /// Tile sheet (`textbox.png`), 128x128.
+    /// 128x128 4bpp tile sheet.
     pub image: ImageRef<'a>,
-    /// 32-colour palette: `textbox_0.pal` then `textbox_1.pal`.
+    /// `textbox_0.pal` followed by `textbox_1.pal` (`graphics_file_rules.mk:60-62`).
     pub palette: PaletteRef<'a>,
-    /// Tilemap (`textbox_map.bin`).
+    /// Little-endian two-byte tilemap entries.
     pub tilemap: &'a [u8],
 }
 
-/// Every battle interface graphic this namespace holds, borrowing the pack for `'a`.
-///
-/// [`AssetPack::battle_interface`] returns it with every entry validated.
+/// Fixed battle-interface entries validated by [`AssetPack::battle_interface`].
 #[derive(Debug, Clone, Copy)]
 pub struct BattleInterfaceHandle<'a> {
-    /// Textbox image, palette, and tilemap.
+    /// Main battle message-window graphics.
     pub textbox: BattleTextboxHandle<'a>,
-    /// Battle-window text palette (`text.pal`), 16 colours.
+    /// Single-bank battle-window text palette.
     pub window_text_palette: PaletteRef<'a>,
-    /// PP text palette (`text_pp.pal`), 16 colours.
+    /// Single-bank PP text palette.
     pub pp_text_palette: PaletteRef<'a>,
 }
 
 impl AssetPack {
-    /// Bundle the battle textbox and the two menu text palettes.
+    /// Battle textbox and menu-text assets, validated on every call.
     ///
     /// # Errors
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
-    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] when
-    /// dimensions, palette size, pixel indices, or tilemap length differ from
-    /// upstream.
+    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] for invalid
+    /// image shape or bit depth, palette size, pixel indices, or tilemap length.
     pub fn battle_interface(&self) -> Result<BattleInterfaceHandle<'_>, PackError> {
         let palette = self.battle_interface_palette("textbox", TEXTBOX_PALETTE_COLORS)?;
         Ok(BattleInterfaceHandle {
@@ -60,8 +62,9 @@ impl AssetPack {
                 palette,
                 tilemap: self.battle_interface_raw("textbox_map", TEXTBOX_TILEMAP_BYTES)?,
             },
-            window_text_palette: self.battle_interface_palette("window_text", BANK_COLORS)?,
-            pp_text_palette: self.battle_interface_palette("pp_text", BANK_COLORS)?,
+            window_text_palette: self
+                .battle_interface_palette("window_text", COLORS_PER_4BPP_BANK)?,
+            pp_text_palette: self.battle_interface_palette("pp_text", COLORS_PER_4BPP_BANK)?,
         })
     }
 
@@ -93,10 +96,10 @@ impl AssetPack {
         if let Some(&pixel) = image
             .pixels
             .iter()
-            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
+            .find(|&&pixel| u16::from(pixel) >= COLORS_PER_4BPP_BANK)
         {
             return Err(fault(format!(
-                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
+                "has pixel index {pixel}: a 4bpp tile selects within one {COLORS_PER_4BPP_BANK}-colour bank"
             )));
         }
         Ok(image)
@@ -371,8 +374,9 @@ impl AssetPack {
             player: frame(SinglesHealthboxSide::Player)?,
             opponent: frame(SinglesHealthboxSide::Opponent)?,
             ball_status_bar_palette: self
-                .battle_interface_palette("ball_status_bar", BANK_COLORS)?,
-            ball_display_palette: self.battle_interface_palette("ball_display", BANK_COLORS)?,
+                .battle_interface_palette("ball_status_bar", COLORS_PER_4BPP_BANK)?,
+            ball_display_palette: self
+                .battle_interface_palette("ball_display", COLORS_PER_4BPP_BANK)?,
         })
     }
 
@@ -425,10 +429,10 @@ impl AssetPack {
         if let Some(&pixel) = image
             .pixels
             .iter()
-            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
+            .find(|&&pixel| u16::from(pixel) >= COLORS_PER_4BPP_BANK)
         {
             return Err(fault(format!(
-                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
+                "has pixel index {pixel}: a 4bpp tile selects within one {COLORS_PER_4BPP_BANK}-colour bank"
             )));
         }
         Ok(image)
