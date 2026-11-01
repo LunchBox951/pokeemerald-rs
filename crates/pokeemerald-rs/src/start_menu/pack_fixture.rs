@@ -54,12 +54,15 @@ fn claim_private_scratch_dir(path: &std::path::Path) -> std::path::PathBuf {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     for attempt in 0..MAX_CLAIM_ATTEMPTS {
         let dir = parent.join(format!("{stem}-{}-{attempt}.d", std::process::id()));
-        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt as _;
+            let mut builder = std::fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
         match builder.create(&dir) {
             Ok(()) => return dir,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
