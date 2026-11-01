@@ -77,7 +77,7 @@ impl OverworldPhase {
             if guard_fails {
                 continue;
             }
-            return script == TRIGGER_SCRIPT;
+            return script.id() == TRIGGER_SCRIPT;
         }
         false
     }

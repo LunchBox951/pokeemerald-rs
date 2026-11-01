@@ -11,6 +11,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod event_scripts;
 mod field_message;
 mod format;
 mod handles;

@@ -669,6 +669,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [assets::MapConnection],
         };
         let events = assets::MapEvents {

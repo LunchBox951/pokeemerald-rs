@@ -125,7 +125,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "SomeScript",
+            script: Some(assets::ScriptRef::new("SomeScript")),
             flag: "0",
         }
     }
