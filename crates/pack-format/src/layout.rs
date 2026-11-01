@@ -23,7 +23,9 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// Version 11 added the `gSongTable` `ms` music-player index to every
 /// `audio/song/*` payload, so an older pack is refused here instead of
 /// failing mid-decode.
-pub const FORMAT_VERSION: u32 = 11;
+/// Version 12 added the `field-message/table` raw payload, so an older pack is
+/// refused here instead of failing at the missing entry.
+pub const FORMAT_VERSION: u32 = 12;
 
 /// The pack's location, relative to the repository root: a top-level,
 /// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
@@ -106,7 +108,7 @@ mod tests {
     #[test]
     fn magic_and_version_are_the_published_values() {
         assert_eq!(&MAGIC, b"PKMRPACK");
-        assert_eq!(FORMAT_VERSION, 11);
+        assert_eq!(FORMAT_VERSION, 12);
     }
 
     #[test]

@@ -12,11 +12,7 @@
 //! Four table slots point at assembly-authored text in `data/text/pc_transfer.inc`;
 //! those four labels are read from there, with their explicit `$` terminator.
 
-mod charmap;
-mod lex;
-
 use std::collections::HashMap;
-use std::fmt;
 use std::path::Path;
 
 use assets::pack::{
@@ -25,9 +21,11 @@ use assets::pack::{
 };
 use pack_format::PackWriter;
 
+use super::text_source::{
+    ident, is_punct, parse_definitions, skip_brackets, string_args, tokenize, Charmap, Fault, Tok,
+    Token,
+};
 use super::{read_text, ExtractError};
-use charmap::Charmap;
-use lex::{tokenize, Tok, Token};
 
 const PACK_ID: &str = "battle-message/table";
 const CHARMAP_PATH: &str = "charmap.txt";
@@ -44,22 +42,6 @@ const EXTERNAL_LABELS: [&str; 4] = [
     "gText_PkmnTransferredSomeonesPCBoxFull",
     "gText_PkmnTransferredLanettesPCBoxFull",
 ];
-
-/// A parse failure inside one source file.
-#[derive(Debug)]
-pub(super) struct Fault {
-    pub(super) line: usize,
-    pub(super) detail: String,
-}
-
-impl Fault {
-    pub(super) fn new(line: usize, detail: impl fmt::Display) -> Self {
-        Self {
-            line,
-            detail: detail.to_string(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 enum File {
@@ -225,76 +207,6 @@ fn check_bounds(defines: &HashMap<String, (String, usize)>) -> Result<(), Fault>
         }
     }
     Ok(())
-}
-
-/// Skip zero or more `[...]` groups from `j`; returns the index after them.
-fn skip_brackets(tokens: &[Token], mut j: usize) -> usize {
-    while tokens.get(j).map(|t| &t.tok) == Some(&Tok::Punct('[')) {
-        let mut depth = 0usize;
-        while let Some(token) = tokens.get(j) {
-            match token.tok {
-                Tok::Punct('[') => depth += 1,
-                Tok::Punct(']') => depth -= 1,
-                _ => {}
-            }
-            j += 1;
-            if depth == 0 {
-                break;
-            }
-        }
-    }
-    j
-}
-
-fn is_punct(tokens: &[Token], index: usize, p: char) -> bool {
-    tokens.get(index).map(|t| &t.tok) == Some(&Tok::Punct(p))
-}
-
-fn ident(tokens: &[Token], index: usize) -> Option<&str> {
-    match tokens.get(index).map(|t| &t.tok) {
-        Some(Tok::Ident(name)) => Some(name),
-        _ => None,
-    }
-}
-
-/// Adjacent literals from `start` up to the closing `)`: raw body and next index.
-fn string_args(tokens: &[Token], mut start: usize) -> Result<(String, usize), Fault> {
-    let line = tokens.get(start).map_or(0, |t| t.line);
-    let mut body = String::new();
-    while let Some(token) = tokens.get(start) {
-        match &token.tok {
-            Tok::Str(piece) => body.push_str(piece),
-            Tok::Punct(')') => return Ok((body, start + 1)),
-            _ => return Err(Fault::new(token.line, "unexpected token inside `_()`")),
-        }
-        start += 1;
-    }
-    Err(Fault::new(line, "unterminated `_()`"))
-}
-
-/// Every `NAME[...] = _("...")` definition: raw body and line. Forward
-/// declarations carry no initializer and are skipped; a second definition of a
-/// name is refused.
-fn parse_definitions(tokens: &[Token]) -> Result<HashMap<String, (String, usize)>, Fault> {
-    let mut out = HashMap::new();
-    for (i, token) in tokens.iter().enumerate() {
-        let Tok::Ident(name) = &token.tok else {
-            continue;
-        };
-        let j = skip_brackets(tokens, i + 1);
-        if j == i + 1
-            || !is_punct(tokens, j, '=')
-            || ident(tokens, j + 1) != Some("_")
-            || !is_punct(tokens, j + 2, '(')
-        {
-            continue;
-        }
-        let (body, _) = string_args(tokens, j + 3)?;
-        if out.insert(name.clone(), (body, token.line)).is_some() {
-            return Err(Fault::new(token.line, format!("`{name}` is defined twice")));
-        }
-    }
-    Ok(out)
 }
 
 struct Row {

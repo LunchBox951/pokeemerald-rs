@@ -114,6 +114,21 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_exactly_the_field_message_inventory() {
+        let symbols: Vec<_> = EMERALD_US_REV0
+            .roots
+            .field_messages
+            .iter()
+            .map(|root| root.symbol)
+            .collect();
+        assert_eq!(symbols, ["gText_PkmnFainted_FldPsn"]);
+        assert_ne!(
+            EMERALD_US_REV0.roots.field_messages[0].addr,
+            crate::reader::GbaPtr::AT_BASE
+        );
+    }
+
+    #[test]
     fn a_hash_that_matches_nothing_is_unsupported() {
         // The fixture is a synthetic image, so it can never match a shipped
         // profile however convincing its header is.
