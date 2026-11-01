@@ -30,8 +30,9 @@
 //!   sprite, and Lotad's front picture with its normal palette) and the wall
 //!   clock (face and hand sheets, both gender palettes, the prompt palette, and
 //!   both tilemaps);
-//! - the static battler art of Treecko, Torchic, and Mudkip: front and back
-//!   images with normal and shiny palettes;
+//! - the static battler art of the starters and the checkpoint's other eleven
+//!   Pokémon (`scope::BATTLERS`): front and back images with normal and shiny
+//!   palettes;
 //! - the Brendan and May trainer front pictures with their palettes;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and

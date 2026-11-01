@@ -76,7 +76,27 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-anim/",
     "bag/",
     "starter-chooser/",
+    "pokemon/",
     "opening-scene/",
+];
+
+/// The species whose static battler art both backends must carry: the
+/// starters, then the checkpoint's other eleven Pokémon.
+const BATTLER_SPECIES: [&str; 14] = [
+    "treecko",
+    "torchic",
+    "mudkip",
+    "poochyena",
+    "mightyena",
+    "wurmple",
+    "silcoon",
+    "beautifly",
+    "cascoon",
+    "dustox",
+    "zigzagoon",
+    "linoone",
+    "wingull",
+    "pelipper",
 ];
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
@@ -144,22 +164,21 @@ fn staged_cry_ids(table_payload: &[u8]) -> Result<BTreeSet<String>, String> {
     Ok(staged)
 }
 
-/// The starters' static battler entries: 12 ids the ROM backend must write
-/// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
-const STARTER_BATTLER_IDS: [&str; 12] = [
-    "pokemon/treecko/front",
-    "pokemon/treecko/back",
-    "pokemon/treecko/palette/normal",
-    "pokemon/treecko/palette/shiny",
-    "pokemon/torchic/front",
-    "pokemon/torchic/back",
-    "pokemon/torchic/palette/normal",
-    "pokemon/torchic/palette/shiny",
-    "pokemon/mudkip/front",
-    "pokemon/mudkip/back",
-    "pokemon/mudkip/palette/normal",
-    "pokemon/mudkip/palette/shiny",
-];
+/// Every battler entry, named by id so entries both backends drop together
+/// still fail: front, back, then normal and shiny palette per species.
+fn battler_ids() -> Vec<String> {
+    BATTLER_SPECIES
+        .iter()
+        .flat_map(|name| {
+            [
+                format!("pokemon/{name}/front"),
+                format!("pokemon/{name}/back"),
+                format!("pokemon/{name}/palette/normal"),
+                format!("pokemon/{name}/palette/shiny"),
+            ]
+        })
+        .collect()
+}
 
 /// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
 /// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
@@ -314,14 +333,6 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `pokemon/` is not a complete prefix while only the starters exist, so
-    // their entries are pinned by id: a dropped root fails here.
-    for id in STARTER_BATTLER_IDS {
-        if !imported.contains_key(id) {
-            differences.push(format!("{id}: the ROM backend wrote no such entry"));
-        }
-    }
-
     // `battle-interface/` is not a complete prefix, so the textbox, element,
     // battle-bar, frame, shadow, and ball-palette entries are pinned by id.
     for id in BATTLE_INTERFACE_IDS {
@@ -330,17 +341,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // Named by id so a payload both backends drop together still fails.
-    for id in checkpoint_payload_ids() {
-        for (what, ids) in [
-            ("the ROM backend", &imported),
-            ("the checkout pack", &checkout),
-        ] {
-            if !ids.contains_key(&id) {
-                differences.push(format!("{id}: {what} wrote no such entry"));
-            }
-        }
-    }
+    // Named by id so an entry both backends drop together still fails.
+    differences.extend(missing_from_either(
+        battler_ids().into_iter().chain(checkpoint_payload_ids()),
+        (&imported, &checkout),
+    ));
 
     differences.extend(field_message_differences(
         (&rom_bytes, &imported),
@@ -617,6 +622,28 @@ fn field_message_differences(
             differences.push(format!(
                 "{FIELD_MESSAGE_PACK_ID}: {what} wrote a payload other than gText_PkmnFainted_FldPsn"
             ));
+        }
+    }
+    differences
+}
+
+/// One difference per `ids` entry that `imported` or `checkout` lacks.
+fn missing_from_either(
+    ids: impl IntoIterator<Item = String>,
+    (imported, checkout): (
+        &BTreeMap<String, DirectoryEntry>,
+        &BTreeMap<String, DirectoryEntry>,
+    ),
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for id in ids {
+        for (what, entries) in [
+            ("the ROM backend", imported),
+            ("the checkout pack", checkout),
+        ] {
+            if !entries.contains_key(&id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
         }
     }
     differences
