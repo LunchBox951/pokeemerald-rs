@@ -72,9 +72,12 @@ impl BagScreen {
     }
 
     /// Whether the pair exists: not during a pocket switch or a context
-    /// menu, which destroy it (`item_menu.c:1262,1328`), nor once closed.
+    /// menu, which destroy it (`item_menu.c:1262,1328`). A screen closed by
+    /// leaving the list keeps it, as it stays the fade source until the host
+    /// drops the screen (`Task_FadeAndCloseBagMenu`, `item_menu.c:1074-1099`);
+    /// one closed by a choice has lost it already (`item_menu.c:1262`).
     pub(super) fn arrows_exist(&self) -> bool {
-        self.switch.is_none() && self.done.is_none() && self.menu.context_grid().is_none()
+        self.switch.is_none() && self.menu.context_grid().is_none() && !self.chose_to_close()
     }
 
     /// Which of the up and down arrows show: up once the list has scrolled,

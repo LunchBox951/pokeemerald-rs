@@ -135,6 +135,7 @@ pub mod new_game;
 mod options;
 pub mod overworld;
 mod pack_source;
+mod palette_overlay;
 mod party;
 pub mod scene;
 mod start_menu;
