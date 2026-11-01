@@ -1,6 +1,6 @@
 use super::fixture::*;
 use super::*;
-use crate::psg::FrameSequencer128Hz;
+use crate::psg::FrameSequencer;
 
 #[test]
 fn a_hardware_muted_square_keeps_its_duty_position_running() {
@@ -201,7 +201,7 @@ fn sweep_steps(sweep_byte: u8, total: usize, schedule: &[usize]) -> Vec<(usize, 
 
 #[test]
 fn square1_sweep_period_1_steps_once_per_scheduled_128hz_tick() {
-    let mut clock = FrameSequencer128Hz::default();
+    let mut clock = FrameSequencer::default();
     let schedule = clock.advance(600);
     assert_eq!(schedule, vec![104, 209, 313, 418, 522]);
 
@@ -213,7 +213,7 @@ fn square1_sweep_period_1_steps_once_per_scheduled_128hz_tick() {
 
 #[test]
 fn square1_sweep_period_2_steps_once_per_second_scheduled_tick() {
-    let mut clock = FrameSequencer128Hz::default();
+    let mut clock = FrameSequencer::default();
     let schedule = clock.advance(1200);
     assert_eq!(
         schedule,
@@ -232,14 +232,14 @@ fn cgb_voice_render_is_chunk_boundary_invariant() {
 
     let mut whole_voice = make_voice();
     whole_voice.begin_frame(false);
-    let mut whole_clock = FrameSequencer128Hz::default();
+    let mut whole_clock = FrameSequencer::default();
     let whole_ticks = whole_clock.advance(600);
     let mut whole_acc = vec![(0i32, 0i32); 600];
     whole_voice.render(&mut whole_acc, &whole_ticks);
 
     let mut split_voice = make_voice();
     split_voice.begin_frame(false);
-    let mut split_clock = FrameSequencer128Hz::default();
+    let mut split_clock = FrameSequencer::default();
     let first_ticks = split_clock.advance(300);
     let mut first_half = vec![(0i32, 0i32); 300];
     split_voice.render(&mut first_half, &first_ticks);
@@ -271,7 +271,7 @@ fn square1_sweep_overflow_mutes_the_voice_mid_buffer_until_the_next_safe_trigger
     );
     voice.begin_frame(false);
 
-    let mut clock = FrameSequencer128Hz::default();
+    let mut clock = FrameSequencer::default();
     let ticks = clock.advance(300);
     let first_tick = ticks[0];
     let mut acc = vec![(0i32, 0i32); 300];

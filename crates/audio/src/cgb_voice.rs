@@ -3,10 +3,11 @@
 use crate::cgb_envelope::{CgbAdsr, CgbEnvelope, HardwareEnvelopeVolume};
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::gate::Gate;
-use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
+use crate::psg::{FrameSequencer, LengthCounter, NoiseChannel, SquareChannel, WaveChannel};
 use crate::voice::StereoAcc;
 use std::sync::Arc;
 
+mod length;
 mod oscillator;
 mod routing;
 
@@ -159,6 +160,19 @@ pub struct CgbVoice {
     /// (`mgba/src/gb/audio.c:180-186,667-672`).
     hardware_muted: bool,
     hardware_envelope_volume: HardwareEnvelopeVolume,
+    /// The instrument's raw `ToneData::length`; nonzero sets `NRx4` bit 6.
+    length_register: u8,
+    /// The hardware sound-length counter and enable bit this channel holds.
+    length: LengthCounter,
+    /// The counter stopped the channel: it holds its last output, its LFSR and
+    /// hardware envelope stand still, its duty position is caught up by the
+    /// next register write, and the note stays allocated until an `NRx4`
+    /// trigger plays it again (`mgba/src/gb/audio.c:493-510,678-707`).
+    length_stopped: bool,
+    /// The frame-sequencer step completed before this voice's next frame.
+    sequencer_step: u8,
+    /// The last sample contribution rendered, which a stopped channel holds.
+    last_contribution: i32,
 }
 
 impl CgbVoice {
@@ -428,6 +442,11 @@ impl CgbVoice {
             pending_pitch: None,
             hardware_muted: false,
             hardware_envelope_volume,
+            length_register: 0,
+            length: LengthCounter::default(),
+            length_stopped: false,
+            sequencer_step: FrameSequencer::INITIAL_STEP,
+            last_contribution: 0,
         }
     }
 
@@ -491,11 +510,16 @@ impl CgbVoice {
     /// one replaces on the shared slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
         self.oscillator.carry_hardware_state_from(&other.oscillator);
+        self.carry_length_from(other);
         // Hold the predecessor's clocks for the note-on writes (`commit_initial_writes`).
         if let (Oscillator::Noise(noise), Oscillator::Noise(previous)) =
             (&mut self.oscillator, &other.oscillator)
         {
-            noise.inherit_hardware_from(previous, other.hardware_envelope_volume.volume());
+            noise.inherit_hardware_from(
+                previous,
+                other.hardware_envelope_volume.volume(),
+                other.length_stopped,
+            );
         }
     }
 
@@ -503,6 +527,7 @@ impl CgbVoice {
     pub(crate) fn apply_hardware_off_write(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.apply_hardware_off_write();
+        self.off_write_length();
         if self.oscillator.noise_mut().is_some() {
             self.hardware_envelope_volume.write_off();
         }
@@ -574,9 +599,15 @@ impl CgbVoice {
     fn apply_retrigger(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.retrigger();
+        self.trigger_length();
     }
 
     fn settle_owed_noise_clocks(&mut self) {
+        // A stopped channel is not run before a register write
+        // (`mgba/src/gb/audio.c:602-644`).
+        if self.length_stopped {
+            return;
+        }
         let volume = self.hardware_envelope_volume.volume();
         if let Some(noise) = self.oscillator.noise_mut() {
             noise.settle_owed_clocks(volume);
@@ -623,16 +654,25 @@ impl CgbVoice {
                 InitialTrigger::Cancelled
             };
         }
+        if initial_trigger {
+            self.load_length();
+        }
         let live_goal = self.routing.envelope_goal();
         let (retriggered_by_transition, envelope_boundary) = self
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
         // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
+        let mut register_write_on_stopped_channel = false;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
                 self.oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
+                register_write_on_stopped_channel = self.length_stopped;
             }
+        }
+        // The note's first pitch block stores `NRx4` with the enable bit.
+        if initial_trigger && self.envelope.is_active() {
+            self.write_length_enable();
         }
         // Pan is recomputed at every boundary, transition or not
         // (`m4a.c:1077-1085`).
@@ -671,12 +711,18 @@ impl CgbVoice {
                 noise.set_clocking(runs);
             }
         }
-        let stepped = self.hardware_envelope_volume.end_frame(
-            1 + u8::from(extra_envelope_iteration),
-            hardware_write,
-            software_volume,
-            self.envelope.hardware_envelope_pacing(),
-        );
+        // A stopped channel's envelope timer is not clocked
+        // (`mgba/src/gb/audio.c:711-732`), though a store still latches.
+        let stepped = if self.length_stopped && !(hardware_write || initial_trigger) {
+            false
+        } else {
+            self.hardware_envelope_volume.end_frame(
+                1 + u8::from(extra_envelope_iteration),
+                hardware_write,
+                software_volume,
+                self.envelope.hardware_envelope_pacing(),
+            )
+        };
         if stepped {
             let volume = self.hardware_envelope_volume.volume();
             if let Some(noise) = self.oscillator.noise_mut() {
@@ -687,6 +733,16 @@ impl CgbVoice {
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
         self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
+        // A write's catch-up re-latches a stopped square at its new duty position
+        // (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+        if register_write_on_stopped_channel && self.length_stopped {
+            if let Some(held) = self
+                .oscillator
+                .relatched_square_contribution(self.frame_gain)
+            {
+                self.last_contribution = held;
+            }
+        }
     }
 
     /// A square held at hardware level 0 skips its duty catch-up
@@ -702,37 +758,70 @@ impl CgbVoice {
                 .is_some_and(|pacing| pacing.increasing)
     }
 
-    /// Accumulate this voice into one frame after [`Self::begin_frame`].
+    /// Accumulate this voice into one frame after [`Self::begin_frame`], with
+    /// the sweep clocks alone: no length clock reaches it.
     /// `sweep_ticks` holds ascending sample offsets of the 128 Hz sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
-        if self.is_dead_at_zero() {
-            self.advance_idle_duty(acc.len(), sweep_ticks);
-            return;
-        }
-        if self.hardware_muted {
-            self.oscillator.advance_silently(acc.len());
-            return;
+        self.render_clocked(acc, sweep_ticks, &[]);
+    }
+
+    /// Accumulate this voice into one frame after [`Self::begin_frame`];
+    /// `length_ticks` holds ascending sample offsets of the 256 Hz length clock.
+    pub fn render_clocked(
+        &mut self,
+        acc: &mut [StereoAcc],
+        sweep_ticks: &[usize],
+        length_ticks: &[usize],
+    ) {
+        if !self.length_stopped {
+            if self.is_dead_at_zero() {
+                self.advance_idle_duty(acc.len(), sweep_ticks);
+                self.last_contribution = 0;
+                self.clock_length_silently(length_ticks.iter().copied());
+                return;
+            }
+            if self.hardware_muted {
+                self.oscillator.advance_silently(acc.len());
+                self.last_contribution = 0;
+                self.clock_length_silently(length_ticks.iter().copied());
+                return;
+            }
         }
         let frame_len = acc.len();
         let mut ticks = sweep_ticks.iter().copied().peekable();
+        let mut lengths = length_ticks.iter().copied().peekable();
         for (sample_offset, output) in acc.iter_mut().enumerate() {
             if !self.envelope.is_active() {
                 break;
             }
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
-                if !self.oscillator.step_sweep_tick() {
+                if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
                     self.hardware_muted = true;
-                    self.oscillator.advance_silently(frame_len - sample_offset);
-                    break;
+                    if !self.length_stopped {
+                        self.oscillator.advance_silently(frame_len - sample_offset);
+                        self.last_contribution = 0;
+                        self.clock_length_silently(lengths);
+                        break;
+                    }
                 }
             }
-            let contribution = self.oscillator.frame_contribution(
-                self.frame_gain,
-                self.hardware_envelope_volume.volume(),
-                self.envelope.volume(),
-            );
-            self.routing.accumulate(contribution, output);
+            while lengths.peek() == Some(&sample_offset) {
+                lengths.next();
+                self.clock_length();
+            }
+            if self.length_stopped {
+                // The duty index does not step, but the time passes: the
+                // next register write catches it up (`mgba/src/gb/audio.c:162-171,493-510`).
+                self.oscillator.defer_idle_samples(1);
+            } else {
+                self.last_contribution = self.oscillator.frame_contribution(
+                    self.frame_gain,
+                    self.hardware_envelope_volume.volume(),
+                    self.envelope.volume(),
+                );
+            }
+            self.routing.accumulate(self.last_contribution, output);
         }
     }
 }
@@ -826,3 +915,7 @@ mod routing_tests;
 #[cfg(test)]
 #[path = "cgb_voice_lifecycle.rs"]
 mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "cgb_voice_length.rs"]
+mod length_tests;

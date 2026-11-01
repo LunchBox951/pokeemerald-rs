@@ -51,6 +51,30 @@ impl Oscillator {
         }
     }
 
+    /// A square's contribution re-latched at its current duty position
+    /// without stepping it; `None` for Wave and Noise.
+    pub(super) fn relatched_square_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(square) => Some(
+                (frame_gain * i32::from(square.held_level()) * BIPOLAR_SAMPLE_SCALE)
+                    >> SAMPLE_GAIN_BITS,
+            ),
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
+    /// The first pass's `NRx1` store, as the byte the length counter loads
+    /// from. A square sums its duty into the byte and re-selects the duty from
+    /// the result ([`SquareChannel::write_nrx1`]); noise stores the raw length
+    /// byte; wave has no such store and returns `None`.
+    pub(super) fn write_nrx1(&mut self, length_register: u8) -> Option<u8> {
+        match self {
+            Self::Square(square) => Some(square.write_nrx1(length_register)),
+            Self::Noise(_) => Some(length_register),
+            Self::Wave { .. } => None,
+        }
+    }
+
     /// A stopped wave channel's held output at full envelope gain, with no
     /// clock (`mgba/src/gb/audio.c:246-253,768-774`); `None` for the other
     /// channels, whose idle outputs are accounted separately.
