@@ -492,8 +492,12 @@ impl Sequencer {
     /// abandoned before its terminal step stops attenuating the song. The
     /// change raises the same dirty flag a fade step does, so the next
     /// rendered frame's post-tick pass applies it to sounding voices. A
-    /// sequencer the terminal step already paused stays paused.
+    /// sequencer the terminal step already paused stays paused. A step the
+    /// fade handed to a frame whose tick is still suspended is dropped with
+    /// the fade, so it cannot attenuate or pause the song once the tick
+    /// completes.
     pub fn restore_full_volume(&mut self) {
+        self.pending_fade = None;
         self.stage_fade_volume(TRACK_VOLUME_SCALE);
     }
 

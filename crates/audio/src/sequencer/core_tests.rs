@@ -815,14 +815,14 @@ fn a_suspended_tick_freezes_the_mixer_until_the_tick_completes() {
     assert_eq!(stalled_out, plain_out);
 }
 
-fn burst_then_second_note(first_note: bool) -> Vec<Event> {
+fn burst_then_second_note(first_note: bool, yields: usize) -> Vec<Event> {
     let mut track = vec![Event::Voice(0), Event::Volume(127)];
     if first_note {
         track.push(tied_note(60));
     }
     track.extend(std::iter::repeat_n(
         Event::Pan(0),
-        TRACK_COMMANDS_PER_TICK as usize + 10,
+        yields * TRACK_COMMANDS_PER_TICK as usize + 10,
     ));
     track.extend([tied_note(64), Event::Wait(48), Event::Fine]);
     track
@@ -833,7 +833,7 @@ fn burst_then_second_note(first_note: bool) -> Vec<Event> {
 /// share one `volX`.
 #[test]
 fn a_fade_step_does_not_split_a_suspended_tick() {
-    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(true)], 150));
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(true, 1)], 150));
     let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
     seq.render_frame_with_fade(&mut out, Some(64));
     assert!(seq.suspended_tick.is_some(), "tick yielded");
@@ -850,7 +850,7 @@ fn a_fade_step_does_not_split_a_suspended_tick() {
 
 #[test]
 fn a_terminal_fade_during_a_suspended_tick_still_completes_it() {
-    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false)], 150));
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false, 1)], 150));
     let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
     seq.render_frame_with_fade(&mut out, Some(64));
     assert!(seq.suspended_tick.is_some(), "tick yielded");
@@ -863,4 +863,38 @@ fn a_terminal_fade_during_a_suspended_tick_still_completes_it() {
         seq.is_paused(),
         "the terminal step pauses once the tick completes"
     );
+}
+
+/// A fade cancelled while its latest step waits on a suspended tick takes
+/// that step with it: the completed tick plays at full volume and unpaused.
+#[test]
+fn cancelling_a_fade_drops_the_step_waiting_on_a_suspended_tick() {
+    // Two yields: the terminal step arrives while the tick is still
+    // suspended, then the fade is cancelled before the tick completes.
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false, 2)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(64));
+    seq.render_frame_with_fade(&mut out, Some(0));
+    assert!(seq.suspended_tick.is_some(), "tick still suspended");
+    seq.restore_full_volume();
+    seq.render_frame_with_fade(&mut out, None);
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    assert!(
+        !seq.is_paused(),
+        "the cancelled terminal step must not pause"
+    );
+    seq.render_frame_with_fade(&mut out, None);
+    let volumes: Vec<_> = seq.mixer.voices().iter().map(|v| v.base_volume()).collect();
+    let mut unfaded = Sequencer::new(test_song(vec![burst_then_second_note(false, 2)], 150));
+    for _ in 0..4 {
+        unfaded.render_frame(&mut out);
+    }
+    let full: Vec<_> = unfaded
+        .mixer
+        .voices()
+        .iter()
+        .map(|v| v.base_volume())
+        .collect();
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes, full, "the note plays at the restored full volume");
 }
