@@ -103,6 +103,17 @@ const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x
 /// emptiness cannot be read, gets its mode back.
 #[cfg(target_vendor = "apple")]
 pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    restore_private_mode_before_pin(path, || {})
+}
+
+/// [`restore_private_mode`] with `before_pin` run between the `lstat` and the
+/// `O_SEARCH` open, so a test can swap the entry at the boundary the dev/ino
+/// comparison guards.
+#[cfg(target_vendor = "apple")]
+pub(super) fn restore_private_mode_before_pin(
+    path: &Path,
+    before_pin: impl FnOnce(),
+) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
     use std::os::unix::fs::PermissionsExt as _;
     let found = std::fs::symlink_metadata(path)?;
@@ -121,6 +132,7 @@ pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
              search, and it cannot be pinned for a safe restore (#2475)"
         )));
     }
+    before_pin();
     let pinned = rustix::fs::open(
         path,
         APPLE_SEARCH

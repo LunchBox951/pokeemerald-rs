@@ -225,6 +225,43 @@ fn restoring_the_private_mode_fixes_or_refuses_a_search_only_directory() {
     }
 }
 
+/// The entry is replaced by an empty foreign directory after the `lstat` and
+/// before the pin, the window a pathname chmod would reach: the restore must
+/// refuse it and change neither directory's mode.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn restoring_the_private_mode_refuses_an_empty_directory_swapped_in_before_the_pin() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = private_base("chmod-pin-swap");
+    let entry = base.join("entry");
+    let aside = base.join("aside");
+    std::fs::create_dir(&entry).unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let result = hold::restore_private_mode_before_pin(&entry, || {
+        std::fs::rename(&entry, &aside).unwrap();
+        std::fs::create_dir(&entry).unwrap();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o300)).unwrap();
+    })
+    .map_err(|error| error.to_string());
+    let mode = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    let modes = (mode(&entry), mode(&aside));
+    // Both are empty, so `rmdir` needs no read access to either.
+    let _ = std::fs::remove_dir(&entry);
+    let _ = std::fs::remove_dir(&aside);
+    let _ = std::fs::remove_dir(&base);
+    assert_eq!(
+        result.unwrap_err(),
+        "the scratch entry is not a directory this session created"
+    );
+    assert_eq!(modes, (0o300, 0o300), "neither directory's mode may change");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_replaced_scratch_directory_receives_no_pack_write() {
