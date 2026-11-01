@@ -29,11 +29,13 @@ mod battle_messages;
 mod battlers;
 mod emit;
 mod error;
+mod field_messages;
 mod fonts;
 mod images;
 mod inventory;
 mod layouts;
 mod locate;
+mod lz77_blobs;
 mod map_file;
 mod opening_scene;
 mod pack_source;
@@ -165,6 +167,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        field_messages: field_messages::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
@@ -278,10 +281,31 @@ fn locate_interface_palettes(
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
-/// Upstream names these `sCamelCasePal` after the file.
+/// The one interface palette extraction emits is `sMainMenuBgPal`, declared
+/// `static` (`main_menu.c:406`), so a linker map cannot list it. An id with no
+/// cited declaration keeps the any-symbol check instead of a guessed claim.
 fn interface_palette_symbol(id: &str) -> SymbolExpectation {
-    let stem = id.trim_start_matches("interface/palette/");
-    SymbolExpectation::Contains(vec![format!("{}Pal", locate::camel_case(stem))])
+    match id {
+        crate::extract::scope::MAIN_MENU_BG_PALETTE_ID => {
+            SymbolExpectation::Local("sMainMenuBgPal".to_owned())
+        }
+        _ => SymbolExpectation::Unnamed,
+    }
+}
+
+/// Mark every line of `lines` that `local` names as a translation-unit-local
+/// `static`, which a linker map does not list.
+///
+/// A locator that reports through shared helpers
+/// ([`images::locate_images`], [`palettes::locate_unique`]) leaves each root
+/// [`SymbolExpectation::Unnamed`]; its domain calls this once on the lines it
+/// added, from a table of upstream declarations.
+fn mark_local_roots(lines: &mut [ReportLine], local: &dyn Fn(&str) -> Option<&'static str>) {
+    for line in lines {
+        if let Some(name) = local(&line.id) {
+            line.symbol = SymbolExpectation::Local(name.to_owned());
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -412,7 +436,11 @@ fn publish_with(
         .create_new(true)
         .open(&temp)
         .map_err(failed)?;
-    match write(&mut file, &temp)
+    // The umask can have taken the owner's read bit, and the rename below
+    // would carry that mode onto the published module.
+    let restored = restore_owner_access(&file);
+    match restored
+        .and_then(|()| write(&mut file, &temp))
         .and_then(|()| file.sync_all())
         .and_then(|()| std::fs::rename(&temp, path))
     {
@@ -423,6 +451,37 @@ fn publish_with(
             Err(failed(remove_after(&temp, err)))
         }
     }
+}
+
+/// Give `file`'s owner read and write access if the umask took either, and
+/// leave every other mode bit as it is.
+///
+/// `OpenOptions` asks for `0o666`, and a umask that strips the owner bits
+/// (`0444`) leaves a file its owner can no longer read; the publishing rename
+/// would install that mode over a readable module. The mode changes only when
+/// an owner bit is missing, through the descriptor that created the file.
+#[cfg(unix)]
+fn restore_owner_access(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const OWNER: u32 = 0o600;
+    let mut permissions = file.metadata()?.permissions();
+    let mode = permissions.mode();
+    if mode & OWNER != OWNER {
+        permissions.set_mode(mode | OWNER);
+        file.set_permissions(permissions)?;
+    }
+    Ok(())
+}
+
+/// Off Unix a file has no owner mode bits to restore.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for every platform; only the unix arm can fail to change a mode"
+)]
+fn restore_owner_access(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Folds a cleanup failure into `original`, keeping its `ErrorKind`, because
@@ -462,6 +521,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
 mod battle_anim_tests;
 #[cfg(test)]
 mod battle_message_tests;
+#[cfg(test)]
+mod field_message_tests;
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]

@@ -4,6 +4,61 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.84.0] - 2026-10-30
+
+- General improvements in preparation for the message shown when a Pokémon faints from poison in the field. The asset pack format changed, so the game asks you to import your ROM again once.
+
+## [0.0.83.0] - 2026-10-30
+
+- A Pokémon that was burned when you saved now fights as burned: it takes burn damage at the end of each turn and its physical attacks do half damage unless it has Guts, as in the original game. Burn by a move in battle is still being prepared.
+
+## [0.0.82.0] - 2026-10-29
+
+- The title screen now fades in from white over the loaded title on boot and when you press B on the main menu, with the music starting partway through the fade as in the original game.
+
+## [0.0.81.0] - 2026-10-28
+
+- Pressing B on the main menu now returns to the title screen with a white fade, as in the original game.
+
+## [0.0.80.0] - 2026-10-28
+
+- Wild and trainer Pokémon with Effect Spore can now put an attacker to sleep, poison it or paralyze it when it hits them with a contact move.
+
+## [0.0.79.0] - 2026-10-28
+
+- A poisoned Pokémon now loses HP as you walk, faints at 0 HP, and if your whole party faints on the field you white out as in the original game. Saves now remember poison, paralysis and sleep.
+
+## [0.0.78.0] - 2026-10-27
+
+- The Bag now shows a TM or HM's move type, power, accuracy and PP while its menu is open.
+- The Bag now shows scroll arrows for long lists and lets you reorder items with SELECT.
+
+## [0.0.77.0] - 2026-10-27
+
+- General improvements in preparation for battle move animations.
+
+## [0.0.76.0] - 2026-10-26
+
+- General improvements in preparation for text that switches fonts mid-line.
+
+## [0.0.75.0] - 2026-10-26
+
+- General improvements in preparation for trainers using items in battle.
+
+## [0.0.74.0] - 2026-10-26
+
+- Mom now turns to face you when you start her dialogue.
+- Corrected the loudness of the Game Boy sound channels against sampled instruments.
+- General improvements to how your lead Pokémon is tracked between the field and battle.
+
+## [0.0.73.0] - 2026-10-26
+
+- General improvements in preparation for Pokémon cries extracted from your ROM.
+
+## [0.0.72.0] - 2026-10-26
+
+- General improvements in preparation for button icons in dialogue.
+
 ## [0.0.71.0] - 2026-10-24
 
 - Trainers who spot you on Route 103 now walk up and challenge you before the battle starts.
@@ -343,7 +398,20 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dev
+[0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...dev
+[0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5f95606fc87e5a6ed148063bbb1ff44d2f8c234a...86a3bf584936f2e61d6b7f04590526afb7fced4a
+[0.0.82.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/91908af79c336519262ccf09e582f2e474451261...5f95606fc87e5a6ed148063bbb1ff44d2f8c234a
+[0.0.81.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/617c52d7a6314c124c872023c981306e38f5a390...91908af79c336519262ccf09e582f2e474451261
+[0.0.80.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/efade96474fdd159720868bc3d02d1da416f5819...617c52d7a6314c124c872023c981306e38f5a390
+[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...efade96474fdd159720868bc3d02d1da416f5819
+[0.0.78.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/7bb89a891a17166542bca78a24db79325000dae9...d828e8ae72b532a2de0148cbf62942cd0805b7ec
+[0.0.77.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6...7bb89a891a17166542bca78a24db79325000dae9
+[0.0.76.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/42b847579ee1ed8368ccf8fb64f932a7c9bd82f3...1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6
+[0.0.75.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/36af396e97b06960838320cc158b442431b44783...42b847579ee1ed8368ccf8fb64f932a7c9bd82f3
+[0.0.74.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/98ba10237970a6e9de877ced16b1b223190090f0...36af396e97b06960838320cc158b442431b44783
+[0.0.73.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8cee32b52a7ce45be4aa91b373848039a0cccd6d...98ba10237970a6e9de877ced16b1b223190090f0
+[0.0.72.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e...8cee32b52a7ce45be4aa91b373848039a0cccd6d
+[0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e
 [0.0.70.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ddd60e3efb8065b0d2a4606dbf63545b51174497...dev
 [0.0.69.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/eb737282b387d993825d6b0582e39de77b682582...ddd60e3efb8065b0d2a4606dbf63545b51174497
 [0.0.68.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/974ece58d7d8a70dbaa7afe7f1b00923037faa59...eb737282b387d993825d6b0582e39de77b682582

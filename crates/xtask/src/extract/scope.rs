@@ -8,8 +8,10 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_interface::healthbox_battle_bar_pack_id;
 use super::battle_interface::healthbox_element_pack_ids;
 use super::battle_interface::healthbox_frame_pack_ids;
+use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
@@ -730,16 +732,28 @@ pub(crate) fn battle_interface_ids() -> Vec<String> {
 }
 
 /// Every `battle-interface/` pack id the health-box extractor emits: the
-/// thirteen health-box elements and the battle bar. No ROM root imports them
-/// yet (#2178), so profile generation leaves them unclaimed.
+/// thirteen health-box elements and the battle bar. ROM import claims all
+/// fourteen; the frames are [`healthbox_frame_ids`].
 pub(crate) fn healthbox_element_ids() -> Vec<String> {
     healthbox_element_pack_ids()
 }
 
+/// The thirteen constituents of `gHealthboxElementsGfxTable`
+/// (`src/graphics.c:358-370`), in table order.
+pub(crate) fn healthbox_table_ids() -> Vec<String> {
+    healthbox_table_pack_ids()
+}
+
+/// The battle bar's pack id: `gBattleInterfaceGfx_BattleBar`, the
+/// concatenation of `hpbar_anim_unused`, `numbers1`, and `numbers2`.
+pub(crate) fn healthbox_battle_bar_id() -> String {
+    healthbox_battle_bar_pack_id()
+}
+
 /// Every `battle-interface/` pack id the health-box frame extractor emits: the
 /// singles player and opponent frames, the enemy shadow, and the two ball
-/// palettes. No ROM root imports them yet (#2178), so profile generation
-/// leaves them unclaimed.
+/// palettes. ROM import claims all five, so profile generation requires them
+/// beside the textbox and element ids.
 pub(crate) fn healthbox_frame_ids() -> Vec<String> {
     healthbox_frame_pack_ids()
 }

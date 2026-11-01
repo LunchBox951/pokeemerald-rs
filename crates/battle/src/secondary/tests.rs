@@ -2,8 +2,7 @@ use super::{
     ensure_admissible, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
     is_speed_down_hit_effect, resolve_synchronize_poison_reflection, spend_effect_chance_draw,
     trampoline_for_effect, SecondaryApplication, SynchronizePoisonReflectionOutcome,
-    EFFECT_CONFUSE_HIT, EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT, EFFECT_POISON_HIT,
-    EFFECT_POISON_TAIL, EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER, SECONDARY_TRAMPOLINES,
+    EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT, SECONDARY_TRAMPOLINES,
 };
 use crate::damage::STRUGGLE;
 use crate::dex::Dex;
@@ -106,11 +105,11 @@ fn certain_trampolines_have_the_expected_effects_and_target_sides() {
     assert_eq!(
         certain,
         [
-            (EFFECT_RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN", true),
-            (EFFECT_FAKE_OUT, "MOVE_EFFECT_FLINCH", false),
-            (EFFECT_SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN", true),
-            (EFFECT_DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33", true),
-            (EFFECT_OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN", true),
+            (MoveEffect::RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN", true),
+            (MoveEffect::FAKE_OUT, "MOVE_EFFECT_FLINCH", false),
+            (MoveEffect::SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN", true),
+            (MoveEffect::DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33", true),
+            (MoveEffect::OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN", true),
         ]
     );
 }
@@ -251,13 +250,13 @@ fn only_effect_poison_hit_is_the_modelled_poison_trampoline() {
         EFFECT_POISON_HIT
     );
 
-    assert!(!is_poison_hit_effect(EFFECT_POISON_TAIL));
+    assert!(!is_poison_hit_effect(MoveEffect::POISON_TAIL));
     assert_eq!(
         dex.move_data(POISON_TAIL).unwrap().effect,
-        EFFECT_POISON_TAIL
+        MoveEffect::POISON_TAIL
     );
     assert_eq!(
-        trampoline_for_effect(EFFECT_POISON_TAIL)
+        trampoline_for_effect(MoveEffect::POISON_TAIL)
             .unwrap()
             .move_effect,
         "MOVE_EFFECT_POISON",

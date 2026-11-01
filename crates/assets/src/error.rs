@@ -137,6 +137,16 @@ pub enum AssetError {
     /// Contains the font's asset-pack name, row-major pixel index, and invalid
     /// palette index.
     FontSheetInvalidPixel(&'static str, usize, u8),
+
+    /// A glyph-source collection was given two sources for one font.
+    ///
+    /// Contains the font's asset-pack name.
+    FontSourceDuplicate(&'static str),
+
+    /// A glyph-source collection was given no source for one font.
+    ///
+    /// Contains the font's asset-pack name.
+    FontSourceMissing(&'static str),
 }
 
 impl fmt::Display for AssetError {
@@ -198,6 +208,10 @@ impl fmt::Display for AssetError {
                 f,
                 "font `{name}` glyph sheet has invalid palette index {value} at pixel {index}: expected 0..=3"
             ),
+            Self::FontSourceDuplicate(name) => {
+                write!(f, "font `{name}` has more than one glyph source")
+            }
+            Self::FontSourceMissing(name) => write!(f, "font `{name}` has no glyph source"),
         }
     }
 }
