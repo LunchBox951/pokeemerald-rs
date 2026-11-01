@@ -14,23 +14,51 @@ const CLAIM_ATTEMPTS: u32 = 1_000;
 /// directory or a symlink, so the name is retried rather than reused, and
 /// no candidate is ever deleted or written through before it is claimed.
 ///
-/// Cleanup never deletes by the directory's name alone, because a name can
-/// be swapped between a check and the delete. Every path a test derives
-/// through [`TempDir::join`] is recorded; drop removes only those entries
-/// and then calls the non-recursive `remove_dir`, which refuses a
-/// non-empty directory. A stranger that swaps itself in at the claimed name
-/// therefore survives, and so does anything the fixture left unrecorded
-/// (the directory is then left behind rather than guessed at). On unix drop
-/// also checks the name still holds the claimed inode before touching it.
-/// The residual is a same-user swap that recreates the exact recorded
-/// names. Off unix there is no identity to check, so drop removes nothing
-/// and leaves the directory.
+/// The claim keeps a handle on the directory it created, so cleanup can
+/// tell the claimed object from whatever occupies the name afterwards.
+/// Every path a test derives through [`TempDir::join`] is recorded; drop
+/// removes only those entries and then calls the non-recursive
+/// `remove_dir`, which refuses a non-empty directory. A stranger that
+/// swaps itself in at the claimed name therefore survives, and so does
+/// anything the fixture left unrecorded (the directory is then left behind
+/// rather than guessed at).
+///
+/// How tightly removal is bound to the claimed object depends on the
+/// target:
+///
+/// * Linux: the recorded entries are removed through
+///   `/proc/self/fd/<n>/`, the retained handle's own entry, which names
+///   the claimed inode however its pathname is swapped. The directory
+///   itself can only be removed by name (`rmdir` has no handle form
+///   `std` reaches), so the name is re-checked against the handle right
+///   before it.
+/// * Other Unix: the name is re-checked against the handle (device and
+///   inode) right before each removal, and removal is by name.
+/// * Windows: the name is re-checked against the handle's
+///   `win_fs::WindowsFileIdentity` right before the entries are removed,
+///   and the directory is deleted through the retained handle itself.
+/// * Anywhere else nothing is removed.
+///
+/// The residual, by-name steps are the final `remove_dir` on Unix and the
+/// entry removals off Linux: a same-user process able to swap the name in
+/// the instants between the re-check and the removal can still have an
+/// empty directory (Linux) or a directory holding the exact recorded names
+/// (elsewhere) removed. Closing that needs `unlinkat`/`openat`, which is a
+/// `libc` or `rustix` dependency this std-only crate does not take. The
+/// claim's own `create_dir` and the open of its handle are not atomic
+/// either: a same-user swap in that gap becomes the claim, because no
+/// handle exists yet to compare it with (only a non-directory or a link
+/// is refused). Likewise a recorded name is a pathname, not proof of
+/// ownership: an entry another same-user process creates at a recorded
+/// name before drop is removed with everything below it. The directory
+/// is under the per-user (or sticky) temporary directory, so only the
+/// same user can make any of these swaps, and nothing outside it is
+/// reachable by name.
 pub(crate) struct TempDir {
     path: PathBuf,
-    /// The claimed directory's identity, so cleanup can tell it from
-    /// whatever occupies the name afterwards.
-    #[cfg(unix)]
-    identity: (u64, u64),
+    /// The claimed directory, held open from just after `create_dir`.
+    #[cfg(any(unix, windows))]
+    handle: std::fs::File,
     /// First path component of everything handed out by `join`.
     entries: Mutex<Vec<OsString>>,
 }
@@ -60,8 +88,8 @@ impl TempDir {
 
     fn owning(path: PathBuf) -> Self {
         Self {
-            #[cfg(unix)]
-            identity: identity_of(&path).expect("the directory just created"),
+            #[cfg(any(unix, windows))]
+            handle: open_claim(&path).expect("the directory just created"),
             path,
             entries: Mutex::new(Vec::new()),
         }
@@ -82,37 +110,138 @@ impl TempDir {
         }
         self.path.join(name)
     }
+
+    /// Whether the claimed name still reaches the directory the handle
+    /// holds, rather than a link, another directory, or nothing.
+    #[cfg(unix)]
+    fn name_is_claim(&self) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        match (
+            self.handle.metadata(),
+            std::fs::symlink_metadata(&self.path),
+        ) {
+            (Ok(held), Ok(found)) => {
+                found.is_dir() && (held.dev(), held.ino()) == (found.dev(), found.ino())
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(windows)]
+    fn name_is_claim(&self) -> bool {
+        use win_fs::WindowsFileIdentity;
+        win_fs::open_for_verified_delete(&self.path).is_ok_and(|fresh| {
+            WindowsFileIdentity::of(&fresh)
+                .and_then(|found| WindowsFileIdentity::of(&self.handle).map(|held| found == held))
+                .unwrap_or(false)
+        })
+    }
+
+    /// A spelling of the claimed directory that reaches its inode whatever
+    /// the pathname now names, or `None` where no such spelling exists or
+    /// `/proc` does not vouch for it.
+    #[cfg(target_os = "linux")]
+    fn pinned_dir(&self) -> Option<PathBuf> {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let through = PathBuf::from(format!("/proc/self/fd/{}", self.handle.as_raw_fd()));
+        let (reached, held) = (
+            std::fs::metadata(&through).ok()?,
+            self.handle.metadata().ok()?,
+        );
+        ((reached.dev(), reached.ino()) == (held.dev(), held.ino())).then_some(through)
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn pinned_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// Removes the recorded entries and the directory, if the name still
+    /// reaches the claim. `between_check_and_removal` runs after the first
+    /// check and before any removal, so a test can land a swap in exactly
+    /// that window; drop passes a no-op.
+    #[cfg(unix)]
+    fn remove_claimed(&self, between_check_and_removal: impl FnOnce()) {
+        if !self.name_is_claim() {
+            return;
+        }
+        between_check_and_removal();
+        let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
+        let pinned = self.pinned_dir();
+        for name in entries {
+            let entry = match &pinned {
+                Some(dir) => dir.join(name),
+                // By name: only as sound as the check made just before it.
+                None if self.name_is_claim() => self.path.join(name),
+                None => return,
+            };
+            // `symlink_metadata` so a link is unlinked, never followed.
+            let _ = match std::fs::symlink_metadata(&entry) {
+                Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&entry),
+                Ok(_) => std::fs::remove_file(&entry),
+                Err(err) => Err(err),
+            };
+        }
+        // Non-recursive: a non-empty directory is left alone.
+        if self.name_is_claim() {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+
+    #[cfg(windows)]
+    fn remove_claimed(&self, between_check_and_removal: impl FnOnce()) {
+        if !self.name_is_claim() {
+            return;
+        }
+        between_check_and_removal();
+        let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
+        for name in entries {
+            if !self.name_is_claim() {
+                return;
+            }
+            let entry = self.path.join(name);
+            let _ = match std::fs::symlink_metadata(&entry) {
+                Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&entry),
+                Ok(_) => std::fs::remove_file(&entry),
+                Err(err) => Err(err),
+            };
+        }
+        // Through the handle that is the claim, not through the name. A
+        // non-empty directory refuses, which leaves it alone.
+        let _ = win_fs::delete_through_handle(&self.handle);
+    }
 }
 
-/// Device and inode of the directory itself (never a link's target), or
-/// `None` when the name holds anything else.
+/// Opens the directory `create_dir` just made and refuses to hold anything
+/// else: a name swapped to a link or another directory in the gap between
+/// the two calls fails the identity comparison instead of becoming the
+/// claim.
 #[cfg(unix)]
-fn identity_of(path: &Path) -> Option<(u64, u64)> {
+fn open_claim(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::MetadataExt as _;
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    meta.is_dir().then(|| (meta.dev(), meta.ino()))
+    let handle = std::fs::File::open(path)?;
+    let (held, found) = (handle.metadata()?, std::fs::symlink_metadata(path)?);
+    if !found.is_dir() || (held.dev(), held.ino()) != (found.dev(), found.ino()) {
+        return Err(std::io::Error::other("the new directory was replaced"));
+    }
+    Ok(handle)
+}
+
+#[cfg(windows)]
+fn open_claim(path: &Path) -> std::io::Result<std::fs::File> {
+    let handle = win_fs::open_for_verified_delete(path)?;
+    if !handle.metadata()?.is_dir() {
+        return Err(std::io::Error::other("the new directory was replaced"));
+    }
+    Ok(handle)
 }
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            if identity_of(&self.path) != Some(self.identity) {
-                return;
-            }
-            let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
-            for name in entries {
-                let entry = self.path.join(name);
-                // `symlink_metadata` so a link is unlinked, never followed.
-                let _ = match std::fs::symlink_metadata(&entry) {
-                    Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&entry),
-                    Ok(_) => std::fs::remove_file(&entry),
-                    Err(err) => Err(err),
-                };
-            }
-            // Non-recursive: a non-empty directory is left alone.
-            let _ = std::fs::remove_dir(&self.path);
-        }
+        // Targets with no identity to compare remove nothing.
+        #[cfg(any(unix, windows))]
+        self.remove_claimed(|| {});
     }
 }
 
@@ -172,7 +301,7 @@ mod tests {
         assert_eq!(std::fs::read(path.join("sentinel")).unwrap(), b"not yours");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn drop_removes_what_the_fixture_recorded_and_the_directory() {
         let root = TempDir::new("cleanup-root");
@@ -185,7 +314,7 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn drop_leaves_an_unrecorded_entry_and_its_directory_in_place() {
         let root = TempDir::new("unrecorded-root");
@@ -203,54 +332,38 @@ mod tests {
         assert_eq!(std::fs::read(path.join("not-via-join")).unwrap(), b"kept");
     }
 
-    #[cfg(unix)]
+    /// The swap lands after cleanup's first identity check and before any
+    /// removal, through the seam, so the window is hit on every run.
+    #[cfg(any(unix, windows))]
     #[test]
-    fn dropping_a_claim_spares_a_stranger_swapped_in_during_cleanup() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+    fn a_swap_between_the_identity_check_and_the_removal_spares_the_stranger() {
+        let root = TempDir::new("swap-root");
+        let claimed = TempDir::new_in(root.path(), "probe");
+        std::fs::write(claimed.join("emerald.gba"), b"mine").unwrap();
+        let name = claimed.path().file_name().and_then(|n| n.to_str()).unwrap();
+        // Recorded in `root`, so its own drop sweeps up both directories.
+        let path = root.join(name);
+        let moved = root.join("moved-claim");
 
-        // A same-user peer keeps swapping a populated stranger in and out of
-        // the claimed name while the claim is dropped. Bounded: the race
-        // window is a few instructions wide, so this raises the odds of a
-        // by-name recursive delete failing rather than guaranteeing them.
-        let root = TempDir::new("race-root");
-        for round in 0..2_000u32 {
-            let claimed = TempDir::new_in(root.path(), "probe");
-            let path = claimed.path().to_path_buf();
-            let stash = root.join(&format!("stash-{round}"));
-            let stranger = root.join(&format!("stranger-{round}"));
-            std::fs::create_dir(&stranger).unwrap();
-            std::fs::write(stranger.join("sentinel"), b"not yours").unwrap();
-            let stop = Arc::new(AtomicBool::new(false));
-            let attacker = {
-                let (path, stash, stranger, stop) =
-                    (path.clone(), stash.clone(), stranger.clone(), stop.clone());
-                std::thread::spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        if std::fs::rename(&path, &stash).is_err() {
-                            continue;
-                        }
-                        let _ = std::fs::rename(&stranger, &path);
-                        let _ = std::fs::rename(&path, &stranger);
-                        let _ = std::fs::rename(&stash, &path);
-                    }
-                })
-            };
-            std::thread::yield_now();
-            drop(claimed);
-            stop.store(true, Ordering::Relaxed);
-            attacker.join().unwrap();
-            let survived = [&stranger, &path, &stash].iter().any(|dir| {
-                std::fs::read(dir.join("sentinel")).ok().as_deref() == Some(&b"not yours"[..])
-            });
-            assert!(
-                survived,
-                "round {round}: cleanup deleted the stranger's directory"
-            );
-            for dir in [&stranger, &path, &stash] {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-        }
+        claimed.remove_claimed(|| {
+            std::fs::rename(&path, &moved).expect("the claim is moved behind its back");
+            std::fs::create_dir(&path).expect("a stranger takes the name");
+            std::fs::write(path.join("emerald.gba"), b"not yours").expect("the stranger's file");
+        });
+
+        assert_eq!(
+            std::fs::read(path.join("emerald.gba")).unwrap(),
+            b"not yours",
+            "cleanup reached the stranger that took the name"
+        );
+        // Linux removes through the handle, so the claimed directory's own
+        // entry goes even though its name was lost. Elsewhere the re-check
+        // fails first and nothing is removed.
+        assert_eq!(
+            moved.join("emerald.gba").exists(),
+            !cfg!(target_os = "linux"),
+            "removal must follow the claimed inode on Linux and stop elsewhere"
+        );
     }
 
     #[cfg(unix)]
