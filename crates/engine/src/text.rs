@@ -81,7 +81,7 @@ const EXT_CTRL_CODE_ESCAPE: u8 = 0x0C;
 const EXT_CTRL_CODE_SHIFT_RIGHT: u8 = 0x0D;
 const EXT_CTRL_CODE_SHIFT_DOWN: u8 = 0x0E;
 // The window fill and cursor reset it triggers (`pokeemerald/src/text.c`
-// `:1052-1056`) are modelled in `render.rs`; see `ext_ctrl::FILL_WINDOW`.
+// `:1052-1056`) are modelled in `render/control.rs`; see `ext_ctrl::FILL_WINDOW`.
 const EXT_CTRL_CODE_FILL_WINDOW: u8 = 0x0F;
 const EXT_CTRL_CODE_PLAY_SE: u8 = 0x10;
 const EXT_CTRL_CODE_CLEAR: u8 = 0x11;
