@@ -42,7 +42,8 @@
 //!   and PP text palettes;
 //! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
 //!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
-//! - `mus_title`, its transitive voicegroup tree, and every sample that tree
+//! - every checkpoint song in the song manifest (`midi::manifest`), plus
+//!   `mus_title`'s transitive voicegroup tree and every sample that tree
 //!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
 //!   templates `BufferStringBattle` selects); and
@@ -201,7 +202,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     cry::extract_cries(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
-    midi::extract_song(&upstream, &mut writer)?;
+    midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;

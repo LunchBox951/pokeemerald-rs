@@ -13,7 +13,7 @@ use super::{read_text, repo_root, upstream_present};
 /// `MAP_INSIDE_OF_TRUCK`, the Littleroot maps, `MAP_ROUTE101`,
 /// `MAP_OLDALE_TOWN`, `MAP_ROUTE103`, and the accessible Oldale interiors, as
 /// their `data/maps` directories.
-const CHECKPOINT_MAPS: [&str; 15] = [
+pub(super) const CHECKPOINT_MAPS: [&str; 15] = [
     "InsideOfTruck",
     "LittlerootTown",
     "LittlerootTown_BrendansHouse_1F",
