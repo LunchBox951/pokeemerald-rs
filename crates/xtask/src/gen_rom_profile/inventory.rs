@@ -5,7 +5,8 @@ use super::pack_source::PackSource;
 use crate::extract::scope::{
     battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
     opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS,
+    TILESETS,
 };
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
@@ -49,10 +50,11 @@ pub fn require_title(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every Latin glyph sheet is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every Latin glyph sheet and the keypad-icon sheet are present.
 pub fn require_fonts(pack: &PackSource) -> Result<(), GenRomProfileError> {
     FONTS
         .into_iter()
+        .chain([KEYPAD_ICONS])
         .try_for_each(|font| pack.get(font.pack_id).map(|_| ()))
 }
 

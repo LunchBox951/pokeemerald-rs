@@ -425,6 +425,13 @@ pub(crate) const FONTS: [FontSource; 5] = [
     },
 ];
 
+/// The keypad-icon sheet (`graphics/fonts/keypad_icons.png`), the bitmap
+/// `sKeypadIconTiles` holds (`pokeemerald/src/text.c:117`).
+pub(crate) const KEYPAD_ICONS: FontSource = FontSource {
+    filename: "keypad_icons.png",
+    pack_id: "font/keypad_icons",
+};
+
 #[derive(Clone, Copy)]
 pub(crate) struct LayoutSource {
     pub(crate) upstream_id: &'static str,

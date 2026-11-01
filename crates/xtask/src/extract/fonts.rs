@@ -1,16 +1,20 @@
-//! Latin font glyph-sheet extraction.
+//! Latin font glyph-sheet and keypad-icon sheet extraction.
 
 use std::path::Path;
 
-use super::scope::FONTS;
+use super::scope::{FONTS, KEYPAD_ICONS};
 use super::{build_image_entry, png, read_file, ExtractError};
 use pack_format::PackWriter;
 
 const FONT_SHEET_WIDTH: u32 = 256;
 const FONT_SHEET_HEIGHT: u32 = 512;
 const FONT_SHEET_BIT_DEPTH: u8 = 2;
+const KEYPAD_SHEET_WIDTH: u32 = 128;
+const KEYPAD_SHEET_HEIGHT: u32 = 32;
+const KEYPAD_SHEET_BIT_DEPTH: u8 = 4;
 
-/// Extracts the configured Latin glyph sheets into the asset pack.
+/// Extracts the configured Latin glyph sheets and the keypad-icon sheet into
+/// the asset pack.
 pub(super) fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let fonts_dir = upstream.join("graphics/fonts");
     for font in FONTS {
@@ -19,6 +23,30 @@ pub(super) fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<
         let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         validate_font_sheet(&path, &image)?;
         writer.push(build_image_entry(&path, font.pack_id.to_owned(), image)?);
+    }
+    let path = fonts_dir.join(KEYPAD_ICONS.filename);
+    let bytes = read_file(&path)?;
+    let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+    validate_keypad_sheet(&path, &image)?;
+    writer.push(build_image_entry(
+        &path,
+        KEYPAD_ICONS.pack_id.to_owned(),
+        image,
+    )?);
+    Ok(())
+}
+
+fn validate_keypad_sheet(path: &Path, image: &png::IndexedImage) -> Result<(), ExtractError> {
+    if image.width != KEYPAD_SHEET_WIDTH
+        || image.height != KEYPAD_SHEET_HEIGHT
+        || image.bit_depth != KEYPAD_SHEET_BIT_DEPTH
+    {
+        return Err(ExtractError::KeypadIconSheetWrongShape {
+            path: path.to_path_buf(),
+            width: image.width,
+            height: image.height,
+            bit_depth: image.bit_depth,
+        });
     }
     Ok(())
 }
@@ -40,11 +68,12 @@ fn validate_font_sheet(path: &Path, image: &png::IndexedImage) -> Result<(), Ext
 
 #[cfg(test)]
 mod tests {
-    use super::super::scope::{FontSource, FONTS};
+    use super::super::scope::{FontSource, FONTS, KEYPAD_ICONS};
     use super::super::{extract_to, png, upstream_present};
     use super::{
-        validate_font_sheet, ExtractError, FONT_SHEET_BIT_DEPTH, FONT_SHEET_HEIGHT,
-        FONT_SHEET_WIDTH,
+        validate_font_sheet, validate_keypad_sheet, ExtractError, FONT_SHEET_BIT_DEPTH,
+        FONT_SHEET_HEIGHT, FONT_SHEET_WIDTH, KEYPAD_SHEET_BIT_DEPTH, KEYPAD_SHEET_HEIGHT,
+        KEYPAD_SHEET_WIDTH,
     };
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
@@ -128,13 +157,58 @@ mod tests {
     }
 
     #[test]
+    fn keypad_sheet_must_match_the_documented_shape() {
+        let path = std::path::Path::new("graphics/fonts/keypad_icons.png");
+        let sheet = |width: u32, height: u32, bit_depth: u8| png::IndexedImage {
+            width,
+            height,
+            bit_depth,
+            pixels: Vec::new(),
+            palette: Vec::new(),
+        };
+
+        validate_keypad_sheet(
+            path,
+            &sheet(
+                KEYPAD_SHEET_WIDTH,
+                KEYPAD_SHEET_HEIGHT,
+                KEYPAD_SHEET_BIT_DEPTH,
+            ),
+        )
+        .unwrap();
+
+        for (width, height, bit_depth) in [
+            (256, KEYPAD_SHEET_HEIGHT, KEYPAD_SHEET_BIT_DEPTH),
+            (KEYPAD_SHEET_WIDTH, 128, KEYPAD_SHEET_BIT_DEPTH),
+            (KEYPAD_SHEET_WIDTH, KEYPAD_SHEET_HEIGHT, 2),
+        ] {
+            let err = validate_keypad_sheet(path, &sheet(width, height, bit_depth)).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    ExtractError::KeypadIconSheetWrongShape {
+                        path: error_path,
+                        width: error_width,
+                        height: error_height,
+                        bit_depth: error_bit_depth,
+                    } if error_path == path
+                        && *error_width == width
+                        && *error_height == height
+                        && *error_bit_depth == bit_depth
+                ),
+                "wrong error for a {width}x{height}/{bit_depth}bpp sheet"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn font_glyph_sheets_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("fonts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
-        for font in FONTS {
+        for font in FONTS.into_iter().chain([KEYPAD_ICONS]) {
             assert!(
                 bytes
                     .windows(font.pack_id.len())

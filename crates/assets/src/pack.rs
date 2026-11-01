@@ -404,6 +404,17 @@ impl AssetPack {
         Ok(FontImageRef::new(font, image))
     }
 
+    /// Look up the keypad-icon sheet (`font/keypad_icons`); validate and
+    /// read icons with
+    /// [`KeypadIconSheet::new`](crate::keypad_icons::KeypadIconSheet::new).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`image`](Self::image).
+    pub fn keypad_icons(&self) -> Result<ImageRef<'_>, PackError> {
+        self.image("font/keypad_icons")
+    }
+
     /// Bundle a border frame's tiles and palette. `frame_id` is upstream's
     /// zero-based `sWindowFrames` index (`0..=19`); as in
     /// `GetWindowFrameTilesPal`, an id of `20` or above selects frame `0`.
