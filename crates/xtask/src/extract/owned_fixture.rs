@@ -113,9 +113,14 @@ impl OwnedDir {
     /// Creates `path` with a single `mkdir`, failing with `AlreadyExists` when
     /// anything (file, directory or symlink) is already there.
     fn claim(path: &Path) -> io::Result<Self> {
-        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = {
+            let mut builder = std::fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
         builder.create(path)?;
         let identity = Identity::of(path).ok_or_else(|| {
             io::Error::other(format!(
