@@ -1,12 +1,12 @@
-use super::super::{hp_hidden_by_load, merge_into_save_pokemon, to_save_pokemon, LoadedLead};
+use super::super::{merge_into_save_pokemon, to_save_pokemon, LoadedLead};
 use super::common::treecko_fixture;
 use battle::Dex;
 
-/// End to end: a KO that both awards EVs and crosses a level
-/// this same turn must file *both* -- the newly gained EV byte, and a stat
-/// block computed with it rather than the record's stale, pre-KO one.
-/// Without both, a KO that grants a level and crosses an `ev/4` boundary
-/// files lower stats than upstream and loses the newly earned EVs.
+/// End to end: a KO that both awards EVs and crosses a level this same turn
+/// must file *both* -- the newly gained EV byte, and the cache
+/// `CalculateMonStats` recalculated with it (`Cmd_getexp` awards EVs before
+/// the level-up, `battle_script_commands.c:3420`), not the record's stale,
+/// pre-KO one.
 #[test]
 fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     let dex = Dex::new();
@@ -85,10 +85,16 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
             ..battle::Evs::default()
         },
     );
-    assert_ne!(
-        filed_with_the_gain.attack, filed_without_the_gain.attack,
+    assert_eq!(
+        (filed_with_the_gain.attack, filed_without_the_gain.attack),
+        (17, 16),
         "fixture sanity: the ev/4 boundary crossing really does move the \
          formula's own output, or the assertion below would be vacuous"
+    );
+    assert_eq!(
+        loaded.battler().cached_stats().attack,
+        17,
+        "the battler's own cache already carries the KO's point"
     );
     assert_eq!(
         merged.attack,
@@ -98,15 +104,14 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     );
 }
 
-/// Upstream only refreshes the
-/// cached stat block inside the level-up sequence itself
-/// (`Cmd_getexp` case 5's `CalculateMonStats`); a later KO's own
+/// Upstream only refreshes the cached stat block inside the level-up sequence
+/// itself (`Cmd_getexp` case 5's `CalculateMonStats`); a later KO's own
 /// `MonGainEVs` call (`battle_script_commands.c:3420`) never touches it. A
-/// level-up in one battle followed by EV gains in a later battle, with no
-/// second level-up, must therefore file the level-up's own block -- not one
-/// inflated by the later EVs.
+/// level-up followed by EV gains with no second level-up must therefore file
+/// the level-up's own block -- not one inflated by the later EVs. The
+/// battler's cache is that block; saving only writes it.
 #[test]
-fn save_time_recompute_uses_the_evs_the_level_up_saw_not_later_gains() {
+fn a_fresh_record_files_the_level_up_cache_not_one_inflated_by_later_gains() {
     const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
         hp: 3,
         attack: 0,
@@ -151,22 +156,29 @@ fn save_time_recompute_uses_the_evs_the_level_up_saw_not_later_gains() {
         .max_hp
             > block_upstream_would_have_cached.max_hp
     );
+    assert_eq!(
+        block_upstream_would_have_cached.max_hp, 36,
+        "fixture sanity"
+    );
+    assert_eq!(mon.cached_stats(), block_upstream_would_have_cached);
     let saved = to_save_pokemon(&dex, &mon);
     assert_eq!(
         u32::from(saved.max_hp),
         block_upstream_would_have_cached.max_hp,
         "the filed block must be the one the level-up's own CalculateMonStats produced"
     );
+    assert_eq!(
+        saved.box_data.substructures().unwrap().evs_and_condition[0],
+        180,
+        "the later gains are filed as EVs, not as stats"
+    );
 }
 
-/// The same property reached through
-/// [`merge_into_save_pokemon`] too: a mon loaded from a backing record, then
-/// levelled up and only *later* KO'd for more EVs with no second level-up,
-/// must file the level-up's own block on the next merge -- not one inflated
-/// by the later gains -- exactly as [`to_save_pokemon`]'s own regression
-/// above.
+/// The same property through [`merge_into_save_pokemon`]: a mon levelled up
+/// and only *later* KO'd for more EVs, with no second level-up, files the
+/// level-up's own block on the next merge.
 #[test]
-fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
+fn merge_files_the_level_up_cache_not_one_inflated_by_later_gains() {
     const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
         hp: 3,
         attack: 0,
@@ -178,9 +190,8 @@ fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
     let dex = Dex::new();
     let mut mon = treecko_fixture();
     let species = dex.species(mon.species()).unwrap();
-    // The backing record this merge overlays onto -- filed before any EVs
-    // or level-up, so the recompute branch below has something to compare
-    // its own species/level against.
+    // The backing record this merge overlays onto, filed before any EVs or
+    // level-up.
     let base = to_save_pokemon(&dex, &mon);
 
     for _ in 0..30 {
@@ -215,8 +226,7 @@ fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
         "fixture sanity: still no second level-up"
     );
 
-    let mut offset = hp_hidden_by_load(&dex, &base, &mon);
-    let merged = merge_into_save_pokemon(&dex, &mon, &base, &mut offset);
+    let merged = merge_into_save_pokemon(&dex, &mon, &base);
 
     assert_eq!(
         u32::from(merged.max_hp),

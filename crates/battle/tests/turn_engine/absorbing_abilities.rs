@@ -216,3 +216,23 @@ fn a_trainer_whose_only_move_is_absorbed_deals_no_damage() {
     assert_eq!(rng.draws(), 8);
     rng.assert_exhausted();
 }
+
+/// A loaded record's HP above its cached maximum clamps to the maximum on an
+/// absorbing heal, and the reported gain saturates at zero instead of
+/// underflowing.
+#[test]
+fn absorbed_healing_on_above_max_saved_hp_clamps_and_reports_no_gain() {
+    let dex = Dex::new();
+    let probe = max_iv_mon(&dex, VAPOREON, 5, vec![SWORDS_DANCE]);
+    let stats = probe.stats();
+    let vaporeon = probe.with_cached_stats(stats, stats.max_hp + 1);
+
+    let (battle, events, _rng) = run_wild_turn(MUDKIP, WATER_GUN, vaporeon, &[ACCURACY_HIT]);
+
+    assert!(events.contains(&BattleEvent::AbilityHealed {
+        by_player: true,
+        move_id: WATER_GUN,
+        healed: 0,
+    }));
+    assert_eq!(battle.enemy().current_hp(), stats.max_hp);
+}
