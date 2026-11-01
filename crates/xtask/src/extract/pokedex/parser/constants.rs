@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use assets::pokedex::{NationalDexNo, NATIONAL_DEX_COUNT, NATIONAL_DEX_LAST};
 
-use super::lexer::{Cursor, Tok};
+use super::lexer::{Cursor, Tok, Token};
 use super::Result;
 use crate::extract::pokedex::error::{PokedexSource, PokedexSourceError};
 
@@ -18,6 +18,10 @@ const COUNT_ALIASES: [(&str, &str, u16); 3] = [
         NATIONAL_DEX_COUNT,
     ),
 ];
+
+/// The one further macro upstream defines after the Hoenn enum
+/// (`include/constants/pokedex.h:846`); nothing in the closure reads it.
+const HOENN_DEX_COUNT_ALIAS: &str = "HOENN_DEX_COUNT";
 
 pub(super) struct Constants {
     pub(super) values: HashMap<String, u16>,
@@ -95,6 +99,14 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             expected: "the include guard's `#endif` closing the file",
         });
     }
+    read_count_aliases(&guard, &values, rest)?;
+    Ok(Constants { values })
+}
+
+/// Reads the directives after the enum: the count aliases, each defined once
+/// as `#define NAME CONSTANT` and naming the constant it must, with every other
+/// macro refused except the one upstream defines that nothing here consumes.
+fn read_count_aliases(guard: &str, values: &HashMap<String, u16>, rest: &[Token]) -> Result<()> {
     let mut aliases: HashMap<String, String> = HashMap::new();
     for token in rest {
         let Tok::Directive(body) = &token.tok else {
@@ -121,7 +133,18 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             });
         }
         if !COUNT_ALIASES.iter().any(|(alias, _, _)| *alias == name) {
-            continue;
+            // Any other macro could rewrite the tables this header precedes
+            // (`#define _(x) ...` would replace every text), so only the one
+            // further macro upstream defines, which nothing here consumes,
+            // is let through.
+            if directive == "define" && name == HOENN_DEX_COUNT_ALIAS {
+                continue;
+            }
+            return Err(PokedexSourceError::Malformed {
+                source: PokedexSource::Constants,
+                line: token.line,
+                expected: "no macro beyond the count aliases in the constants header",
+            });
         }
         // A count alias must be defined once as `#define NAME CONSTANT`.
         // Whitespace after the name makes it object-like.
@@ -149,7 +172,7 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             });
         }
     }
-    Ok(Constants { values })
+    Ok(())
 }
 
 /// The guard macro is defined before the enum, so a guard naming a constant

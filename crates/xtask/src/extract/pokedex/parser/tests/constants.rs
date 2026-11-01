@@ -329,3 +329,42 @@ fn include_guard_must_be_a_c_identifier() {
         );
     }
 }
+
+#[test]
+fn macros_beyond_the_count_aliases_are_refused() {
+    // `_` wraps every table text, so redefining it would rewrite the payload
+    // under cpp while this parser still read the source literals.
+    for extra in [
+        "#define _(x) _(\"WRONG\")\n",
+        "#define OTHER 1\n",
+        "#undef OTHER\n",
+    ] {
+        let mut f = fixture();
+        replace_once(
+            &mut f.constants,
+            "#endif // GUARD\n",
+            &format!("{extra}#endif // GUARD\n"),
+        );
+        assert!(
+            matches!(
+                f.parse(),
+                Err(PokedexSourceError::Malformed {
+                    source: PokedexSource::Constants,
+                    ..
+                })
+            ),
+            "{extra:?} must be refused"
+        );
+    }
+}
+
+#[test]
+fn the_hoenn_count_alias_is_let_through() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.constants,
+        "#endif // GUARD\n",
+        "#define HOENN_DEX_COUNT HOENN_DEX_DEOXYS\n#endif // GUARD\n",
+    );
+    assert!(f.parse().is_ok());
+}
