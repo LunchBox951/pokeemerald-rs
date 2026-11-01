@@ -22,7 +22,7 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
     };
     let mut base = Framebuffer::new();
     base.fill(marker);
-    let composed = synthetic_start_menu().compose_over(base);
+    let composed = synthetic_start_menu().compose_over(base, rendering::PaletteStage::default());
 
     let inside_item_window = composed.pixel(
         usize::try_from(MENU_TILEMAP_LEFT * 8 + 4).unwrap(),
@@ -72,7 +72,7 @@ fn selecting_save_keeps_the_item_window_until_its_message_exists() {
             "{frame}: no save message may exist yet"
         );
         assert_ne!(
-            menu.compose_over(base.clone())
+            menu.compose_over(base.clone(), rendering::PaletteStage::default())
                 .pixel(item_pixel.0, item_pixel.1),
             Some(marker),
             "{frame}: the frame must still draw the item window, not a bare \
@@ -111,7 +111,8 @@ fn selecting_save_keeps_the_item_window_until_its_message_exists() {
         "the third tick after selecting SAVE must have built the confirm message"
     );
     assert_eq!(
-        menu.compose_over(base).pixel(item_pixel.0, item_pixel.1),
+        menu.compose_over(base, rendering::PaletteStage::default())
+            .pixel(item_pixel.0, item_pixel.1),
         Some(marker),
         "once the confirm message exists the item window must be gone"
     );
