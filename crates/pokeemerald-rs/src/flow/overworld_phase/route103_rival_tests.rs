@@ -126,7 +126,7 @@ fn is_rival_trigger_only_matches_route_103s_own_rival_script() {
 #[test]
 fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
 
     assert!(!phase.is_rival_battle_active(), "setup: no battle yet");
     phase.step(pressed(Buttons::A));
@@ -135,7 +135,7 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
         "an A press facing the rival must start the battle"
     );
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "the lead moves into the battle, matching every other battle handoff"
     );
     assert_eq!(
@@ -159,7 +159,7 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
 #[test]
 fn facing_the_rival_with_a_perpendicular_direction_starts_the_battle_without_turning() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     let start_position = phase.player.position();
 
     // North is perpendicular to the East facing `route_103_phase_facing_the_rival`
@@ -194,7 +194,7 @@ fn a_held_a_after_the_battle_starts_does_not_re_trigger_it() {
     // `one_turn_does_not_immediately_end_a_fresh_battle` precedent): the
     // point here is "no re-trigger", not "how long the fight lasts", so
     // the fixture must not itself end the battle on the very next turn.
-    phase.party_lead = Some(lead(277, 5, 1));
+    phase.set_fresh_lead_for_test(lead(277, 5, 1));
     phase.step(pressed(Buttons::A));
     assert!(
         phase.is_rival_battle_active(),
@@ -222,7 +222,7 @@ fn input_during_the_rival_battle_neither_moves_the_player_nor_re_triggers() {
     let mut phase = route_103_phase_facing_the_rival();
     // Even levels (the `one_turn_does_not_immediately_end_a_fresh_battle`
     // precedent): the battle must survive the frames this test steps.
-    phase.party_lead = Some(lead(277, 5, 1));
+    phase.set_fresh_lead_for_test(lead(277, 5, 1));
     let position = phase.player.position();
     let facing = phase.player.facing();
     phase.step(pressed(Buttons::A));
@@ -257,10 +257,13 @@ fn input_during_the_rival_battle_neither_moves_the_player_nor_re_triggers() {
 fn facing_away_from_the_rival_does_not_start_the_battle() {
     let (rx, ry) = RIVAL_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::West));
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
-    assert!(phase.party_lead.is_some(), "the lead must be untouched");
+    assert!(
+        phase.lead_for_test().is_some(),
+        "the lead must be untouched"
+    );
 }
 
 /// No party lead at all -- the same defensive `None` arm
@@ -269,7 +272,7 @@ fn facing_away_from_the_rival_does_not_start_the_battle() {
 #[test]
 fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
     let mut phase = route_103_phase_facing_the_rival();
-    assert!(phase.party_lead.is_none(), "setup");
+    assert!(phase.lead_for_test().is_none(), "setup");
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
 }
@@ -288,7 +291,7 @@ fn the_trigger_never_fires_off_route_103() {
         PlayerState::new((4, 4), 3, Direction::South),
         None,
     );
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
 }

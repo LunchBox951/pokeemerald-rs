@@ -183,7 +183,7 @@ fn already_defeated(trainer_id: TrainerId, event_data: &EventData) -> bool {
 /// PLAYER_HAS_TWO_USABLE_MONS`) refuses even a doubles-capable game unless
 /// the player's party holds two usable mons. This port has no doubles
 /// support in the `battle` crate at all and, separately, tracks at most one
-/// party mon ([`OverworldPhase::party_lead`]'s own docs), so that gate can
+/// party mon (the phase's lead owner docs), so that gate can
 /// never pass here -- the same real outcome upstream produces for a
 /// permanently-one-mon party, not a bespoke port-only carve-out. Both twins'
 /// cones are still checked every frame, and the scan simply continues to the
@@ -499,8 +499,8 @@ impl OverworldPhase {
                 if first_report {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
-                         refused before any draw (a held-item party, an unimplemented moveset, \
-                         or a fainted lead)"
+                         refused before any draw (a held-item party or lead, an unimplemented \
+                         moveset, or a fainted lead)"
                     );
                 }
                 SightTrainerOutcome::Refused
@@ -818,9 +818,7 @@ mod tests {
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnportedAbilityInteraction(
-                    assets::AbilityId::EFFECT_SPORE,
-                )),
+                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
             ),
             (
                 "Amy & Liv",

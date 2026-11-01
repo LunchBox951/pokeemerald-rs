@@ -114,6 +114,21 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_exactly_the_field_message_inventory() {
+        let symbols: Vec<_> = EMERALD_US_REV0
+            .roots
+            .field_messages
+            .iter()
+            .map(|root| root.symbol)
+            .collect();
+        assert_eq!(symbols, ["gText_PkmnFainted_FldPsn"]);
+        assert_ne!(
+            EMERALD_US_REV0.roots.field_messages[0].addr,
+            crate::reader::GbaPtr::AT_BASE
+        );
+    }
+
+    #[test]
     fn a_hash_that_matches_nothing_is_unsupported() {
         // The fixture is a synthetic image, so it can never match a shipped
         // profile however convincing its header is.
@@ -167,6 +182,18 @@ mod tests {
                 profile: "wrong game code"
             }
         ));
+    }
+
+    #[test]
+    fn a_hostile_profile_name_renders_on_one_line() {
+        let mut wrong = *shared_fixture_profile();
+        wrong.version = 9;
+        wrong.name = "name\nnext\u{1b}[2K";
+        let text = select_with(shared_emerald_rom(), &[wrong])
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains(r"`name\nnext\u{1b}[2K`"), "{text}");
+        assert!(!text.contains(['\n', '\u{1b}']), "{text:?}");
     }
 
     #[test]
