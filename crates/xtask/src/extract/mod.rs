@@ -112,6 +112,7 @@ pub(crate) mod midi;
 mod naming_screen;
 mod opening_scene;
 pub mod png;
+mod pokedex;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
