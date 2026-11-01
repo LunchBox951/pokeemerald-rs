@@ -76,8 +76,9 @@
 //! battle reports any real outcome: heals the party lead, writes
 //! `VAR_BIRCH_LAB_STATE`/the real `VAR_STARTER_MON`/`VAR_ROUTE101_STATE`'s
 //! terminal value, and warps to Birch's lab. Still not modelled: the
-//! rescue cutscene, the `special ChooseStarter` starter-select UI and its
-//! `ScriptGiveMon` handout, and the `B_TRANSITION_BLUR` intro (that
+//! rescue cutscene, the field binding of `special ChooseStarter` to the
+//! [`starter_chooser`] scene, its `ScriptGiveMon` handout, and the
+//! `B_TRANSITION_BLUR` intro (that
 //! module's own docs carry the full deferral list). The crate-root re-exports
 //! back that hookup for `xtask`'s `boot-to-first-fight` scenario (I-7),
 //! which drives [`App`] through this exact chain -- title,
@@ -138,6 +139,7 @@ mod pack_source;
 mod party;
 pub mod scene;
 mod start_menu;
+pub mod starter_chooser;
 mod textbox;
 pub mod title;
 
