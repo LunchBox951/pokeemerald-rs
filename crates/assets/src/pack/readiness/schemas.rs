@@ -3,11 +3,12 @@
 use std::collections::BTreeSet;
 
 use crate::audio::{
-    CryTable, Sample, SampleId, Song, VoiceEntry, VoiceGroup, VoiceGroupId, CRY_TABLE_PACK_ID,
+    CryTable, DirectSoundMode, KeySplitVoice, RhythmVoice, Sample, SampleId, Song, VoiceEntry,
+    VoiceGroup, VoiceGroupId, CRY_TABLE_PACK_ID,
 };
 use crate::{BattleAnimationCatalog, PokedexData};
 
-use super::{invalid, AssetPack, EntryKind, PackProblem};
+use super::{invalid, AssetPack, ConsumerConstraint, EntryKind, PackProblem, RequiredAsset};
 
 impl AssetPack {
     pub(super) fn validate_schemas(&self) -> Result<(), PackProblem> {
@@ -15,10 +16,7 @@ impl AssetPack {
         for entry in &self.entries {
             let id = entry.id.as_str();
             if let EntryKind::Image { bit_depth, .. } = entry.kind {
-                let max_pixel = u8::MAX >> (8 - bit_depth);
-                if self.payload(entry).iter().any(|&pixel| pixel > max_pixel) {
-                    return Err(invalid(id, "pixel index exceeds the image bit depth"));
-                }
+                self.check_pixel_depth(id, bit_depth, "the image bit depth")?;
             }
             if id.starts_with("tileset/") && id.ends_with("/metatile-attributes") {
                 let bytes = self.raw(id).map_err(|err| invalid(id, err))?;
@@ -56,6 +54,77 @@ impl AssetPack {
             }
         }
         self.validate_graphics_groups()?;
+        Ok(())
+    }
+
+    /// Reject any pixel of image `id` that a `bit_depth`-bit reader cannot hold.
+    fn check_pixel_depth(&self, id: &str, bit_depth: u8, what: &str) -> Result<(), PackProblem> {
+        if !(1..=8).contains(&bit_depth) {
+            return Err(invalid(id, format!("unsupported bit depth {bit_depth}")));
+        }
+        let max_pixel = u8::MAX >> (8 - bit_depth);
+        let entry = self.find(id).map_err(|err| invalid(id, err))?;
+        if self.payload(entry).iter().any(|&pixel| pixel > max_pixel) {
+            return Err(invalid(id, format!("pixel index exceeds {what}")));
+        }
+        Ok(())
+    }
+
+    /// Check each rule the supported game's consumers add to a required asset.
+    /// Runs after [`Self::validate_schemas`], so every payload it reads has
+    /// already decoded and every reference resolved.
+    pub(super) fn validate_consumers(&self, required: &[RequiredAsset]) -> Result<(), PackProblem> {
+        for asset in required {
+            match asset.consumer {
+                None => {}
+                Some(ConsumerConstraint::ImagePixelDepth(depth)) => self.check_pixel_depth(
+                    &asset.id,
+                    depth,
+                    &format!("the {depth}-bit depth its consumer reads"),
+                )?,
+                Some(ConsumerConstraint::PlayableSong) => self.check_song_playable(&asset.id)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The voices the music converter converts for song `id`: every top-level
+    /// slot, plus the leaf slots of each key-split or rhythm child group.
+    /// Indirections nested inside a child group resolve silent and are never
+    /// converted, so their groups are not followed. The converter rejects
+    /// reverse DirectSound playback, which would start the song without music.
+    fn check_song_playable(&self, id: &str) -> Result<(), PackProblem> {
+        let song = Song::decode(self.raw(id).map_err(|err| invalid(id, err))?)
+            .map_err(|err| invalid(id, err))?;
+        let top_id = song.voicegroup().0.as_str();
+        let top = self
+            .voicegroup(song.voicegroup())
+            .map_err(|err| invalid(top_id, err))?;
+        self.check_leaves_playable(top_id, &top)?;
+        for entry in top.slots() {
+            let (VoiceEntry::KeySplit(KeySplitVoice { children, .. })
+            | VoiceEntry::Rhythm(RhythmVoice { children })) = entry
+            else {
+                continue;
+            };
+            let group = self
+                .voicegroup(children)
+                .map_err(|err| invalid(&children.0, err))?;
+            self.check_leaves_playable(&children.0, &group)?;
+        }
+        Ok(())
+    }
+
+    fn check_leaves_playable(&self, id: &str, group: &VoiceGroup) -> Result<(), PackProblem> {
+        for entry in group.slots() {
+            if matches!(entry, VoiceEntry::DirectSound(voice) if voice.mode == DirectSoundMode::Reverse)
+            {
+                return Err(invalid(
+                    id,
+                    "a direct-sound voice plays in reverse, which the game cannot play",
+                ));
+            }
+        }
         Ok(())
     }
 

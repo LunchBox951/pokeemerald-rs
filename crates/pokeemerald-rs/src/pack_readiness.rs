@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use assets::pack::{PackReadinessError, RequiredAsset};
+use assets::pack::{ConsumerConstraint, PackReadinessError, RequiredAsset};
 use assets::{AssetPack, EntryKind};
 use rom_import::{BlobRoot, ImageRoot, PaletteRoot, Roots};
 
@@ -18,6 +18,9 @@ use rom_import::{BlobRoot, ImageRoot, PaletteRoot, Roots};
 pub fn load_ready_pack(path: &Path) -> Result<AssetPack, PackReadinessError> {
     AssetPack::load_ready(path, &Requirements::for_game().0)
 }
+
+/// The song the title screen starts as its music.
+const TITLE_SONG_ID: &str = "audio/song/mus_title";
 
 struct Requirements(Vec<RequiredAsset>);
 
@@ -79,6 +82,7 @@ impl Requirements {
                     bit_depth: font.bit_depth,
                 },
                 byte_len: None,
+                consumer: None,
             });
         }
         for battler in roots.battlers.species {
@@ -89,6 +93,13 @@ impl Requirements {
         }
         for song in roots.audio.songs {
             self.raw(song.id);
+            if song.id == TITLE_SONG_ID {
+                // The title music is best-effort at runtime, so an
+                // unplayable voice would silently start the game without it.
+                if let Some(asset) = self.0.last_mut() {
+                    asset.consumer = Some(ConsumerConstraint::PlayableSong);
+                }
+            }
         }
         for voicegroup in roots.audio.voicegroups {
             self.raw(voicegroup.id);
@@ -105,6 +116,10 @@ impl Requirements {
     }
 
     fn image(&mut self, root: &ImageRoot) {
+        // The title renderer repacks this sheet at 4bpp although the pack
+        // declares 8bpp, so an index above 15 passes metadata but fails there.
+        let consumer = (root.id == crate::title::PRESS_START_IMAGE_ID)
+            .then_some(ConsumerConstraint::ImagePixelDepth(4));
         self.0.push(RequiredAsset {
             id: root.id.into(),
             kind: EntryKind::Image {
@@ -113,6 +128,7 @@ impl Requirements {
                 bit_depth: root.pack_bit_depth,
             },
             byte_len: None,
+            consumer,
         });
     }
 
@@ -123,6 +139,7 @@ impl Requirements {
                 color_count: root.color_count,
             },
             byte_len: None,
+            consumer: None,
         });
     }
 
@@ -131,6 +148,7 @@ impl Requirements {
             id: root.id.into(),
             kind: EntryKind::Raw,
             byte_len: Some(u64::from(root.len)),
+            consumer: None,
         });
     }
 
@@ -139,6 +157,7 @@ impl Requirements {
             id: id.into(),
             kind: EntryKind::Raw,
             byte_len: None,
+            consumer: None,
         });
     }
 }

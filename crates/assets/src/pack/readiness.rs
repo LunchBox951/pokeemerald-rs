@@ -18,6 +18,21 @@ pub struct RequiredAsset {
     pub kind: EntryKind,
     /// Required raw payload length, when its schema has a fixed size.
     pub byte_len: Option<u64>,
+    /// How the supported game reads this asset, when that is stricter than its
+    /// stored shape.
+    pub consumer: Option<ConsumerConstraint>,
+}
+
+/// A rule the supported game's consumer of one asset imposes beyond the
+/// asset's stored shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumerConstraint {
+    /// The consumer repacks image pixels at this bit depth, which may be
+    /// narrower than the depth the pack declares, and rejects larger indices.
+    ImagePixelDepth(u8),
+    /// The raw asset is a song the game starts as its music, so every voice it
+    /// converts must be playable.
+    PlayableSong,
 }
 
 impl AssetPack {
@@ -54,6 +69,7 @@ impl AssetPack {
         let pack = Self { bytes, entries };
         pack.validate_required(required).map_err(fail)?;
         pack.validate_schemas().map_err(fail)?;
+        pack.validate_consumers(required).map_err(fail)?;
         Ok(pack)
     }
 

@@ -395,8 +395,9 @@ impl TitleScene {
 }
 
 /// Loads the pack from its default location and decodes the title screen in
-/// one step -- the entry point [`crate::App::new`] uses. Checkout gates use
-/// [`load_repo`] instead.
+/// one step. [`crate::App::new`] resolves that location once itself and uses
+/// [`load_at`], so later loads stay on the pack it validated. Checkout gates
+/// use [`load_repo`] instead.
 ///
 /// # Errors
 ///
@@ -405,7 +406,17 @@ impl TitleScene {
 /// `./init.sh` then `cargo xtask extract` in a checkout).
 /// [`crate::load_ready_pack`] and [`TitleScene::from_pack`] describe other failures.
 pub fn load_default() -> Result<TitleScene, TitleSceneError> {
-    let pack = crate::load_ready_pack(&AssetPack::default_path())?;
+    load_at(&AssetPack::default_path())
+}
+
+/// [`load_default`] for a pack at a caller-chosen path, so a caller that
+/// resolved the path once can validate exactly the pack it keeps reading.
+///
+/// # Errors
+///
+/// As [`load_default`].
+pub fn load_at(path: &std::path::Path) -> Result<TitleScene, TitleSceneError> {
+    let pack = crate::load_ready_pack(path)?;
     TitleScene::from_pack(&pack)
 }
 
@@ -423,6 +434,10 @@ pub fn load_repo() -> Result<TitleScene, TitleSceneError> {
     let pack = crate::load_ready_pack(&AssetPack::repo_pack_path())?;
     TitleScene::from_pack(&pack)
 }
+
+/// The press-start sheet. The import profile declares it 8bpp in the pack, but
+/// the renderer repacks it as 4bpp, so readiness checks it at that depth.
+pub(crate) const PRESS_START_IMAGE_ID: &str = "title/image/press_start";
 
 mod asset_tilesets;
 mod idle_frame;

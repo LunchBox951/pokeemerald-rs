@@ -52,7 +52,7 @@ pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
 pub use pokedex_graphics::PokedexGraphicsHandle;
-pub use readiness::{PackProblem, PackReadinessError, RequiredAsset};
+pub use readiness::{ConsumerConstraint, PackProblem, PackReadinessError, RequiredAsset};
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 
 pub use trainer_pic::TrainerPicHandle;
