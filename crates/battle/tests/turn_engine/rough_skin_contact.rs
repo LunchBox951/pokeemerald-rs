@@ -2,11 +2,11 @@
 //! `battle_util.c:2767`-`:2780`) consumes no RNG.
 
 use crate::poison_support::*;
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
 /// Rough Skin holder, slower than [`RATTATA`] except at levels 1, 2 and 5.
-const CARVANHA: u16 = 330;
+const CARVANHA: SpeciesId = SpeciesId::CARVANHA;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
 

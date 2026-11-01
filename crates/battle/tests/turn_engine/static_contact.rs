@@ -2,11 +2,11 @@
 //! (`battle_util.c:2821`), run by `MOVEEND_ON_DAMAGE_ABILITIES` (`battle_script_commands.c:4281`).
 
 use crate::poison_support::*;
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 
 /// `SPECIES_PIKACHU`: Static, and faster than [`RATTATA`] at equal level.
-const PIKACHU: u16 = 25;
+const PIKACHU: SpeciesId = SpeciesId::PIKACHU;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
 const CONSTRUCTION_TURN_NUMBER: u16 = 0;

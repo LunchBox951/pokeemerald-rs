@@ -3,7 +3,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
@@ -14,11 +14,11 @@ const SCRATCH: MoveId = MoveId::SCRATCH;
 const SWORDS_DANCE: MoveId = MoveId::SWORDS_DANCE;
 const FOCUS_ENERGY: MoveId = MoveId::FOCUS_ENERGY;
 
-const RATTATA: u16 = 19;
-const VAPOREON: u16 = 134;
-const JOLTEON: u16 = 135;
-const FLAREON: u16 = 136;
-const MUDKIP: u16 = 283;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
+const VAPOREON: SpeciesId = SpeciesId::VAPOREON;
+const JOLTEON: SpeciesId = SpeciesId::JOLTEON;
+const FLAREON: SpeciesId = SpeciesId::FLAREON;
+const MUDKIP: SpeciesId = SpeciesId::MUDKIP;
 
 /// Trainer whose move choice is scored by `AI_CheckBadMove` alone.
 const GRUNT_AQUA_HIDEOUT_1: TrainerId = TrainerId(2);
@@ -37,7 +37,7 @@ fn injured(mut mon: BattlePokemon, hp_lost: u32) -> BattlePokemon {
 /// Runs one wild turn where the player's `move_id` meets `enemy`, whose only
 /// move is draw-free Swords Dance, and returns the battle, events and RNG.
 fn run_wild_turn(
-    attacker_species: u16,
+    attacker_species: SpeciesId,
     move_id: MoveId,
     enemy: BattlePokemon,
     move_draws: &[u16],

@@ -2,11 +2,11 @@
 //! the original attacker immune to its own reflected poison.
 
 use crate::poison_support::*;
-use assets::AbilityId;
+use assets::{AbilityId, SpeciesId};
 use battle::{Battle, BattleEvent, Dex, PlayerAction, Status1};
 
 /// `SPECIES_ZANGOOSE`: Immunity in its only ability slot.
-const ZANGOOSE: u16 = 380;
+const ZANGOOSE: SpeciesId = SpeciesId::ZANGOOSE;
 
 #[test]
 fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {

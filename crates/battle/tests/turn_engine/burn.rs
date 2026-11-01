@@ -3,7 +3,7 @@
 //! (`pokeemerald/include/constants/battle.h:118`).
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::hit::damage_before_roll;
 use battle::status1::burn_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, Status1};
@@ -14,11 +14,11 @@ const SCRATCH: MoveId = MoveId::SCRATCH;
 
 /// `SPECIES_RATTATA`: Normal-type, Guts in ability slot 1, faster than
 /// [`ZIGZAGOON`] at equal levels.
-const RATTATA: u16 = 19;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// `SPECIES_ZIGZAGOON`: a Normal-type defender with no damage-reading ability.
-const ZIGZAGOON: u16 = 288;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
 /// `SPECIES_SEVIPER`: Shed Skin in its only ability slot.
-const SEVIPER: u16 = 379;
+const SEVIPER: SpeciesId = SpeciesId::SEVIPER;
 const GUTS_SLOT: u8 = 1;
 const LEVEL: u8 = 20;
 

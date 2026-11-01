@@ -58,21 +58,21 @@ const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 /// `AI_SCRIPT_CHECK_VIABILITY` (`src/data/trainers.h:6280`-`:6290`).
 const BRENDAN_ROUTE_103_TREECKO: TrainerId = TrainerId(523);
 
-const TREECKO: u16 = 277;
-const TORCHIC: u16 = 280;
-const MUDKIP: u16 = 283;
-const ZIGZAGOON: u16 = 288;
-const PICHU: u16 = 172;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
+const TORCHIC: SpeciesId = SpeciesId::TORCHIC;
+const MUDKIP: SpeciesId = SpeciesId::MUDKIP;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
+const PICHU: SpeciesId = SpeciesId::PICHU;
 /// `SPECIES_MEOWTH`: Pickup is its only ability, so the trainer AI reads it
 /// without a guess. Paired with Slash and level 50 in these fixtures, it
 /// one-shots and outspeeds any level-5 party member, so the rival's own
 /// action never executes.
-const MEOWTH: u16 = 52;
+const MEOWTH: SpeciesId = SpeciesId::MEOWTH;
 /// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
-const CHANSEY: u16 = 113;
+const CHANSEY: SpeciesId = SpeciesId::CHANSEY;
 /// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
 /// [`ZIGZAGOON`].
-const KANGASKHAN: u16 = 115;
+const KANGASKHAN: SpeciesId = SpeciesId::KANGASKHAN;
 
 const POUND: MoveId = MoveId::POUND;
 const SCRATCH: MoveId = MoveId::SCRATCH;
@@ -161,7 +161,7 @@ fn the_route_103_rival_battle_exposes_its_trainer_context() {
     // TRAINER_CLASS_RIVAL's gTrainerMoneyTable value is 15, the party's last
     // mon is level 5, moneyMultiplier is 1: 4 * 5 * 1 * 15.
     assert_eq!(context.money(), 300);
-    assert_eq!(battle.enemy().species(), SpeciesId(TREECKO));
+    assert_eq!(battle.enemy().species(), TREECKO);
     assert_eq!(battle.enemy().level(), 5);
     let known: Vec<MoveId> = battle.enemy().moves().iter().map(|m| m.move_id).collect();
     assert_eq!(known, vec![POUND, LEER]);
@@ -269,7 +269,7 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
 /// award itself.
 #[test]
 fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
-    const BULBASAUR: u16 = 1;
+    const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
     let knockout_script = || {
         script(&[
             CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
@@ -366,7 +366,7 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(TORCHIC),
+            species: TORCHIC,
             bench_remaining: 1,
         }),
         "the second party member comes out, not the third: {events:?}"
@@ -378,7 +378,7 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         "the battle is not over while the trainer still has mons"
     );
     assert_eq!(battle.outcome(), None);
-    assert_eq!(battle.enemy().species(), SpeciesId(TORCHIC));
+    assert_eq!(battle.enemy().species(), TORCHIC);
     assert!(
         !battle.enemy().is_fainted()
             && battle.enemy().current_hp() == battle.enemy().stats().max_hp,
@@ -390,7 +390,7 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(MUDKIP),
+            species: MUDKIP,
             bench_remaining: 0,
         }),
         "the third party member comes out: {events:?}"
@@ -444,12 +444,12 @@ fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(MUDKIP),
+            species: MUDKIP,
             bench_remaining: 1,
         }),
         "the super-effective Mudkip comes out, not the party-order Treecko: {events:?}"
     );
-    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+    assert_eq!(battle.enemy().species(), MUDKIP);
     assert_eq!(rng.draws(), 12, "exact scripted draw stream is consumed");
     rng.assert_exhausted();
 }
@@ -488,12 +488,12 @@ fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_par
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(PICHU),
+            species: PICHU,
             bench_remaining: 1,
         }),
         "Tackle's STAB from the Normal-type Zigzagoon sends out Pichu, not the party-order Mudkip: {events:?}"
     );
-    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(battle.enemy().species(), PICHU);
     assert_eq!(rng.draws(), 11, "exact scripted draw stream is consumed");
     rng.assert_exhausted();
 }
@@ -529,12 +529,12 @@ fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() 
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(PICHU),
+            species: PICHU,
             bench_remaining: 1,
         }),
         "Mega Kick's power cannot outscore Tackle when both are Normal: {events:?}"
     );
-    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(battle.enemy().species(), PICHU);
     assert_eq!(rng.draws(), 11, "exact scripted draw stream is consumed");
     rng.assert_exhausted();
 }
@@ -572,7 +572,7 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
     );
     assert_eq!(battle.player().level(), 6);
     assert_ne!(battle.player().stats(), old_stats);
-    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(battle.enemy().species(), PICHU);
 
     let expected_damage = |attacker: &BattlePokemon| {
         let mut hit_rng = SequenceRng::new([u16::MAX; 4]);
@@ -622,8 +622,7 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
     let level_16 =
-        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 16)
-            .unwrap();
+        assets::experience_for_level(dex.species(TREECKO).unwrap().growth_rate, 16).unwrap();
 
     assert!(
         player
@@ -636,7 +635,7 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     assert_eq!(player.level(), 16, "the thresholds were crossed");
     assert_eq!(player.experience(), level_16);
     assert!(
-        battle::initial_moveset(SpeciesId(TREECKO), 16).contains(&PURSUIT),
+        battle::initial_moveset(TREECKO, 16).contains(&PURSUIT),
         "fixture sanity: level 16 is the learnset entry that holds Pursuit"
     );
     assert_eq!(
@@ -698,8 +697,7 @@ fn a_single_crossed_level_learns_its_learnset_move() {
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL]);
     let level_16 =
-        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
-            .unwrap();
+        assets::experience_for_level(dex.species(TORCHIC).unwrap().growth_rate, 16).unwrap();
 
     assert!(
         mon.apply_experience(&dex, level_16 - mon.experience())
@@ -729,8 +727,7 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, PECK]);
     let level_16 =
-        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
-            .unwrap();
+        assets::experience_for_level(dex.species(TORCHIC).unwrap().growth_rate, 16).unwrap();
 
     assert!(
         mon.apply_experience(&dex, level_16 - mon.experience())
@@ -757,7 +754,7 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
 fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 13, vec![SCRATCH]);
-    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let growth_rate = dex.species(TORCHIC).unwrap().growth_rate;
     let level_28 = assets::experience_for_level(growth_rate, 28).unwrap();
     let level_29 = assets::experience_for_level(growth_rate, 29).unwrap();
 
@@ -823,8 +820,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 15, original_moves.clone());
     let level_16 =
-        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
-            .unwrap();
+        assets::experience_for_level(dex.species(TORCHIC).unwrap().growth_rate, 16).unwrap();
 
     let pending = mon
         .apply_experience(&dex, level_16 - mon.experience())
@@ -878,7 +874,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
 #[allow(clippy::too_many_lines)]
 fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let dex = Dex::new();
-    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let growth_rate = dex.species(TORCHIC).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
@@ -993,7 +989,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
 #[test]
 fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on() {
     let dex = Dex::new();
-    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let growth_rate = dex.species(TORCHIC).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
@@ -1041,7 +1037,7 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
         vec![
             BattleEvent::MoveLearnDeclined { move_id: PECK },
             BattleEvent::TrainerSentOut {
-                species: SpeciesId(TREECKO),
+                species: TREECKO,
                 bench_remaining: 0,
             },
         ]
@@ -1061,7 +1057,7 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
 /// learnset entry before running the deferred faint aftermath.
 #[test]
 fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
-    const WYNAUT: u16 = 360;
+    const WYNAUT: SpeciesId = SpeciesId::WYNAUT;
     const COUNTER: MoveId = MoveId::COUNTER;
     const MIRROR_COAT: MoveId = MoveId::MIRROR_COAT;
     const SAFEGUARD: MoveId = MoveId::SAFEGUARD;
@@ -1069,7 +1065,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     const LEVEL_15_BLOCK: [MoveId; 4] = [COUNTER, MIRROR_COAT, SAFEGUARD, DESTINY_BOND];
 
     let dex = Dex::new();
-    let growth_rate = dex.species(SpeciesId(WYNAUT)).unwrap().growth_rate;
+    let growth_rate = dex.species(WYNAUT).unwrap().growth_rate;
     let level_15 = assets::experience_for_level(growth_rate, 15).unwrap();
     let mut player = max_iv_mon(&dex, WYNAUT, 14, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
@@ -1263,7 +1259,7 @@ fn both_route_103_ai_flag_shapes_construct_and_play() {
 
 #[test]
 fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
-    const MAGIKARP: u16 = 129;
+    const MAGIKARP: SpeciesId = SpeciesId::MAGIKARP;
 
     let dex = Dex::new();
     let player = max_iv_mon(&dex, MAGIKARP, 1, vec![TACKLE]);
@@ -1356,13 +1352,13 @@ fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_e
     );
     assert!(
         turn1.contains(&BattleEvent::PlayerSentOut {
-            species: SpeciesId(TORCHIC),
+            species: TORCHIC,
             reserves_remaining: 0,
         }),
         "the healthy reserve takes over instead of ending the battle: {turn1:?}"
     );
     assert_eq!(battle.outcome(), None);
-    assert_eq!(battle.player().species(), SpeciesId(TORCHIC));
+    assert_eq!(battle.player().species(), TORCHIC);
 
     let turn2 = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -1380,10 +1376,10 @@ fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_e
 
     let members: Vec<_> = battle.player_members().collect();
     assert_eq!(members.len(), 2);
-    assert_eq!(members[0].species(), SpeciesId(MUDKIP));
+    assert_eq!(members[0].species(), MUDKIP);
     assert_eq!(members[0].current_hp(), 0);
     assert_eq!(members[0].moves()[0].pp, lead_pp);
-    assert_eq!(members[1].species(), SpeciesId(TORCHIC));
+    assert_eq!(members[1].species(), TORCHIC);
     assert_eq!(members[1].current_hp(), 0);
     assert_eq!(members[1].moves()[0].pp, reserve_pp);
     assert_eq!(rng.draws(), 21, "exact scripted draw stream is consumed");
@@ -1578,7 +1574,7 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
 
 #[test]
 fn zigzagoon_fixture_is_species_zigzagoon() {
-    assert_eq!(SpeciesId(ZIGZAGOON), SpeciesId::ZIGZAGOON);
+    assert_eq!(ZIGZAGOON, SpeciesId::ZIGZAGOON);
 }
 
 /// `HandleAction_ActionFinished` clears `gCurrentMove` (`pokeemerald/src/battle_util.c:658-670`)
@@ -1639,13 +1635,13 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     assert_eq!(
         events[sent_out_index],
         BattleEvent::TrainerSentOut {
-            species: SpeciesId(PICHU),
+            species: PICHU,
             bench_remaining: BENCH_REMAINING_AFTER_SEND_OUT,
         },
         "a cleared gCurrentMove scores every candidate off the floor base, \
          so Tackle's STAB keeps party-order-first Pichu: {events:?}"
     );
-    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(battle.enemy().species(), PICHU);
 }
 
 /// `HandleFaintedMonActions` case 4 walks battlers from 0
