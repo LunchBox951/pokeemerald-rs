@@ -53,7 +53,9 @@
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
 //!   `assets`' own schema encoders, and `MUS_TITLE` itself
 //!   (`audio/song/*`), decoded from the engine's track byte-code into
-//!   `assets::Song` events. A domain that has a ROM struct behind
+//!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
+//!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to
+//!   PCM). A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
@@ -98,7 +100,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use domains::audio::decode_voicegroup_payload;
+pub use domains::audio::{decode_cry_payloads, decode_voicegroup_payload};
 pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
@@ -122,8 +124,8 @@ pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
+    Encoding, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
     OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
