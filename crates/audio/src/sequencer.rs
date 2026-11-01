@@ -292,7 +292,8 @@ pub struct Sequencer {
     suspended_tick: Option<usize>,
     /// A fade step handed to a frame whose tick was suspended. `FadeOutBody`
     /// runs only when the next `MPlayMain` begins (`m4a_1.s:1152`-`:1169`),
-    /// so the step waits for the tick to complete; a later step replaces it.
+    /// so the step waits for the tick to complete and `advance_frame` applies
+    /// it then, through either render path; a later step replaces it.
     pending_fade: Option<u8>,
 }
 
@@ -442,22 +443,16 @@ impl Sequencer {
     /// A suspended tick is still the previous `MPlayMain`, whose tick upstream
     /// finishes before the next `FadeOutBody` runs, so a frame that resumes
     /// one applies no step before it: the step waits (the latest one wins)
-    /// and is staged, or pauses, once the tick completes, ahead of the next
-    /// frame's tick. The tick's notes therefore all share one `volX`, and the
-    /// terminal step never leaves a tick half-run.
+    /// and [`Self::advance_frame`] stages it, or pauses, the moment the tick
+    /// completes, whichever render path completes it. The tick's notes
+    /// therefore all share one `volX`, and the terminal step never leaves a
+    /// tick half-run.
     pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
         if self.suspended_tick.is_some() && !self.paused {
             if fade_vol_x.is_some() {
                 self.pending_fade = fade_vol_x;
             }
             self.advance_frame();
-            if self.suspended_tick.is_none() {
-                match self.pending_fade.take() {
-                    Some(0) => self.pause(),
-                    Some(vol_x) => self.stage_fade_volume(vol_x),
-                    None => {}
-                }
-            }
             self.mix_committed_frame(out);
             return;
         }
@@ -538,6 +533,11 @@ impl Sequencer {
             if !self.finish_tick(track_id, false) {
                 return;
             }
+            // The fade step that waited on the tick is the next
+            // `FadeOutBody`, whichever render path completed the tick.
+            if self.apply_pending_fade() {
+                return;
+            }
         } else {
             debug_assert!(self.tempo_c < TEMPO_UNIT);
             self.tempo_c += self.tempo_i;
@@ -553,6 +553,22 @@ impl Sequencer {
         // A suspended tick returns above, so a half-run burst's volume or
         // pitch never reaches a voice.
         self.propagate_dirty_tracks();
+    }
+
+    /// Stages the fade step that waited on a suspended tick, or pauses on its
+    /// terminal step; `true` when it paused, so no further tick runs.
+    fn apply_pending_fade(&mut self) -> bool {
+        match self.pending_fade.take() {
+            Some(0) => {
+                self.pause();
+                true
+            }
+            Some(vol_x) => {
+                self.stage_fade_volume(vol_x);
+                false
+            }
+            None => false,
+        }
     }
 
     /// Runs one whole tick; `false` if a track's run yielded and the tick is

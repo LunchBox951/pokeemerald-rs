@@ -926,3 +926,30 @@ fn cancelling_a_fade_mid_tick_restores_every_note_of_that_tick() {
     assert_eq!(volumes.len(), 2);
     assert_eq!(volumes, full, "both notes play at the restored full volume");
 }
+
+/// The waiting restore drains at the tick boundary itself, so a caller that
+/// cancels a fade and goes back to plain `render_frame` still gets it.
+#[test]
+fn a_waiting_restore_drains_through_plain_render_frame() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(true, 1)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(32));
+    assert!(seq.suspended_tick.is_some(), "tick yielded");
+    seq.restore_full_volume();
+    seq.render_frame(&mut out);
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    seq.render_frame(&mut out);
+    let volumes: Vec<_> = seq.mixer.voices().iter().map(|v| v.base_volume()).collect();
+    let mut unfaded = Sequencer::new(test_song(vec![burst_then_second_note(true, 1)], 150));
+    for _ in 0..3 {
+        unfaded.render_frame(&mut out);
+    }
+    let full: Vec<_> = unfaded
+        .mixer
+        .voices()
+        .iter()
+        .map(|v| v.base_volume())
+        .collect();
+    assert_eq!(volumes.len(), 2);
+    assert_eq!(volumes, full, "plain rendering applies the waiting restore");
+}
