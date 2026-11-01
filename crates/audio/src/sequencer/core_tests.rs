@@ -953,3 +953,43 @@ fn a_waiting_restore_drains_through_plain_render_frame() {
     assert_eq!(volumes.len(), 2);
     assert_eq!(volumes, full, "plain rendering applies the waiting restore");
 }
+
+/// At two ticks a frame, the restore that waited on the yielded first tick
+/// follows the frame's second tick and propagation pass, so the second
+/// tick's `Note` cannot consume its dirty flag ahead of the first voice.
+#[test]
+fn a_waiting_restore_follows_the_frames_remaining_ticks() {
+    let track = || {
+        let mut t = vec![Event::Voice(0), Event::Volume(127), tied_note(60)];
+        t.extend(std::iter::repeat_n(
+            Event::Pan(0),
+            TRACK_COMMANDS_PER_TICK as usize + 10,
+        ));
+        t.extend([Event::Wait(1), tied_note(64), Event::Wait(48), Event::Fine]);
+        t
+    };
+    let mut seq = Sequencer::new(test_song(vec![track()], 300));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(32));
+    assert!(seq.suspended_tick.is_some(), "first tick yielded");
+    seq.restore_full_volume();
+    seq.render_frame(&mut out);
+    assert!(seq.suspended_tick.is_none(), "frame completed");
+    seq.render_frame(&mut out);
+    let volumes: Vec<_> = seq.mixer.voices().iter().map(|v| v.base_volume()).collect();
+    let mut unfaded = Sequencer::new(test_song(vec![track()], 300));
+    for _ in 0..3 {
+        unfaded.render_frame(&mut out);
+    }
+    let full: Vec<_> = unfaded
+        .mixer
+        .voices()
+        .iter()
+        .map(|v| v.base_volume())
+        .collect();
+    assert_eq!(volumes.len(), 2);
+    assert_eq!(
+        volumes, full,
+        "both ticks' notes play at the restored volume"
+    );
+}
