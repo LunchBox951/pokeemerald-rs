@@ -134,7 +134,9 @@ impl Oscillator {
     /// the held nibble.
     pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
-            (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
+            (Self::Square(square), Self::Square(previous)) => {
+                square.inherit_hardware_from(previous);
+            }
             (Self::Noise(noise), Self::Noise(previous)) => {
                 noise.continue_output_from(previous);
             }
@@ -158,11 +160,13 @@ impl Oscillator {
         }
     }
 
-    /// Plays the replacement's note-on `NR43` writes against the noise
+    /// Plays the replacement's note-on writes against the noise or square
     /// predecessor it inherited; a no-op otherwise.
     pub(super) fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
-        if let Self::Noise(noise) = self {
-            noise.commit_initial_writes(retires_on_first_pass);
+        match self {
+            Self::Square(square) => square.commit_initial_writes(retires_on_first_pass),
+            Self::Noise(noise) => noise.commit_initial_writes(retires_on_first_pass),
+            Self::Wave { .. } => {}
         }
     }
 
