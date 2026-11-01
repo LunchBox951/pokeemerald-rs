@@ -56,7 +56,10 @@ const MAX_REVERB_LEVEL: u8 = 127;
 /// loop (a `MEMACC` counter) still runs to its `Wait`/`Fine`. The next frame
 /// resumes the same logical tick at the same command: no gate expires, no
 /// later track runs, and no dirty volume or pitch reaches a voice until the
-/// run ends, so the tick stays atomic as upstream's is.
+/// run ends. A frame that ends with the tick suspended mixes nothing and
+/// renders silence (`Sequencer::mix_committed_frame`), so no note started or
+/// released part-way through the tick is heard before the tick completes,
+/// as upstream mixes only after the whole tick (`m4a_1.s:51`-`:62`).
 const TRACK_COMMANDS_PER_TICK: u32 = 1 << 16;
 
 /// Cycle-detection state for one track's current zero-wait run, carried
@@ -382,7 +385,25 @@ impl Sequencer {
     /// Panics if `out.len() != Self::FRAME_SAMPLES`.
     pub fn render_frame(&mut self, out: &mut [f32]) {
         self.advance_frame();
-        self.mixer.mix_frame(out);
+        self.mix_committed_frame(out);
+    }
+
+    /// Mixes the frame unless a tick is suspended. `SoundMain` mixes only
+    /// after `MPlayMainHead` returns (`m4a_1.s:51`-`:62`), so the mixer never
+    /// sees a tick part-way through: a stall frame renders silence and leaves
+    /// every voice, the reverb ring and the CGB clocks where they were, and
+    /// the next frame mixes from the completed tick.
+    fn mix_committed_frame(&mut self, out: &mut [f32]) {
+        if self.suspended_tick.is_some() && !self.paused {
+            assert_eq!(
+                out.len(),
+                Self::FRAME_SAMPLES,
+                "mix_frame expects one frame of interleaved stereo",
+            );
+            out.fill(0.0);
+        } else {
+            self.mixer.mix_frame(out);
+        }
     }
 
     /// Render whole frames into `out`, whose length must be a multiple of
@@ -421,7 +442,7 @@ impl Sequencer {
             }
             None => self.advance_frame(),
         }
-        self.mixer.mix_frame(out);
+        self.mix_committed_frame(out);
     }
 
     /// Stops every not-yet-ended track's voices outright and latches

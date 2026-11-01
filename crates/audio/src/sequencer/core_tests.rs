@@ -737,3 +737,80 @@ fn a_yielded_burst_holds_its_pitch_change_until_the_run_ends() {
         "a half-run burst's pitch must not reach the voice"
     );
 }
+
+/// Peak magnitude of the first rendered frame of a track that starts a note
+/// and then ends it with `Fine` after `burst` zero-wait commands.
+fn first_frame_peak_of_note_then_fine_after(burst: usize) -> f32 {
+    let mut track = vec![Event::Voice(0), Event::Volume(127), tied_note(60)];
+    track.extend(std::iter::repeat_n(Event::Volume(127), burst));
+    track.push(Event::Fine);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame(&mut out);
+    out.iter().fold(0.0, |peak, s| peak.max(s.abs()))
+}
+
+#[test]
+fn yielded_tick_does_not_sound_a_note_its_fine_would_stop() {
+    // `SoundMain` mixes only after `MPlayMainHead` returns (`m4a_1.s:51`-
+    // `:62`), and a channel that `ply_fine` stops before its first mix never
+    // sounds (`m4a_1.s:762`, `:176`-`:182`). So the note's own tick, however
+    // long its zero-wait run, is never heard part-way through.
+    let short = first_frame_peak_of_note_then_fine_after(10);
+    let long = first_frame_peak_of_note_then_fine_after(TRACK_COMMANDS_PER_TICK as usize + 10);
+    assert_eq!(
+        short.to_bits(),
+        0.0_f32.to_bits(),
+        "a note its own tick's Fine stops never sounds"
+    );
+    assert_eq!(
+        long.to_bits(),
+        short.to_bits(),
+        "a suspended tick's note must not reach the mix before its Fine"
+    );
+}
+
+#[test]
+fn a_suspended_tick_freezes_the_mixer_until_the_tick_completes() {
+    // A note already sounding before the long tick resumes exactly where it
+    // stopped once the tick completes: the stall frame neither renders nor
+    // advances it.
+    let mut burst_track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+    ];
+    burst_track.extend(std::iter::repeat_n(
+        Event::Volume(127),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    burst_track.extend([Event::Wait(48), Event::Fine]);
+    let mut plain_track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+    ];
+    plain_track.extend(std::iter::repeat_n(Event::Volume(127), 10));
+    plain_track.extend([Event::Wait(48), Event::Fine]);
+    let mut stalled = Sequencer::new(test_song(vec![burst_track], 150));
+    let mut plain = Sequencer::new(test_song(vec![plain_track], 150));
+    let mut stalled_out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    let mut plain_out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    // Frame 1: the note's tick; frame 2: the burst's tick yields.
+    for _ in 0..2 {
+        stalled.render_frame(&mut stalled_out);
+        plain.render_frame(&mut plain_out);
+    }
+    assert!(stalled.suspended_tick.is_some(), "the burst's tick yielded");
+    assert!(
+        stalled_out.iter().all(|&s| s == 0.0),
+        "a stall frame mixes nothing"
+    );
+    // Frame 3 completes the stalled tick; it then renders what the plain
+    // song rendered on its second frame.
+    stalled.render_frame(&mut stalled_out);
+    assert!(stalled.suspended_tick.is_none());
+    assert_eq!(stalled_out, plain_out);
+}
