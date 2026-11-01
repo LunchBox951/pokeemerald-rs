@@ -25,7 +25,8 @@ use crate::layout::OUTPUT_RELATIVE_PATH;
 #[cfg(unix)]
 type Identity = (u64, u64);
 #[cfg(not(unix))]
-type Identity = ();
+#[derive(Clone, Copy)]
+struct Identity;
 
 /// The identity of the real directory at `path`, or `None` when nothing is
 /// there, a symlink is, or it is not a directory. Reads the link itself, never
@@ -42,7 +43,7 @@ fn directory_identity(path: &Path) -> Option<Identity> {
     }
     #[cfg(not(unix))]
     {
-        Some(())
+        Some(Identity)
     }
 }
 
