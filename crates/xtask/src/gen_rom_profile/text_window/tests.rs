@@ -204,10 +204,20 @@ impl OwnedMap {
     /// entry (a planted symlink included), so the fixture moves to the next
     /// candidate instead of adopting a path it did not create.
     fn create_in(base: &Path, name: &str, contents: &str) -> std::io::Result<Self> {
+        Self::create_in_with(base, name, |file, _| file.write_all(contents.as_bytes()))
+    }
+
+    /// As `create_in`, with the map's content written by `write`, which gets
+    /// the open handle and the map path. A failed write cleans up like a drop.
+    fn create_in_with(
+        base: &Path,
+        name: &str,
+        write: impl FnOnce(&mut File, &Path) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
         for attempt in 0.. {
             let dir = Self::candidate(base, name, attempt);
             match Self::create_private_dir(&dir) {
-                Ok(()) => return Self::create_map(dir, contents),
+                Ok(()) => return Self::create_map(dir, write),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
@@ -223,70 +233,93 @@ impl OwnedMap {
     }
 
     fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = {
+            let mut builder = std::fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
         builder.create(dir)
     }
 
-    /// Create the map in the just-claimed `dir`, removing the directory again
-    /// if that fails so a failed claim leaves nothing behind.
-    fn create_map(dir: PathBuf, contents: &str) -> std::io::Result<Self> {
+    /// Create the map in the just-claimed `dir` and fill it with `write`.
+    ///
+    /// The guard owns the handle from the moment the file exists, so a failed
+    /// write unwinds through the same identity-checked cleanup as a drop and
+    /// never unlinks the map path on faith.
+    fn create_map(
+        dir: PathBuf,
+        write: impl FnOnce(&mut File, &Path) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
         let path = dir.join("pokeemerald.map");
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = match options.open(&path) {
+        let file = match options.open(&path) {
             Ok(file) => file,
             Err(error) => {
                 let _ = std::fs::remove_dir(&dir);
                 return Err(error);
             }
         };
-        if let Err(error) = file.write_all(contents.as_bytes()) {
-            // The file is ours: `create_new` just made it.
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir(&dir);
-            return Err(error);
-        }
-        Ok(Self {
+        let mut owned = Self {
             dir,
             path,
             file: Some(file),
-        })
+        };
+        if let Some(file) = owned.file.as_mut() {
+            // On error `owned` drops here and cleans up.
+            write(file, &owned.path)?;
+        }
+        Ok(owned)
     }
 
-    /// Remove the map only if it is still `file`, the one this fixture
-    /// created; a replacement is left where it is.
+    /// Remove the map only if it is still `file`; a replacement stays.
     ///
-    /// Checking the entry and then unlinking it by name would leave a window
-    /// for a swap, so the entry is first renamed to a name only this cleanup
-    /// uses inside the private directory: rename takes whatever sits at the
-    /// path in one step, and the identity check and the unlink then act on
-    /// that moved entry. The residual window is a mismatch: the replacement is
-    /// absent from the map path until the no-clobber `hard_link` puts it back,
-    /// and a same-user process that guesses the aside name could swap it. A
-    /// replacement is never unlinked either way, so the cost is a stray entry
-    /// that makes the final `remove_dir` fail, which is accepted for a test
-    /// fixture whose scratch directory is mode 0700.
+    /// The entry moves into a fresh unguessable directory, so the rename cannot
+    /// replace a planted name and the identity check and unlink act on what
+    /// moved. std has no `unlinkat`/`renameat2`, so a same-user process that
+    /// races inside the 0700 directory during these few calls is not excluded.
     #[cfg(unix)]
     fn remove_owned_map(&self, file: &File) {
         use std::os::unix::fs::MetadataExt as _;
-        let aside = self.dir.join("pokeemerald.map.cleanup");
-        if std::fs::rename(&self.path, &aside).is_err() {
-            return;
-        }
-        let (Ok(created), Ok(moved)) = (file.metadata(), std::fs::symlink_metadata(&aside)) else {
+        let Some(aside_dir) = self.claim_aside_dir() else {
             return;
         };
-        let ours = (created.dev(), created.ino()) == (moved.dev(), moved.ino());
-        // Only the fixture's own file, or a replacement already back at the
-        // map path, may lose its aside name.
-        if ours || std::fs::hard_link(&aside, &self.path).is_ok() {
-            let _ = std::fs::remove_file(&aside);
+        let aside = aside_dir.join("map");
+        if std::fs::rename(&self.path, &aside).is_ok() {
+            if let (Ok(created), Ok(moved)) = (file.metadata(), std::fs::symlink_metadata(&aside)) {
+                let ours = (created.dev(), created.ino()) == (moved.dev(), moved.ino());
+                // Only the fixture's own file, or a replacement already back at
+                // the map path, may lose its aside name.
+                if ours || std::fs::hard_link(&aside, &self.path).is_ok() {
+                    let _ = std::fs::remove_file(&aside);
+                }
+            }
         }
+        let _ = std::fs::remove_dir(&aside_dir);
+    }
+
+    /// A new empty directory inside the private one, under an unguessable
+    /// name, that nothing else can already hold.
+    #[cfg(unix)]
+    fn claim_aside_dir(&self) -> Option<PathBuf> {
+        use std::hash::{BuildHasher as _, Hasher as _};
+        for _ in 0..64 {
+            // `RandomState` is seeded from the OS per instance.
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            let aside_dir = self.dir.join(format!(".cleanup-{:016x}", hasher.finish()));
+            match Self::create_private_dir(&aside_dir) {
+                Ok(()) => return Some(aside_dir),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return None,
+            }
+        }
+        None
     }
 
     #[cfg(windows)]
@@ -559,4 +592,59 @@ fn cleanup_spares_an_entry_that_replaced_the_map() {
     std::fs::remove_file(&path).expect("remove replacement");
     std::fs::remove_dir(&dir).expect("remove directory");
     assert_eq!(spared.expect("replacement survives cleanup"), "replacement");
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_spares_an_entry_planted_at_the_old_fixed_aside_name() {
+    let fixture = private_base("tw-aside");
+    let (dir, path) = (fixture.dir.clone(), fixture.path.clone());
+    let planted = dir.join("pokeemerald.map.cleanup");
+    std::fs::write(&planted, "precious").expect("plant at the aside name");
+    drop(fixture);
+
+    let spared = std::fs::read_to_string(&planted);
+    let map_gone = std::fs::symlink_metadata(&path).is_err();
+    std::fs::remove_file(&planted).expect("remove planted entry");
+    std::fs::remove_dir(&dir).expect("the directory holds nothing else");
+    assert_eq!(spared.expect("planted entry survives"), "precious");
+    assert!(map_gone, "cleanup left the fixture's own map behind");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_write_spares_an_entry_that_replaced_the_map() {
+    let base = private_base("tw-write-error");
+    let mut replaced = None;
+    let result = OwnedMap::create_in_with(&base.dir, "tw-write-error", |_, path| {
+        std::fs::remove_file(path)?;
+        std::fs::write(path, "replacement")?;
+        replaced = Some(path.to_path_buf());
+        Err(std::io::Error::other("write failed"))
+    });
+    assert!(result.is_err(), "the failed write is reported");
+    let path = replaced.expect("the write step ran");
+
+    let spared = std::fs::read_to_string(&path);
+    std::fs::remove_file(&path).expect("remove replacement");
+    std::fs::remove_dir(path.parent().expect("map dir")).expect("remove directory");
+    assert_eq!(spared.expect("replacement survives"), "replacement");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_write_removes_the_fixtures_own_map_and_directory() {
+    let base = private_base("tw-write-own");
+    let mut claimed = None;
+    let result = OwnedMap::create_in_with(&base.dir, "tw-write-own", |_, path| {
+        claimed = Some(path.to_path_buf());
+        Err(std::io::Error::other("write failed"))
+    });
+    assert!(result.is_err(), "the failed write is reported");
+    let path = claimed.expect("the write step ran");
+    assert!(std::fs::symlink_metadata(&path).is_err(), "map left behind");
+    assert!(
+        std::fs::symlink_metadata(path.parent().expect("map dir")).is_err(),
+        "directory left behind"
+    );
 }
