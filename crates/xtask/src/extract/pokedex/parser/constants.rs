@@ -180,10 +180,20 @@ fn include_guard(cur: &mut Cursor) -> Result<String> {
         Ok(name)
     };
     let guard = guard_line("ifndef")?;
-    if guard_line("define")? != guard {
+    if guard_line("define")? != guard || !is_c_identifier(&guard) {
         return Err(cur.fail(expected));
     }
     Ok(guard)
+}
+
+/// Whether `text` is one C identifier: a letter or underscore, then letters,
+/// digits and underscores. A guard that is not one is not a macro name.
+fn is_c_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Splits `text` after its leading identifier, which is empty if `text` does

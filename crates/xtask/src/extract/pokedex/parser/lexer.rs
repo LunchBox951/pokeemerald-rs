@@ -162,6 +162,12 @@ pub(super) fn lex_string(
     }
 }
 
+/// The blanks GNU cpp skips between a splicing backslash and its newline:
+/// space, tab, vertical tab and form feed.
+fn is_horizontal_blank(c: Option<&char>) -> bool {
+    matches!(c, Some(' ' | '\t' | '\u{b}' | '\u{c}'))
+}
+
 /// Refuses line-ending forms whose preprocessor reading this lexer does not
 /// model: a bare carriage return, which GNU cpp does not read as a line end,
 /// and a backslash separated from its newline by blanks, which GNU cpp still
@@ -180,9 +186,9 @@ fn refuse_unmodelled_line_endings(source: PokedexSource, text: &str) -> Result<(
                     expected: "no bare carriage return outside a `\\r\\n` line ending",
                 });
             }
-            '\\' if matches!(chars.get(i + 1), Some(' ' | '\t')) => {
+            '\\' if is_horizontal_blank(chars.get(i + 1)) => {
                 let mut j = i + 1;
-                while matches!(chars.get(j), Some(' ' | '\t')) {
+                while is_horizontal_blank(chars.get(j)) {
                     j += 1;
                 }
                 if matches!(chars.get(j), Some('\n' | '\r')) {

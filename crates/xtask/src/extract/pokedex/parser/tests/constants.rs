@@ -307,3 +307,25 @@ fn include_guard_naming_a_constant_is_refused() {
         "a guard erasing a dex constant must be refused"
     );
 }
+
+#[test]
+fn include_guard_must_be_a_c_identifier() {
+    for bad in ["123", "BAD-NAME"] {
+        let mut f = fixture();
+        replace_once(
+            &mut f.constants,
+            "#ifndef GUARD\n#define GUARD\n",
+            &format!("#ifndef {bad}\n#define {bad}\n"),
+        );
+        assert!(
+            matches!(
+                f.parse(),
+                Err(PokedexSourceError::Malformed {
+                    source: PokedexSource::Constants,
+                    ..
+                })
+            ),
+            "guard `{bad}` must be refused"
+        );
+    }
+}

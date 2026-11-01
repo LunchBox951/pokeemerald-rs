@@ -203,3 +203,19 @@ fn a_backslash_space_newline_splice_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_backslash_vt_or_ff_newline_splice_is_refused() {
+    // GNU cpp also splices across `\v` and `\f`, which would expose `+ 1`.
+    for replacement in [
+        ".height = 7 /* *\\\u{b}\n/ + 1 /* */,",
+        ".height = 7 /* *\\\u{c}\n/ + 1 /* */,",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.entries, ".height = 7,", replacement);
+        assert!(
+            matches!(err(&f), PokedexSourceError::Malformed { .. }),
+            "{replacement:?} must be refused"
+        );
+    }
+}
