@@ -352,6 +352,12 @@ pub(crate) struct OverworldPhase {
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
 }
 
+/// `FLAG_BADGE02_GET`, `FLAG_BADGE04_GET`, `FLAG_BADGE06_GET` and
+/// `FLAG_BADGE08_GET` (`SYSTEM_FLAGS + 0x8/0xA/0xC/0xE`,
+/// `include/constants/flags.h:1360`-`:1366`): the badges `IsMonDisobedient`
+/// reads.
+const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
+
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
 /// answers every header, event, and collision query the phase makes, so a
 /// scene from another room would silently run `map`'s scripts over the wrong
@@ -370,6 +376,20 @@ pub(super) fn assert_scene_owns_map(scene: &OverworldScene, map: assets::MapId) 
 }
 
 impl OverworldPhase {
+    /// The player's identity and badge limit for the battle-start boundaries
+    /// that hand party members into `battle::Battle`, so traded Pokémon hit
+    /// the pre-PP obedience gate (`IsMonDisobedient`,
+    /// `src/battle_util.c:3923`-`:4038`).
+    pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
+        let badges =
+            OBEDIENCE_BADGE_FLAGS.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false));
+        battle::PlayerObedience::new(
+            u32::from_le_bytes(self.save2.player_trainer_id),
+            self.save2.player_name,
+            badges,
+        )
+    }
+
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
     /// rather than default (module docs on [`Self::new`]).
@@ -998,6 +1018,8 @@ mod landing_call_arrow_elevation_tests;
 mod lead_owner_tests;
 #[cfg(test)]
 mod mom_faceplayer_tests;
+#[cfg(test)]
+mod obedience_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.

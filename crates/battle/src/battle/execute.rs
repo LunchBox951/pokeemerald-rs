@@ -682,12 +682,15 @@ impl Battle {
     /// `CalculateBaseDamage` tests `gBattleMoves[gCurrentMove].effect` for
     /// `EFFECT_EXPLOSION` and halves the raw Defense before the stage scales
     /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
-    /// confused Selfdestruct or Explosion user takes the larger self-hit
-    /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
-    /// depleted slot reaches it too).
-    pub(super) fn apply_confusion_self_hit(
+    /// confused or disobedient Selfdestruct or Explosion user takes the larger
+    /// self-hit (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort,
+    /// so a depleted slot reaches it too). `disobedient` selects the
+    /// [`BattleEvent::DisobedientSelfHit`] report over the confusion one
+    /// (`IsMonDisobedient`, `src/battle_util.c:4023`-`:4030`).
+    pub(super) fn apply_self_hit(
         &mut self,
         battler_is_player: bool,
+        disobedient: bool,
         selected_move: MoveId,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
@@ -735,9 +738,16 @@ impl Battle {
         };
         let hp_lost = damage.min(battler.current_hp());
         battler.apply_damage(hp_lost);
-        events.push(BattleEvent::ConfusionSelfHit {
-            by_player: battler_is_player,
-            damage: hp_lost,
+        events.push(if disobedient {
+            BattleEvent::DisobedientSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
+        } else {
+            BattleEvent::ConfusionSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
         });
         self.settle_faint(battler_is_player, events);
         Ok(())

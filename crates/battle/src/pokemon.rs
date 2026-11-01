@@ -344,6 +344,12 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// Raw game-text OT name with its terminator; `None` when the boundary
+    /// that built this Pokémon never recorded one.
+    ///
+    /// Excluded from [`PartialEq`] (below): the save encoder does not write
+    /// it back, so a reloaded Pokémon differs only in this provenance.
+    original_trainer_name: Option<[u8; 8]>,
     /// The held item, [`ItemId::NONE`] when empty. Part of the mon's identity,
     /// so it survives fainting and write-back; which items a battle accepts is
     /// decided by [`crate::battle::held_item`].
@@ -386,6 +392,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            original_trainer_name: _,
             held_item,
             types,
             base_stats,
@@ -515,6 +522,7 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            original_trainer_name: None,
             held_item: ItemId::NONE,
             types: base.types,
             base_stats: *base,
@@ -647,6 +655,27 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_original_trainer_id(mut self, original_trainer_id: u32) -> Self {
         self.original_trainer_id = original_trainer_id;
+        self
+    }
+
+    /// The original trainer's raw game-text name, terminator appended
+    /// (`GetBoxMonData(MON_DATA_OT_NAME)`), when recorded.
+    #[must_use]
+    pub const fn original_trainer_name(&self) -> Option<&[u8; 8]> {
+        self.original_trainer_name.as_ref()
+    }
+
+    /// Records the original trainer's seven saved name bytes; the eighth
+    /// buffer byte is the terminator `GetBoxMonData` appends.
+    #[must_use]
+    pub const fn with_original_trainer_name(mut self, saved_name: [u8; 7]) -> Self {
+        let mut name = [crate::obedience::TEXT_EOS; 8];
+        let mut index = 0;
+        while index < 7 {
+            name[index] = saved_name[index];
+            index += 1;
+        }
+        self.original_trainer_name = Some(name);
         self
     }
 

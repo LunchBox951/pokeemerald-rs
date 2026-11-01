@@ -121,6 +121,9 @@ pub struct Battle {
     /// Move history and Perish Song state per battler, `[player, enemy]`,
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
+    /// The player's identity and badge limit; `None` skips the obedience
+    /// gate (every Pokémon obeys).
+    player_obedience: Option<crate::obedience::PlayerObedience>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +351,7 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         })
     }
 
@@ -492,7 +496,26 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         })
+    }
+
+    /// Supplies the player's identity and badge limit so the pre-PP
+    /// obedience gate runs for Pokémon of another original trainer
+    /// (`IsMonDisobedient`, `src/battle_util.c:3923`-`:4038`).
+    #[must_use]
+    pub const fn with_player_obedience(
+        mut self,
+        obedience: crate::obedience::PlayerObedience,
+    ) -> Self {
+        self.player_obedience = Some(obedience);
+        self
+    }
+
+    /// The identity and badge limit the obedience gate runs on, if supplied.
+    #[must_use]
+    pub const fn player_obedience(&self) -> Option<&crate::obedience::PlayerObedience> {
+        self.player_obedience.as_ref()
     }
 
     /// Returns the opponent's trainer context, if this is a trainer battle.
@@ -1412,7 +1435,7 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
-                self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
+                self.apply_self_hit(player_is_attacker, false, move_id, rng, events)?;
                 self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
             }
@@ -1458,25 +1481,76 @@ impl Battle {
             } else {
                 self.enemy.moves()[slot].pp
             };
-            if slot_pp == 0 {
-                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
-                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
-                // nothing from an empty slot (`:1230`).
-                if move_id != STRUGGLE {
-                    events.push(BattleEvent::FailedNoPp {
-                        by_player: player_is_attacker,
-                        move_id,
-                    });
-                    self.record_cancelled_move(player_is_attacker, move_id)?;
-                    return Ok(());
-                }
-            } else if player_is_attacker {
-                self.player.deduct_pp_by(slot, pp_cost)?;
-            } else {
-                self.enemy.deduct_pp_by(slot, pp_cost)?;
+            // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+            // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+            // nothing from an empty slot (`:1230`).
+            if slot_pp == 0 && move_id != STRUGGLE {
+                events.push(BattleEvent::FailedNoPp {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                self.record_cancelled_move(player_is_attacker, move_id)?;
+                return Ok(());
             }
         }
+        if !self.passes_obedience_gate(player_is_attacker, move_id, rng, events)? {
+            return Ok(());
+        }
+        if let Some(slot) = slot {
+            self.spend_move_pp(player_is_attacker, slot, pp_cost)?;
+        }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// `Cmd_ppreduce` for one slot: spends `pp_cost`, nothing from an empty
+    /// slot (`battle_script_commands.c:1230`).
+    fn spend_move_pp(
+        &mut self,
+        player_is_attacker: bool,
+        slot: usize,
+        pp_cost: u8,
+    ) -> Result<(), BattleError> {
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if attacker.moves()[slot].pp == 0 {
+            return Ok(());
+        }
+        attacker.deduct_pp_by(slot, pp_cost)
+    }
+
+    /// `IsMonDisobedient` runs after the no-PP abort and before
+    /// `ppreduce` (`battle_script_commands.c:944`-`:957`), so a refused
+    /// action spends no PP. A loafing action jumps straight to
+    /// `MOVEEND_NEXT_TARGET`, past `MOVEEND_UPDATE_LAST_MOVES`
+    /// (`data/battle_scripts_1.s:4232`-`:4242`), so it records no move;
+    /// the self-hit rejoins `BattleScript_MoveEnd` like confusion's.
+    ///
+    /// Returns whether the action goes on to spend PP and execute.
+    fn passes_obedience_gate(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let Some(obedience) = self.player_obedience.filter(|_| player_is_attacker) else {
+            return Ok(true);
+        };
+        match crate::obedience::check(&obedience, &self.player, rng)? {
+            crate::obedience::Obedience::Obeys => Ok(true),
+            crate::obedience::Obedience::Loafs(message) => {
+                events.push(BattleEvent::Disobeyed { message });
+                Ok(false)
+            }
+            crate::obedience::Obedience::HurtsItself => {
+                self.apply_self_hit(true, true, move_id, rng, events)?;
+                self.record_confusion_self_hit(true);
+                Ok(false)
+            }
+        }
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one
@@ -1611,6 +1685,7 @@ mod tests {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         };
         (battle, player_max_hp, player_move_max_pp)
     }
