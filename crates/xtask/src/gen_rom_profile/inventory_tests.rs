@@ -8,14 +8,15 @@ use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, field_messages, fonts,
-    inventory, layouts, locate_profile, opening_scene, sprites, starter_chooser, text_window,
-    tilesets, title,
+    inventory, layouts, locate_profile, naming_screen, opening_scene, sprites, starter_chooser,
+    text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
-    healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
-    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids, sprite_palette_ids,
+    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
+    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -42,6 +43,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(starter_chooser_ids())
         .chain(opening_scene_ids())
         .chain(battle_interface_ids())
+        .chain(naming_screen_ids())
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .map(|id| raw_entry(id, vec![0]))
@@ -80,6 +82,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             opening_scene::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_interface" {
             battle_interface::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "naming_screen" {
+            naming_screen::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
@@ -137,6 +141,7 @@ fn the_fixed_inventory_ids_are_unique() {
         starter_chooser_ids(),
         opening_scene_ids(),
         battle_interface_ids(),
+        naming_screen_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");
@@ -408,6 +413,48 @@ fn a_surplus_battle_interface_entry_is_refused_by_id() {
         );
         let mut report = Vec::new();
         let err = battle_interface::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_naming_screen_inventory_is_fifteen_sheets_seven_palettes_and_four_tilemaps() {
+    let ids = naming_screen_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 26);
+    assert_eq!(count("naming-screen/image/"), 15);
+    assert_eq!(count("naming-screen/palette/"), 7);
+    assert_eq!(count("naming-screen/raw/"), 4);
+}
+
+#[test]
+fn a_pack_missing_a_naming_screen_entry_is_refused() {
+    for id in naming_screen_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "naming_screen");
+    }
+}
+
+#[test]
+fn a_surplus_naming_screen_entry_is_refused_by_id() {
+    let surplus = "naming-screen/palette/rival";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-naming-screen", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = naming_screen::locate(ctx, &mut report)
             .map(|_| ())
             .unwrap_err();
         assert!(

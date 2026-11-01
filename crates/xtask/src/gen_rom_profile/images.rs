@@ -73,7 +73,7 @@ struct Variant {
 /// cannot list it), or `None` for a global root.
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
-/// `list_menu.c:290`, `text_window.c:10-28`.
+/// `list_menu.c:290`, `text_window.c:10-28`, `naming_screen.c:185-186`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         return super::text_window::is_static_frame(stem)
@@ -85,6 +85,8 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
             .then(|| format!("sTitleScreen{camel}Gfx"));
     }
     match id {
+        "naming-screen/image/pc_icon_off" => Some("sPCIconOff_Gfx".to_owned()),
+        "naming-screen/image/pc_icon_on" => Some("sPCIconOn_Gfx".to_owned()),
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
         "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
@@ -124,6 +126,15 @@ fn symbol_fragments(id: &str) -> Vec<String> {
             return vec!["gMessageBox_Gfx".to_owned()];
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
+    }
+    if let Some(stem) = id.strip_prefix("naming-screen/image/") {
+        // `gNamingScreenOKButton_Gfx` is the one spelling `camel_case` misses.
+        let name = if stem == "ok_button" {
+            "OKButton".to_owned()
+        } else {
+            super::locate::camel_case(stem)
+        };
+        return vec![format!("gNamingScreen{name}_Gfx")];
     }
     match id {
         "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
@@ -197,6 +208,16 @@ fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
     kept
 }
 
+/// How [`locate_images_with`] treats an image whose bytes turn up at more
+/// addresses than there are ids sharing them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Duplicates {
+    /// Pair ids with copies in address order ([`Resolution::ArbitraryAmongIdentical`]).
+    PairInAddressOrder,
+    /// Refuse: a family with an upstream structure to decide must not guess.
+    Refuse,
+}
+
 /// Locates every image in `queries` with one raw and one LZ77 ROM search.
 ///
 /// # Errors
@@ -209,6 +230,34 @@ pub fn locate_images(
     ctx: &Context<'_>,
     queries: &[ImageQuery],
     report: &mut Vec<ReportLine>,
+) -> Result<Vec<ImagePlan>, GenRomProfileError> {
+    locate_images_with(ctx, queries, report, Duplicates::PairInAddressOrder)
+}
+
+/// [`locate_images`] that accepts an image only when its art turns up at
+/// exactly one address, whatever else shares its bytes.
+///
+/// For families whose images have no identical-art twins to pair, so a repeat
+/// is evidence the search is wrong rather than a copy to pick.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::NotFound`] if an image's art is nowhere in the ROM
+/// under any packing, or [`GenRomProfileError::Ambiguous`] if it turns up at
+/// more than one address.
+pub fn locate_unique_images(
+    ctx: &Context<'_>,
+    queries: &[ImageQuery],
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<ImagePlan>, GenRomProfileError> {
+    locate_images_with(ctx, queries, report, Duplicates::Refuse)
+}
+
+fn locate_images_with(
+    ctx: &Context<'_>,
+    queries: &[ImageQuery],
+    report: &mut Vec<ReportLine>,
+    duplicates: Duplicates,
 ) -> Result<Vec<ImagePlan>, GenRomProfileError> {
     let mut raw_needles: Vec<Vec<u8>> = Vec::new();
     let mut raw_variants: Vec<Variant> = Vec::new();
@@ -286,7 +335,34 @@ pub fn locate_images(
         }
     }
 
+    if duplicates == Duplicates::Refuse {
+        require_one_address_each(queries, &found)?;
+    }
     assign(ctx, queries, &found, report)
+}
+
+/// Fails unless every query matched at exactly one address.
+fn require_one_address_each(
+    queries: &[ImageQuery],
+    found: &[Candidates],
+) -> Result<(), GenRomProfileError> {
+    for (query, candidates) in queries.iter().zip(found) {
+        match candidates.len() {
+            0 => {
+                return Err(GenRomProfileError::NotFound {
+                    id: query.id.clone(),
+                })
+            }
+            1 => {}
+            _ => {
+                return Err(GenRomProfileError::Ambiguous {
+                    id: query.id.clone(),
+                    addrs: candidates.keys().copied().collect(),
+                })
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One plan per query from its candidate addresses; ids with identical
@@ -419,6 +495,14 @@ mod tests {
         assert_eq!(
             symbol_fragments("battle-interface/image/textbox"),
             ["gBattleTextboxTiles"]
+        );
+        assert_eq!(
+            symbol_fragments("naming-screen/image/ok_button"),
+            ["gNamingScreenOKButton_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("naming-screen/image/page_swap_frame"),
+            ["gNamingScreenPageSwapFrame_Gfx"]
         );
         assert_eq!(
             symbol_fragments("battle-interface/image/healthbox_singles_player"),

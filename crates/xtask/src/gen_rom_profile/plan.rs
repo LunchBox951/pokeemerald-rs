@@ -535,6 +535,17 @@ pub struct BattleInterfacePlan {
     pub battle_bar: BlobPlan,
 }
 
+/// The naming screen's sheets, palettes, and tilemaps, owned.
+#[derive(Debug, Clone)]
+pub struct NamingScreenPlan {
+    /// Every `naming-screen/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `naming-screen/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `naming-screen/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -568,6 +579,8 @@ pub struct ProfilePlan {
     pub opening_scene: OpeningScenePlan,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfacePlan,
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenPlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }
