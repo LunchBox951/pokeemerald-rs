@@ -1,4 +1,6 @@
-use super::shared::{pack_fixture_dir, write_pack};
+#[cfg(unix)]
+use super::shared::pack_fixture_dir;
+use super::shared::write_pack;
 
 const PRECIOUS: &[u8] = b"precious";
 

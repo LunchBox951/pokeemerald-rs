@@ -445,12 +445,15 @@ impl Drop for PackFixture {
 fn claim_private_dir(dir_hint: &str) -> std::path::PathBuf {
     for attempt in 0.. {
         let dir = pack_fixture_dir(dir_hint, attempt);
-        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt as _;
+            let mut builder = std::fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
         match builder.create(&dir) {
             Ok(()) => return dir,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
