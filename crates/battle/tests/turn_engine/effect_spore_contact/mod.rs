@@ -82,15 +82,32 @@ fn rattata(dex: &Dex, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     max_iv_mon(dex, RATTATA, level, moves)
 }
 
-/// Builds a species at a level that out-speeds a level-5 [`shroomish`] holder.
-fn species_with_ability(dex: &Dex, species: SpeciesId, ability: AbilityId) -> BattlePokemon {
-    let mon = max_iv_mon(dex, species.0, FASTER_THAN_HOLDER_LEVEL, vec![TACKLE]);
+/// Builds a species at `level`, asserting it carries `ability` so a fixture
+/// default drift fails the test instead of silently dropping the ability.
+fn species_with_ability_at_level(
+    dex: &Dex,
+    species: SpeciesId,
+    level: u8,
+    ability: AbilityId,
+) -> BattlePokemon {
+    let mon = max_iv_mon(dex, species.0, level, vec![TACKLE]);
     assert_eq!(mon.ability(), ability);
     mon
 }
 
+/// Builds a species at a level that out-speeds a level-5 [`shroomish`] holder.
+fn species_with_ability(dex: &Dex, species: SpeciesId, ability: AbilityId) -> BattlePokemon {
+    species_with_ability_at_level(dex, species, FASTER_THAN_HOLDER_LEVEL, ability)
+}
+
 fn synchronizer(dex: &Dex) -> BattlePokemon {
     species_with_ability(dex, SpeciesId(RALTS), AbilityId::SYNCHRONIZE)
+}
+
+/// A [`synchronizer`] at an explicit `level`, for a case that needs a level
+/// other than the out-speed one.
+fn synchronizer_at_level(dex: &Dex, level: u8) -> BattlePokemon {
+    species_with_ability_at_level(dex, SpeciesId(RALTS), level, AbilityId::SYNCHRONIZE)
 }
 
 /// Leaves `mon` with exactly `hp` HP.
