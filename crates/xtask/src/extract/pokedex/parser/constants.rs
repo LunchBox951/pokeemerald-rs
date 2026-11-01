@@ -42,7 +42,7 @@ impl Constants {
 
 pub(super) fn parse_constants(text: &str) -> Result<Constants> {
     let mut cur = Cursor::new(PokedexSource::Constants, text)?;
-    let guard = include_guard(&mut cur)?;
+    let (guard, guard_line) = include_guard(&mut cur)?;
     cur.keyword("enum", "the National Dex `enum {`")?;
     cur.punct('{', "`{` opening the National Dex enum")?;
     let mut values: HashMap<String, u16> = HashMap::new();
@@ -82,7 +82,7 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             actual: count,
         });
     }
-    refuse_guard_naming_a_constant(&guard, &values)?;
+    refuse_guard_naming_a_constant(&guard, guard_line, &values)?;
 
     // The include guard's `#endif` must be the last token.
     let Some((closing, rest)) = cur.tokens[cur.pos..].split_last() else {
@@ -152,22 +152,29 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
     Ok(Constants { values })
 }
 
-/// Consumes the leading `#ifndef NAME` / `#define NAME` pair; returns `NAME`.
 /// The guard macro is defined before the enum, so a guard naming a constant
-/// would erase that constant under preprocessing.
-fn refuse_guard_naming_a_constant(guard: &str, values: &HashMap<String, u16>) -> Result<()> {
+/// would erase that constant under preprocessing. `line` is the guard's
+/// `#ifndef` line.
+fn refuse_guard_naming_a_constant(
+    guard: &str,
+    line: usize,
+    values: &HashMap<String, u16>,
+) -> Result<()> {
     if values.contains_key(guard) {
         return Err(PokedexSourceError::Malformed {
             source: PokedexSource::Constants,
-            line: 1,
+            line,
             expected: "an include guard that names no National Dex constant",
         });
     }
     Ok(())
 }
 
-fn include_guard(cur: &mut Cursor) -> Result<String> {
+/// Consumes the leading `#ifndef NAME` / `#define NAME` pair; returns `NAME`
+/// and the line of its `#ifndef`.
+fn include_guard(cur: &mut Cursor) -> Result<(String, usize)> {
     let expected = "the `#ifndef`/`#define` include guard before the enum";
+    let line = cur.line();
     let mut guard_line = |word: &str| -> Result<String> {
         let name = match cur.peek() {
             Some(Tok::Directive(body)) => match body.split_whitespace().collect::<Vec<_>>()[..] {
@@ -183,7 +190,7 @@ fn include_guard(cur: &mut Cursor) -> Result<String> {
     if guard_line("define")? != guard || !is_c_identifier(&guard) {
         return Err(cur.fail(expected));
     }
-    Ok(guard)
+    Ok((guard, line))
 }
 
 /// Whether `text` is one C identifier: a letter or underscore, then letters,
