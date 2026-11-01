@@ -16,6 +16,7 @@ use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
+pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;
 use super::ExtractError;
 
 #[derive(Clone, Copy)]
@@ -756,4 +757,26 @@ pub(crate) fn healthbox_battle_bar_id() -> String {
 /// beside the textbox and element ids.
 pub(crate) fn healthbox_frame_ids() -> Vec<String> {
     healthbox_frame_pack_ids()
+}
+
+/// Every `trainer-pic/` pack id extraction emits: the front image and
+/// palette of Brendan and of May.
+pub(crate) fn trainer_front_ids() -> Vec<String> {
+    TRAINER_FRONT_PICS
+        .iter()
+        .flat_map(|pic| [pic.image_id, pic.palette_id])
+        .map(str::to_owned)
+        .collect()
+}
+
+pub(crate) use super::trainer_battler::TRAINERS as TRAINER_BATTLERS;
+
+/// Every `trainer/` pack id extraction emits: for Brendan and for May the
+/// front picture, the back sheet and the shared palette.
+pub(crate) fn trainer_battler_ids() -> Vec<String> {
+    TRAINER_BATTLERS
+        .iter()
+        .flat_map(|trainer| [trainer.front_id, trainer.back_id, trainer.palette_id])
+        .map(str::to_owned)
+        .collect()
 }

@@ -4,7 +4,7 @@ use assets::items::{ItemId, Pocket};
 use engine::bag_menu::{BagAction, BagPositions};
 use engine::save::bag::Bag;
 use platform::{ButtonState, Buttons};
-use rendering::{Framebuffer, Rgb888};
+use rendering::{Framebuffer, PaletteStage, Rgb888};
 
 use super::pack_fixture::{
     bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, GRAY_CURSOR_SHADOW,
@@ -75,7 +75,7 @@ fn open_with(request: BagScreenRequest, bag: &Bag) -> BagScreen {
 pub(super) fn frame_of(screen: &BagScreen) -> Framebuffer {
     let mut base = Framebuffer::new();
     base.fill(SHOWN_BASE);
-    screen.compose_over(base)
+    screen.compose_over(base, PaletteStage::default())
 }
 
 fn at(fb: &Framebuffer, x: usize, y: usize) -> Rgb888 {
@@ -300,16 +300,15 @@ fn cancel_returns_to_the_field_or_cancels_the_battle() {
         BagScreenTick::Closed(BagScreenResult::ReturnToField)
     );
     let mut battle = open_screen(BagScreenMode::Battle, &sample_bag());
+    let open_frame = frame_of(&battle);
     assert_eq!(
         battle.tick(press(Buttons::B)),
         BagScreenTick::Closed(BagScreenResult::Cancelled)
     );
 
-    // A closed screen draws nothing and keeps reporting its result.
-    let mut base = Framebuffer::new();
-    base.fill(SHOWN_BASE);
-    let after = battle.compose_over(base.clone());
-    assert_eq!(after.pixels(), base.pixels());
+    // A closed screen keeps drawing, as the source of the fade out, and keeps
+    // reporting its result.
+    assert_eq!(frame_of(&battle).pixels(), open_frame.pixels());
     assert_eq!(
         battle.tick(press(Buttons::A)),
         BagScreenTick::Closed(BagScreenResult::Cancelled)
@@ -699,6 +698,7 @@ fn a_held_down_does_not_repeat_inside_a_choice_window() {
 }
 
 mod move_data;
+mod palette;
 mod scroll;
 mod swap;
 mod switch;

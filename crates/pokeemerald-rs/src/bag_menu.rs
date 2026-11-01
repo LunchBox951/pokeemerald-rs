@@ -5,7 +5,9 @@
 //! One renderer serves both request modes. [`BagScreenMode`] only picks the
 //! engine's selection mode (`GoToBagMenu` locations, `item_menu.c:560-571`)
 //! and the close row's wording; it never selects different drawing, and the
-//! screen applies no effect of its own. A confirmed action, a selected item,
+//! screen drives no fade of its own: [`BagScreen::compose_over`] applies the
+//! host's palette stage, and a closed screen keeps drawing, as the source of
+//! the fade out, until the host drops it. A confirmed action, a selected item,
 //! and a close all return to the caller as [`BagScreenTick`] data: using,
 //! tossing, registering, consuming, suspending a battle, or routing back to the
 //! field is the host's, as are the entries that open this screen.
@@ -236,6 +238,9 @@ pub(crate) struct BagScreen {
     /// and Down read.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
+    /// Whether the choice that closed the screen was confirmed in a context
+    /// menu, whose "is selected" text then stays in the description window.
+    closed_from_context: bool,
 }
 
 impl BagScreen {
@@ -293,6 +298,7 @@ impl BagScreen {
         ) else {
             return BagScreenTick::Open;
         };
+        let in_context = self.menu.context_grid().is_some();
         match self.apply(input) {
             None => BagScreenTick::Open,
             Some(BagMenuOutcome::Action { action, selection }) => {
@@ -301,6 +307,7 @@ impl BagScreen {
             Some(outcome) => {
                 let result = self.result_of(outcome);
                 self.done = Some(result);
+                self.closed_from_context = in_context;
                 BagScreenTick::Closed(result)
             }
         }
@@ -480,6 +487,7 @@ fn open_from_pack(
         swap: None,
         repeat: KeyRepeat::new(key_repeat::START_DELAY),
         done: None,
+        closed_from_context: false,
     })
 }
 

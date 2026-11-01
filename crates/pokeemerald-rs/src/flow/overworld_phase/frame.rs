@@ -6,9 +6,11 @@
 //! then the start menu, into the platform framebuffer.
 
 use platform::{ButtonState, Frame};
+use rendering::PaletteStage;
 
 use crate::overworld::dialog::confirm_printer_input;
 use crate::overworld::DialogOutcome;
+use crate::palette_overlay::stage_overlay;
 
 use super::OverworldPhase;
 
@@ -40,27 +42,36 @@ impl OverworldPhase {
         self.pending_turn = None;
     }
 
-    /// Composes the finished frame: the scene for the current player,
-    /// event flags and animation tick, then the open dialog, then the open
-    /// start menu, converted to the platform framebuffer.
+    /// Composes the finished frame with no palette stage.
+    pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
+        self.compose_frame_staged(PaletteStage::default())
+    }
+
+    /// Composes the finished frame under `palette`: the scene for the current
+    /// player, event flags and animation tick, then the open dialog, then the
+    /// open start menu, converted to the platform framebuffer. The stage
+    /// reaches the field at palette-sample time and every overlay's BG
+    /// pixels, so a fully black stage blanks the whole frame.
     ///
     /// The dialog and the start menu are never open together, since an open
     /// message box locks field controls and `START` cannot reach the menu.
     /// Each overlay is still drawn on its own condition, in upstream's order:
     /// message box below, menu windows above.
-    pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
-        let base = self.scene.compose_live(
+    pub(in crate::flow) fn compose_frame_staged(&self, palette: PaletteStage<'_>) -> Box<Frame> {
+        let mut composed = self.scene.compose_live(
             &self.player,
             &self.save1.event_data,
             self.tick,
             &self.object_events,
+            palette,
         );
-        let composed = match &self.dialog {
-            Some(dialog) => dialog.compose_over(base),
-            None => base,
-        };
+        if let Some(dialog) = &self.dialog {
+            stage_overlay(&mut composed, palette.bg, |fb| {
+                *fb = dialog.compose_over(std::mem::take(fb));
+            });
+        }
         let composed = match self.start_menu() {
-            Some(menu) => menu.compose_over(composed),
+            Some(menu) => menu.compose_over(composed, palette),
             None => composed,
         };
         crate::frame::to_platform_frame(&composed)
