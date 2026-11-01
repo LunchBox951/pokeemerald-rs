@@ -134,12 +134,50 @@ fn chmod_through_proc(pinned: &File) -> io::Result<()> {
     Ok(())
 }
 
+/// `O_SEARCH` on Apple targets, which have no `O_PATH`: search access to a
+/// directory without the read access `O_RDONLY` demands. Apple spells it
+/// `O_EXEC | O_DIRECTORY` (`libc`'s `O_EXEC`, `0x4000_0000`); `rustix` 1.1 has
+/// no flag for it, so the value travels as externally defined `OFlags` bits,
+/// as in `record_snapshot/directory.rs`.
+#[cfg(target_vendor = "apple")]
+const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
+
 /// Opens the directory `path` without following a symlink and restores owner
-/// rwx through that descriptor. Beyond Linux there is no permission-free pin
-/// through the approved `rustix` surface, so a umask that withheld owner read
-/// from the new directory makes this open fail rather than fall back to
-/// changing the mode by pathname.
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+/// rwx through that descriptor. The open asks for search, not read, so the
+/// `0300` a `0444` umask leaves on the new directory still admits it. Darwin's
+/// `O_SEARCH` does need owner search, so a umask that stripped that bit
+/// (`0100`, leaving `0600`) falls back to the read-only open, which that mode
+/// admits; a mode that allows neither is refused rather than changed by path.
+#[cfg(target_vendor = "apple")]
+fn pin_directory(path: &Path) -> io::Result<Handle> {
+    let open = |access: rustix::fs::OFlags| {
+        rustix::fs::open(
+            path,
+            access
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+    };
+    let held = match open(APPLE_SEARCH) {
+        Err(rustix::io::Errno::ACCESS) => open(rustix::fs::OFlags::RDONLY)?,
+        other => other?,
+    };
+    let held = File::from(held);
+    rustix::fs::fchmod(&held, rustix::fs::Mode::RWXU)?;
+    Ok(held)
+}
+
+/// Opens the directory `path` without following a symlink and restores owner
+/// rwx through that descriptor. Beyond Linux and Apple there is no
+/// permission-free pin through the approved `rustix` surface, so a umask that
+/// withheld owner read from the new directory makes this open fail rather
+/// than fall back to changing the mode by pathname.
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+))]
 fn pin_directory(path: &Path) -> io::Result<Handle> {
     let held = File::from(rustix::fs::open(
         path,
@@ -366,12 +404,12 @@ mod tests {
 
     /// Set in the child [`a_claim_under_an_owner_stripping_umask_stays_owner_accessible`]
     /// re-runs itself as, so only that child changes its own umask.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     const UMASK_CHILD: &str = "POKEEMERALD_TEST_SUPPORT_UMASK_CHILD";
 
     /// `mkdir(0700)` under umask 0444 leaves 0300, which a plain read-only
     /// open cannot enter; the claim must still succeed and restore rwx.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn a_claim_under_an_owner_stripping_umask_stays_owner_accessible() {
         use std::os::unix::fs::PermissionsExt as _;
