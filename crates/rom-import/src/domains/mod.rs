@@ -34,6 +34,7 @@ pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
 pub(crate) mod opening_scene;
+pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
@@ -74,6 +75,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     opening_scene::write,
     battle_interface::write,
     battlers::write,
+    poke_ball::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.

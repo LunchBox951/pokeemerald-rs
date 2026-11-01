@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+mod poke_ball;
+
 use rom_import::Encoding;
 
 use super::plan::{
@@ -71,7 +73,8 @@ use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
     FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
-    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 }};
@@ -135,6 +138,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_interface_roots(&mut out, &plan.battle_interface);
 
     battler_roots(&mut out, &plan.battlers);
+    poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
 
     let _ = writeln!(out, "}};");
     out
@@ -1060,11 +1064,16 @@ mod bag_field_tests {
             bag: bag_plan(),
             starter_chooser: chooser_plan(),
             opening_scene: scene_plan(),
+            poke_ball: super::poke_ball::tests::plan(),
             battle_interface: interface_plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
+        assert!(
+            module.contains("    poke_ball: PokeBallRoots {"),
+            "{module}"
+        );
         assert_interface_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(

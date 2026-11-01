@@ -48,8 +48,10 @@
 //!   templates `BufferStringBattle` selects); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
-//! - the battle-animation catalog (`data/battle_anim_scripts.s`); and
-//! - the sheet and palette of every battle-effect sprite a catalog program loads.
+//! - the battle-animation catalog (`data/battle_anim_scripts.s`);
+//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
+//! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
+//!   sheet.
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -78,6 +80,7 @@
 //! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `poke-ball/{image,palette}/<name>`
 //! - `field-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `battle-anim/catalog`
@@ -110,6 +113,7 @@ pub(crate) mod midi;
 mod naming_screen;
 mod opening_scene;
 pub mod png;
+pub(crate) mod poke_ball;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
@@ -208,6 +212,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
+    poke_ball::extract_poke_ball(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
