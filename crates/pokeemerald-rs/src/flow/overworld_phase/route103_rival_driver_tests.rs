@@ -599,6 +599,24 @@ fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
     phase.restore_lead_battler(lent);
 }
 
+/// After the take, the same lead starts the rival battle, and it carries no item.
+#[test]
+fn taking_a_refused_item_lets_the_rival_battle_start() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.set_fresh_lead_for_test(loaded_holding(
+        &overwhelming_treecko_lead(),
+        ItemId::ORAN_BERRY,
+    ));
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::ORAN_BERRY))
+    );
+
+    phase.step(pressed(Buttons::A));
+
+    assert!(phase.is_rival_battle_active(), "the battle starts");
+}
+
 /// A start refused for the starter variable also returns the lent lead.
 #[test]
 fn an_unmapped_starter_var_returns_the_lent_lead() {

@@ -295,11 +295,11 @@ fn an_open_start_menu_freezes_movement_and_exit_writes_nothing() {
         phase.start_menu().expect("still open").selected(),
         StartMenuItem::Save
     );
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves to the second item"
+        "UP from the first item wraps to EXIT"
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
     assert!(
@@ -326,7 +326,7 @@ fn item_window_pixels(phase: &OverworldPhase) -> Vec<u32> {
     const LEFT: usize = 22 * 8;
     const TOP: usize = 8;
     const WIDTH: usize = 7 * 8;
-    const HEIGHT: usize = (2 * 2 + 2) * 8;
+    const HEIGHT: usize = (3 * 2 + 2) * 8;
     let frame = phase.compose_frame();
     (TOP..TOP + HEIGHT)
         .flat_map(|y| (LEFT..LEFT + WIDTH).map(move |x| (y, x)))
@@ -346,11 +346,11 @@ fn a_on_exit_still_draws_the_menu_on_its_own_press_frame() {
     let mut phase = new_game_phase();
     settle(&mut phase);
     phase.open_synthetic_start_menu();
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves to EXIT before the A press this test drives"
+        "UP wraps to EXIT before the A press this test drives"
     );
     let open_pixels = item_window_pixels(&phase);
 
@@ -443,11 +443,11 @@ fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
     let mut phase = new_game_phase();
 
     phase.open_synthetic_start_menu();
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves the cursor onto EXIT before closing"
+        "UP wraps the cursor onto EXIT before closing"
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
     assert!(
@@ -481,11 +481,11 @@ fn reopening_after_start_or_b_keeps_the_cursor() {
         let mut phase = new_game_phase();
 
         phase.open_synthetic_start_menu();
-        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
         assert_eq!(
             phase.start_menu().unwrap().selected(),
             StartMenuItem::Exit,
-            "{close_key:?}: DOWN moves the cursor onto EXIT before closing"
+            "{close_key:?}: UP wraps the cursor onto EXIT before closing"
         );
         phase.advance_start_menu_frame(pressed(close_key), &mut save_slot);
         assert!(
@@ -498,6 +498,156 @@ fn reopening_after_start_or_b_keeps_the_cursor() {
             phase.start_menu().unwrap().selected(),
             StartMenuItem::Exit,
             "{close_key:?}: reopening must land back on EXIT, not reset to SAVE"
+        );
+    }
+}
+
+/// The start menu's take-item hook (`CursorCb_TakeItem`,
+/// `pokeemerald/src/party_menu.c:3273-3298`) on a lead backed by a saved slot.
+mod take_lead_held_item {
+    use super::{new_game_phase, pressed, settle, StartMenuItem, TempSave};
+    use crate::flow::lead_screen::{ensure_lead_can_battle, loaded_holding};
+    use crate::new_game;
+    use crate::party::{from_save_pokemon, to_save_pokemon, TakeHeldItem};
+    use assets::items::ItemId;
+    use battle::{BattleError, Dex};
+    use platform::Buttons;
+
+    fn berry_total(phase: &super::OverworldPhase) -> u16 {
+        phase
+            .save1()
+            .bag
+            .berries
+            .iter()
+            .filter(|slot| slot.item_id == ItemId::ORAN_BERRY.0)
+            .map(|slot| slot.quantity)
+            .sum()
+    }
+
+    fn phase_leading_with_oran_berry() -> super::OverworldPhase {
+        let mut phase = new_game_phase();
+        settle(&mut phase);
+        let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+        let record = to_save_pokemon(&Dex::new(), &lead);
+        phase.set_backed_lead_for_test(0, record, lead);
+        phase
+    }
+
+    #[test]
+    fn the_item_moves_to_the_bag_and_the_save_follows() {
+        let mut phase = phase_leading_with_oran_berry();
+        assert_eq!(
+            ensure_lead_can_battle(phase.lead_for_test().unwrap()),
+            Err(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+            "setup: the lead is refused"
+        );
+
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        );
+
+        assert_eq!(berry_total(&phase), 1, "the bag gains one");
+        let lead = phase.lead_for_test().unwrap();
+        assert_eq!(lead.held_item(), ItemId::NONE);
+        assert_eq!(ensure_lead_can_battle(lead), Ok(()));
+        let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
+        assert_eq!(saved.held_item(), ItemId::NONE, "the saved slot follows");
+    }
+
+    #[test]
+    fn a_refused_take_changes_neither_the_lead_nor_the_save() {
+        let mut phase = phase_leading_with_oran_berry();
+        phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+        phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
+        let bag = phase.save1().bag.clone();
+
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))
+        );
+
+        assert_eq!(phase.save1().bag, bag);
+        assert_eq!(
+            phase.lead_for_test().unwrap().held_item(),
+            ItemId::ORAN_BERRY
+        );
+        let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
+        assert_eq!(saved.held_item(), ItemId::ORAN_BERRY);
+    }
+
+    #[test]
+    fn nothing_held_and_no_lead_are_reported_without_a_write() {
+        let mut phase = phase_leading_with_oran_berry();
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        );
+        let bag = phase.save1().bag.clone();
+        assert_eq!(phase.take_lead_held_item(), Some(TakeHeldItem::NotHolding));
+        assert_eq!(phase.save1().bag, bag);
+
+        phase.clear_lead_for_test();
+        assert_eq!(phase.take_lead_held_item(), None);
+    }
+
+    /// The player-reachable path: a TAKE selection in the open menu moves a
+    /// refused item to the bag and unblocks the battle screen.
+    #[test]
+    fn selecting_take_in_the_open_menu_unblocks_a_refused_lead() {
+        let temp = TempSave::new("menu-take-item");
+        let mut save_slot = temp.slot();
+        let mut phase = phase_leading_with_oran_berry();
+        assert!(ensure_lead_can_battle(phase.lead_for_test().unwrap()).is_err());
+
+        phase.open_synthetic_start_menu();
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        assert_eq!(
+            phase.start_menu().unwrap().selected(),
+            StartMenuItem::TakeItem
+        );
+        assert_eq!(berry_total(&phase), 0, "nothing moves on the cursor frame");
+        phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+        assert!(phase.start_menu().is_none(), "the take closes the menu");
+        assert_eq!(berry_total(&phase), 1, "the bag gains one");
+        let lead = phase.lead_for_test().unwrap();
+        assert_eq!(lead.held_item(), ItemId::NONE);
+        assert_eq!(ensure_lead_can_battle(lead), Ok(()));
+        let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
+        assert_eq!(saved.held_item(), ItemId::NONE, "the saved slot follows");
+        assert!(
+            !temp.slot().load().status.menu_shows_continue(),
+            "taking an item writes no save file"
+        );
+
+        phase.open_synthetic_start_menu();
+        assert_eq!(
+            phase.start_menu().unwrap().selected(),
+            StartMenuItem::TakeItem,
+            "the cursor is retained like any other selection"
+        );
+    }
+
+    /// A full bag refuses the take through the menu too, and the lead keeps
+    /// its item.
+    #[test]
+    fn selecting_take_with_a_full_bag_keeps_the_item_on_the_lead() {
+        let temp = TempSave::new("menu-take-item-bag-full");
+        let mut save_slot = temp.slot();
+        let mut phase = phase_leading_with_oran_berry();
+        phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+        phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
+        let bag = phase.save1().bag.clone();
+
+        phase.open_synthetic_start_menu();
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+        assert_eq!(phase.save1().bag, bag);
+        assert_eq!(
+            phase.lead_for_test().unwrap().held_item(),
+            ItemId::ORAN_BERRY
         );
     }
 }

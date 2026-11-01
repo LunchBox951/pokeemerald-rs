@@ -539,6 +539,31 @@ fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing()
     phase.assert_lead_at_slot_for_test(0);
 }
 
+/// The same lead, after the take, starts the rescue battle and the bag holds the item.
+#[test]
+fn taking_a_refused_item_lets_the_first_battle_start() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(loaded_holding(
+        &new_game::provisional_starter(),
+        ItemId::ORAN_BERRY,
+    ));
+
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::ORAN_BERRY))
+    );
+    walk_one_tile_east(&mut phase);
+
+    assert!(phase.is_first_battle_active(), "the rescue battle starts");
+    assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(2));
+}
+
 /// A successful first-battle start leaves the lead lent, so a second lend is refused.
 #[test]
 #[should_panic(expected = "lent out to a battle")]

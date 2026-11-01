@@ -13,6 +13,7 @@ mod merge_hp;
 mod merge_stats;
 mod retained_record;
 mod stats;
+mod take_item;
 
 #[test]
 fn slot_zero_synchronize_nature_reads_slot_zero_even_when_fainted() {

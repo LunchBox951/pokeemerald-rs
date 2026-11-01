@@ -692,6 +692,34 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild_lead_refusal, None);
 }
 
+/// Taking the refused item through the start menu's hook re-enables the roll, and the
+/// handoff then builds the battle with the same lead.
+#[test]
+fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    let treecko = player_mon(277, 50, vec![MoveId::POUND]);
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::ORAN_BERRY));
+    assert!(!phase.wild_lead_admissible(), "setup: the item is refused");
+
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::ORAN_BERRY))
+    );
+
+    assert!(phase.wild_lead_admissible());
+    assert_eq!(phase.wild_lead_refusal, None);
+    let lead = phase.lead_for_test().cloned().expect("the lead stays home");
+    assert_eq!(lead.held_item(), ItemId::NONE);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("the lead holds nothing the battle refuses");
+}
+
 #[test]
 fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
     let mut rng = Rng::new(ENCOUNTER_SEED);
