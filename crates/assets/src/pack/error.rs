@@ -107,6 +107,15 @@ pub enum PackError {
     },
     /// The pack carries no trainer picture for this identity.
     UnsupportedTrainerPic(TrainerPicId),
+    /// A trainer battler entry differs from the upstream graphic's shape.
+    MalformedTrainerBattlerAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The pack carries no battler art for this trainer.
+    UnsupportedTrainerBattler(TrainerPicId),
     /// An opening-scene entry (Birch's speech scene or the wall clock) differs
     /// from the upstream graphic's shape.
     MalformedOpeningSceneAsset {
@@ -289,6 +298,14 @@ impl fmt::Display for PackError {
                 "asset pack: no trainer picture for index {}",
                 pic.index()
             ),
+            Self::MalformedTrainerBattlerAsset { id, detail } => {
+                write!(f, "asset pack: trainer battler entry `{id}` {detail}")
+            }
+            Self::UnsupportedTrainerBattler(trainer) => write!(
+                f,
+                "asset pack: no trainer battler art for trainer picture {}",
+                trainer.index()
+            ),
             Self::MalformedOpeningSceneAsset { id, detail } => {
                 write!(f, "asset pack: opening-scene entry `{id}` {detail}")
             }
@@ -366,6 +383,8 @@ impl std::error::Error for PackError {
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
             | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedTrainerBattlerAsset { .. }
+            | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
