@@ -6,12 +6,24 @@
 //! moves and PP, IVs, ability slot, level, and current HP. A new record uses
 //! save-format defaults for everything else; [`merge_into_save_pokemon`]
 //! overlays those fields onto the record that was loaded, retaining its
-//! header, held item, friendship, contest condition, egg flag, encounter
-//! data, ribbons, status, and mail. EVs are the battler's: the merge writes
+//! header, friendship, contest condition, egg flag, encounter
+//! data, ribbons, and mail. EVs are the battler's: the merge writes
 //! them back from [`battle::BattlePokemon::evs`].
 //!
+//! # Held item
+//!
+//! [`from_save_pokemon`] reads the growth substructure's held item
+//! (`MON_DATA_HELD_ITEM`, `pokeemerald/src/pokemon.c:3833`) onto the battler
+//! through [`battle::BattlePokemon::with_held_item`], whatever its id.
+//! `battle` carries the item but models none of its effects, so
+//! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
+//! item has one; each flow's refusal is documented where it is made. A fresh
+//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
+//! backing record's item bytes alone, as nothing in the port changes a held
+//! item after load.
+//!
 //! Deliberately not modelled by `battle`, and so retained from the backing
-//! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
+//! record by [`merge_into_save_pokemon`]: friendship, pokérus,
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
 //! trailing six bytes). [`to_save_pokemon`], which has no record to retain
@@ -30,11 +42,16 @@
 //! that holds that state is threaded through -- [`starter`]'s level-five grant
 //! is the first such caller and stamps all three.
 //!
-//! Non-volatile status is likewise retained rather than merged: `battle`
-//! now models [`battle::Status1::Paralysed`] and [`battle::Status1::Poisoned`]
-//! in-battle, but neither encoder reads or writes either, so a battler
-//! paralysed or poisoned this session keeps the backing record's own stored
-//! status word through an ordinary save.
+//! Primary status is the battler's, in both directions
+//! (`pokeemerald/src/battle_controller_player.c:1636-1640,1983-1987`): both
+//! encoders write [`battle::BattlePokemon::status1`] into the record's status
+//! word, so an inflicted or cured condition reaches the save, and
+//! [`from_save_pokemon`] reads it back. Only healthy, ordinary poison,
+//! paralysis, and sleep (`1..=7` turns left) are modelled
+//! (`pokeemerald/include/constants/battle.h:114-125`); a record whose word is
+//! anything else -- burn, freeze, bad poison, several conditions, or stray
+//! bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather than
+//! reading as healthy and losing the condition on the next save.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -71,6 +88,7 @@ const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
 const GROWTH_SPECIES: Range<usize> = 0..2;
+const GROWTH_HELD_ITEM: Range<usize> = 2..4;
 const GROWTH_EXPERIENCE: Range<usize> = 4..8;
 const GROWTH_PP_BONUSES: usize = 8;
 const GROWTH_FRIENDSHIP: usize = 9;
@@ -135,6 +153,12 @@ pub(crate) enum PartyError {
     /// model only holds a contiguous moveset, so decoding it would drop the
     /// later moves and PP on the next save.
     InteriorEmptyMove,
+    /// The saved primary-status word is not one the battle model carries --
+    /// freeze, bad poison (with or without its counter), several
+    /// conditions at once, or bits outside `STATUS1_ANY`. Decoding it as
+    /// healthy would let the next save erase the condition, so the record
+    /// stays undecoded and its bytes untouched.
+    UnsupportedStatus(u32),
 }
 
 impl std::fmt::Display for PartyError {
@@ -147,6 +171,12 @@ impl std::fmt::Display for PartyError {
                 write!(
                     f,
                     "saved party member: a known move follows an empty move slot"
+                )
+            }
+            Self::UnsupportedStatus(word) => {
+                write!(
+                    f,
+                    "saved party member: primary status word {word:#x} is not modelled"
                 )
             }
         }
@@ -164,6 +194,66 @@ impl From<engine::save::PokemonError> for PartyError {
 impl From<battle::BattleError> for PartyError {
     fn from(err: battle::BattleError) -> Self {
         Self::Battler(err)
+    }
+}
+
+/// `STATUS1_SLEEP`, `STATUS1_POISON`, `STATUS1_BURN`, `STATUS1_PARALYSIS` --
+/// the primary status word's encodings for the conditions `battle::Status1`
+/// carries (`pokeemerald/include/constants/battle.h:114-121`). The sleep bits are a
+/// three-bit remaining-turn count, not a flag.
+const STATUS1_SLEEP_MASK: u32 = 7;
+const STATUS1_POISON: u32 = 1 << 3;
+const STATUS1_BURN: u32 = 1 << 4;
+const STATUS1_PARALYSIS: u32 = 1 << 6;
+
+/// Decodes the save record's primary status word (`MON_DATA_STATUS`, copied
+/// into the battler by `CopyPlayerMonData`,
+/// `pokeemerald/src/battle_controller_player.c:1636-1640`) into the battle
+/// model's [`battle::Status1`].
+///
+/// Exactly one modelled condition decodes; freeze, bad poison, any
+/// combination, the toxic counter bits, and anything above `STATUS1_ANY`
+/// (`battle.h:125`) fail closed rather than being masked into a neighbour.
+fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
+    match word {
+        0 => Ok(battle::Status1::Healthy),
+        1..=STATUS1_SLEEP_MASK => Ok(battle::Status1::Asleep {
+            // At most seven: the mask above bounds it.
+            turns: u8::try_from(word).unwrap_or(u8::MAX),
+        }),
+        STATUS1_POISON => Ok(battle::Status1::Poisoned),
+        STATUS1_BURN => Ok(battle::Status1::Burned),
+        STATUS1_PARALYSIS => Ok(battle::Status1::Paralysed),
+        unsupported => Err(PartyError::UnsupportedStatus(unsupported)),
+    }
+}
+
+/// Encodes the battler's primary status as the save record's status word
+/// (`SetPlayerMonData`'s `MON_DATA_STATUS` write-back,
+/// `pokeemerald/src/battle_controller_player.c:1983-1987`).
+///
+/// A healthy battler files `STATUS1_NONE`, which is how a cure reaches the
+/// save.
+///
+/// # Panics
+///
+/// Panics if a sleep count exceeds the three bits the word holds; a modelled
+/// infliction draws two to five turns, so a larger one is a broken invariant
+/// that would otherwise corrupt the neighbouring status bits.
+fn status1_to_word(status1: battle::Status1) -> u32 {
+    match status1.normalised() {
+        battle::Status1::Healthy | battle::Status1::Asleep { turns: 0 } => 0,
+        battle::Status1::Paralysed => STATUS1_PARALYSIS,
+        battle::Status1::Poisoned => STATUS1_POISON,
+        battle::Status1::Burned => STATUS1_BURN,
+        battle::Status1::Asleep { turns } => {
+            let word = u32::from(turns);
+            assert!(
+                word <= STATUS1_SLEEP_MASK,
+                "a sleep count of {turns} does not fit STATUS1_SLEEP's three bits"
+            );
+            word
+        }
     }
 }
 
@@ -268,6 +358,7 @@ fn zero_ev_max_hp(dex: &Dex, species: u16, level: u8, mon: &BattlePokemon) -> u3
 pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut growth = [0u8; SUBSTRUCTURE_LEN];
     growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     growth[GROWTH_FRIENDSHIP] = dex
@@ -314,6 +405,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut record = Pokemon {
         box_data,
         mail: MAIL_NONE,
+        status: status1_to_word(mon.status1()),
         ..Pokemon::default()
     };
     // Recomputed only when `mon` has levelled up since `BattlePokemon::new`
@@ -502,6 +594,7 @@ pub(crate) fn merge_into_save_pokemon(
     substructures.evs_and_condition[0..6].copy_from_slice(&evs_to_substruct2(mon.evs()));
 
     let mut merged = *base;
+    merged.status = status1_to_word(mon.status1());
     merged.box_data.set_substructures(&substructures);
     // Re-derives `hasSpecies` alongside the growth species this branch
     // re-files every save (`pokeemerald/src/pokemon.c:4220-4227`).
@@ -587,6 +680,7 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// invalid, or a known move follows an empty move slot.
 pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePokemon, PartyError> {
     let substructures = saved.box_data.substructures()?;
+    let status1 = status1_from_word(saved.status)?;
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
     let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
     let ability_slot = u8::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
@@ -623,6 +717,11 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     // same EVs, so the order of the two calls does not matter.
     let evs = evs_from_substruct2(&substructures.evs_and_condition);
 
+    // Carried as stored, even an id outside the item table: the battle crate
+    // decides whether a battle can play it (`ensure_held_item_playable`), so a
+    // loaded party never drops an item here.
+    let held_item = assets::items::ItemId(read_u16(&substructures.growth, GROWTH_HELD_ITEM));
+
     let mut mon = BattlePokemon::new(
         dex,
         species,
@@ -634,7 +733,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_original_trainer_id(saved.box_data.ot_id())
     .with_ability_slot(ability_slot)
     .with_pp_bonuses(dex, pp_bonuses)?
-    .with_evs(evs);
+    .with_evs(evs)
+    .with_held_item(held_item);
 
     let saved_experience = read_u32(&substructures.growth, GROWTH_EXPERIENCE);
     // Match `CalculateMonStats`: derive level from experience without invoking
@@ -643,6 +743,7 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 
     let saved_damage = mon.stats().max_hp.saturating_sub(u32::from(saved.hp));
     mon.apply_damage(saved_damage);
+    mon.set_status1(status1);
 
     for (index, saved_pp) in remaining_pp.iter().copied().take(known_moves).enumerate() {
         let pp_spent = mon.moves()[index].pp.saturating_sub(saved_pp);
@@ -788,29 +889,15 @@ pub(crate) fn select_active_battler(
 /// record, and [`Self::merge_and_save`] replaces the owned record and rebases
 /// the owned offset in one step -- the single reconciliation boundary
 /// `Cmd_getexp` keeps (`pokeemerald/src/battle_script_commands.c:3465-3478`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller until the overworld adopts it"
-    )
-)]
 #[derive(Debug)]
 pub(crate) struct LoadedLead {
     slot: usize,
     /// `None` only while [`Self::take_battler`] has lent it to a battle.
     battler: Option<BattlePokemon>,
     record: Pokemon,
-    lead_hp_hidden_by_load: i32,
+    hidden_hp_offset: i32,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller until the overworld adopts it"
-    )
-)]
 impl LoadedLead {
     /// Selects the active member of `party` and measures what its load hid.
     ///
@@ -824,24 +911,42 @@ impl LoadedLead {
     pub(crate) fn load(dex: &Dex, party: &[Pokemon]) -> Result<Self, PartyError> {
         let (slot, battler) = select_active_battler(dex, party)?;
         let record = party[slot];
-        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
         Ok(Self {
             slot,
             battler: Some(battler),
             record,
-            lead_hp_hidden_by_load,
+            hidden_hp_offset,
         })
     }
 
     /// Adopts a member just created into slot 0: its battler and the record
     /// encoded from it, with the hidden-HP offset measured against that record.
-    fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
-        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+    pub(crate) fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
         Self {
             slot: 0,
             battler: Some(battler),
             record,
-            lead_hp_hidden_by_load,
+            hidden_hp_offset,
+        }
+    }
+
+    /// Adopts `battler` as the member whose saved record is `record` in `slot`,
+    /// measuring the offset against that same pair.
+    #[cfg(test)]
+    pub(crate) fn backed_for_test(
+        dex: &Dex,
+        slot: usize,
+        battler: BattlePokemon,
+        record: Pokemon,
+    ) -> Self {
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
+        Self {
+            slot,
+            battler: Some(battler),
+            record,
+            hidden_hp_offset,
         }
     }
 
@@ -856,8 +961,18 @@ impl LoadedLead {
     }
 
     /// The signed hidden-HP offset carried into the next merge.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the overworld never reads the offset")
+    )]
     pub(crate) fn hidden_hp_offset(&self) -> i32 {
-        self.lead_hp_hidden_by_load
+        self.hidden_hp_offset
+    }
+
+    /// Whether [`Self::take_battler`] has lent the battler out and it has not
+    /// come back through [`Self::restore_battler`].
+    pub(crate) fn is_lent(&self) -> bool {
+        self.battler.is_none()
     }
 
     /// # Panics
@@ -913,7 +1028,7 @@ impl LoadedLead {
     pub(crate) fn merge_and_save(&mut self, dex: &Dex) -> Pokemon {
         let battler = self.battler.as_ref().expect(LENT_OUT);
         self.record =
-            merge_into_save_pokemon(dex, battler, &self.record, &mut self.lead_hp_hidden_by_load);
+            merge_into_save_pokemon(dex, battler, &self.record, &mut self.hidden_hp_offset);
         self.record
     }
 
@@ -943,7 +1058,7 @@ impl LoadedLead {
         let stored_count = usize::from(player_party_count);
         if stored_count != 0 && self.slot >= stored_count {
             let battler = self.battler.as_ref().expect(LENT_OUT);
-            self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+            self.hidden_hp_offset = hp_hidden_by_load(dex, &self.record, battler);
             self.merge_and_save(dex);
             return Ok(());
         }
@@ -951,7 +1066,7 @@ impl LoadedLead {
         self.record.hp = self.record.max_hp;
         let battler = self.battler.as_mut().expect(LENT_OUT);
         battler.heal(dex)?;
-        self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+        self.hidden_hp_offset = hp_hidden_by_load(dex, &self.record, battler);
         self.merge_and_save(dex);
         Ok(())
     }

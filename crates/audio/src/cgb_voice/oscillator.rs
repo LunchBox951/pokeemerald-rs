@@ -51,6 +51,21 @@ impl Oscillator {
         }
     }
 
+    /// A stopped wave channel's held output at full envelope gain, with no
+    /// clock (`mgba/src/gb/audio.c:246-253,768-774`); `None` for the other
+    /// channels, whose idle outputs are accounted separately.
+    pub(super) fn held_wave_contribution(&self) -> Option<i32> {
+        match self {
+            Self::Wave { channel, .. } => Some(
+                (i32::try_from(FULL_GAIN_256).unwrap_or(i32::MAX)
+                    * channel.held_output()
+                    * WAVE_SAMPLE_SCALE)
+                    >> SAMPLE_GAIN_BITS,
+            ),
+            Self::Square(_) | Self::Noise(_) => None,
+        }
+    }
+
     pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
         match self {
             Self::Noise(noise) => Some(noise),
@@ -94,7 +109,8 @@ impl Oscillator {
     }
 
     /// The noise off-write restarts phase and LFSR but leaves the latch for
-    /// the next clock to settle; a no-op for Wave.
+    /// the next clock to settle; Wave's `NR30` off-write stops its clock and
+    /// leaves the latch (`mgba/src/gb/audio.c:246-253`).
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
@@ -144,9 +160,9 @@ impl Oscillator {
 
     /// Plays the replacement's note-on `NR43` writes against the noise
     /// predecessor it inherited; a no-op otherwise.
-    pub(super) fn commit_initial_writes(&mut self) {
+    pub(super) fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
         if let Self::Noise(noise) = self {
-            noise.commit_initial_writes();
+            noise.commit_initial_writes(retires_on_first_pass);
         }
     }
 

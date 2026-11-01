@@ -1,152 +1,89 @@
-//! Encodes [`CompiledSong`] values into the asset pack's song schema. The
-//! pack container around this payload is shared (`pack_format` owns it);
-//! only the payload encoding is duplicated here.
+//! Encodes [`CompiledSong`] values into the asset pack's song payload. The
+//! pack container around this payload is shared (`pack_format` owns it).
+//! The payload schema is owned by `assets`: each [`CompiledSong`] is mapped
+//! onto [`assets::audio::Song`] and written by [`assets::audio::Song::encode`],
+//! so the tags, field order, string framing, and wait canonicalization exist
+//! in exactly one place and the runtime decoder validates what the extractor
+//! writes.
 //!
-//! MIDI extraction writes this schema without using the `assets` encoder, so
-//! schema changes must be mirrored between them. Strings are UTF-8 prefixed by
-//! their `u16` little-endian byte length. The voicegroup id is followed by the `u16`
-//! little-endian `gSongTable` `ms` music-player index. Each track is prefixed by its `u32`
-//! little-endian event count.
+//! The event mapping is the only schema knowledge kept here. Building the
+//! typed song re-runs `assets`' own validation, so a value outside the
+//! schema's domain surfaces as an [`assets::AudioError`] rather than as a pack
+//! the runtime would refuse to load.
+
+use assets::audio::{MusicPlayerId, Song, SongEvent as AssetEvent, VoiceGroupId};
+use assets::AudioError;
 
 use super::compile::CompiledSong;
-use super::error::MidiError;
 use super::event::SongEvent;
 
 /// Prefix prepended to a `midi.cfg` voicegroup label to form its pack id
-/// (`crate::extract`'s "Asset id scheme" docs), and counted toward the
-/// wire-format string's `u16` byte-length bound alongside the label itself.
+/// (`crate::extract`'s "Asset id scheme" docs).
 const VOICEGROUP_PACK_ID_PREFIX: &str = "audio/voicegroup/";
 
-#[derive(Clone, Copy)]
-#[repr(u8)]
-enum EventTag {
-    Wait = 0,
-    Note = 1,
-    EndOfTie = 2,
-    Voice = 3,
-    Volume = 4,
-    Pan = 5,
-    Bend = 6,
-    BendRange = 7,
-    Tune = 8,
-    KeyShift = 9,
-    Tempo = 10,
-    Priority = 11,
-    LfoSpeed = 12,
-    LfoDelay = 13,
-    Modulation = 14,
-    ModType = 15,
-    Goto = 16,
-    Fine = 17,
-    PseudoEchoVolume = 18,
-    PseudoEchoLength = 19,
-}
-
-impl EventTag {
-    const fn byte(self) -> u8 {
-        self as u8
-    }
-}
-
-fn write_string(out: &mut Vec<u8>, value: &str) -> Result<(), MidiError> {
-    let byte_len =
-        u16::try_from(value.len()).map_err(|_| MidiError::VoiceGroupPackIdTooLong(value.len()))?;
-    out.extend_from_slice(&byte_len.to_le_bytes());
-    out.extend_from_slice(value.as_bytes());
-    Ok(())
-}
-
-fn write_tagged_u8(out: &mut Vec<u8>, tag: EventTag, value: u8) {
-    out.extend_from_slice(&[tag.byte(), value]);
-}
-
-fn write_tagged_i8(out: &mut Vec<u8>, tag: EventTag, value: i8) {
-    out.extend_from_slice(&[tag.byte(), value.to_le_bytes()[0]]);
-}
-
-fn write_event(out: &mut Vec<u8>, event: &SongEvent) {
+/// Maps one compiled event onto the schema's event. Compiled ties always name
+/// their key, so `EndOfTie` never uses the schema's "currently sounding key"
+/// form.
+pub(super) const fn asset_event(event: &SongEvent) -> AssetEvent {
     match *event {
-        SongEvent::Wait(ticks) => write_tagged_u8(out, EventTag::Wait, ticks),
+        SongEvent::Wait(ticks) => AssetEvent::Wait(ticks),
         SongEvent::Note {
             key,
             velocity,
             gate,
-        } => out.extend_from_slice(&[EventTag::Note.byte(), key, velocity, gate]),
-        SongEvent::EndOfTie { key } => {
-            out.extend_from_slice(&[EventTag::EndOfTie.byte(), u8::from(true), key]);
-        }
-        SongEvent::Voice(index) => write_tagged_u8(out, EventTag::Voice, index),
-        SongEvent::Volume(volume) => write_tagged_u8(out, EventTag::Volume, volume),
-        SongEvent::Pan(pan) => write_tagged_i8(out, EventTag::Pan, pan),
-        SongEvent::Bend(bend) => write_tagged_i8(out, EventTag::Bend, bend),
-        SongEvent::BendRange(range) => write_tagged_u8(out, EventTag::BendRange, range),
-        SongEvent::Tune(tune) => write_tagged_i8(out, EventTag::Tune, tune),
-        SongEvent::KeyShift(shift) => write_tagged_i8(out, EventTag::KeyShift, shift),
-        SongEvent::Tempo(bpm) => {
-            out.push(EventTag::Tempo.byte());
-            out.extend_from_slice(&bpm.to_le_bytes());
-        }
-        SongEvent::Priority(priority) => write_tagged_u8(out, EventTag::Priority, priority),
-        SongEvent::LfoSpeed(speed) => write_tagged_u8(out, EventTag::LfoSpeed, speed),
-        SongEvent::LfoDelay(delay) => write_tagged_u8(out, EventTag::LfoDelay, delay),
-        SongEvent::Modulation(depth) => write_tagged_u8(out, EventTag::Modulation, depth),
-        SongEvent::ModType(kind) => write_tagged_u8(out, EventTag::ModType, kind),
-        SongEvent::PseudoEchoVolume(volume) => {
-            write_tagged_u8(out, EventTag::PseudoEchoVolume, volume);
-        }
-        SongEvent::PseudoEchoLength(length) => {
-            write_tagged_u8(out, EventTag::PseudoEchoLength, length);
-        }
-        SongEvent::Goto(target) => {
-            out.push(EventTag::Goto.byte());
-            out.extend_from_slice(&target.to_le_bytes());
-        }
-        SongEvent::Fine => out.push(EventTag::Fine.byte()),
+        } => AssetEvent::Note {
+            key,
+            velocity,
+            gate,
+        },
+        SongEvent::EndOfTie { key } => AssetEvent::EndOfTie { key: Some(key) },
+        SongEvent::Voice(index) => AssetEvent::Voice(index),
+        SongEvent::Volume(volume) => AssetEvent::Volume(volume),
+        SongEvent::Pan(pan) => AssetEvent::Pan(pan),
+        SongEvent::Bend(bend) => AssetEvent::Bend(bend),
+        SongEvent::BendRange(range) => AssetEvent::BendRange(range),
+        SongEvent::Tune(tune) => AssetEvent::Tune(tune),
+        SongEvent::KeyShift(shift) => AssetEvent::KeyShift(shift),
+        SongEvent::Tempo(bpm) => AssetEvent::Tempo(bpm),
+        SongEvent::Priority(priority) => AssetEvent::Priority(priority),
+        SongEvent::LfoSpeed(speed) => AssetEvent::LfoSpeed(speed),
+        SongEvent::LfoDelay(delay) => AssetEvent::LfoDelay(delay),
+        SongEvent::Modulation(depth) => AssetEvent::Modulation(depth),
+        SongEvent::ModType(kind) => AssetEvent::ModType(kind),
+        SongEvent::PseudoEchoVolume(volume) => AssetEvent::PseudoEchoVolume(volume),
+        SongEvent::PseudoEchoLength(length) => AssetEvent::PseudoEchoLength(length),
+        SongEvent::Goto(target) => AssetEvent::Goto(target),
+        SongEvent::Fine => AssetEvent::Fine,
     }
 }
 
-fn event_count_field(event_count: usize) -> Result<u32, MidiError> {
-    u32::try_from(event_count).map_err(|_| MidiError::TooManyTrackEvents(event_count))
-}
-
-fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) -> Result<(), MidiError> {
-    let event_count = event_count_field(track.len())?;
-    out.extend_from_slice(&event_count.to_le_bytes());
-    for event in track {
-        write_event(out, event);
-    }
-    Ok(())
-}
-
-/// Encodes a compiled song in the asset pack's song schema. `player` is the song's
-/// `gSongTable` `ms` value.
+/// Encodes a compiled song through `assets`' canonical song encoder, which
+/// also canonicalizes each track's waits. `player` is the song's `gSongTable`
+/// `ms` value.
 ///
 /// # Errors
 ///
-/// Returns [`MidiError::TooManyTracks`] when the track count does not fit the
-/// schema's `u8` field, [`MidiError::VoiceGroupPackIdTooLong`] when the
-/// encoded voicegroup pack id does not fit the schema's `u16` string-length
-/// field, or [`MidiError::TooManyTrackEvents`] when a track's event count
-/// does not fit the schema's `u32` field.
-pub(super) fn encode_song(song: &CompiledSong, player: u16) -> Result<Vec<u8>, MidiError> {
-    let track_count =
-        u8::try_from(song.tracks.len()).map_err(|_| MidiError::TooManyTracks(song.tracks.len()))?;
-    let mut out = Vec::new();
-    write_string(
-        &mut out,
-        &format!("{VOICEGROUP_PACK_ID_PREFIX}{}", song.voicegroup_label),
-    )?;
-    out.extend_from_slice(&player.to_le_bytes());
-    out.extend_from_slice(&[
+/// Returns the [`AudioError`] `assets` raises when the song is outside its
+/// schema's domain: a voicegroup pack id too long for the `u16` string
+/// length, more tracks than the `u8` track count holds, a track whose event
+/// count exceeds a `u32`, or a jump that does not address its own track.
+pub(super) fn encode_song(song: &CompiledSong, player: u16) -> Result<Vec<u8>, AudioError> {
+    let tracks = song
+        .tracks
+        .iter()
+        .map(|track| track.iter().map(asset_event).collect())
+        .collect();
+    Ok(Song::new(
+        VoiceGroupId(format!(
+            "{VOICEGROUP_PACK_ID_PREFIX}{}",
+            song.voicegroup_label
+        )),
+        MusicPlayerId(player),
         song.priority,
-        u8::from(song.reverb.is_some()),
-        song.reverb.unwrap_or(0),
-        track_count,
-    ]);
-    for track in &song.tracks {
-        write_track(&mut out, track)?;
-    }
-    Ok(out)
+        song.reverb,
+        tracks,
+    )?
+    .encode())
 }
 
 #[cfg(test)]

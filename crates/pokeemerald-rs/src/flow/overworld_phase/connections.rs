@@ -17,7 +17,7 @@ use std::cell::OnceCell;
 
 use crate::overworld;
 
-use super::OverworldPhase;
+use super::{assert_scene_owns_map, OverworldPhase};
 
 /// Resolves map-edge connection-crossing geometry against the real
 /// generated map tables and, once a candidate connection's own bounds
@@ -269,6 +269,7 @@ impl OverworldPhase {
         // the destination map.
         self.pending_landing = None;
         self.pending_turn = None;
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -348,6 +349,7 @@ impl OverworldPhase {
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
         self.pending_turn = None;
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -395,6 +397,7 @@ impl OverworldPhase {
         let Some(landing) = saved_location_landing(&scene, destination) else {
             return false;
         };
+        assert_scene_owns_map(&scene, map);
         self.scene = scene;
         self.commit_saved_location_landing(
             map,
@@ -481,6 +484,7 @@ impl OverworldPhase {
             return false;
         };
 
+        assert_scene_owns_map(&scene, to_map);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;
