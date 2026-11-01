@@ -17,6 +17,7 @@ mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;
+mod trainer_battler;
 mod trainer_pic;
 
 mod battle_interface_frames;

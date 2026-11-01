@@ -33,6 +33,8 @@
 //! - the static battler art of Treecko, Torchic, and Mudkip: front and back
 //!   images with normal and shiny palettes;
 //! - the Brendan and May trainer front pictures with their palettes;
+//! - the Brendan and May trainer battlers: front picture, four-frame back
+//!   sheet and the palette both share;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -120,6 +122,7 @@ mod text_source;
 mod text_window;
 mod tilesets;
 mod title;
+mod trainer_battler;
 mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
@@ -188,6 +191,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
     trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
+    trainer_battler::extract_trainer_battlers(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
