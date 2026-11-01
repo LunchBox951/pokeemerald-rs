@@ -254,6 +254,274 @@ pub(super) fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
+/// Empties `dir` (held as `dir`, named by `dir_path`) with a handle-based walk,
+/// the Windows counterpart of the Unix `remove_contents`. The volume must
+/// support opening by file ID (NTFS and `ReFS` do; FAT and exFAT, whose IDs
+/// follow directory-entry slots, do not), or nothing is removed. The entries
+/// are listed through the held handle (`FileIdExtdDirectoryInfo`, which
+/// carries each entry's full 128-bit file ID; the 64-bit form is not unique on
+/// `ReFS`). Each entry is then opened by name under the held directory with
+/// `DELETE` access, no delete sharing and without following a reparse point,
+/// and is refused unless the opened handle's 128-bit file ID (`FileIdInfo`) is
+/// the one the listing named. Deletion goes through that verified handle and
+/// subdirectories recurse through their own handles, which keep them from
+/// being renamed while they are emptied. The name is resolved once, so a
+/// swapped-in entry fails the ID check and is left alone. `OpenFileById` is
+/// not used: it sits behind `windows-sys`'s `Win32_Security` feature, outside
+/// the approved `Win32_Storage_FileSystem` surface.
+#[cfg(windows)]
+pub(super) fn remove_contents(
+    dir: &std::fs::File,
+    dir_path: &Path,
+    before_remove: &mut dyn FnMut(&std::ffi::OsStr),
+) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_LIST_DIRECTORY: u32 = 0x1;
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    require_unique_file_ids(dir)?;
+    for (name, listed_id, attributes) in list_entries(dir)? {
+        // A test seam: the instant between the listing and the open.
+        before_remove(&name);
+        let child_path = dir_path.join(&name);
+        let child = std::fs::OpenOptions::new()
+            .access_mode(DELETE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
+            .share_mode(SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&child_path)?;
+        if file_id(&child)? != listed_id {
+            return Err(std::io::Error::other(
+                "a scratch entry was replaced during cleanup",
+            ));
+        }
+        let is_real_dir = attributes & FILE_ATTRIBUTE_DIRECTORY != 0
+            && attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0;
+        if is_real_dir {
+            remove_contents(&child, &child_path, before_remove)?;
+        }
+        mark_for_deletion(&child)?;
+        // The entry goes when this handle closes (or, after the legacy
+        // fallback, when the last handle to it closes).
+        drop(child);
+    }
+    Ok(())
+}
+
+/// Refuses a volume that cannot open a file by its ID: only there is a file ID
+/// a stable identity rather than a directory-entry position that a
+/// replacement can reuse. The claim runs this before the session writes
+/// anything, and cleanup runs it again before it removes anything.
+#[cfg(windows)]
+pub(super) fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
+    const FILE_SUPPORTS_OPEN_BY_FILE_ID: u32 = 0x0100_0000;
+    let mut flags = 0u32;
+    // SAFETY: `dir` stays open for this call, `flags` is an out parameter, and
+    // every other buffer is null with a zero size.
+    let ok = unsafe {
+        GetVolumeInformationByHandleW(
+            dir.as_raw_handle(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut flags,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if flags & FILE_SUPPORTS_OPEN_BY_FILE_ID == 0 {
+        return Err(std::io::Error::other(
+            "the scratch volume has no stable file IDs to verify cleanup against (FAT or \
+             exFAT); point TEMP at an NTFS or ReFS volume",
+        ));
+    }
+    Ok(())
+}
+
+/// The entries of `dir` other than `.` and `..` as (name, 128-bit file ID,
+/// attributes), listed through the handle itself.
+#[cfg(windows)]
+fn list_entries(dir: &std::fs::File) -> std::io::Result<Vec<(std::ffi::OsString, [u8; 16], u32)>> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdExtdDirectoryInfo, FileIdExtdDirectoryRestartInfo, GetFileInformationByHandleEx,
+        FILE_ID_EXTD_DIR_INFO,
+    };
+    // `u64` elements keep the buffer 8-aligned, as the entries require.
+    let mut buffer = vec![0u64; 8192];
+    let size = u32::try_from(buffer.len() * 8).expect("64 KiB fits in u32");
+    let mut class = FileIdExtdDirectoryRestartInfo;
+    let mut entries = Vec::new();
+    loop {
+        // SAFETY: `dir` stays open for this call and `buffer` is `size` bytes.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                dir.as_raw_handle(),
+                class,
+                buffer.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if ok == 0 {
+            let error = std::io::Error::last_os_error();
+            if error
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok())
+                == Some(ERROR_NO_MORE_FILES)
+            {
+                return Ok(entries);
+            }
+            return Err(error);
+        }
+        class = FileIdExtdDirectoryInfo;
+        let base = buffer.as_ptr().cast::<u8>();
+        let mut offset = 0usize;
+        loop {
+            #[allow(
+                clippy::cast_ptr_alignment,
+                reason = "the buffer is 8-aligned and the system 8-aligns each record"
+            )]
+            // SAFETY: the call above filled `buffer` with a chain of
+            // `FILE_ID_EXTD_DIR_INFO` records, each 8-aligned and ending
+            // within it; `NextEntryOffset` is zero on the last one.
+            let (next, attributes, id, name) = unsafe {
+                let record = base.add(offset).cast::<FILE_ID_EXTD_DIR_INFO>();
+                let name_at = base
+                    .add(offset + std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileName))
+                    .cast::<u16>();
+                let units = usize::try_from((*record).FileNameLength).unwrap_or(0) / 2;
+                (
+                    (*record).NextEntryOffset,
+                    (*record).FileAttributes,
+                    (*record).FileId.Identifier,
+                    std::ffi::OsString::from_wide(std::slice::from_raw_parts(name_at, units)),
+                )
+            };
+            if name != "." && name != ".." {
+                entries.push((name, id, attributes));
+            }
+            if next == 0 {
+                break;
+            }
+            offset += usize::try_from(next).unwrap_or(usize::MAX);
+        }
+    }
+}
+
+/// The 128-bit file ID of the object `handle` refers to, the same ID a
+/// `FileIdExtdDirectoryInfo` listing reports for that entry.
+#[cfg(windows)]
+fn file_id(handle: &std::fs::File) -> std::io::Result<[u8; 16]> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+    let mut info = FILE_ID_INFO::default();
+    let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+        .expect("FILE_ID_INFO is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for this call, `FileIdInfo` fills a
+    // `FILE_ID_INFO`, and `size` is that structure's exact size.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileIdInfo,
+            std::ptr::from_mut(&mut info).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.FileId.Identifier)
+}
+
+/// Deletes the object `handle` refers to through `handle` itself. POSIX
+/// semantics (`FileDispositionInfoEx`, ignoring the read-only attribute) is
+/// tried first, so the name leaves the directory when `handle` closes even if
+/// another opener (a scanner, say) still holds the object, and its parent can
+/// then be removed. A volume or Windows release without it answers
+/// `ERROR_NOT_SUPPORTED`, `ERROR_INVALID_PARAMETER`, or
+/// `ERROR_INVALID_FUNCTION`, and falls back to the plain `FileDispositionInfo`
+/// delete-on-close, which another open handle can keep pending.
+#[cfg(windows)]
+fn mark_for_deletion(handle: &std::fs::File) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+    };
+    let posix = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE
+            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+    };
+    // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
+    match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {
+        Ok(()) => return Ok(()),
+        Err(refused)
+            if refused
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok())
+                .is_some_and(|code| {
+                    matches!(
+                        code,
+                        ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                    )
+                }) => {}
+        Err(failed) => return Err(failed),
+    }
+    let legacy = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: `FileDispositionInfo` takes a `FILE_DISPOSITION_INFO`, which `legacy` is.
+    unsafe { set_file_information(handle, FileDispositionInfo, &legacy) }
+}
+
+/// `SetFileInformationByHandle` on `handle` with `info` as the buffer.
+///
+/// # Safety
+///
+/// `T` must be the structure `class` documents as its buffer.
+#[cfg(windows)]
+unsafe fn set_file_information<T>(
+    handle: &std::fs::File,
+    class: windows_sys::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
+    info: &T,
+) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+    let size = u32::try_from(std::mem::size_of::<T>())
+        .expect("a file-information structure is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for the call, the caller guarantees `T`
+    // matches `class`, and `size` is `T`'s exact size.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            class,
+            std::ptr::from_ref(info).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Empties `dir` through its descriptor: every entry is unlinked relative to
 /// its held parent and subdirectories are opened `NOFOLLOW`, so no pathname
 /// is ever re-resolved and a symlink is unlinked, not followed. Each entry
