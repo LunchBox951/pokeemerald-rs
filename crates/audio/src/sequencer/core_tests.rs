@@ -898,3 +898,31 @@ fn cancelling_a_fade_drops_the_step_waiting_on_a_suspended_tick() {
     assert_eq!(volumes.len(), 1);
     assert_eq!(volumes, full, "the note plays at the restored full volume");
 }
+
+/// A restore while a tick is suspended waits for the tick: staged mid-tick,
+/// the `Note` ahead in the run would consume the dirty flag and leave the
+/// first note at the cancelled fade's volume.
+#[test]
+fn cancelling_a_fade_mid_tick_restores_every_note_of_that_tick() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(true, 1)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(32));
+    assert!(seq.suspended_tick.is_some(), "tick yielded");
+    seq.restore_full_volume();
+    seq.render_frame_with_fade(&mut out, None);
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    seq.render_frame_with_fade(&mut out, None);
+    let volumes: Vec<_> = seq.mixer.voices().iter().map(|v| v.base_volume()).collect();
+    let mut unfaded = Sequencer::new(test_song(vec![burst_then_second_note(true, 1)], 150));
+    for _ in 0..3 {
+        unfaded.render_frame(&mut out);
+    }
+    let full: Vec<_> = unfaded
+        .mixer
+        .voices()
+        .iter()
+        .map(|v| v.base_volume())
+        .collect();
+    assert_eq!(volumes.len(), 2);
+    assert_eq!(volumes, full, "both notes play at the restored full volume");
+}

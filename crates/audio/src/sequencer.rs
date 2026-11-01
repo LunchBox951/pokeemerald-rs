@@ -495,8 +495,14 @@ impl Sequencer {
     /// sequencer the terminal step already paused stays paused. A step the
     /// fade handed to a frame whose tick is still suspended is dropped with
     /// the fade, so it cannot attenuate or pause the song once the tick
-    /// completes.
+    /// completes, and the restore itself then waits for that tick as any
+    /// fade change does: staged mid-tick, a `Note` ahead in the run would
+    /// consume the dirty flag and leave the earlier voice attenuated.
     pub fn restore_full_volume(&mut self) {
+        if self.suspended_tick.is_some() && !self.paused {
+            self.pending_fade = Some(TRACK_VOLUME_SCALE);
+            return;
+        }
         self.pending_fade = None;
         self.stage_fade_volume(TRACK_VOLUME_SCALE);
     }
