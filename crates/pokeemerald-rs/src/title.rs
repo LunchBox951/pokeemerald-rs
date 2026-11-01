@@ -90,6 +90,8 @@ const RAYQUAZA_BLEND_TARGETS: [bool; 4] = [true, false, false, false];
 /// Why building a [`TitleScene`] failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TitleSceneError {
+    /// The installed pack is not ready for this build's supported game content.
+    Readiness(assets::pack::PackReadinessError),
     /// Loading or reading the asset pack failed.
     Pack(PackError),
     /// Packed graphics did not fit the corresponding rendering type.
@@ -136,6 +138,7 @@ pub enum TitleSceneError {
 impl fmt::Display for TitleSceneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Readiness(err) => write!(f, "{err}"),
             // Every requested asset ID is static, so an unknown asset means
             // the pack schema predates the binary. Both remedies are named
             // below, like `PackError::NotFound`: an imported pack goes
@@ -185,6 +188,12 @@ impl From<PackError> for TitleSceneError {
     }
 }
 
+impl From<assets::pack::PackReadinessError> for TitleSceneError {
+    fn from(err: assets::pack::PackReadinessError) -> Self {
+        Self::Readiness(err)
+    }
+}
+
 impl From<RenderError> for TitleSceneError {
     fn from(err: RenderError) -> Self {
         Self::Render(err)
@@ -196,12 +205,14 @@ impl TitleSceneError {
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(PackError::NotFound(_)))
+            || matches!(self, Self::Readiness(err) if matches!(err.problem(), assets::pack::PackProblem::Missing))
     }
 
-    /// Returns whether the asset pack predates the binary's title schema.
+    /// Returns whether the pack format is unsupported or required content is missing.
     #[must_use]
     pub const fn is_pack_stale(&self) -> bool {
         matches!(self, Self::Pack(PackError::UnknownAsset(_)))
+            || matches!(self, Self::Readiness(err) if matches!(err.problem(), assets::pack::PackProblem::UnsupportedFormat { .. } | assets::pack::PackProblem::MissingAsset(_)))
     }
 }
 
@@ -384,17 +395,28 @@ impl TitleScene {
 }
 
 /// Loads the pack from its default location and decodes the title screen in
-/// one step -- the entry point [`crate::App::new`] uses. Checkout gates use
-/// [`load_repo`] instead.
+/// one step. [`crate::App::new`] resolves that location once itself and uses
+/// [`load_at`], so later loads stay on the pack it validated. Checkout gates
+/// use [`load_repo`] instead.
 ///
 /// # Errors
 ///
-/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// [`TitleSceneError::Readiness`] with [`TitleSceneError::is_pack_missing`] true
 /// if there is no pack yet (`pokeemerald-rs --import-rom <rom>`, or
-/// `./init.sh` then `cargo xtask extract` in a checkout); see
-/// [`TitleScene::from_pack`] for the other (real-pack-only) error cases.
+/// `./init.sh` then `cargo xtask extract` in a checkout).
+/// [`crate::load_ready_pack`] and [`TitleScene::from_pack`] describe other failures.
 pub fn load_default() -> Result<TitleScene, TitleSceneError> {
-    let pack = AssetPack::load_default()?;
+    load_at(&AssetPack::default_path())
+}
+
+/// [`load_default`] for a pack at a caller-chosen path, so a caller that
+/// resolved the path once can validate exactly the pack it keeps reading.
+///
+/// # Errors
+///
+/// As [`load_default`].
+pub fn load_at(path: &std::path::Path) -> Result<TitleScene, TitleSceneError> {
+    let pack = crate::load_ready_pack(path)?;
     TitleScene::from_pack(&pack)
 }
 
@@ -405,13 +427,17 @@ pub fn load_default() -> Result<TitleScene, TitleSceneError> {
 ///
 /// # Errors
 ///
-/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// [`TitleSceneError::Readiness`] with [`TitleSceneError::is_pack_missing`] true
 /// if the checkout has no extracted pack yet (`./init.sh` then
 /// `cargo xtask extract`); otherwise as [`load_default`].
 pub fn load_repo() -> Result<TitleScene, TitleSceneError> {
-    let pack = AssetPack::load_repo()?;
+    let pack = crate::load_ready_pack(&AssetPack::repo_pack_path())?;
     TitleScene::from_pack(&pack)
 }
+
+/// The press-start sheet. The import profile declares it 8bpp in the pack, but
+/// the renderer repacks it as 4bpp, so readiness checks it at that depth.
+pub(crate) const PRESS_START_IMAGE_ID: &str = "title/image/press_start";
 
 mod asset_tilesets;
 mod idle_frame;

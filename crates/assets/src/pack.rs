@@ -18,6 +18,7 @@ mod naming_screen;
 mod opening_scene;
 mod paletted_image;
 mod pokedex_graphics;
+mod readiness;
 mod starter_chooser;
 mod text_tokens;
 mod trainer_pic;
@@ -51,6 +52,7 @@ pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
 pub use pokedex_graphics::PokedexGraphicsHandle;
+pub use readiness::{ConsumerConstraint, PackProblem, PackReadinessError, RequiredAsset};
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 
 pub use trainer_pic::TrainerPicHandle;

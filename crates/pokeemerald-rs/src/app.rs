@@ -322,8 +322,9 @@ pub struct App {
     music_context: MusicContext,
     /// Where every scene load [`crate::flow::advance_scene`] performs -- and
     /// [`Self::start_title_music`]'s own second pack load -- reads
-    /// from (issue #412): [`crate::pack_source::PackSource::Runtime`] for
-    /// [`Self::new`], [`crate::pack_source::PackSource::Repo`] for
+    /// from (issue #412): the path [`Self::new`] resolved once and validated
+    /// ([`crate::pack_source::PackSource::Explicit`]),
+    /// [`crate::pack_source::PackSource::Repo`] for
     /// [`Self::new_headless_real`] -- resolved once here, at construction,
     /// and threaded down through every [`Self::step`] call rather than a
     /// process-wide `$POKEEMERALD_PACK` override (`crates/README.md`'s
@@ -457,11 +458,10 @@ impl App {
     /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(
-            title::load_default,
+        let mut app = Self::boot_resolving_pack_once(
+            assets::AssetPack::default_path,
             || Platform::new(title),
             || Ok(SaveSlot::default_location()),
-            crate::pack_source::PackSource::Runtime,
         )?;
         // `mus_title` starts on the initializer's state-4 frame
         // ([`Self::restart_title_music`]), not at construction.
@@ -549,15 +549,46 @@ impl App {
         pack: &std::sync::Arc<std::path::Path>,
         save: &std::path::Path,
     ) -> Result<Self, AppError> {
-        let source = crate::pack_source::PackSource::Explicit(pack.clone());
-        Self::boot(
-            || {
-                let pack = assets::AssetPack::load(pack).map_err(TitleSceneError::Pack)?;
-                title::TitleScene::from_pack(&pack)
-            },
+        Self::boot_pinned_to(
+            pack,
             || Ok(Platform::new_headless()),
             || SaveSlot::at_path(save),
-            source,
+        )
+    }
+
+    /// [`App::boot`] with the pack location decided once: `resolve` runs a
+    /// single time and the path it returns is both the pack the readiness
+    /// check validates and the [`crate::pack_source::PackSource::Explicit`]
+    /// every later load reads. A runtime resolver that re-ran per load could
+    /// otherwise move to a pack that never crossed the readiness boundary
+    /// after the save medium opened.
+    pub(crate) fn boot_resolving_pack_once(
+        resolve: impl FnOnce() -> std::path::PathBuf,
+        open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+        open_save_slot: impl FnOnce() -> Result<SaveSlot, SaveFileError>,
+    ) -> Result<Self, AppError> {
+        let pack: std::sync::Arc<std::path::Path> = resolve().into();
+        Self::boot_pinned_to(&pack, open_platform, open_save_slot)
+    }
+
+    /// Test-only: the source this session's later loads read from.
+    #[cfg(test)]
+    pub(crate) fn pack_source(&self) -> &crate::pack_source::PackSource {
+        &self.pack_source
+    }
+
+    /// [`App::boot`] validating the pack at `pack` and pinning every later
+    /// load to that same path.
+    fn boot_pinned_to(
+        pack: &std::sync::Arc<std::path::Path>,
+        open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+        open_save_slot: impl FnOnce() -> Result<SaveSlot, SaveFileError>,
+    ) -> Result<Self, AppError> {
+        Self::boot(
+            || title::load_at(pack),
+            open_platform,
+            open_save_slot,
+            crate::pack_source::PackSource::Explicit(pack.clone()),
         )
     }
 
