@@ -235,7 +235,9 @@ pub(crate) struct BagScreen {
     menu_request: BagMenuRequest,
     swap: Option<ItemSwap>,
     /// `ReadKeys`' per-frame repeat counter, which the item list's held Up
-    /// and Down read.
+    /// and Down read, in the list and while swapping. It opens at the boot
+    /// delay of 40: upstream's session-global `gKeyRepeatStartDelay` is not
+    /// modelled, so a naming screen's 16 does not carry over.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
     /// Whether the choice that closed the screen was confirmed in a context
@@ -276,7 +278,7 @@ impl BagScreen {
             return BagScreenTick::Open;
         }
         if let Some(swap) = self.swap {
-            return self.advance_swap(swap, buttons);
+            return self.advance_swap(swap, buttons, repeated);
         }
         if self.can_switch_pocket() {
             if let Some(direction) = switch_direction(buttons, self.lr_buttons) {

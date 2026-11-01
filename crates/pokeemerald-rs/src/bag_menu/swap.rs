@@ -81,9 +81,16 @@ impl BagScreen {
     }
 
     /// One frame of a swap: SELECT puts the item down, otherwise A puts it
-    /// down, B cancels, and Up and Down move the place (`list_menu.c:398-415`).
-    /// Left, Right, L and R do nothing: the swap task never switches pockets.
-    pub(super) fn advance_swap(&mut self, swap: ItemSwap, buttons: ButtonState) -> BagScreenTick {
+    /// down, B cancels, and a fresh or repeated Up or Down moves the place,
+    /// since the list menu reads `JOY_REPEAT` (`list_menu.c:398-415`,
+    /// `item_menu.c:1461`). Left, Right, L and R do nothing: the swap task
+    /// never switches pockets.
+    pub(super) fn advance_swap(
+        &mut self,
+        swap: ItemSwap,
+        buttons: ButtonState,
+        repeated: Buttons,
+    ) -> BagScreenTick {
         let pressed = |button| buttons.is_newly_pressed(button);
         if pressed(Buttons::SELECT) {
             return self.finish_swap(swap, true);
@@ -98,9 +105,9 @@ impl BagScreen {
         } else if pressed(Buttons::B) {
             self.finish_swap(swap, false)
         } else {
-            if pressed(Buttons::UP) {
+            if repeated.intersects(Buttons::UP) {
                 self.apply(BagMenuInput::Up);
-            } else if pressed(Buttons::DOWN) {
+            } else if repeated.intersects(Buttons::DOWN) {
                 self.apply(BagMenuInput::Down);
             }
             BagScreenTick::Open

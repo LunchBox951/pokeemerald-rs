@@ -697,6 +697,23 @@ fn a_held_down_does_not_repeat_inside_a_choice_window() {
     assert_eq!(grid.cursor, 2, "only the fresh press moved the choice");
 }
 
+#[test]
+fn a_held_down_repeats_while_swapping_items() {
+    // The swap task reads the list menu's `JOY_REPEAT(DPAD_DOWN)`
+    // (`item_menu.c:1461`, `list_menu.c:411`).
+    let mut screen = open_screen(BagScreenMode::Field, &four_item_bag());
+    screen.tick(press(Buttons::SELECT));
+    let mut state = ButtonState::new();
+    state.update(Buttons::NONE);
+    screen.tick(state);
+    assert!(screen.swap().is_some(), "the swap is under way");
+    assert_eq!(
+        frames_that_moved(&mut screen, Buttons::DOWN, 46),
+        [0, 40, 45]
+    );
+    assert!(screen.swap().is_some(), "the swap is still under way");
+}
+
 mod move_data;
 mod palette;
 mod scroll;

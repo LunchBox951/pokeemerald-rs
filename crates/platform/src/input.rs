@@ -118,6 +118,10 @@ impl Not for Buttons {
 pub struct ButtonState {
     held: Buttons,
     newly_pressed: Buttons,
+    /// `gMain.heldKeysRaw`: the held set before any button-mode remap.
+    raw_held: Buttons,
+    /// `gMain.newKeysRaw`: the newly pressed set before any remap.
+    raw_newly_pressed: Buttons,
 }
 
 impl ButtonState {
@@ -133,7 +137,9 @@ impl ButtonState {
     /// Equivalent to upstream's per-frame `newKeys = keyInput & ~heldKeys;
     /// heldKeys = keyInput;` transition, computed once per vblank.
     pub fn update(&mut self, currently_held: Buttons) {
-        self.newly_pressed = currently_held & !self.held;
+        self.raw_newly_pressed = currently_held & !self.raw_held;
+        self.raw_held = currently_held;
+        self.newly_pressed = self.raw_newly_pressed;
         self.held = currently_held;
     }
 
@@ -144,6 +150,9 @@ impl ButtonState {
     /// in the newly-pressed view, and a held `L` also sets `A` in the held
     /// view. Physical `L` stays set, and the two views are remapped
     /// independently, so a physical `A` edge is untouched by a held `L`.
+    /// The raw views ([`raw_held`](Self::raw_held),
+    /// [`raw_newly_pressed`](Self::raw_newly_pressed)) are not remapped,
+    /// as `gMain.heldKeysRaw` and `gMain.newKeysRaw` are not.
     #[must_use]
     pub fn with_l_equals_a(mut self) -> Self {
         if self.newly_pressed.intersects(Buttons::L) {
@@ -166,6 +175,21 @@ impl ButtonState {
     #[must_use]
     pub const fn newly_pressed(&self) -> Buttons {
         self.newly_pressed
+    }
+
+    /// Every button physically held down, before any button-mode remap
+    /// (`gMain.heldKeysRaw`).
+    #[must_use]
+    pub const fn raw_held(&self) -> Buttons {
+        self.raw_held
+    }
+
+    /// Buttons that physically transitioned from up to down on the most
+    /// recent [`update`](Self::update) call, before any remap
+    /// (`gMain.newKeysRaw`).
+    #[must_use]
+    pub const fn raw_newly_pressed(&self) -> Buttons {
+        self.raw_newly_pressed
     }
 
     /// Whether `button` is currently held down.
