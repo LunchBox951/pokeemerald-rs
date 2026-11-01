@@ -2,8 +2,9 @@
 //! per-track state, and drives the [`Mixer`] one V-blank frame at a time
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
-//! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
-//! and the terminal reserved kinds 0 and 3 decode but never execute.
+//! `PORT` and every `XCMD` besides `xWAIT`, the pseudo-echo pair
+//! (`xIECV`/`xIECL`), and the terminal reserved kinds 0 and 3 decode but
+//! never execute.
 
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -20,6 +21,8 @@ const XCMD_IECV: u8 = 0x08;
 /// `XCMD` sub-command number for `xIECL` (pseudo-echo length,
 /// `m4a_tables.c:253`).
 const XCMD_IECL: u8 = 0x09;
+/// `XCMD` sub-command number for `xWAIT` (`m4a_tables.c:305`).
+const XCMD_WAIT: u8 = 0x0C;
 
 /// Ticks fire each time the accumulator crosses this threshold
 /// (`subs r0, 150`, `m4a_1.s:1169`).
@@ -115,6 +118,9 @@ impl ModulationTarget {
 struct TrackState {
     cursor: usize,
     wait: u16,
+    /// Ticks `xWAIT` has already held this track (`MusicPlayerTrack::timer`,
+    /// `m4a_internal.h:309`); zeroed when the wait completes.
+    xwait_timer: u16,
     ended: bool,
     /// The `VOICE`-selected bank entry; `None` is the cleared startup tone
     /// (`Clear64byte` then `tone.type = 1`, `m4a_1.s:1218`..`:1230`), which
@@ -163,6 +169,7 @@ impl TrackState {
         Self {
             cursor: 0,
             wait: 0,
+            xwait_timer: 0,
             ended: false,
             voice: None,
             vol: DEFAULT_TRACK_VOLUME,
@@ -188,6 +195,18 @@ impl TrackState {
             priority: 0,
             vol_dirty: false,
             pitch_dirty: false,
+        }
+    }
+
+    /// `ply_xwait` (`m4a.c:1615`..`:1636`): the command re-executes once per
+    /// tick for `len` ticks, then the next command runs on that same tick.
+    fn xwait(&mut self, len: u16) {
+        if self.xwait_timer < len {
+            self.xwait_timer += 1;
+            self.cursor -= 1;
+            self.wait = 1;
+        } else {
+            self.xwait_timer = 0;
         }
     }
 
@@ -645,6 +664,10 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Xcmd {
+                kind: XCMD_WAIT,
+                value,
+            } => track.xwait(u16::try_from(value & 0xFFFF).unwrap_or(0)),
+            Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
             } => track.pseudo_echo_volume = u8::try_from(value).unwrap_or(0),
@@ -660,7 +683,8 @@ impl Sequencer {
                 target,
             } => Self::exec_memacc(mem_acc, track, op, addr, value, target),
             // Canonical `mid2agb` songs emit neither `PORT` nor other `XCMD`s
-            // (`tools/mid2agb/agb.cpp:338`..`:341`); they remain decode-only.
+            // (`tools/mid2agb/agb.cpp:338`..`:341`) besides the ones above;
+            // they remain decode-only.
             Event::Xcmd { .. } | Event::Port { .. } => {}
         }
     }

@@ -31104,6 +31104,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "ply_xwait": {
+          "reason": "ply_xwait's hold-for-len XCMD (kind 0x0C, m4a.c:1615-1636) executed by sequencer::TrackState::xwait: while the per-track timer is below the 16-bit length it counts a tick, rewinds onto the command, and waits one tick; then it clears the timer and continues on the same tick.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "ply_xxx": {
           "reason": "ply_xxx dispatches to the ply_fine jump-table entry (m4a.c:1531-1534); typed XCMD kinds 0 and 3 now terminate and release the track.",
           "rust_target": "crates/audio/src/sequencer.rs",
