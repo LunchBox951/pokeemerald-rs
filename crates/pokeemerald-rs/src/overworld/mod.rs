@@ -187,6 +187,12 @@ pub enum OverworldSceneError {
         /// The supplied `(width, height)` in pixels.
         actual: (u32, u32),
     },
+    /// The scene's player and object sprite frames need more OBJ tiles than
+    /// the 1024 an OAM tile index addresses.
+    SpriteTilesExceedObjSpace {
+        /// The tiles the combined sprite sheet needs.
+        tiles: usize,
+    },
     /// A map layout names a tileset that the scene loader does not support.
     UnknownTileset(&'static str),
     /// The header a scene was given names a different layout than the layout
@@ -260,6 +266,11 @@ impl std::fmt::Display for OverworldSceneError {
             } => write!(
                 f,
                 "overworld scene: sprite sheet `{id}` is {aw}x{ah}, expected {ew}x{eh}"
+            ),
+            Self::SpriteTilesExceedObjSpace { tiles } => write!(
+                f,
+                "overworld scene: the scene's sprites need {tiles} OBJ tiles, past the 1024 \
+                 an OAM tile index addresses"
             ),
             Self::UnknownTileset(symbol) => write!(
                 f,
@@ -450,7 +461,10 @@ impl OverworldScene {
     /// map has no events. Otherwise returns an error when a tileset symbol is
     /// unsupported, a required pack
     /// entry is missing, or the tile, animation, layout-grid, border, or
-    /// sprite-sheet bytes fail to decode. An unbundled connected map is
+    /// sprite-sheet bytes fail to decode, or the scene's sprite frames would
+    /// not fit the OBJ tile space. Object frames are packed per scene, only
+    /// the sheet cells an object event shows, and each object's draw elevation
+    /// comes from its cell in the layout grid. An unbundled connected map is
     /// omitted; present but malformed connection data returns an error.
     /// Metatile definitions and metatile attributes are copied unchecked, so a
     /// truncated or undecodable entry leaves the cells that use it blank
@@ -500,11 +514,11 @@ impl OverworldScene {
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
         let border_bytes = pack.layout_border(&layout_name)?.to_vec();
-        let _ = layout.grid(&grid_bytes)?;
+        let grid = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
         let connections = resolve_connections(pack, header)?;
-        let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events, &grid, event_data)?;
 
         Ok(Self {
             map_id: header.id,

@@ -703,14 +703,26 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
             .filter(|e| e.id.starts_with("tileset/petalburg/")),
     );
     for sprite in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(sprite);
         entries.push(Entry {
             id: format!("sprite/{sprite}"),
             kind_tag: IMAGE_KIND_TAG,
-            meta: image_meta(144, 32, 8),
-            payload: vec![3u8; 144 * 32],
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
         });
     }
     write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// The pixel size of the real sheet a fixture sprite path stands for: nine
+/// 16x32 frames for a people sheet, except the 16x16 Birch's bag and the
+/// nine-frame 32x32 Zigzagoon.
+fn synthetic_sheet_dimensions(sprite_path: &str) -> (u32, u32) {
+    match sprite_path {
+        "misc/birchs_bag" => (16, 16),
+        "pokemon/enemy_zigzagoon" => (288, 32),
+        _ => (144, 32),
+    }
 }
 
 /// Writes a synthetic pack at `path` that loads the *real* bundled
@@ -753,12 +765,19 @@ pub(crate) fn write_route101_oldale_layout_pack(
             .filter(|e| e.id.starts_with("tileset/petalburg/")),
     );
     for sprite in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(sprite);
         entries.push(Entry {
             id: format!("sprite/{sprite}"),
             kind_tag: IMAGE_KIND_TAG,
-            meta: image_meta(144, 32, 8),
-            payload: vec![3u8; 144 * 32],
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
         });
     }
+    entries.push(Entry {
+        id: "sprite/palette/enemy_zigzagoon".into(),
+        kind_tag: PALETTE_KIND_TAG,
+        meta: 0u16.to_le_bytes().to_vec(),
+        payload: vec![],
+    });
     write_scratch_exclusive(path, write_synthetic_pack(entries));
 }

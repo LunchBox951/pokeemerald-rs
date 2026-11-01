@@ -171,8 +171,8 @@ const OLDALE_SPRITES: [&str; 3] = ["girl_3", "mart_employee", "maniac"];
 const ROUTE_101_SPRITES: [&str; 5] = [
     "youngster",
     "prof_birch",
-    "birchs_bag",
-    "zigzagoon_1",
+    "misc/birchs_bag",
+    "pokemon/enemy_zigzagoon",
     "boy_2",
 ];
 
