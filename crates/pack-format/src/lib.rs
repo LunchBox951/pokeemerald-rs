@@ -102,7 +102,13 @@
 //!
 //! One crate owns the layout so its writers (`xtask::extract`, the ROM
 //! importer) and its reader (`crates/assets`) cannot drift: a format bump
-//! touches one file, and `xtask` and `assets` never depend on each other.
+//! touches one file.
+//!
+//! Ownership is split on purpose: `pack-format` owns the container layout and
+//! `assets` owns the payload schemas. A producer with a canonical `assets`
+//! encoder for a payload encodes through it rather than keeping a second copy
+//! of the schema; the voicegroup extractor in `xtask` does today. Which crates
+//! depend on which is `Cargo.toml`'s to say.
 //!
 //! The entry constructors are what makes two backends produce one pack. A
 //! hand-built [`PackEntry`] literal can still promise an image bit depth
