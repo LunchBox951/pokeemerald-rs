@@ -51,6 +51,7 @@ mod scroll;
 mod sprite;
 mod swap;
 
+use crate::key_repeat::{self, KeyRepeat};
 use chrome::BagChrome;
 use scroll::ArrowClock;
 use swap::ItemSwap;
@@ -233,6 +234,11 @@ pub(crate) struct BagScreen {
     /// host passed it in until then.
     menu_request: BagMenuRequest,
     swap: Option<ItemSwap>,
+    /// `ReadKeys`' per-frame repeat counter, which the item list's held Up
+    /// and Down read, in the list and while swapping. It opens at the boot
+    /// delay of 40: upstream's session-global `gKeyRepeatStartDelay` is not
+    /// modelled, so a naming screen's 16 does not carry over.
+    repeat: KeyRepeat,
     done: Option<BagScreenResult>,
     /// Whether the choice that closed the screen was confirmed in a context
     /// menu, whose "is selected" text then stays in the description window.
@@ -246,8 +252,11 @@ impl BagScreen {
     /// B, direction -- upstream's handler runs one branch per frame
     /// (`Task_BagMenu_HandleInput`, `item_menu.c:1209-1259`, with the list
     /// menu's own A, B, then D-pad order, `list_menu.c:398-415`). L and R
-    /// switch pockets only in the L/R button mode. Held directions do not
-    /// auto-repeat.
+    /// switch pockets only in the L/R button mode. While the item list has
+    /// the input, a held Up or Down repeats as `JOY_REPEAT` does: the first
+    /// repeat 40 frames after the press, then every 5 frames
+    /// (`ReadKeys`, `main.c:251-275`). Every other input, and the choice
+    /// windows' directions, read only fresh presses.
     ///
     /// A pocket switch runs for the next 17 ticks. Only a fresh switch
     /// press is heard meanwhile and restarts it, unless the request has a
@@ -263,12 +272,13 @@ impl BagScreen {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
         }
+        let repeated = self.repeat.advance(buttons);
         if let Some(switch) = self.switch {
             self.advance_switch(switch, buttons);
             return BagScreenTick::Open;
         }
         if let Some(swap) = self.swap {
-            return self.advance_swap(swap, buttons);
+            return self.advance_swap(swap, buttons, repeated);
         }
         if self.can_switch_pocket() {
             if let Some(direction) = switch_direction(buttons, self.lr_buttons) {
@@ -284,6 +294,7 @@ impl BagScreen {
         }
         let Some(input) = input_of(
             buttons,
+            repeated,
             self.lr_buttons,
             self.menu.context_grid().map(|grid| grid.columns),
         ) else {
@@ -360,8 +371,12 @@ fn switch_direction(buttons: ButtonState, lr_buttons: bool) -> Option<SwitchDire
     }
 }
 
+/// `repeated` is `gMain.newAndRepeatedKeys`; only the item list reads it
+/// (`ListMenu_ProcessInput` tests `JOY_REPEAT` for Up and Down,
+/// `list_menu.c:406-413`). The choice windows test `JOY_NEW`.
 fn input_of(
     buttons: ButtonState,
+    repeated: Buttons,
     lr_buttons: bool,
     context_columns: Option<usize>,
 ) -> Option<BagMenuInput> {
@@ -413,9 +428,9 @@ fn input_of(
         Some(BagMenuInput::Confirm)
     } else if pressed(Buttons::B) {
         Some(BagMenuInput::Cancel)
-    } else if pressed(Buttons::UP) {
+    } else if repeated.intersects(Buttons::UP) {
         Some(BagMenuInput::Up)
-    } else if pressed(Buttons::DOWN) {
+    } else if repeated.intersects(Buttons::DOWN) {
         Some(BagMenuInput::Down)
     } else {
         None
@@ -472,6 +487,7 @@ fn open_from_pack(
         bag: bag.clone(),
         menu_request: engine_request,
         swap: None,
+        repeat: KeyRepeat::new(key_repeat::START_DELAY),
         done: None,
         closed_from_context: false,
     })
