@@ -1,5 +1,5 @@
 //! The lead-owner interface ([`super::lead_owner`]) exercised without any
-//! direct access to the `party_lead` triad.
+//! direct access to the phase's `LoadedLead`.
 
 use battle::{BattlePokemon, Dex};
 
@@ -429,4 +429,121 @@ fn the_provisional_starter_is_filed_in_slot_zero_by_a_save() {
     assert!(phase.save1.player_party[1..]
         .iter()
         .all(|p| *p == engine::save::Pokemon::default()));
+}
+
+/// A phase continued from exactly `records` in slots 0.. (the rest default),
+/// stored `count`.
+fn continued_from_records(records: &[engine::save::Pokemon], count: u8) -> OverworldPhase {
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = count;
+    seed.save1.player_party = [engine::save::Pokemon::default(); 6];
+    seed.save1.player_party[..records.len()].copy_from_slice(records);
+    OverworldPhase::from_saved(
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    )
+}
+
+#[test]
+fn flushing_an_unchanged_loaded_lead_leaves_every_record_byte_identical() {
+    const EV_HP_BONUS: u16 = 7;
+    let plain = record_of(&starter());
+    let mut ev_trained = record_of(&starter());
+    ev_trained.max_hp += EV_HP_BONUS;
+    ev_trained.hp = ev_trained.max_hp - 3;
+    let mut statused = record_of(&starter());
+    statused.status = 0x40;
+
+    for (records, count, slot) in [
+        (vec![plain], 1, 0),
+        (vec![ev_trained], 1, 0),
+        (vec![statused], 1, 0),
+        (vec![record_of(&fainted_starter()), plain], 1, 1),
+        (vec![dormant_party_member(0x11), ev_trained], 2, 1),
+    ] {
+        let mut phase = continued_from_records(&records, count);
+        phase.assert_lead_at_slot_for_test(slot);
+        let before = (phase.save1.player_party, phase.save1.player_party_count);
+
+        phase.flush_lead_to_save();
+        phase.copy_party_and_objects_to_save();
+
+        assert_eq!(
+            (phase.save1.player_party, phase.save1.player_party_count),
+            before,
+            "an unchanged lead must file its record byte for byte"
+        );
+        for (index, record) in before.0.iter().enumerate() {
+            assert_eq!(
+                phase.save1.player_party[index].to_bytes(),
+                record.to_bytes(),
+                "slot {index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn flushing_an_unlent_unchanged_fresh_lead_files_its_to_save_record() {
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    phase.save1.player_party = [engine::save::Pokemon::default(); 6];
+    let fresh = starter();
+    phase.install_fresh_lead(fresh.clone());
+
+    phase.flush_lead_to_save();
+
+    assert_eq!(phase.save1.player_party[0], record_of(&fresh));
+    assert_eq!(phase.save1.player_party_count, 1);
+    assert!(phase.save1.player_party[1..]
+        .iter()
+        .all(|p| *p == engine::save::Pokemon::default()));
+}
+
+#[test]
+fn a_damaged_fresh_lead_files_the_same_record_a_from_scratch_encoding_would() {
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    phase.install_fresh_lead(starter());
+    phase.lead_mut_for_test().unwrap().apply_damage(3);
+
+    phase.flush_lead_to_save();
+
+    assert_eq!(
+        phase.save1.player_party[0],
+        record_of(phase.lead_battler().unwrap())
+    );
+}
+
+#[test]
+fn flushing_and_healing_while_the_battler_is_lent_change_nothing() {
+    let mut phase = continued(&[starter()], 1);
+    let before = (phase.save1.player_party, phase.save1.player_party_count);
+    let lent = phase.take_lead_battler().unwrap();
+
+    phase.flush_lead_to_save();
+    phase.heal_whole_lead(&Dex::new()).unwrap();
+
+    assert_eq!(
+        (phase.save1.player_party, phase.save1.player_party_count),
+        before
+    );
+    phase.restore_lead_battler(lent);
+    phase.assert_lead_at_slot_for_test(0);
+}
+
+#[test]
+fn reselecting_over_a_lent_lead_rebuilds_it_from_the_save() {
+    let mut phase = continued(&[starter()], 1);
+    let lent = phase.take_lead_battler().unwrap();
+
+    phase.reselect_lead_from_save(&Dex::new(), "test");
+
+    phase.assert_lead_at_slot_for_test(0);
+    assert_eq!(
+        phase.lead_battler().unwrap().personality(),
+        lent.personality()
+    );
 }

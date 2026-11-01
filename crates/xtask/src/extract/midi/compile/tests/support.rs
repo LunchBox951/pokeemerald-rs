@@ -1,4 +1,8 @@
+use assets::audio::{MusicPlayerId, Song, SongEvent as AssetEvent, VoiceGroupId};
+
 use crate::extract::midi::cfg::MidiCfgEntry;
+use crate::extract::midi::encode::asset_event;
+use crate::extract::midi::event::SongEvent;
 
 const META_EVENT: u8 = 0xFF;
 pub(super) const END_OF_TRACK_META_EVENT: u8 = 0x2F;
@@ -132,5 +136,58 @@ pub(super) fn cfg() -> MidiCfgEntry {
         master_volume: 127,
         exact_gate_time: true,
         clocks_per_beat: 1,
+    }
+}
+
+/// Returns `track` as `assets` canonicalizes it: adjacent waits merged and
+/// long rests split, the shape the pack carries. The compiler preserves total
+/// delays and leaves that shape to the schema.
+pub(super) fn canonical_waits(track: &[SongEvent]) -> Vec<SongEvent> {
+    let song = Song::new(
+        VoiceGroupId(String::new()),
+        MusicPlayerId(0),
+        0,
+        None,
+        vec![track.iter().map(asset_event).collect()],
+    )
+    .expect("a compiled track is within the schema's domain");
+    song.tracks()[0].iter().map(compiled_event).collect()
+}
+
+fn compiled_event(event: &AssetEvent) -> SongEvent {
+    match *event {
+        AssetEvent::Wait(ticks) => SongEvent::Wait(ticks),
+        AssetEvent::Note {
+            key,
+            velocity,
+            gate,
+        } => SongEvent::Note {
+            key,
+            velocity,
+            gate,
+        },
+        AssetEvent::EndOfTie { key: Some(key) } => SongEvent::EndOfTie { key },
+        AssetEvent::Voice(index) => SongEvent::Voice(index),
+        AssetEvent::Volume(volume) => SongEvent::Volume(volume),
+        AssetEvent::Pan(pan) => SongEvent::Pan(pan),
+        AssetEvent::Bend(bend) => SongEvent::Bend(bend),
+        AssetEvent::BendRange(range) => SongEvent::BendRange(range),
+        AssetEvent::Tune(tune) => SongEvent::Tune(tune),
+        AssetEvent::KeyShift(shift) => SongEvent::KeyShift(shift),
+        AssetEvent::Tempo(bpm) => SongEvent::Tempo(bpm),
+        AssetEvent::Priority(priority) => SongEvent::Priority(priority),
+        AssetEvent::LfoSpeed(speed) => SongEvent::LfoSpeed(speed),
+        AssetEvent::LfoDelay(delay) => SongEvent::LfoDelay(delay),
+        AssetEvent::Modulation(depth) => SongEvent::Modulation(depth),
+        AssetEvent::ModType(kind) => SongEvent::ModType(kind),
+        AssetEvent::PseudoEchoVolume(volume) => SongEvent::PseudoEchoVolume(volume),
+        AssetEvent::PseudoEchoLength(length) => SongEvent::PseudoEchoLength(length),
+        AssetEvent::Goto(target) => SongEvent::Goto(target),
+        AssetEvent::Fine => SongEvent::Fine,
+        AssetEvent::EndOfTie { key: None }
+        | AssetEvent::MemAcc { .. }
+        | AssetEvent::MemAccBranch { .. } => {
+            unreachable!("the compiler emits no event outside its own model")
+        }
     }
 }

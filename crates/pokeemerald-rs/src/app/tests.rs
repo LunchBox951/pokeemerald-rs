@@ -40,12 +40,21 @@ fn animated_frame_returns_the_presented_tick() {
     );
     let mut app = App::new_headless_animated(scene);
 
-    assert_eq!(app.frame().to_vec(), expected0.to_vec());
+    assert!(
+        app.frame().iter().all(|&pixel| pixel == WHITE),
+        "construction alone shows the initializer's white frame"
+    );
+    run_title_init(&mut app);
+    assert_eq!(
+        app.frame().to_vec(),
+        expected0.to_vec(),
+        "the initializer's last frame is the unfaded title"
+    );
     app.step().expect("headless step never errors");
     assert_eq!(
         app.frame().to_vec(),
         expected0.to_vec(),
-        "the first step presents tick 0; frame() must still be tick 0's composition"
+        "the first MainCB2 step presents tick 0; frame() must still be tick 0's composition"
     );
     app.step().expect("headless step never errors");
     assert_eq!(
@@ -92,27 +101,31 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
 
     let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
 
-    assert_eq!(
-        app.frame().to_vec(),
-        expected0.to_vec(),
-        "App::boot -- App::new's own construction body -- must compose the real title screen's \
-         tick-0 frame"
-    );
     assert!(
-        app.frame().iter().any(|&pixel| pixel != 0),
-        "the real title screen booted through App::boot must be non-blank"
+        app.frame().iter().all(|&pixel| pixel == WHITE),
+        "App::boot -- App::new's own construction body -- starts CB2_InitTitleScreen on white"
     );
-
     assert!(
         app.platform.last_presented().is_none(),
         "construction alone must not present anything yet"
     );
 
+    // S0..S34: the setup frames, then the white fade-in over the loaded title.
+    for step in 0..TITLE_INIT_FRAMES {
+        app.step().expect("headless step never errors");
+        let shown = presented(&app);
+        match step {
+            0..=4 => assert!(shown.iter().all(|&pixel| pixel == WHITE), "S{step}"),
+            29..=34 => assert_eq!(shown, expected0.to_vec(), "S{step}: unfaded"),
+            _ => assert_ne!(shown, expected0.to_vec(), "S{step}: still fading"),
+        }
+    }
+
     app.step().expect("headless step never errors");
     assert_eq!(
         presented(&app),
         expected0.to_vec(),
-        "the first step must present that same tick-0 frame (flow's Title arm)"
+        "the first MainCB2 step must present the tick-0 frame (flow's Title arm)"
     );
     for _ in 0..2 {
         app.step().expect("headless step never errors");
@@ -138,6 +151,22 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
         "the fifteenth step must present tick 14 exactly -- an App running one tick behind \
          would still be presenting tick 13 here (differs, asserted above)"
     );
+}
+
+/// Frames `CB2_InitTitleScreen` runs before `MainCB2` (S0..S34).
+const TITLE_INIT_FRAMES: usize = 35;
+const WHITE: u32 = 0x00FF_FFFF;
+
+/// Steps a fresh `app` through the whole initializer with nothing held.
+fn run_title_init(app: &mut App) {
+    run_title_init_from(app, 0);
+}
+
+/// [`run_title_init`] for an `app` that has already run `done` frames.
+fn run_title_init_from(app: &mut App, done: usize) {
+    for _ in done..TITLE_INIT_FRAMES {
+        app.step().expect("headless step never errors");
+    }
 }
 
 /// The frame `app`'s headless backend actually received from
@@ -261,6 +290,15 @@ const MAX_FADE_WAIT_STEPS: usize = 40;
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_headless_app_reports_title_then_selected_main_menu() {
     let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
+    assert_eq!(app.state(), AppState::Title);
+
+    // A press before `MainCB2` runs is ignored.
+    app.set_headless_buttons(Buttons::START)
+        .expect("headless input injection succeeds");
+    assert!(app.step().expect("headless step never errors"));
+    app.set_headless_buttons(Buttons::NONE)
+        .expect("headless input injection succeeds");
+    run_title_init_from(&mut app, 1);
     assert_eq!(app.state(), AppState::Title);
 
     app.set_headless_buttons(Buttons::START)
