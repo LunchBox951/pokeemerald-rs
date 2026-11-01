@@ -36,6 +36,46 @@ impl OverworldPhase {
         self.resident_lead_mut().map(LoadedLead::battler_mut)
     }
 
+    /// The lead classified against the save owner for a battle start:
+    /// `IsTradedMon` (`pokeemerald/src/pokemon.c:6602-6626`) compares the
+    /// backing record's OT id and OT name with the owner's. The record backs
+    /// the lead only if its personality and OT id match the battler's, so a
+    /// lead installed without a saved record is left as is.
+    fn classified_for_battle(&self, lead: BattlePokemon) -> BattlePokemon {
+        let owner_id = u32::from_le_bytes(self.save2.player_trainer_id);
+        let traded = self
+            .lead
+            .as_ref()
+            .map(LoadedLead::record)
+            .is_some_and(|record| {
+                record.box_data.personality() == lead.personality()
+                    && record.box_data.ot_id() == lead.original_trainer_id()
+                    && !party::has_unstamped_owner_name(record, owner_id)
+                    && party::is_traded_record(record, owner_id, &self.save2.player_name)
+            });
+        let traded = traded || lead.is_traded_recipient();
+        lead.with_traded_recipient(traded)
+    }
+
+    /// A copy of the resident lead for a battle start, classified against the
+    /// save owner (see [`Self::take_lead_for_battle`]).
+    pub(super) fn lead_for_battle(&self) -> Option<BattlePokemon> {
+        let lead = self.lead_battler()?.clone();
+        Some(self.classified_for_battle(lead))
+    }
+
+    /// [`Self::take_lead_battler`] for a battle start: the lent battler is
+    /// classified against the save owner, so the traded-recipient experience
+    /// bonus reaches every overworld battle.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::take_lead_battler`] does.
+    pub(super) fn take_lead_for_battle(&mut self) -> Option<BattlePokemon> {
+        let lead = self.take_lead_battler()?;
+        Some(self.classified_for_battle(lead))
+    }
+
     /// Lend: moves the battler out for a battle. The lead keeps its slot,
     /// record, and hidden-HP offset, so [`Self::restore_lead_battler`] merges
     /// back into the same record. `None` when no lead is loaded.

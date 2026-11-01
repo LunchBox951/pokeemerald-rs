@@ -100,7 +100,7 @@ impl OverworldPhase {
             "wild encounter: slot {} -- species {:?} at level {}",
             encounter.slot, encounter.species, encounter.level
         );
-        let Some(lead) = self.take_lead_battler() else {
+        let Some(lead) = self.take_lead_for_battle() else {
             eprintln!("wild encounter: no party mon yet -- no battle to start");
             return;
         };

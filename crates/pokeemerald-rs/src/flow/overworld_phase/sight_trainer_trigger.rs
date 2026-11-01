@@ -470,7 +470,7 @@ impl OverworldPhase {
             );
         }
 
-        let Some(lead) = self.lead_battler().cloned() else {
+        let Some(lead) = self.lead_for_battle() else {
             if first_report {
                 eprintln!("sight trainer: no party mon yet -- no battle to start");
             }

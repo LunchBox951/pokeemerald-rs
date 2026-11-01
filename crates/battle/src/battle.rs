@@ -1246,11 +1246,16 @@ impl Battle {
         }
         let defeated = self.dex.species(self.enemy.species())?;
         let level = self.enemy.level();
-        let exp = if self.trainer().is_some() {
+        let mut exp = if self.trainer().is_some() {
             trainer_faint_exp(defeated.base_exp, level)
         } else {
             wild_faint_exp(defeated.base_exp, level)
         };
+        // A traded recipient's award takes one more truncating 150% after the
+        // trainer multiplier (`src/battle_script_commands.c:3378`-`:3390`).
+        if self.player.is_traded_recipient() {
+            exp = exp * 150 / 100;
+        }
         // `MonGainEVs` runs ahead of the exp and level-up sequence, so a
         // level crossed this turn snapshots the gain
         // (`src/battle_script_commands.c:3420`).
