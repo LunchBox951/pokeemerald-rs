@@ -1,9 +1,9 @@
 //! Stateful adapters for drain, fixed-damage, multi-hit, flag, and Defense
 //! Curl move resolution.
 
-use assets::MoveId;
+use assets::{Effectiveness, MoveId};
 
-use crate::damage::{apply_damage_roll, BattleRng};
+use crate::damage::{aggregate_type_effectiveness, apply_damage_roll, BattleRng, STRUGGLE};
 use crate::defense_curl::{resolve_defense_curl_move, DefenseCurlOutcome};
 use crate::drain::{resolve_drain, resolve_drain_move};
 use crate::error::BattleError;
@@ -87,6 +87,7 @@ impl Battle {
             damage: target_hp_lost,
             is_critical,
         });
+        self.push_type_effectiveness(attacker_is_player, move_id, events);
 
         let target_ability = self.battlers(attacker_is_player).1.ability();
         if let Some(drain) = resolve_drain(target_hp_lost, target_ability) {
@@ -187,8 +188,43 @@ impl Battle {
             damage: hp_lost,
             is_critical,
         });
+        // Upstream clears both effectiveness flags after `typecalc` for
+        // fixed-damage moves (`data/battle_scripts_1.s:825`, `:1201`, `:1726`),
+        // so no matchup line follows this hit.
         self.settle_faint(!attacker_is_player, events);
         Ok(())
+    }
+
+    /// Reports a super effective or not very effective matchup after a hit
+    /// (`resultmessage`); neutral matchups and Struggle print nothing.
+    pub(in crate::battle) fn push_type_effectiveness(
+        &self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        if move_id == STRUGGLE {
+            return;
+        }
+        let Some(move_type) = self
+            .dex
+            .move_data(move_id)
+            .ok()
+            .and_then(|data| data.move_type.battle_type())
+        else {
+            return;
+        };
+        let effectiveness =
+            aggregate_type_effectiveness(move_type, self.battlers(attacker_is_player).1.types());
+        if matches!(
+            effectiveness,
+            Effectiveness::SuperEffective | Effectiveness::NotVeryEffective
+        ) {
+            events.push(BattleEvent::TypeEffectiveness {
+                by_player: attacker_is_player,
+                effectiveness,
+            });
+        }
     }
 
     /// Applies live HP between multi-hit attempts and settles the target's faint.
@@ -229,6 +265,7 @@ impl Battle {
                 move_id,
             });
         } else if result.conclusion.reports_hit_count() && result.hits_landed > 0 {
+            self.push_type_effectiveness(attacker_is_player, move_id, events);
             events.push(BattleEvent::MultiHit {
                 by_player: attacker_is_player,
                 move_id,

@@ -135,6 +135,10 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: STRUGGLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: STRUGGLE,
@@ -147,7 +151,7 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
                 damage: player_max_hp / 4,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ]
     );
     assert_eq!(
@@ -190,10 +194,14 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -233,16 +241,24 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
                 damage: 9,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -284,10 +300,14 @@ fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: HORN_DRILL
+            },
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: HORN_DRILL,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -342,10 +362,14 @@ fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: HORN_DRILL
+            },
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: HORN_DRILL,
-            },
+            }
         ]
     );
     assert_eq!(rng.draws(), 4);
@@ -385,10 +409,14 @@ fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: SUPERSONIC
+            },
             BattleEvent::SoundproofProtected {
                 by_player: false,
                 move_id: SUPERSONIC,
-            },
+            }
         ]
     );
     assert_eq!(rng.draws(), 4);
@@ -483,7 +511,7 @@ fn a_directly_chosen_struggle_deducts_pp_normally() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Hit {
             by_player: true,
             move_id: STRUGGLE,
@@ -492,7 +520,7 @@ fn a_directly_chosen_struggle_deducts_pp_normally() {
         }
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::Recoil {
             by_player: true,
             move_id: STRUGGLE,
@@ -537,6 +565,10 @@ fn a_directly_known_struggle_at_zero_pp_still_executes() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: STRUGGLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: STRUGGLE,
@@ -549,7 +581,7 @@ fn a_directly_known_struggle_at_zero_pp_still_executes() {
                 damage: player_max_hp / 4,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "a zero-PP Struggle must still land, not fail through FailedNoPp"
     );
@@ -608,6 +640,10 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: LEER
+            },
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: LEER,
@@ -615,12 +651,16 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
                 damage: 3,
                 is_critical: false,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -686,7 +726,7 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Hit {
             by_player: true,
             move_id: STRUGGLE,
@@ -697,7 +737,7 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
          the Hit event reports the capped knockout: {events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::Recoil {
             by_player: true,
             move_id: STRUGGLE,
@@ -705,7 +745,7 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
         },
         "a quarter of the HP actually dealt, floored: {events:?}"
     );
-    assert_eq!(events[2], BattleEvent::Fainted { by_player: false });
+    assert_eq!(events[3], BattleEvent::Fainted { by_player: false });
     assert!(
         events
             .iter()
@@ -804,10 +844,14 @@ fn a_soundproof_defender_blocks_hyper_voice_before_any_move_draw() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: HYPER_VOICE
+            },
             BattleEvent::SoundproofProtected {
                 by_player: false,
                 move_id: HYPER_VOICE,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -856,10 +900,14 @@ fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: GROWL
+            },
             BattleEvent::SoundproofProtected {
                 by_player: false,
                 move_id: GROWL,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -929,10 +977,14 @@ fn a_depleted_serene_grace_poison_slot_still_selects_and_fails_no_pp() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: POISON_STING
+            },
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: POISON_STING,
-            },
+            }
         ]
     );
     assert_eq!(

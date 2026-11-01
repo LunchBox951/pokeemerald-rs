@@ -68,9 +68,10 @@ fn stat_fell_events(events: &[BattleEvent]) -> Vec<&BattleEvent> {
 fn a_landed_constrict_lowers_speed_one_stage_right_after_its_hit() {
     let (battle, events) = constrict_turn(ZIGZAGOON, CHANCE_HITS);
 
+    // `UsedMove` is announced first (`attackstring`, `data/battle_scripts_1.s:3556`).
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: CONSTRICT,
@@ -80,7 +81,7 @@ fn a_landed_constrict_lowers_speed_one_stage_right_after_its_hit() {
         "{events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::StatFell {
             by_player: true,
             move_id: CONSTRICT,

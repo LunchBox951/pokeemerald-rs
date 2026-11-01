@@ -6,6 +6,8 @@ mod common;
 
 #[path = "turn_engine/absorbing_abilities.rs"]
 mod absorbing_abilities;
+#[path = "turn_engine/announcement.rs"]
+mod announcement;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]

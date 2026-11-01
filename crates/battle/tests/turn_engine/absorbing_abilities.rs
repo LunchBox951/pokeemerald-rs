@@ -80,6 +80,7 @@ fn water_absorb_heals_a_quarter_after_exactly_one_accuracy_draw() {
         by_player: true,
         move_id: WATER_GUN,
         healed: quarter,
+        ability: assets::AbilityId::WATER_ABSORB,
     }));
     assert!(no_damage_event(&events), "{events:?}");
     assert_eq!(battle.enemy().current_hp(), hp_before + quarter);
@@ -103,6 +104,7 @@ fn volt_absorb_heals_a_quarter_from_an_always_hit_move_with_no_draws() {
         by_player: true,
         move_id: SHOCK_WAVE,
         healed: quarter,
+        ability: assets::AbilityId::VOLT_ABSORB,
     }));
     assert!(no_damage_event(&events), "{events:?}");
     assert_eq!(battle.enemy().current_hp(), hp_before + quarter);
@@ -122,13 +124,14 @@ fn absorbed_healing_is_capped_at_max_hp_and_reports_the_actual_gain() {
         by_player: true,
         move_id: WATER_GUN,
         healed: 1,
+        ability: assets::AbilityId::WATER_ABSORB,
     }));
     assert_eq!(battle.enemy().current_hp(), battle.enemy().stats().max_hp);
     rng.assert_exhausted();
 }
 
 #[test]
-fn an_absorbing_target_at_full_hp_reports_no_effect_and_still_spends_pp() {
+fn an_absorbing_target_at_full_hp_reports_the_ability_made_the_move_useless_and_still_spends_pp() {
     let dex = Dex::new();
     let vaporeon = max_iv_mon(&dex, VAPOREON, 5, vec![SWORDS_DANCE]);
     let max_hp = vaporeon.stats().max_hp;
@@ -136,9 +139,10 @@ fn an_absorbing_target_at_full_hp_reports_no_effect_and_still_spends_pp() {
 
     let (battle, events, rng) = run_wild_turn(MUDKIP, WATER_GUN, vaporeon, &[ACCURACY_HIT]);
 
-    assert!(events.contains(&BattleEvent::NoEffect {
+    assert!(events.contains(&BattleEvent::AbsorbMadeMoveUseless {
         by_player: true,
         move_id: WATER_GUN,
+        ability: assets::AbilityId::WATER_ABSORB,
     }));
     assert!(no_damage_event(&events), "{events:?}");
     assert_eq!(battle.enemy().current_hp(), max_hp);
@@ -209,6 +213,7 @@ fn a_trainer_whose_only_move_is_absorbed_deals_no_damage() {
         by_player: false,
         move_id: WATER_GUN,
         healed: quarter,
+        ability: assets::AbilityId::WATER_ABSORB,
     }));
     assert!(no_damage_event(&events), "{events:?}");
     assert_eq!(battle.player().current_hp(), hp_before + quarter);
