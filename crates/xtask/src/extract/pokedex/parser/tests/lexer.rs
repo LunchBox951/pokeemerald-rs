@@ -187,3 +187,19 @@ fn a_splice_consumes_a_physical_line_in_diagnostics() {
     assert_eq!(line_of(".height = \\\n12abc,"), plain + 1);
     assert_eq!(line_of(".hei\\\nght = \\\r\n12abc,"), plain + 2);
 }
+
+#[test]
+fn a_backslash_space_newline_splice_is_refused() {
+    // GNU cpp splices `*\ ⏎/` into `*/`, which would expose `+ 1`.
+    for replacement in [
+        ".height = 7 /* *\\ \n/ + 1 /* */,",
+        ".height = 7 /* *\\\t\r\n/ + 1 /* */,",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.entries, ".height = 7,", replacement);
+        assert!(
+            matches!(err(&f), PokedexSourceError::Malformed { .. }),
+            "{replacement:?} must be refused"
+        );
+    }
+}

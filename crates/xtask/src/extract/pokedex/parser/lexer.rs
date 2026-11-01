@@ -162,7 +162,46 @@ pub(super) fn lex_string(
     }
 }
 
+/// Refuses line-ending forms whose preprocessor reading this lexer does not
+/// model: a bare carriage return, which GNU cpp does not read as a line end,
+/// and a backslash separated from its newline by blanks, which GNU cpp still
+/// splices. Either could hide a token from the lexer, so both fail closed.
+fn refuse_unmodelled_line_endings(source: PokedexSource, text: &str) -> Result<()> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut line = 1;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\n' => line += 1,
+            '\r' if chars.get(i + 1) != Some(&'\n') => {
+                return Err(PokedexSourceError::Malformed {
+                    source,
+                    line,
+                    expected: "no bare carriage return outside a `\\r\\n` line ending",
+                });
+            }
+            '\\' if matches!(chars.get(i + 1), Some(' ' | '\t')) => {
+                let mut j = i + 1;
+                while matches!(chars.get(j), Some(' ' | '\t')) {
+                    j += 1;
+                }
+                if matches!(chars.get(j), Some('\n' | '\r')) {
+                    return Err(PokedexSourceError::Malformed {
+                        source,
+                        line,
+                        expected: "no blanks between a line-splicing backslash and its newline",
+                    });
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
 pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
+    refuse_unmodelled_line_endings(source, text)?;
     let text = Spliced::new(text);
     let chars = &text.chars;
     let mut tokens = Vec::new();

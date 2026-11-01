@@ -102,3 +102,17 @@ fn entry_members_must_appear_exactly_once() {
         matches!(err(&f), PokedexSourceError::UnknownEntryMember { ref member, .. } if member == "padding")
     );
 }
+
+#[test]
+fn bare_cr_ends_a_line_comment_before_a_duplicate_member() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.entries,
+        ".height = 7,",
+        ".height = 7, // note\r        .height = 8,",
+    );
+    assert!(
+        matches!(err(&f), PokedexSourceError::Malformed { .. }),
+        "a bare carriage return must be refused, not read as comment text"
+    );
+}

@@ -293,3 +293,17 @@ fn quoted_comment_delimiters_do_not_hide_an_override() {
         "an override between top-level quoted `/*` and `*/` must be refused"
     );
 }
+
+#[test]
+fn include_guard_naming_a_constant_is_refused() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.constants,
+        "#ifndef GUARD\n#define GUARD\n",
+        "#ifndef NATIONAL_DEX_MON_1\n#define NATIONAL_DEX_MON_1\n",
+    );
+    assert!(
+        f.parse().is_err(),
+        "a guard erasing a dex constant must be refused"
+    );
+}

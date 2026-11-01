@@ -82,6 +82,7 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             actual: count,
         });
     }
+    refuse_guard_naming_a_constant(&guard, &values)?;
 
     // The include guard's `#endif` must be the last token.
     let Some((closing, rest)) = cur.tokens[cur.pos..].split_last() else {
@@ -152,6 +153,19 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
 }
 
 /// Consumes the leading `#ifndef NAME` / `#define NAME` pair; returns `NAME`.
+/// The guard macro is defined before the enum, so a guard naming a constant
+/// would erase that constant under preprocessing.
+fn refuse_guard_naming_a_constant(guard: &str, values: &HashMap<String, u16>) -> Result<()> {
+    if values.contains_key(guard) {
+        return Err(PokedexSourceError::Malformed {
+            source: PokedexSource::Constants,
+            line: 1,
+            expected: "an include guard that names no National Dex constant",
+        });
+    }
+    Ok(())
+}
+
 fn include_guard(cur: &mut Cursor) -> Result<String> {
     let expected = "the `#ifndef`/`#define` include guard before the enum";
     let mut guard_line = |word: &str| -> Result<String> {
