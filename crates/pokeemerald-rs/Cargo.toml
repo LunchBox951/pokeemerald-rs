@@ -62,6 +62,13 @@ rom-import = { path = "../rom-import" }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
+# The scratch-directory guard in `app::tests` verifies the directory it claimed
+# through `win-fs`'s Windows file identity, an in-workspace crate rather than a
+# new external dependency (`win-fs` owns the one `windows-sys` use; dependency
+# ledger, `README.md`). Test-only, so no release build links it.
+[target.'cfg(windows)'.dev-dependencies]
+win-fs = { path = "../win-fs" }
+
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
 # (mirrors `engine`'s `Cargo.toml`): `main_menu`/`intro`'s unit tests build
