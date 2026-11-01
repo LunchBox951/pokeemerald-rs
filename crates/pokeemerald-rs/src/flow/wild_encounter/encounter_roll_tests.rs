@@ -21,7 +21,7 @@ use super::test_support::{
     ROUTE_101, TEST_PLAYER_TRAINER_ID, WURMPLE,
 };
 use crate::flow::lead_screen::loaded_holding;
-use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
+use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase, WildBattle};
 use assets::items::ItemId;
 use assets::{MoveId, SpeciesId};
 use battle::{BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, MAX_IV};
@@ -94,7 +94,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
          has not been observed yet (issue #1039)"
     );
     phase.step(ButtonState::new());
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the seeded roll fires an encounter on the first rolled step");
     };
     assert_eq!(battle.enemy().species(), WURMPLE);
@@ -467,7 +467,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         assert!(steps < 100, "100 steps in grass without an encounter");
     }
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("an encounter fired");
     };
     let land = assets::WildEncounterTable::new()

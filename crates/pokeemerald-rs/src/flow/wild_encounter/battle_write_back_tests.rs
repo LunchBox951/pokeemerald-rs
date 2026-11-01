@@ -4,7 +4,7 @@
 use super::test_support::{player_mon, ENCOUNTER_SEED, TEST_PLAYER_TRAINER_ID, WURMPLE};
 use super::{advance_wild_battle, start_wild_battle};
 use assets::MoveId;
-use battle::{Battle, BattlePokemon, StatStage};
+use battle::{Battle, StatStage};
 use engine::overworld::wild_encounter::WildEncounter;
 use engine::rng::Rng;
 
@@ -49,14 +49,17 @@ fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
     );
 
     let mut slot = Some(battle);
-    let mut written_back: Option<BattlePokemon> = None;
+    let mut ended = None;
     let mut frames = 0;
     while slot.is_some() {
-        advance_wild_battle(&mut slot, &mut written_back, &mut rng);
+        ended = advance_wild_battle(&mut slot, &mut rng);
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
     }
-    let lead = written_back.expect("the battle writes the lead mon back when it ends");
+    let lead = ended
+        .expect("the battle writes the lead mon back when it ends")
+        .members
+        .remove(0);
     assert_eq!(
         lead.stages(),
         battle::StatStages::default(),
@@ -103,14 +106,17 @@ fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
     assert!(battle.player().volatiles().charged_up());
 
     let mut slot = Some(battle);
-    let mut written_back: Option<BattlePokemon> = None;
+    let mut ended = None;
     let mut frames = 0;
     while slot.is_some() {
-        advance_wild_battle(&mut slot, &mut written_back, &mut rng);
+        ended = advance_wild_battle(&mut slot, &mut rng);
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
     }
-    let lead = written_back.expect("the battle writes the lead mon back when it ends");
+    let lead = ended
+        .expect("the battle writes the lead mon back when it ends")
+        .members
+        .remove(0);
     assert_eq!(
         lead.volatiles(),
         battle::Volatiles::default(),
@@ -123,9 +129,7 @@ fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
 #[test]
 fn advancing_an_absent_battle_does_nothing() {
     let mut slot: Option<Battle> = None;
-    let mut lead = None;
     let mut rng = Rng::new(1);
-    assert!(advance_wild_battle(&mut slot, &mut lead, &mut rng).is_none());
-    assert!(lead.is_none());
+    assert!(advance_wild_battle(&mut slot, &mut rng).is_none());
     assert_eq!(rng.state(), Rng::new(1).state(), "no battle, no draw");
 }
