@@ -11,7 +11,10 @@ use super::{describe_newly_pressed, App, AppError, AppState, SaveSlot};
 use platform::{ButtonState, Buttons};
 
 mod music_lifecycle;
+mod scratch_dir;
 mod subprocess_harness;
+
+use scratch_dir::ScratchDir;
 
 /// The animated path's `frame()` contract (I-2): after every step,
 /// `frame()` is the frame that step actually presented — the first
@@ -392,12 +395,16 @@ fn release_then_repress_is_logged_again() {
 /// error and never opens (so never creates) the save medium.
 #[test]
 fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
-    let dir =
-        std::env::temp_dir().join(format!("pokeemerald-explicit-boot-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_missing_pack_fails_before_touching_the_save(&std::env::temp_dir());
+}
+
+/// The body of the missing-pack test, with its scratch directory claimed
+/// under `parent` so a regression can run it somewhere it owns.
+fn assert_missing_pack_fails_before_touching_the_save(parent: &std::path::Path) {
+    let scratch = ScratchDir::claim_in(parent, "pokeemerald-explicit-boot");
+    let dir = scratch.path();
     let result = App::new_headless_real_at(&dir.join("no.pack"), &dir.join("save").join("a.sav"));
-    let save_dir_created = dir.exists();
-    let _ = std::fs::remove_dir_all(&dir);
+    let save_dir_created = dir.join("save").exists();
     let Err(err) = result else {
         panic!("a missing pack must not boot");
     };
@@ -405,6 +412,26 @@ fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
     assert!(
         !save_dir_created,
         "a failed pack load must not open the save"
+    );
+}
+
+/// The missing-pack fixture must not delete contents it did not create.
+#[test]
+fn missing_pack_test_leaves_unowned_existing_contents_alone() {
+    let parent = ScratchDir::new("pokeemerald-explicit-boot-guard");
+    let occupied = parent.path().join(format!(
+        "pokeemerald-explicit-boot-{}-0",
+        std::process::id()
+    ));
+    std::fs::create_dir(&occupied).unwrap();
+    let sentinel = occupied.join("unrelated.txt");
+    std::fs::write(&sentinel, b"not yours").unwrap();
+
+    assert_missing_pack_fails_before_touching_the_save(parent.path());
+
+    assert!(
+        sentinel.exists(),
+        "the test deleted pre-existing unrelated contents"
     );
 }
 
