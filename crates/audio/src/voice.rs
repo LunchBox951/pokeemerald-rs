@@ -684,6 +684,17 @@ mod tests {
     }
 
     #[test]
+    fn interpolation_keeps_retained_phase_bit_30_contribution() {
+        // 0x4040_0000 * 81 wraps to 0x5440_0000; >> 23 yields 168.
+        // Adding 168 to sample 10 gives 178; fractional-only masking gives 50.
+        let wave = WaveData::looping(0, 0, vec![10, 91, 10, 91]);
+        let mut position = SourcePosition::start();
+        position.phase = 0x4040_0000;
+
+        assert_eq!(position.interpolated_sample(&wave), 178);
+    }
+
+    #[test]
     fn near_max_phase_step_wraps_without_panicking() {
         let wave = Arc::new(WaveData::looping(0, 0, vec![10, -10, 10, -10]));
         let mut voice = voice(wave, u32::MAX, u8::MAX, u8::MAX, 0);
