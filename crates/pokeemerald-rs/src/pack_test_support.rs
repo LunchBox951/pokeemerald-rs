@@ -114,6 +114,119 @@ pub(crate) fn claim_scratch_exclusive(path: &std::path::Path) -> std::fs::File {
     }
 }
 
+/// A scratch file claimed by [`claim_scratch_exclusive`] and removed on drop
+/// only while its pathname still names the claimed file.
+///
+/// The guard holds the claim's open handle, so the file's identity is pinned
+/// for the guard's whole life.
+///
+/// On Unix, drop reads the pathname's own metadata (`symlink_metadata`,
+/// which never follows a link) and unlinks only an entry that is a regular
+/// file with the held handle's device and inode. A file renamed away and
+/// replaced under the same name, or a symlink planted there, is left alone
+/// rather than deleted on the strength of a name this guard no longer owns.
+/// Residual: the identity check and the `remove_file` that follows are two
+/// pathname operations, so a swap landing between them can still unlink the
+/// replacement. Closing that window needs a handle-bound delete, which is
+/// the `rustix` Cargo-feature decision issue #2873 tracks; this crate's
+/// default test leg stays std-only here.
+///
+/// On Windows the claim records the held handle's `win_fs::WindowsFileIdentity`
+/// (volume serial and file ID) and drop deletes through
+/// `win_fs::remove_through_verified_handle`, which opens the pathname without
+/// following a reparse point, compares the file ID, and deletes through that
+/// same handle, so no second lookup of the path remains. Timestamps and size
+/// are never used: a replacement can copy both. If the identity cannot be
+/// read, the file is left in the temp directory rather than risk removing a
+/// replacement.
+///
+/// Install the guard only after the claim succeeded, which constructing it
+/// does, so a failed claim never removes an entry the caller does not own.
+pub(crate) struct ScratchClaim {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    /// The claimed file's identity; `None` when it could not be read, which
+    /// leaves the file in place at drop.
+    #[cfg(windows)]
+    identity: Option<win_fs::WindowsFileIdentity>,
+}
+
+impl ScratchClaim {
+    /// Exclusively claims `path` through [`claim_scratch_exclusive`].
+    pub(crate) fn claim(path: std::path::PathBuf) -> Self {
+        let file = claim_scratch_exclusive(&path);
+        Self {
+            #[cfg(windows)]
+            identity: win_fs::WindowsFileIdentity::of(&file).ok(),
+            path,
+            file,
+        }
+    }
+
+    /// [`claim`](Self::claim), then writes `bytes` through the claimed handle.
+    /// A write panic still unwinds through the installed guard and cleans up.
+    pub(crate) fn claim_with(path: std::path::PathBuf, bytes: impl AsRef<[u8]>) -> Self {
+        use std::io::Write as _;
+        let mut claim = Self::claim(path);
+        claim
+            .file
+            .write_all(bytes.as_ref())
+            .expect("the scratch pack is writable");
+        claim
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// The handle the claim returned, for writing without reopening the
+    /// shared pathname.
+    pub(crate) fn file_mut(&mut self) -> &mut std::fs::File {
+        &mut self.file
+    }
+}
+
+#[cfg(not(windows))]
+impl ScratchClaim {
+    /// Whether `path` is still a regular file with the held handle's
+    /// identity. Off Unix there is no identity to compare, so nothing is
+    /// removed.
+    fn pathname_is_still_ours(&self) -> bool {
+        let Ok(found) = std::fs::symlink_metadata(&self.path) else {
+            return false;
+        };
+        found.file_type().is_file()
+            && self
+                .file
+                .metadata()
+                .is_ok_and(|held| same_file_identity(&held, &found))
+    }
+}
+
+impl Drop for ScratchClaim {
+    fn drop(&mut self) {
+        #[cfg(not(windows))]
+        if self.pathname_is_still_ours() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        #[cfg(windows)]
+        if let Some(identity) = self.identity {
+            let _ = win_fs::remove_through_verified_handle(&self.path, identity);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn same_file_identity(held: &std::fs::Metadata, found: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    (held.dev(), held.ino()) == (found.dev(), found.ino())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_held: &std::fs::Metadata, _found: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// Writes `bytes` to a fresh file at `path` claimed by
 /// [`claim_scratch_exclusive`].
 pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
