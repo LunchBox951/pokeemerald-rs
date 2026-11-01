@@ -92,7 +92,7 @@ impl AssetPack {
     /// slot, plus the leaf slots of each key-split or rhythm child group.
     /// Indirections nested inside a child group resolve silent and are never
     /// converted, so their groups are not followed. The converter rejects
-    /// reverse DirectSound playback, which would start the song without music.
+    /// reverse `DirectSound` playback, which would start the song without music.
     fn check_song_playable(&self, id: &str) -> Result<(), PackProblem> {
         let song = Song::decode(self.raw(id).map_err(|err| invalid(id, err))?)
             .map_err(|err| invalid(id, err))?;
@@ -100,7 +100,7 @@ impl AssetPack {
         let top = self
             .voicegroup(song.voicegroup())
             .map_err(|err| invalid(top_id, err))?;
-        self.check_leaves_playable(top_id, &top)?;
+        Self::check_leaves_playable(top_id, &top)?;
         for entry in top.slots() {
             let (VoiceEntry::KeySplit(KeySplitVoice { children, .. })
             | VoiceEntry::Rhythm(RhythmVoice { children })) = entry
@@ -110,12 +110,12 @@ impl AssetPack {
             let group = self
                 .voicegroup(children)
                 .map_err(|err| invalid(&children.0, err))?;
-            self.check_leaves_playable(&children.0, &group)?;
+            Self::check_leaves_playable(&children.0, &group)?;
         }
         Ok(())
     }
 
-    fn check_leaves_playable(&self, id: &str, group: &VoiceGroup) -> Result<(), PackProblem> {
+    fn check_leaves_playable(id: &str, group: &VoiceGroup) -> Result<(), PackProblem> {
         for entry in group.slots() {
             if matches!(entry, VoiceEntry::DirectSound(voice) if voice.mode == DirectSoundMode::Reverse)
             {
