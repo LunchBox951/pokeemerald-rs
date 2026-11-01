@@ -814,3 +814,53 @@ fn a_suspended_tick_freezes_the_mixer_until_the_tick_completes() {
     assert!(stalled.suspended_tick.is_none());
     assert_eq!(stalled_out, plain_out);
 }
+
+fn burst_then_second_note(first_note: bool) -> Vec<Event> {
+    let mut track = vec![Event::Voice(0), Event::Volume(127)];
+    if first_note {
+        track.push(tied_note(60));
+    }
+    track.extend(std::iter::repeat_n(
+        Event::Pan(0),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    track.extend([tied_note(64), Event::Wait(48), Event::Fine]);
+    track
+}
+
+/// Upstream finishes the whole tick inside one `MPlayMain` before the next
+/// frame's `FadeOutBody` (`m4a_1.s:1152`-`:1169`), so both notes of one tick
+/// share one `volX`.
+#[test]
+fn a_fade_step_does_not_split_a_suspended_tick() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(true)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(64));
+    assert!(seq.suspended_tick.is_some(), "tick yielded");
+    seq.render_frame_with_fade(&mut out, Some(32));
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    seq.render_frame_with_fade(&mut out, Some(32));
+    let volumes: Vec<_> = seq.mixer.voices().iter().map(|v| v.base_volume()).collect();
+    assert_eq!(volumes.len(), 2);
+    assert_eq!(
+        volumes[0], volumes[1],
+        "both notes of one tick share the fade step"
+    );
+}
+
+#[test]
+fn a_terminal_fade_during_a_suspended_tick_still_completes_it() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, Some(64));
+    assert!(seq.suspended_tick.is_some(), "tick yielded");
+    seq.render_frame_with_fade(&mut out, Some(0));
+    assert!(
+        seq.suspended_tick.is_none(),
+        "suspended tick must complete before the fade pauses"
+    );
+    assert!(
+        seq.is_paused(),
+        "the terminal step pauses once the tick completes"
+    );
+}
