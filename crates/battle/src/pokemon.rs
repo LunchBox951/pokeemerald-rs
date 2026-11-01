@@ -1,31 +1,42 @@
-//! A Pokémon's owned battle state, stat calculation, HP, experience, and
-//! move slots.
+//! A Pokémon's owned battle state: identity, HP, status, and move slots.
 //!
 //! [`BattlePokemon`] carries its held item ([`BattlePokemon::held_item`]); a
 //! battle admits it only when the item's hold effect is none
 //! ([`crate::ensure_held_item_playable`]). It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
-//! see `calc_max_hp`.
+//! see [`stats`].
+//!
+//! [`stats`] owns the stat formula and the standalone [`Ivs`] and [`Stats`]
+//! value types. `combat_stats` owns the battle-time stat reads, and
+//! `experience` owns the level-from-experience walk.
 //!
 //! [`evs`] owns the whole EV surface: adoption, KO gains, and the one line
 //! [`BattlePokemon::stats`] refuses to cross because of them.
 //! [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns level-up
 //! move decisions.
+//!
+//! What stays here is the aggregate itself: the [`BattlePokemon`] fields, its
+//! construction and validation, and its small accessors and HP, status, and PP
+//! mutators. Those share one private field set, so the remaining size is the
+//! struct's own surface rather than a second concept.
 
 use assets::items::ItemId;
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
-use crate::nature::{Nature, Stat};
+use crate::nature::Nature;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 use crate::volatile::Volatiles;
 
+mod combat_stats;
 pub mod evs;
+mod experience;
 pub mod learn;
 pub mod pp_bonuses;
+pub mod stats;
 
 #[cfg(test)]
 mod tests;
@@ -33,6 +44,10 @@ mod tests;
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
 pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
+use stats::effective_battle_base_stats;
+#[cfg(test)]
+use stats::{calc_max_hp, calc_stat};
+pub use stats::{compute_stats, compute_stats_with_evs, Ivs, Stats};
 
 /// Maximum number of moves a Pokémon can know.
 pub const MAX_MON_MOVES: usize = 4;
@@ -63,74 +78,6 @@ pub const MAX_LEVEL: u8 = 100;
 
 /// Maximum individual value for one stat.
 pub const MAX_IV: u8 = 31;
-
-/// Individual values for all six stats, each in `0..=`[`MAX_IV`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Ivs {
-    /// HP individual value.
-    pub hp: u8,
-    /// Attack individual value.
-    pub attack: u8,
-    /// Defense individual value.
-    pub defense: u8,
-    /// Speed individual value.
-    pub speed: u8,
-    /// Special Attack individual value.
-    pub sp_attack: u8,
-    /// Special Defense individual value.
-    pub sp_defense: u8,
-}
-
-impl Ivs {
-    /// Values in HP, Attack, Defense, Speed, Special Attack, Special Defense
-    /// order.
-    #[must_use]
-    pub const fn as_array(self) -> [u8; 6] {
-        [
-            self.hp,
-            self.attack,
-            self.defense,
-            self.speed,
-            self.sp_attack,
-            self.sp_defense,
-        ]
-    }
-
-    const fn first_invalid(self) -> Option<u8> {
-        let values = self.as_array();
-        let mut index = 0;
-        while index < values.len() {
-            if values[index] > MAX_IV {
-                return Some(values[index]);
-            }
-            index += 1;
-        }
-        None
-    }
-
-    /// Whether every value is in `0..=`[`MAX_IV`].
-    #[must_use]
-    pub const fn is_valid(self) -> bool {
-        self.first_invalid().is_none()
-    }
-}
-
-/// Computed battle stats before applying [`StatStages`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Stats {
-    /// Maximum HP.
-    pub max_hp: u32,
-    /// Attack.
-    pub attack: u32,
-    /// Defense.
-    pub defense: u32,
-    /// Speed.
-    pub speed: u32,
-    /// Special Attack.
-    pub sp_attack: u32,
-    /// Special Defense.
-    pub sp_defense: u32,
-}
 
 /// The five combat, accuracy, and evasion stages for one battler.
 ///
@@ -174,132 +121,6 @@ pub struct MoveSlot {
     pub move_id: MoveId,
     /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
     pub pp: u8,
-}
-
-const STAT_FORMULA_SCALE: u32 = 100;
-const EFFORT_VALUES_PER_STAT_POINT: u32 = 4;
-const NON_HP_STAT_OFFSET: u32 = 5;
-const HP_STAT_OFFSET: u32 = 10;
-const SHEDINJA_MAX_HP: u32 = 1;
-const PARALYSIS_SPEED_DIVISOR: u32 = 4;
-
-fn calc_stat(
-    base: u8,
-    individual_value: u8,
-    effort_value: u8,
-    level: u8,
-    nature: Nature,
-    stat: Stat,
-) -> u32 {
-    let effort_contribution = u32::from(effort_value) / EFFORT_VALUES_PER_STAT_POINT;
-    let scaled_stat = (2 * u32::from(base) + u32::from(individual_value) + effort_contribution)
-        * u32::from(level)
-        / STAT_FORMULA_SCALE;
-    nature.modify_stat(stat, scaled_stat + NON_HP_STAT_OFFSET)
-}
-
-fn calc_max_hp(
-    species: SpeciesId,
-    base: u8,
-    individual_value: u8,
-    effort_value: u8,
-    level: u8,
-) -> u32 {
-    if species == SPECIES_SHEDINJA {
-        // Shedinja bypasses every ordinary HP input (`src/pokemon.c:2845-2848`).
-        return SHEDINJA_MAX_HP;
-    }
-    let effort_contribution = u32::from(effort_value) / EFFORT_VALUES_PER_STAT_POINT;
-    let scaled_stat = (2 * u32::from(base) + u32::from(individual_value) + effort_contribution)
-        * u32::from(level)
-        / STAT_FORMULA_SCALE;
-    scaled_stat + u32::from(level) + HP_STAT_OFFSET
-}
-
-/// Emerald's Speed Forme base stats, applied to Deoxys outside link battles.
-const DEOXYS_SPEED_FORME_ATTACK: u8 = 95;
-const DEOXYS_SPEED_FORME_DEFENSE: u8 = 90;
-const DEOXYS_SPEED_FORME_SPEED: u8 = 180;
-const DEOXYS_SPEED_FORME_SP_ATTACK: u8 = 95;
-const DEOXYS_SPEED_FORME_SP_DEFENSE: u8 = 90;
-
-/// Base stats a single-player battle reads for `species`.
-///
-/// Upstream `GetDeoxysStat` replaces Deoxys's five non-HP base stats with the
-/// Speed Forme values outside link battles (`pokemon.c:2698-2712`); the dex row
-/// and the save-time `CalculateMonStats` cache stay on the raw Normal Forme data.
-fn effective_battle_base_stats(species: SpeciesId, base: &BaseStats) -> BaseStats {
-    if species != SpeciesId::DEOXYS {
-        return *base;
-    }
-    BaseStats {
-        attack: DEOXYS_SPEED_FORME_ATTACK,
-        defense: DEOXYS_SPEED_FORME_DEFENSE,
-        speed: DEOXYS_SPEED_FORME_SPEED,
-        sp_attack: DEOXYS_SPEED_FORME_SP_ATTACK,
-        sp_defense: DEOXYS_SPEED_FORME_SP_DEFENSE,
-        ..*base
-    }
-}
-
-/// Computes battle stats with zero EVs.
-#[must_use]
-pub fn compute_stats(
-    species: SpeciesId,
-    base: &BaseStats,
-    level: u8,
-    nature: Nature,
-    ivs: Ivs,
-) -> Stats {
-    compute_stats_with_evs(species, base, level, nature, ivs, Evs::default())
-}
-
-/// Computes battle stats with explicit EVs.
-#[must_use]
-pub fn compute_stats_with_evs(
-    species: SpeciesId,
-    base: &BaseStats,
-    level: u8,
-    nature: Nature,
-    ivs: Ivs,
-    evs: Evs,
-) -> Stats {
-    Stats {
-        max_hp: calc_max_hp(species, base.hp, ivs.hp, evs.hp, level),
-        attack: calc_stat(
-            base.attack,
-            ivs.attack,
-            evs.attack,
-            level,
-            nature,
-            Stat::Attack,
-        ),
-        defense: calc_stat(
-            base.defense,
-            ivs.defense,
-            evs.defense,
-            level,
-            nature,
-            Stat::Defense,
-        ),
-        speed: calc_stat(base.speed, ivs.speed, evs.speed, level, nature, Stat::Speed),
-        sp_attack: calc_stat(
-            base.sp_attack,
-            ivs.sp_attack,
-            evs.sp_attack,
-            level,
-            nature,
-            Stat::SpAttack,
-        ),
-        sp_defense: calc_stat(
-            base.sp_defense,
-            ivs.sp_defense,
-            evs.sp_defense,
-            level,
-            nature,
-            Stat::SpDefense,
-        ),
-    }
 }
 
 const fn is_placeholder_species(species: SpeciesId) -> bool {
@@ -796,194 +617,6 @@ impl BattlePokemon {
     pub fn clear_battle_scratch(&mut self) {
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
-    }
-
-    /// Applies earned experience one level threshold at a time, capping both
-    /// level and total experience at [`MAX_LEVEL`]. Each crossed level
-    /// recalculates stats, preserves damage taken, and teaches that level's
-    /// complete learnset without filtering unsupported moves — a move this
-    /// crate cannot execute yet is still learned, exactly like upstream. A full moveset pauses the
-    /// award and returns a [`PendingMoveLearn`]; the caller must pass its
-    /// decision to [`BattlePokemon::resolve_move_learn`] before applying more
-    /// experience. [`BattlePokemon::evs`] is not changed here —
-    /// [`BattlePokemon::gain_evs`] already folds a KO's award in before this
-    /// runs; friendship is still not part of this battle model
-    /// and does not change.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
-    /// decision is already pending — a second walk would overwrite the open
-    /// question and drop its unconsumed remainder.
-    #[must_use = "a full moveset pauses the level-up walk for a player \
-                  decision the mon now carries \
-                  (`BattlePokemon::pending_move_learn`); ignoring the \
-                  report means never asking the player"]
-    pub fn apply_experience(
-        &mut self,
-        dex: &Dex,
-        amount: u32,
-    ) -> Result<Option<PendingMoveLearn>, BattleError> {
-        if let Some(pending) = self.pending_move_learn {
-            return Err(BattleError::MoveLearnPending(pending.move_id()));
-        }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
-    }
-
-    /// Reconciles saved experience without teaching crossed-level moves.
-    ///
-    /// Experience is clamped between the current value and the level-100
-    /// threshold. The level can rise to match it but never decreases.
-    pub fn reconcile_saved_experience(&mut self, total: u32) {
-        let max_experience =
-            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
-        self.experience = self.experience.max(total.min(max_experience));
-        self.raise_level_to_experience();
-    }
-
-    /// Raises the level (and stats, preserving damage taken) to match the
-    /// current experience total, returning `Some((old_level, new_level))`
-    /// when at least one threshold was crossed. Shared by the in-battle
-    /// award ([`BattlePokemon::apply_experience`], which then teaches the
-    /// crossed learnset moves) and the save decoder
-    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
-    ///
-    /// The stat recompute is [`compute_stats`] at `0` EVs for max HP and
-    /// every non-Deoxys stat; Deoxys's five Speed Forme stats then take the
-    /// current EVs through [`BattlePokemon::apply_speed_forme_evs`]. See the
-    /// [`evs`] module docs for why the rest of [`BattlePokemon::stats`] must
-    /// stay `0`-EV even here. A crossed level
-    /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
-    /// field's own doc for what reads it and why.
-    fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
-        let mut new_level = self.level;
-        while new_level < MAX_LEVEL {
-            let next_level = new_level + 1;
-            let threshold =
-                experience_for_level(self.base_stats.growth_rate, next_level).unwrap_or(u32::MAX);
-            if self.experience < threshold {
-                break;
-            }
-            new_level = next_level;
-        }
-        if new_level == self.level {
-            return None;
-        }
-
-        let old_level = self.level;
-        let old_max_hp = self.stats.max_hp;
-        self.level = new_level;
-        self.stats = compute_stats(
-            self.species,
-            &effective_battle_base_stats(self.species, &self.base_stats),
-            self.level,
-            self.nature,
-            self.ivs,
-        );
-        self.apply_speed_forme_evs();
-        self.current_hp = self
-            .current_hp
-            .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
-        self.evs_at_last_level_up = self.evs;
-        Some((old_level, new_level))
-    }
-
-    /// Feeds Deoxys's current EVs into its five Speed Forme stats.
-    ///
-    /// Upstream `GetDeoxysStat` reads each stat's EV byte alongside its IV
-    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware even though
-    /// every other species' live block stays `0`-EV. Max HP is untouched:
-    /// `GetDeoxysStat` never reads it, and the save-side HP bookkeeping in
-    /// [`evs`] relies on that `0`-EV floor.
-    ///
-    /// [`BattlePokemon::gain_evs`] does not call this, so EVs earned in a
-    /// battle leave that battle's stats alone; each battle constructor calls
-    /// it on the player's side instead, where upstream's battle-start copy
-    /// re-reads the party member through `GetMonData`
-    /// (`CopyPlayerMonData`, `battle_controller_player.c:1641`-`:1645`).
-    pub(crate) fn apply_speed_forme_evs(&mut self) {
-        if self.species != SpeciesId::DEOXYS {
-            return;
-        }
-        let ev_aware = compute_stats_with_evs(
-            self.species,
-            &effective_battle_base_stats(self.species, &self.base_stats),
-            self.level,
-            self.nature,
-            self.ivs,
-            self.evs,
-        );
-        self.stats = Stats {
-            max_hp: self.stats.max_hp,
-            ..ev_aware
-        };
-    }
-
-    /// Attacking stat and stage for the move category.
-    ///
-    /// A Hustle holder's, then a statused Guts holder's, raw physical Attack
-    /// is each raised 150% before the stage is applied, matching upstream's
-    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
-    /// special Attack is returned raw: Thick Fat and Plus/Minus depend on the
-    /// other battler, so callers apply them before the stage.
-    #[must_use]
-    pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
-        match category {
-            crate::damage::MoveCategory::Physical => {
-                let raw_attack = crate::ability::hustle_attack(self.ability(), self.stats.attack);
-                let raw_attack =
-                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
-                (raw_attack, self.stages.attack)
-            }
-            crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),
-        }
-    }
-
-    /// Defending stat and stage for the move category.
-    ///
-    /// A statused Marvel Scale holder's raw physical Defense is raised 150%
-    /// before the stage is applied, matching upstream's
-    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
-    /// Defense never changes.
-    #[must_use]
-    pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
-        match category {
-            crate::damage::MoveCategory::Physical => {
-                let raw_defense = crate::ability::marvel_scale_defense(
-                    self.ability(),
-                    self.status1,
-                    self.stats.defense,
-                );
-                (raw_defense, self.stages.defense)
-            }
-            crate::damage::MoveCategory::Special => (self.stats.sp_defense, self.stages.sp_defense),
-        }
-    }
-
-    /// Speed after applying its stat stage.
-    ///
-    /// Weather, ability, and item modifiers are not applied here; paralysis'
-    /// quarter modifier is [`BattlePokemon::speed_for_turn_order`]'s alone,
-    /// since only turn ordering reads it (`battle_main.c:4650`-`:4651`).
-    #[must_use]
-    pub const fn effective_speed(&self) -> u32 {
-        self.stages.speed.apply(self.stats.speed)
-    }
-
-    /// [`BattlePokemon::effective_speed`] with paralysis' quarter modifier
-    /// applied after stage scaling, truncating independently
-    /// (`speedBattler /= 4`, `battle_main.c:4650`-`:4651`,
-    /// `:4684`-`:4685`). Turn order is the only reader of this modifier —
-    /// see [`BattlePokemon::effective_speed`]'s own doc.
-    #[must_use]
-    pub const fn speed_for_turn_order(&self) -> u32 {
-        let speed = self.effective_speed();
-        if self.status1.is_paralysed() {
-            speed / PARALYSIS_SPEED_DIVISOR
-        } else {
-            speed
-        }
     }
 
     /// Deducts one PP from a move slot.
