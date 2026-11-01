@@ -49,6 +49,8 @@ fn is_full_sha(text: &str) -> bool {
 
 /// How many `git status` entries a dirty-tree report lists.
 const DIRTY_ENTRIES: usize = 20;
+/// How many hidden index entries a rejection lists.
+const HIDDEN_ENTRIES: usize = 10;
 /// The longest `git status` line kept; longer lines are cut.
 const MAX_STATUS_LINE: u64 = 8192;
 /// How much of a git failure's stderr is kept.
@@ -104,12 +106,15 @@ fn discard_line<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     }
 }
 
-/// Reads at most `limit` lines from `reader`, each cut to `MAX_STATUS_LINE`
-/// bytes, and reports whether more followed and any read error. An
-/// over-long line's remainder is discarded without being retained.
-pub(super) fn read_head<R: BufRead>(
+/// Reads at most `limit` lines `keep` accepts from `reader`, each cut to
+/// `MAX_STATUS_LINE` bytes, and reports whether more matching lines followed
+/// and any read error. Lines `keep` rejects are read through and dropped, and
+/// an over-long line's remainder is discarded without being retained, so
+/// memory stays bounded however long the listing.
+pub(super) fn read_matching<R: BufRead>(
     reader: &mut R,
     limit: usize,
+    keep: impl Fn(&str) -> bool,
 ) -> (Vec<String>, bool, Option<std::io::Error>) {
     let mut lines = Vec::new();
     loop {
@@ -129,10 +134,14 @@ pub(super) fn read_head<R: BufRead>(
                 return (lines, false, Some(err));
             }
         }
+        let line = String::from_utf8_lossy(&line);
+        if !keep(&line) {
+            continue;
+        }
         if lines.len() == limit {
             return (lines, true, None);
         }
-        lines.push(String::from_utf8_lossy(&line).trim_end().to_owned());
+        lines.push(line.trim_end().to_owned());
     }
 }
 
@@ -140,6 +149,18 @@ pub(super) fn read_head<R: BufRead>(
 /// stdout, and whether more followed. It stops reading once past `limit`
 /// and kills git, so a huge listing is never held in memory.
 fn git_head(cwd: &Path, args: &[&str], limit: usize) -> Result<(Vec<String>, bool), RomBuildError> {
+    git_head_matching(cwd, args, limit, |_| true)
+}
+
+/// As [`git_head`], but only stdout lines `keep` accepts are counted and
+/// returned; git is still read to its end, one bounded line at a time, unless
+/// more than `limit` lines match.
+fn git_head_matching(
+    cwd: &Path,
+    args: &[&str],
+    limit: usize,
+    keep: impl Fn(&str) -> bool,
+) -> Result<(Vec<String>, bool), RomBuildError> {
     let mut child = git_command(cwd)
         .args(args)
         .stdout(Stdio::piped())
@@ -158,7 +179,7 @@ fn git_head(cwd: &Path, args: &[&str], limit: usize) -> Result<(Vec<String>, boo
         })
     });
     let (lines, more, read_error) = match child.stdout.take() {
-        Some(stdout) => read_head(&mut BufReader::new(stdout), limit),
+        Some(stdout) => read_matching(&mut BufReader::new(stdout), limit, keep),
         None => (Vec::new(), false, None),
     };
     if more {
@@ -257,12 +278,10 @@ pub(super) fn verify_reference(dir: &Path, pin: &str) -> Result<(), RomBuildErro
 /// Rejects assume-unchanged (lowercase) and skip-worktree (`S`) index entries:
 /// they make `git status` blind to edits of tracked files.
 fn ensure_visible_index(dir: &Path) -> Result<(), RomBuildError> {
-    let listing = git_str(dir, &["ls-files", "-v"]).map_err(unverifiable(dir))?;
-    let hidden: Vec<&str> = listing
-        .lines()
-        .filter(|line| line.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S'))
-        .take(10)
-        .collect();
+    let (hidden, _) = git_head_matching(dir, &["ls-files", "-v"], HIDDEN_ENTRIES, |line| {
+        line.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S')
+    })
+    .map_err(unverifiable(dir))?;
     if hidden.is_empty() {
         return Ok(());
     }
