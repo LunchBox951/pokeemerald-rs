@@ -38,44 +38,26 @@ use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::stat_stage::StatStage;
 
-const EFFECT_ATTACK_UP: MoveEffect = MoveEffect(10);
-const EFFECT_DEFENSE_UP: MoveEffect = MoveEffect(11);
-const EFFECT_SPECIAL_ATTACK_UP: MoveEffect = MoveEffect(13);
-const EFFECT_EVASION_UP: MoveEffect = MoveEffect(16);
-
 /// The move-effect ID for lowering Attack by one stage.
-pub const EFFECT_ATTACK_DOWN: MoveEffect = MoveEffect(18);
+pub const EFFECT_ATTACK_DOWN: MoveEffect = MoveEffect::ATTACK_DOWN;
 
 /// The move-effect ID for lowering Defense by one stage.
-pub const EFFECT_DEFENSE_DOWN: MoveEffect = MoveEffect(19);
-
-const EFFECT_SPEED_DOWN: MoveEffect = MoveEffect(20);
-const EFFECT_ACCURACY_DOWN: MoveEffect = MoveEffect(23);
-const EFFECT_EVASION_DOWN: MoveEffect = MoveEffect(24);
-const EFFECT_ATTACK_UP_TWO: MoveEffect = MoveEffect(50);
-const EFFECT_DEFENSE_UP_TWO: MoveEffect = MoveEffect(51);
-const EFFECT_SPEED_UP_TWO: MoveEffect = MoveEffect(52);
-const EFFECT_SPECIAL_ATTACK_UP_TWO: MoveEffect = MoveEffect(53);
-const EFFECT_SPECIAL_DEFENSE_UP_TWO: MoveEffect = MoveEffect(54);
-const EFFECT_ATTACK_DOWN_TWO: MoveEffect = MoveEffect(58);
-const EFFECT_DEFENSE_DOWN_TWO: MoveEffect = MoveEffect(59);
-const EFFECT_SPEED_DOWN_TWO: MoveEffect = MoveEffect(60);
-const EFFECT_SPECIAL_DEFENSE_DOWN_TWO: MoveEffect = MoveEffect(62);
+pub const EFFECT_DEFENSE_DOWN: MoveEffect = MoveEffect::DEFENSE_DOWN;
 
 /// The Clear Body ability ID.
-pub const CLEAR_BODY: AbilityId = AbilityId(29);
+pub const CLEAR_BODY: AbilityId = AbilityId::CLEAR_BODY;
 
 /// The White Smoke ability ID.
-pub const WHITE_SMOKE: AbilityId = AbilityId(73);
+pub const WHITE_SMOKE: AbilityId = AbilityId::WHITE_SMOKE;
 
 /// The Keen Eye ability ID.
-pub const KEEN_EYE: AbilityId = AbilityId(51);
+pub const KEEN_EYE: AbilityId = AbilityId::KEEN_EYE;
 
 /// The Hyper Cutter ability ID.
-pub const HYPER_CUTTER: AbilityId = AbilityId(52);
+pub const HYPER_CUTTER: AbilityId = AbilityId::HYPER_CUTTER;
 
 /// The Soundproof ability ID.
-pub const SOUNDPROOF: AbilityId = AbilityId(43);
+pub const SOUNDPROOF: AbilityId = AbilityId::SOUNDPROOF;
 
 /// Emerald's sound-based moves, in the order of `sSoundMovesTable`
 /// (`src/battle_util.c:686-692`). Soundproof blocks every entry, whatever the
@@ -212,19 +194,19 @@ const fn lower(stat: ChangedStat, magnitude: StatChangeMagnitude) -> StatChangeE
 /// a stat.
 pub const STAT_CHANGE_EFFECTS: [(MoveEffect, StatChangeEffect); 18] = [
     (
-        EFFECT_ATTACK_UP,
+        MoveEffect::ATTACK_UP,
         raise(ChangedStat::Attack, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_DEFENSE_UP,
+        MoveEffect::DEFENSE_UP,
         raise(ChangedStat::Defense, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_SPECIAL_ATTACK_UP,
+        MoveEffect::SPECIAL_ATTACK_UP,
         raise(ChangedStat::SpAttack, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_EVASION_UP,
+        MoveEffect::EVASION_UP,
         raise(ChangedStat::Evasion, StatChangeMagnitude::One),
     ),
     (
@@ -236,51 +218,51 @@ pub const STAT_CHANGE_EFFECTS: [(MoveEffect, StatChangeEffect); 18] = [
         lower(ChangedStat::Defense, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_SPEED_DOWN,
+        MoveEffect::SPEED_DOWN,
         lower(ChangedStat::Speed, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_ACCURACY_DOWN,
+        MoveEffect::ACCURACY_DOWN,
         lower(ChangedStat::Accuracy, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_EVASION_DOWN,
+        MoveEffect::EVASION_DOWN,
         lower(ChangedStat::Evasion, StatChangeMagnitude::One),
     ),
     (
-        EFFECT_ATTACK_UP_TWO,
+        MoveEffect::ATTACK_UP_2,
         raise(ChangedStat::Attack, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_DEFENSE_UP_TWO,
+        MoveEffect::DEFENSE_UP_2,
         raise(ChangedStat::Defense, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_SPEED_UP_TWO,
+        MoveEffect::SPEED_UP_2,
         raise(ChangedStat::Speed, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_SPECIAL_ATTACK_UP_TWO,
+        MoveEffect::SPECIAL_ATTACK_UP_2,
         raise(ChangedStat::SpAttack, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_SPECIAL_DEFENSE_UP_TWO,
+        MoveEffect::SPECIAL_DEFENSE_UP_2,
         raise(ChangedStat::SpDefense, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_ATTACK_DOWN_TWO,
+        MoveEffect::ATTACK_DOWN_2,
         lower(ChangedStat::Attack, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_DEFENSE_DOWN_TWO,
+        MoveEffect::DEFENSE_DOWN_2,
         lower(ChangedStat::Defense, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_SPEED_DOWN_TWO,
+        MoveEffect::SPEED_DOWN_2,
         lower(ChangedStat::Speed, StatChangeMagnitude::Two),
     ),
     (
-        EFFECT_SPECIAL_DEFENSE_DOWN_TWO,
+        MoveEffect::SPECIAL_DEFENSE_DOWN_2,
         lower(ChangedStat::SpDefense, StatChangeMagnitude::Two),
     ),
 ];

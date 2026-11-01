@@ -13,7 +13,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use crate::one_line::OneLinePath;
+use crate::one_line::{OneLinePath, OneLineText};
 use crate::profile::EMERALD_US_REV0;
 use crate::sha1::Digest;
 
@@ -353,6 +353,40 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::pack::BattleMessageError,
     },
+    /// The field-message schema refused what the ROM holds: a stream with no
+    /// well-formed terminator, or roots the inventory cannot be filled from.
+    FieldMessage {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::FieldMessageError,
+    },
+    /// The battle-animation schema refused what the ROM holds: a program
+    /// whose shape or operands the catalog cannot carry, or roots it cannot
+    /// be assembled from.
+    BattleAnimation {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::BattleAnimationError,
+    },
+    /// A battle-animation command byte is not one of `sScriptCmdTable`'s slots.
+    AnimationOpcode {
+        /// The ROM offset of the command.
+        at: usize,
+        /// The byte found.
+        opcode: u8,
+    },
+    /// A battle-animation command names a template, task, or program the
+    /// profile does not record.
+    AnimationPointer {
+        /// The ROM offset of the operand.
+        at: usize,
+        /// What the operand should name: a template, a task, or a program.
+        what: &'static str,
+        /// The address found.
+        ptr: crate::reader::GbaPtr,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The pack's destination is the source ROM itself.
@@ -399,8 +433,9 @@ impl fmt::Display for ImportError {
         match self {
             Self::ReadFailed { path, source } => write!(
                 f,
-                "could not read ROM `{}`: {source}",
-                OneLinePath(path)
+                "could not read ROM `{}`: {}",
+                OneLinePath(path),
+                OneLineText(source)
             ),
             Self::WrongSize { actual } => write!(
                 f,
@@ -423,7 +458,8 @@ impl fmt::Display for ImportError {
             }
             Self::ProfileHeaderMismatch { profile } => write!(
                 f,
-                "ROM matches profile `{profile}` by SHA-1 but its header game code or version disagrees"
+                "ROM matches profile `{}` by SHA-1 but its header game code or version disagrees",
+                OneLineText(profile)
             ),
             Self::PointerOutOfRange { at, raw } => write!(
                 f,
@@ -489,7 +525,20 @@ impl fmt::Display for ImportError {
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
-            Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
+            Self::FieldMessage { id, source } => write!(f, "`{id}`: {source}"),
+            Self::BattleAnimation { id, source } => write!(f, "`{id}`: {}", OneLineText(source)),
+            Self::AnimationOpcode { at, opcode } => write!(
+                f,
+                "battle animation command at ROM offset {at:#08x} has opcode {opcode:#04x}, which is not a command"
+            ),
+            Self::AnimationPointer { at, what, ptr } => write!(
+                f,
+                "battle animation operand at ROM offset {at:#08x} points at {what} {:#010x}, which this revision profile does not record",
+                ptr.raw()
+            ),
+            Self::PackWrite(source) => {
+                write!(f, "could not assemble the asset pack: {}", OneLineText(source))
+            }
             Self::SameFile { path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`",
@@ -500,7 +549,12 @@ impl fmt::Display for ImportError {
                 partial,
                 source,
             } => {
-                write!(f, "could not write `{}`: {source}", OneLinePath(path))?;
+                write!(
+                    f,
+                    "could not write `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )?;
                 match partial {
                     PartialFile::Gone => Ok(()),
                     PartialFile::MayRemain => f.write_str(
@@ -510,12 +564,14 @@ impl fmt::Display for ImportError {
                     PartialFile::Unreadable(why) => write!(
                         f,
                         " (and the destination could not be read to tell whether a partial \
-                         file remains: {why})"
+                         file remains: {})",
+                        OneLineText(why)
                     ),
                     PartialFile::RemovalFailed(why) => write!(
                         f,
-                        " (a partial file remains there and could not be removed: {why}; \
-                         retry with a fresh destination name)"
+                        " (a partial file remains there and could not be removed: {}; \
+                         retry with a fresh destination name)",
+                        OneLineText(why)
                     ),
                 }
             }
@@ -534,6 +590,8 @@ impl std::error::Error for ImportError {
             Self::EntryShape { source, .. } => Some(source),
             Self::Audio { source, .. } => Some(source),
             Self::BattleMessage { source, .. } => Some(source),
+            Self::FieldMessage { source, .. } => Some(source),
+            Self::BattleAnimation { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -745,6 +803,23 @@ mod tests {
             ImportError::BattleMessage {
                 id: "battle-message/table",
                 source: assets::pack::BattleMessageError::Truncated,
+            },
+            ImportError::FieldMessage {
+                id: "field-message/table",
+                source: assets::pack::FieldMessageError::Truncated,
+            },
+            ImportError::BattleAnimation {
+                id: "battle-anim/catalog",
+                source: assets::BattleAnimationError::EmptyProgram,
+            },
+            ImportError::AnimationOpcode {
+                at: 0x20,
+                opcode: 0x30,
+            },
+            ImportError::AnimationPointer {
+                at: 0x24,
+                what: "a template",
+                ptr: crate::reader::GbaPtr::AT_BASE,
             },
             ImportError::Song {
                 id: "audio/song/mus_title",

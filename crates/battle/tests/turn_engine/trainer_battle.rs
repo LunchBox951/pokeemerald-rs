@@ -22,7 +22,7 @@
 //! fixtures below use hand-built parties instead — pinning behaviour only
 //! against a one-mon party would pin nothing. A forced post-faint send-out
 //! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
-//! falling back to party order; see `TrainerContext::send_out_next`'s docs.
+//! falling back to party order; see `TrainerContext::select_replacement`'s docs.
 
 use crate::common::{max_iv_mon, script, SequenceRng};
 use assets::trainers::TrainerId;
@@ -259,6 +259,70 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
             .any(|e| matches!(e, BattleEvent::MoneyGained(_))),
         "a wild battle pays no prize money"
     );
+    assert_eq!(rng.draws(), 7, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
+}
+
+/// Bulbasaur's expYield is 64 (`BULBASAUR_BASE_EXP` in `exp.rs`): 64*5/7 = 45,
+/// an odd award, so the trainer bonus 45*150/100 = 67 differs from the 68 a
+/// bonus-before-division order gives. The player's experience delta is the
+/// award itself.
+#[test]
+fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
+    const BULBASAUR: u16 = 1;
+    let knockout_script = || {
+        script(&[
+            CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+            TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+            AI_SIMULATED_DAMAGE, // battle_ai_script_commands.c:341, slots 0..3
+            TRAINER_MOVE_PICK,   // battle_ai_script_commands.c:445 highest-score pick
+            ACC_CRIT_VARIANCE_SECONDARY,
+        ])
+    };
+
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MEOWTH, 50, vec![SLASH]);
+    let party = vec![max_iv_mon(&dex, BULBASAUR, 5, vec![POUND, LEER])];
+    let mut rng = SequenceRng::new(knockout_script());
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let experience_before = battle.player().experience();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::ExpGained(67)),
+        "a trainer KO pays 64*5/7 = 45, then 45*150/100 = 67: {events:?}"
+    );
+    assert!(
+        !events.contains(&BattleEvent::ExpGained(68)),
+        "bonus-before-division would pay 68: {events:?}"
+    );
+    assert_eq!(battle.player().experience() - experience_before, 67);
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(rng.draws(), 11, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
+
+    // Wild control: the same KO without the trainer bonus pays 45.
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MEOWTH, 50, vec![SLASH]);
+    let enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![POUND, LEER]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        WILD_MOVE_SLOT_PICK, // battle_controller_opponent.c:1599 move-slot pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let experience_before = battle.player().experience();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::ExpGained(45)),
+        "a wild KO pays 64*5/7 = 45 with no bonus: {events:?}"
+    );
+    assert_eq!(battle.player().experience() - experience_before, 45);
     assert_eq!(rng.draws(), 7, "exact scripted draw stream is consumed");
     rng.assert_exhausted();
 }

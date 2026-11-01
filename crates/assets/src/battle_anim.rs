@@ -1,20 +1,16 @@
-//! Backend-neutral battle-animation program catalog (S-4): the
-//! script tables upstream launches through `LaunchBattleAnimation`
-//! (`src/battle_anim.c:208-262`), in the one raw pack entry both extraction
-//! backends fill.
+//! Backend-neutral battle-animation catalog: the script tables upstream
+//! launches through `LaunchBattleAnimation` (`src/battle_anim.c:208-262`).
 //!
-//! The four selector tables are `gBattleAnims_Moves`, `gBattleAnims_StatusConditions`,
-//! `gBattleAnims_General`, and `gBattleAnims_Special`
-//! (`data/battle_anim_scripts.s:18,377,389,415`). Each selector resolves to one
-//! [`BattleAnimationProgram`], a script of [`AnimCommand`]s whose opcodes and
-//! operand shapes are `sScriptCmdTable` (`src/battle_anim.c:118-171`) and the
-//! macros of `asm/macros/battle_anim_script.inc`.
+//! Each selector of the four tables (`gBattleAnims_Moves`,
+//! `gBattleAnims_StatusConditions`, `gBattleAnims_General`,
+//! `gBattleAnims_Special`) resolves to one [`BattleAnimationProgram`]: a script
+//! of [`AnimCommand`]s whose opcodes and operands follow `sScriptCmdTable`
+//! (`src/battle_anim.c:118-171`) and `asm/macros/battle_anim_script.inc`.
 //!
 //! [`BattleAnimationCatalog::encode`] and [`BattleAnimationCatalog::decode`]
-//! are inverses over the wire format owned by [`codec`]; construction and
-//! decoding enforce the same rules, so a value that exists always encodes.
-//! The catalog is complete by construction: every selector of every table has
-//! a program, and there is no fallback program for a selector the payload omits.
+//! are inverses; construction and decoding enforce the same rules, so every
+//! constructed catalog encodes. Every selector has a program; there is no
+//! fallback for an omitted one.
 
 mod codec;
 mod command;
@@ -26,6 +22,26 @@ use std::fmt;
 pub use command::{AnimCommand, AnimSymbol, EffectSpriteId, PanSweep, ProgramId};
 pub use command::{ANIM_ARGS_COUNT, EFFECT_SPRITE_COUNT, SUBPRIORITY_MASK};
 pub use error::BattleAnimationError;
+
+/// The move table's cardinality (`include/constants/moves.h:360`) as the `u16`
+/// a selector index uses, derived from the canonical [`crate::MOVES_COUNT`] so
+/// a move-table expansion moves this bound with it. A count beyond `u16` fails
+/// the build.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the assert below bounds the count to u16"
+)]
+const MOVES_COUNT: u16 = {
+    let count = crate::MOVES_COUNT;
+    assert!(
+        count <= u16::MAX as usize,
+        "the move table outgrew the u16 animation selector"
+    );
+    count as u16
+};
+const STATUS_CONDITION_COUNT: u16 = 9;
+const GENERAL_ANIM_COUNT: u16 = 23;
+const SPECIAL_ANIM_COUNT: u16 = 7;
 
 /// The four upstream script tables a selector indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,18 +71,16 @@ impl AnimationTable {
 
     /// How many selectors the table holds.
     ///
-    /// The move table lists `MOVES_COUNT` (355, `include/constants/moves.h:360`)
-    /// moves; upstream appends one more `Move_COUNT` entry
-    /// (`data/battle_anim_scripts.s:374`) that its own comment says "cannot be
-    /// reached", so it is not a selector. The status table lists the nine
-    /// conditions before the nonexistent `B_ANIM_STATUS_WRAPPED`.
+    /// Upstream's trailing `Move_COUNT` move entry
+    /// (`data/battle_anim_scripts.s:374`) is unreachable and not a selector;
+    /// the status table stops before the nonexistent `B_ANIM_STATUS_WRAPPED`.
     #[must_use]
     pub const fn len(self) -> u16 {
         match self {
-            Self::Moves => 355,
-            Self::StatusConditions => 9,
-            Self::General => 23,
-            Self::Special => 7,
+            Self::Moves => MOVES_COUNT,
+            Self::StatusConditions => STATUS_CONDITION_COUNT,
+            Self::General => GENERAL_ANIM_COUNT,
+            Self::Special => SPECIAL_ANIM_COUNT,
         }
     }
 
@@ -97,7 +111,7 @@ impl fmt::Display for AnimationTable {
     }
 }
 
-/// One slot of one animation table: the `tableId` of `LaunchBattleAnimation`.
+/// One slot of one animation table (`LaunchBattleAnimation`'s `tableId`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AnimationSelector {
     table: AnimationTable,
@@ -131,12 +145,10 @@ impl AnimationSelector {
     }
 }
 
-/// One upstream animation script: the commands from a label to the command that
-/// leaves it.
+/// One upstream animation script, from its label to the command that leaves it.
 ///
-/// The last command, and only the last, must be one that never falls through
-/// (`end`, `return`, `goto`, or `choosetwoturnanim`), so a program cannot run
-/// off its own end or carry commands nothing reaches.
+/// Only the last command may be a terminator (`end`, `return`, `goto`, or
+/// `choosetwoturnanim`), and it must be one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattleAnimationProgram {
     symbol: AnimSymbol,
@@ -250,16 +262,15 @@ impl BattleAnimationCatalog {
         Ok(Self { programs, tables })
     }
 
-    /// The program `selector` launches. Total: construction guarantees every
-    /// selector has one.
+    /// The program `selector` launches.
     #[must_use]
     pub fn program(&self, selector: AnimationSelector) -> &BattleAnimationProgram {
         let id = self.tables[selector.table.slot()][usize::from(selector.index)];
         &self.programs[usize::from(id.get())]
     }
 
-    /// The program a `call`/`goto`/jump operand names, or `None` for an id
-    /// from another catalog.
+    /// The program a `call`/`goto`/jump operand names, or `None` when `id` is
+    /// out of range.
     #[must_use]
     pub fn program_by_id(&self, id: ProgramId) -> Option<&BattleAnimationProgram> {
         self.programs.get(usize::from(id.get()))

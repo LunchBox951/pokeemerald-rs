@@ -42,6 +42,25 @@ pub enum BattleEvent {
         /// The move with no PP remaining.
         move_id: MoveId,
     },
+    /// A sleeping battler's remaining duration survived this action's
+    /// decrement, cancelling its chosen move before any PP was spent
+    /// (`CANCELER_ASLEEP`, `src/battle_util.c:2015`-`:2057`).
+    ///
+    /// This precedes the confusion and paralysis cancellers, which do not
+    /// run for the action.
+    FastAsleep {
+        /// Whether the player's battler is asleep.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A sleeping battler's duration reached zero this action, so it woke
+    /// and its chosen move proceeds through the remaining cancellers
+    /// (`BattleScript_MoveUsedWokeUp`, `src/battle_util.c:2045`-`:2053`).
+    WokeUp {
+        /// Whether the player's battler woke.
+        by_player: bool,
+    },
     /// A confused battler's duration reached zero this action, ending
     /// confusion before the paralysis draw and PP handling run
     /// (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
@@ -385,17 +404,63 @@ pub enum BattleEvent {
         /// HP the attacker actually lost.
         damage: u32,
     },
-    /// A [`BattleEvent::ParalyzedByStatic`] attacker's own Synchronize
-    /// reflected the paralysis onto the surviving Static holder
-    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// A contact ability's paralysis on the attacker (a
+    /// [`BattleEvent::ParalyzedByStatic`] or [`BattleEvent::ParalyzedByEffectSpore`])
+    /// was reflected by the attacker's own Synchronize onto the surviving
+    /// holder (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
     /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
     ///
-    /// This follows [`BattleEvent::ParalyzedByStatic`] and consumes no RNG.
+    /// This follows the contact ability's own paralysis event and consumes no RNG.
     ParalyzedByAttackerSynchronize {
-        /// Whether the player used the contact move; the opposing Static
-        /// holder is the battler paralysed.
+        /// Whether the player used the contact move; the opposing holder is
+        /// the battler paralysed.
         by_player: bool,
-        /// The contact move that triggered Static.
+        /// The contact move that triggered the holder's ability.
+        move_id: MoveId,
+    },
+    /// The target's [`AbilityId::EFFECT_SPORE`] put the attacker to sleep after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_EFFECT_SPORE`,
+    /// `battle_util.c:2782`-`:2804`; `STATUS1_SLEEP`,
+    /// `battle_script_commands.c:2273`-`:2298`, `:2480`-`:2487`).
+    ///
+    /// Spent draws, in order: the `Random() % 10` chance, each `Random() & 3`
+    /// selector until a nonzero one picks sleep, then the sleep duration;
+    /// only an attacker with no primary status and neither Insomnia nor Vital
+    /// Spirit reaches the duration draw and this event. A holder that
+    /// fainted to the hit still triggers it, after its [`BattleEvent::Fainted`].
+    AsleepByEffectSpore {
+        /// Whether the player used the contact move and so fell asleep.
+        by_player: bool,
+        /// The contact move that triggered Effect Spore.
+        move_id: MoveId,
+    },
+    /// The target's [`AbilityId::EFFECT_SPORE`] poisoned the attacker after a
+    /// damaging contact hit (`ABILITY_EFFECT_SPORE`, `battle_util.c:2782`-
+    /// `:2804`; `STATUS1_POISON`, `battle_script_commands.c:2299`-`:2340`).
+    ///
+    /// Spent draws, in order: the `Random() % 10` chance, then each
+    /// `Random() & 3` selector until a nonzero one picks poison. A Poison or
+    /// Steel type, an existing primary status and Immunity keep the attacker
+    /// unchanged and emit nothing.
+    PoisonedByEffectSpore {
+        /// Whether the player used the contact move and so was poisoned.
+        by_player: bool,
+        /// The contact move that triggered Effect Spore.
+        move_id: MoveId,
+    },
+    /// The target's [`AbilityId::EFFECT_SPORE`] paralysed the attacker after a
+    /// damaging contact hit (`ABILITY_EFFECT_SPORE`, `battle_util.c:2782`-
+    /// `:2804`; `STATUS1_PARALYSIS`, `battle_script_commands.c:2395`-`:2424`).
+    ///
+    /// Spent draws, in order: the `Random() % 10` chance, then each
+    /// `Random() & 3` selector until a nonzero one picks the burn effect
+    /// upstream replaces with paralysis. Limber and an existing primary
+    /// status keep the attacker unchanged and emit nothing.
+    ParalyzedByEffectSpore {
+        /// Whether the player used the contact move and so was paralysed.
+        by_player: bool,
+        /// The contact move that triggered Effect Spore.
         move_id: MoveId,
     },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
@@ -412,25 +477,26 @@ pub enum BattleEvent {
         /// The contact move that triggered Poison Point.
         move_id: MoveId,
     },
-    /// A [`BattleEvent::PoisonedByPoisonPoint`] attacker's own Synchronize
-    /// reflected the poison onto the surviving Poison Point holder
-    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// A contact ability's poison on the attacker (a
+    /// [`BattleEvent::PoisonedByPoisonPoint`] or [`BattleEvent::PoisonedByEffectSpore`])
+    /// was reflected by the attacker's own Synchronize onto the surviving
+    /// holder (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
     /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
     ///
-    /// This follows [`BattleEvent::PoisonedByPoisonPoint`] and consumes no RNG.
+    /// This follows the contact ability's own poison event and consumes no RNG.
     PoisonedByAttackerSynchronize {
-        /// Whether the player used the contact move; the opposing Poison Point
-        /// holder is the battler poisoned.
+        /// Whether the player used the contact move; the opposing holder is
+        /// the battler poisoned.
         by_player: bool,
-        /// The contact move that triggered Poison Point.
+        /// The contact move that triggered the holder's ability.
         move_id: MoveId,
     },
-    /// An attacker's Synchronize reflected a [`BattleEvent::PoisonedByPoisonPoint`]
-    /// poison, and the Poison Point holder's own Poison or Steel typing
-    /// protected it (`BattleScript_PSNPrevention`,
+    /// An attacker's Synchronize reflected a contact ability's poison (see
+    /// [`BattleEvent::PoisonedByAttackerSynchronize`]), and the holder's own
+    /// Poison or Steel typing protected it (`BattleScript_PSNPrevention`,
     /// `battle_script_commands.c:2320`-`:2329`).
     ///
-    /// This follows the [`BattleEvent::PoisonedByPoisonPoint`] event it reflects.
+    /// This follows the contact ability's own poison event.
     AttackerSynchronizePoisonOrSteelTypeProtected {
         /// Whether the player used the contact move; the opposing holder was
         /// the protected battler.
@@ -510,23 +576,35 @@ pub enum BattleEvent {
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
     },
+    /// `STRINGID_PKMNHURTBYBURN` (`data/battle_scripts_1.s:3750`-`:3753`): a
+    /// burned battler's `ENDTURN_BURN` tick, which follows its
+    /// [`BattleEvent::HurtByPoison`] slot (`pokeemerald/src/battle_util.c:1550`-
+    /// `:1560`).
+    HurtByBurn {
+        /// Whether the player's battler was hurt.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the tick.
+        damage: u32,
+    },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
     /// holder's end-turn draw cured its primary status, before that
-    /// battler's own [`BattleEvent::HurtByPoison`] tick would otherwise run
-    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON`,
-    /// `pokeemerald/src/battle_util.c:1494`-`:1535`).
+    /// battler's own [`BattleEvent::HurtByPoison`] or
+    /// [`BattleEvent::HurtByBurn`] tick would otherwise run
+    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON` and `ENDTURN_BURN`,
+    /// `pokeemerald/src/battle_util.c:1494`-`:1560`).
     ShedSkinCured {
         /// Whether the player's battler was cured.
         by_player: bool,
         /// The primary status Shed Skin cured.
         status: Status1,
     },
-    /// A trainer sent out the next party member after faint resolution.
+    /// A trainer sent out a party member: the forced replacement after a
+    /// faint, or a prechosen voluntary switch.
     TrainerSentOut {
         /// The replacement's species.
         species: SpeciesId,
-        /// Party members remaining on the bench after the replacement.
+        /// Non-fainted party members behind the replacement.
         bench_remaining: usize,
     },
     /// The player sent out the first non-fainted reserve after an active

@@ -3,8 +3,9 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan,
-    ProfilePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
+    BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
+    FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan,
+    ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -67,10 +68,12 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
-    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
+    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
+    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -123,8 +126,13 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
+    field_message_roots(&mut out, &plan.field_messages);
+    battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
+    starter_chooser_roots(&mut out, &plan.starter_chooser);
+    opening_scene_roots(&mut out, &plan.opening_scene);
+    battle_interface_roots(&mut out, &plan.battle_interface);
 
     battler_roots(&mut out, &plan.battlers);
 
@@ -142,6 +150,67 @@ fn bag_roots(out: &mut String, bag: &BagPlan) {
     }
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
+}
+
+fn starter_chooser_roots(out: &mut String, chooser: &StarterChooserPlan) {
+    graphics_family(
+        out,
+        ("starter_chooser", "StarterChooserRoots"),
+        (&chooser.images, &chooser.palettes, &chooser.tilemaps),
+    );
+}
+
+fn opening_scene_roots(out: &mut String, scene: &OpeningScenePlan) {
+    graphics_family(
+        out,
+        ("opening_scene", "OpeningSceneRoots"),
+        (&scene.images, &scene.palettes, &scene.tilemaps),
+    );
+}
+
+fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
+    let _ = writeln!(out, "    battle_interface: BattleInterfaceRoots {{");
+    graphics_fields(
+        out,
+        (&interface.images, &interface.palettes, &interface.tilemaps),
+    );
+    let _ = writeln!(out, "        healthbox_elements: &[");
+    for blob in &interface.healthbox_elements {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(
+        out,
+        "        battle_bar: Some({}),",
+        blob_root(&interface.battle_bar)
+    );
+    let _ = writeln!(out, "    }},");
+}
+
+/// A family of images, palettes, and tilemap blobs: the `Roots` field and
+/// its struct, then the three slices in that order.
+fn graphics_family(
+    out: &mut String,
+    (field, type_name): (&str, &str),
+    lists: (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+) {
+    let _ = writeln!(out, "    {field}: {type_name} {{");
+    graphics_fields(out, lists);
+    let _ = writeln!(out, "    }},");
+}
+
+/// The three slices a graphics family opens with, at struct-field indent.
+fn graphics_fields(
+    out: &mut String,
+    (images, palettes, tilemaps): (&[ImagePlan], &[PalettePlan], &[BlobPlan]),
+) {
+    image_slice(out, "        ", "images", images);
+    palette_slice(out, "        ", palettes);
+    let _ = writeln!(out, "        tilemaps: &[");
+    for blob in tilemaps {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
 }
 
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
@@ -289,6 +358,62 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
 }
+
+fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
+    let _ = writeln!(out, "    field_messages: &[");
+    for message in &messages.messages {
+        let _ = writeln!(
+            out,
+            "        FieldMessageRoot {{ symbol: {:?}, addr: {} }},",
+            message.symbol,
+            gba_ptr_expression(message.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
+}
+
+fn battle_anim_roots(out: &mut String, anims: &BattleAnimationPlan) {
+    let _ = writeln!(out, "    battle_anims: BattleAnimationRoots {{");
+    let tables: Vec<String> = anims
+        .tables
+        .iter()
+        .map(|&t| gba_ptr_expression(t))
+        .collect();
+    let _ = writeln!(out, "        tables: [{}],", tables.join(", "));
+    let _ = writeln!(out, "        programs: &[");
+    for program in &anims.programs {
+        let _ = writeln!(
+            out,
+            "            AnimProgramRoot {{ symbol: {:?}, addr: {}, len: {} }},",
+            program.symbol,
+            gba_ptr_expression(program.addr),
+            program.len
+        );
+    }
+    let _ = writeln!(out, "        ],");
+    for (field, roots) in [("templates", &anims.templates), ("tasks", &anims.tasks)] {
+        let _ = writeln!(out, "        {field}: &[");
+        for root in roots {
+            let _ = writeln!(
+                out,
+                "            AnimSymbolRoot {{ symbol: {:?}, addr: {} }},",
+                root.symbol,
+                gba_ptr_expression(root.addr)
+            );
+        }
+        let _ = writeln!(out, "        ],");
+    }
+    let _ = writeln!(out, "        selectors: &[");
+    for row in anims.selectors.chunks(SELECTORS_PER_LINE) {
+        let row: Vec<String> = row.iter().map(u16::to_string).collect();
+        let _ = writeln!(out, "            {},", row.join(", "));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
+/// How many selector ids share a line in the emitted table.
+const SELECTORS_PER_LINE: usize = 16;
 
 fn battler_roots(out: &mut String, battlers: &BattlerPlan) {
     let _ = writeln!(out, "    battlers: BattlerRoots {{");
@@ -487,6 +612,49 @@ mod tests {
     }
 
     #[test]
+    fn battle_anim_roots_render_one_record_per_line() {
+        use super::battle_anim_roots;
+        use crate::gen_rom_profile::plan::{AnimProgramPlan, AnimSymbolPlan, BattleAnimationPlan};
+
+        let mut out = String::new();
+        battle_anim_roots(
+            &mut out,
+            &BattleAnimationPlan {
+                tables: [0x0860_0000, 0x0860_0800, 0x0860_0900, 0x0860_0A00],
+                programs: vec![AnimProgramPlan {
+                    symbol: "Move_POUND".to_owned(),
+                    addr: 0x0860_1000,
+                    len: 24,
+                }],
+                templates: vec![AnimSymbolPlan {
+                    symbol: "gBasicHitSplatSpriteTemplate".to_owned(),
+                    addr: 0x0861_0000,
+                }],
+                tasks: vec![AnimSymbolPlan {
+                    symbol: "AnimTask_ShakeMon".to_owned(),
+                    addr: 0x0810_0001,
+                }],
+                selectors: (0..20).collect(),
+            },
+        );
+        assert!(
+            out.contains("tables: [GbaPtr::at(0x0860_0000), GbaPtr::at(0x0860_0800), GbaPtr::at(0x0860_0900), GbaPtr::at(0x0860_0A00)],"),
+            "{out}"
+        );
+        assert!(
+            out.contains("AnimProgramRoot { symbol: \"Move_POUND\", addr: GbaPtr::at(0x0860_1000), len: 24 },"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "AnimSymbolRoot { symbol: \"AnimTask_ShakeMon\", addr: GbaPtr::at(0x0810_0001) },"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,\n            16, 17, 18, 19,\n"), "{out}");
+    }
+
+    #[test]
     fn every_encoding_has_a_path() {
         assert_eq!(encoding_variant_path(Encoding::Raw), "Encoding::Raw");
         assert_eq!(encoding_variant_path(Encoding::Lz77), "Encoding::Lz77");
@@ -616,10 +784,227 @@ mod tests {
 mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
-        AudioPlan, BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, PalettePlan,
-        ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+        AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
+        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, OpeningScenePlan, PalettePlan,
+        ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
+
+    fn bag_plan() -> BagPlan {
+        BagPlan {
+            images: vec![ImagePlan {
+                id: "bag/image/hm".to_owned(),
+                addr: 0x0812_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 16,
+                height: 16,
+                metatile_width: 1,
+                metatile_height: 1,
+                tile_count: 4,
+            }],
+            palettes: vec![PalettePlan {
+                id: "bag/item-icon/palette/potion".to_owned(),
+                addr: 0x0813_0000,
+                color_count: 16,
+                encoding: Encoding::Lz77,
+            }],
+            raws: vec![BlobPlan {
+                id: "bag/raw/menu".to_owned(),
+                addr: 0x0814_0000,
+                encoding: Encoding::Lz77,
+                len: 2048,
+            }],
+        }
+    }
+
+    fn chooser_plan() -> StarterChooserPlan {
+        StarterChooserPlan {
+            images: vec![ImagePlan {
+                id: "starter-chooser/image/tiles".to_owned(),
+                addr: 0x0815_0000,
+                encoding: Encoding::Lz77,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 128,
+                height: 128,
+                metatile_width: 1,
+                metatile_height: 1,
+                tile_count: 256,
+            }],
+            palettes: vec![PalettePlan {
+                id: "starter-chooser/palette/tiles".to_owned(),
+                addr: 0x0816_0000,
+                color_count: 32,
+                encoding: Encoding::Raw,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "starter-chooser/raw/birch_bag".to_owned(),
+                addr: 0x0817_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
+    fn scene_plan() -> OpeningScenePlan {
+        OpeningScenePlan {
+            images: vec![ImagePlan {
+                id: "opening-scene/image/birch".to_owned(),
+                addr: 0x0815_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 64,
+                height: 64,
+                metatile_width: 8,
+                metatile_height: 8,
+                tile_count: 64,
+            }],
+            palettes: vec![PalettePlan {
+                id: "opening-scene/palette/lotad".to_owned(),
+                addr: 0x0816_0000,
+                color_count: 16,
+                encoding: Encoding::Lz77,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "opening-scene/raw/clock_start".to_owned(),
+                addr: 0x0817_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
+    fn interface_plan() -> BattleInterfacePlan {
+        BattleInterfacePlan {
+            images: vec![ImagePlan {
+                id: "battle-interface/image/textbox".to_owned(),
+                addr: 0x0818_0000,
+                encoding: Encoding::Lz77,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 128,
+                height: 128,
+                metatile_width: 1,
+                metatile_height: 1,
+                tile_count: 256,
+            }],
+            palettes: vec![
+                PalettePlan {
+                    id: "battle-interface/palette/textbox".to_owned(),
+                    addr: 0x0819_0000,
+                    color_count: 32,
+                    encoding: Encoding::Lz77,
+                },
+                PalettePlan {
+                    id: "battle-interface/palette/pp_text".to_owned(),
+                    addr: 0x081A_0000,
+                    color_count: 16,
+                    encoding: Encoding::Raw,
+                },
+            ],
+            tilemaps: vec![BlobPlan {
+                id: "battle-interface/raw/textbox_map".to_owned(),
+                addr: 0x081B_0000,
+                encoding: Encoding::Lz77,
+                len: 4096,
+            }],
+            healthbox_elements: vec![
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/hpbar".to_owned(),
+                    addr: 0x081C_0000,
+                    encoding: Encoding::Raw,
+                    len: 384,
+                },
+                BlobPlan {
+                    id: "battle-interface/raw/healthbox_element/expbar".to_owned(),
+                    addr: 0x081C_0180,
+                    encoding: Encoding::Raw,
+                    len: 288,
+                },
+            ],
+            battle_bar: BlobPlan {
+                id: "battle-interface/raw/battle_bar".to_owned(),
+                addr: 0x081D_0000,
+                encoding: Encoding::Lz77,
+                len: 1312,
+            },
+        }
+    }
+
+    fn assert_interface_roots(module: &str) {
+        assert!(
+            module.contains("    battle_interface: BattleInterfaceRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"battle-interface/image/textbox\", addr: GbaPtr::at(0x0818_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"battle-interface/palette/textbox\", addr: GbaPtr::at(0x0819_0000), color_count: 32, encoding: Encoding::Lz77 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"battle-interface/palette/pp_text\", addr: GbaPtr::at(0x081A_0000), color_count: 16, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"battle-interface/raw/textbox_map\", addr: GbaPtr::at(0x081B_0000), encoding: Encoding::Lz77, len: 4096 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        healthbox_elements: &[\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/hpbar\", addr: GbaPtr::at(0x081C_0000), encoding: Encoding::Raw, len: 384 },\n            BlobRoot { id: \"battle-interface/raw/healthbox_element/expbar\", addr: GbaPtr::at(0x081C_0180), encoding: Encoding::Raw, len: 288 },\n        ],"),
+            "{module}"
+        );
+        assert!(
+            module.contains("        battle_bar: Some(BlobRoot { id: \"battle-interface/raw/battle_bar\", addr: GbaPtr::at(0x081D_0000), encoding: Encoding::Lz77, len: 1312 }),"),
+            "{module}"
+        );
+        assert!(!module.contains("BattleInterfaceRoots::NONE"), "{module}");
+    }
+
+    fn assert_chooser_roots(module: &str) {
+        assert!(
+            module.contains("    starter_chooser: StarterChooserRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"starter-chooser/image/tiles\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"starter-chooser/palette/tiles\", addr: GbaPtr::at(0x0816_0000), color_count: 32, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"starter-chooser/raw/birch_bag\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("StarterChooserRoots::NONE"), "{module}");
+    }
+
+    fn assert_scene_roots(module: &str) {
+        assert!(
+            module.contains("    opening_scene: OpeningSceneRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"opening-scene/image/birch\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"opening-scene/palette/lotad\", addr: GbaPtr::at(0x0816_0000), color_count: 16, encoding: Encoding::Lz77 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"opening-scene/raw/clock_start\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
+    }
 
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
@@ -657,6 +1042,14 @@ mod bag_field_tests {
                 table: base,
                 specials: vec![],
             },
+            field_messages: FieldMessagePlan { messages: vec![] },
+            battle_anims: BattleAnimationPlan {
+                tables: [base; 4],
+                programs: vec![],
+                templates: vec![],
+                tasks: vec![],
+                selectors: vec![],
+            },
             battlers: BattlerPlan {
                 front_table: base,
                 back_table: base,
@@ -664,34 +1057,15 @@ mod bag_field_tests {
                 shiny_palette_table: base,
                 species: vec![],
             },
-            bag: BagPlan {
-                images: vec![ImagePlan {
-                    id: "bag/image/hm".to_owned(),
-                    addr: 0x0812_0000,
-                    encoding: Encoding::Raw,
-                    rom_bit_depth: 4,
-                    pack_bit_depth: 4,
-                    width: 16,
-                    height: 16,
-                    metatile_width: 1,
-                    metatile_height: 1,
-                    tile_count: 4,
-                }],
-                palettes: vec![PalettePlan {
-                    id: "bag/item-icon/palette/potion".to_owned(),
-                    addr: 0x0813_0000,
-                    color_count: 16,
-                    encoding: Encoding::Lz77,
-                }],
-                raws: vec![BlobPlan {
-                    id: "bag/raw/menu".to_owned(),
-                    addr: 0x0814_0000,
-                    encoding: Encoding::Lz77,
-                    len: 2048,
-                }],
-            },
+            bag: bag_plan(),
+            starter_chooser: chooser_plan(),
+            opening_scene: scene_plan(),
+            battle_interface: interface_plan(),
         };
         let module = module(&plan, "0", &[]);
+        assert_chooser_roots(&module);
+        assert_scene_roots(&module);
+        assert_interface_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

@@ -1,4 +1,4 @@
-//! MIDI configuration, parsing, compilation, and encoding errors.
+//! MIDI configuration, parsing, and compilation errors.
 
 use std::fmt;
 
@@ -10,15 +10,6 @@ pub(crate) enum MidiError {
     Truncated,
     /// A raw tick cannot be scaled into a `u32`.
     TickOverflow(u32),
-    /// The compiled track count does not fit the song schema.
-    TooManyTracks(usize),
-    /// A compiled track's event count does not fit the song schema's `u32`
-    /// event-count field.
-    TooManyTrackEvents(usize),
-    /// The encoded voicegroup pack id (the `audio/voicegroup/` prefix plus
-    /// the configured label) does not fit the song schema's `u16`
-    /// string-length field. Carries the id's UTF-8 byte length.
-    VoiceGroupPackIdTooLong(usize),
     /// The file does not start with an `MThd` chunk.
     BadHeaderMagic,
     /// The `MThd` chunk does not declare the standard body length.
@@ -66,6 +57,10 @@ pub(crate) enum MidiError {
     CfgMalformedFlag(String),
     /// A `midi.cfg` entry has no voicegroup flag.
     CfgMissingVoiceGroup,
+    /// `song_table.inc` has no row for the song symbol.
+    SongTableEntryMissing(String),
+    /// A `song_table.inc` row's player is neither a defined `.equiv` name nor a `u16` literal.
+    SongTablePlayerMalformed(String),
 }
 
 impl fmt::Display for MidiError {
@@ -75,19 +70,6 @@ impl fmt::Display for MidiError {
             Self::TickOverflow(raw) => write!(
                 f,
                 "MIDI tick {raw} overflows a u32 once scaled to 24 clocks per beat"
-            ),
-            Self::TooManyTracks(count) => write!(
-                f,
-                "compiled song has {count} tracks, more than the schema's u8 track count allows"
-            ),
-            Self::TooManyTrackEvents(count) => write!(
-                f,
-                "compiled track has {count} events, more than the schema's u32 event count allows"
-            ),
-            Self::VoiceGroupPackIdTooLong(byte_len) => write!(
-                f,
-                "compiled song's voicegroup pack id is {byte_len} bytes, more than the schema's \
-                 u16 string-length field allows"
             ),
             Self::BadHeaderMagic => write!(f, "not a standard MIDI file (missing MThd magic)"),
             Self::HeaderLengthMismatch(len) => {
@@ -144,6 +126,12 @@ impl fmt::Display for MidiError {
             Self::CfgMalformedFlag(token) => write!(f, "midi.cfg entry has a malformed flag `{token}`"),
             Self::CfgMissingVoiceGroup => {
                 write!(f, "midi.cfg entry has no `-G` (voice group) flag")
+            }
+            Self::SongTableEntryMissing(symbol) => {
+                write!(f, "song_table.inc has no row for `{symbol}`")
+            }
+            Self::SongTablePlayerMalformed(player) => {
+                write!(f, "song_table.inc player `{player}` is not a defined index")
             }
         }
     }

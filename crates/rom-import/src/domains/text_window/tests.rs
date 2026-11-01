@@ -3,8 +3,9 @@
 //! The reader's own logic is the check of `sTextWindowPalettes`, so the
 //! cases are a table that agrees with the profile, one whose first bank is
 //! not the message box's colours, one whose `text_pal*` banks are not
-//! where the profile says, a profile missing one of the five, and a table
-//! addressed past the image.
+//! where the profile says, a profile missing one of the five, a bank root
+//! recorded with fifteen colours (narrow) or seventeen (oversized), and a
+//! table addressed past the image.
 
 use pack_format::{parse_directory, DirectoryEntry, PackWriter};
 
@@ -85,6 +86,30 @@ static SHIFTED: [PaletteRoot; 5] = [
 
 /// `text_pal2` missing.
 static MISSING: [PaletteRoot; 4] = [PALETTES[0], PALETTES[1], PALETTES[3], PALETTES[4]];
+
+/// `text_pal2` recorded with fifteen colours.
+static NARROW: [PaletteRoot; 5] = [
+    PALETTES[0],
+    PALETTES[1],
+    PaletteRoot {
+        color_count: 15,
+        ..PALETTES[2]
+    },
+    PALETTES[3],
+    PALETTES[4],
+];
+
+/// The message box palette recorded with seventeen colours.
+static OVERSIZED: [PaletteRoot; 5] = [
+    PaletteRoot {
+        color_count: 17,
+        ..PALETTES[0]
+    },
+    PALETTES[1],
+    PALETTES[2],
+    PALETTES[3],
+    PALETTES[4],
+];
 
 fn rom() -> Rom {
     let mut table = bank(0x11).to_vec();
@@ -167,4 +192,16 @@ fn a_table_past_the_image_is_truncated() {
 fn a_profile_with_no_palettes_reads_no_table() {
     let entries = run(&roots(PAST_THE_ROM, &[])).expect("no table to check");
     assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn a_narrow_bank_is_refused() {
+    let err = run(&roots(TABLE_AT, &NARROW)).unwrap_err();
+    assert!(mismatch(&err, "text-window/palette/text_pal2"), "{err}");
+}
+
+#[test]
+fn an_oversized_bank_is_refused() {
+    let err = run(&roots(TABLE_AT, &OVERSIZED)).unwrap_err();
+    assert!(mismatch(&err, "text-window/palette/message_box"), "{err}");
 }

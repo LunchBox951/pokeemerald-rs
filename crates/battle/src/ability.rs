@@ -7,43 +7,43 @@ use crate::damage::MoveCategory;
 use crate::status1::Status1;
 
 /// Battle Armor's ability ID.
-pub const BATTLE_ARMOR: AbilityId = AbilityId(4);
+pub const BATTLE_ARMOR: AbilityId = AbilityId::BATTLE_ARMOR;
 
 /// Huge Power's ability ID.
-pub const HUGE_POWER: AbilityId = AbilityId(37);
+pub const HUGE_POWER: AbilityId = AbilityId::HUGE_POWER;
 
 /// Liquid Ooze's ability ID.
-pub const LIQUID_OOZE: AbilityId = AbilityId(64);
+pub const LIQUID_OOZE: AbilityId = AbilityId::LIQUID_OOZE;
 
 /// Overgrow's ability ID.
-pub const OVERGROW: AbilityId = AbilityId(65);
+pub const OVERGROW: AbilityId = AbilityId::OVERGROW;
 
 /// Blaze's ability ID.
-pub const BLAZE: AbilityId = AbilityId(66);
+pub const BLAZE: AbilityId = AbilityId::BLAZE;
 
 /// Torrent's ability ID.
-pub const TORRENT: AbilityId = AbilityId(67);
+pub const TORRENT: AbilityId = AbilityId::TORRENT;
 
 /// Swarm's ability ID.
-pub const SWARM: AbilityId = AbilityId(68);
+pub const SWARM: AbilityId = AbilityId::SWARM;
 
 /// Pure Power's ability ID.
-pub const PURE_POWER: AbilityId = AbilityId(74);
+pub const PURE_POWER: AbilityId = AbilityId::PURE_POWER;
 
 /// Shell Armor's ability ID.
-pub const SHELL_ARMOR: AbilityId = AbilityId(75);
+pub const SHELL_ARMOR: AbilityId = AbilityId::SHELL_ARMOR;
 
 /// Guts' ability ID.
-pub const GUTS: AbilityId = AbilityId(62);
+pub const GUTS: AbilityId = AbilityId::GUTS;
 
 /// Marvel Scale's ability ID.
-pub const MARVEL_SCALE: AbilityId = AbilityId(63);
+pub const MARVEL_SCALE: AbilityId = AbilityId::MARVEL_SCALE;
 
 /// Thick Fat's ability ID.
-pub const THICK_FAT: AbilityId = AbilityId(47);
+pub const THICK_FAT: AbilityId = AbilityId::THICK_FAT;
 
 /// Hustle's ability ID.
-pub const HUSTLE: AbilityId = AbilityId(55);
+pub const HUSTLE: AbilityId = AbilityId::HUSTLE;
 
 /// Low-HP power-boosting abilities paired with their boosted move type.
 pub const PINCH_BOOSTS: [(AbilityId, Type); 4] = [
@@ -186,6 +186,15 @@ pub fn guts_attack(attacker_ability: AbilityId, attacker_status1: Status1, raw_a
     }
 }
 
+/// Whether burn halves this attacker's physical damage: it is burned and does
+/// not have Guts, so a Guts holder keeps the full damage on top of its 150%
+/// Attack ([`guts_attack`]). Upstream tests this after the division by 50 in
+/// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3262`-`:3264`).
+#[must_use]
+pub fn burn_halves_damage(attacker_ability: AbilityId, attacker_status1: Status1) -> bool {
+    attacker_status1.is_burned() && attacker_ability != GUTS
+}
+
 /// Applies Marvel Scale to a raw physical Defense stat.
 ///
 /// This must run before stat-stage scaling. A statused holder's raw Defense
@@ -207,10 +216,10 @@ pub fn marvel_scale_defense(
 #[cfg(test)]
 mod tests {
     use super::{
-        guts_attack, huge_power_attack, hustle_attack, inverts_drain, marvel_scale_defense,
-        pinch_boosts_power, suppresses_critical_hits, BATTLE_ARMOR, BLAZE, GUTS, HUGE_POWER,
-        HUSTLE, LIQUID_OOZE, MARVEL_SCALE, OVERGROW, PINCH_BOOSTS, PURE_POWER, SHELL_ARMOR, SWARM,
-        TORRENT,
+        burn_halves_damage, guts_attack, huge_power_attack, hustle_attack, inverts_drain,
+        marvel_scale_defense, pinch_boosts_power, suppresses_critical_hits, BATTLE_ARMOR, BLAZE,
+        GUTS, HUGE_POWER, HUSTLE, LIQUID_OOZE, MARVEL_SCALE, OVERGROW, PINCH_BOOSTS, PURE_POWER,
+        SHELL_ARMOR, SWARM, TORRENT,
     };
     use super::{thick_fat_special_attack, THICK_FAT};
     use crate::damage::MoveCategory;
@@ -219,7 +228,7 @@ mod tests {
     use assets::species::AbilityId;
     use assets::{SpeciesId, Type};
 
-    const NO_ABILITY: AbilityId = AbilityId(0);
+    const NO_ABILITY: AbilityId = AbilityId::NONE;
     const TENTACOOL: SpeciesId = SpeciesId(72);
     const MARILL: SpeciesId = SpeciesId(183);
     const TREECKO: SpeciesId = SpeciesId(277);
@@ -305,7 +314,7 @@ mod tests {
 
     #[test]
     fn guts_raises_only_a_statused_holders_raw_physical_attack() {
-        for status in [Status1::Paralysed, Status1::Poisoned] {
+        for status in [Status1::Paralysed, Status1::Poisoned, Status1::Burned] {
             assert_eq!(
                 guts_attack(GUTS, status, 14),
                 21,
@@ -322,6 +331,23 @@ mod tests {
                 guts_attack(other, Status1::Paralysed, 14),
                 14,
                 "{other:?} must not trigger Guts"
+            );
+        }
+    }
+
+    #[test]
+    fn burn_halves_damage_for_every_burned_attacker_but_a_guts_holder() {
+        for ability in [NO_ABILITY, HUGE_POWER, MARVEL_SCALE, HUSTLE] {
+            assert!(burn_halves_damage(ability, Status1::Burned), "{ability:?}");
+        }
+        assert!(
+            !burn_halves_damage(GUTS, Status1::Burned),
+            "Guts exempts its holder from the halving"
+        );
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            assert!(
+                !burn_halves_damage(NO_ABILITY, status),
+                "{status:?} is not a burn"
             );
         }
     }

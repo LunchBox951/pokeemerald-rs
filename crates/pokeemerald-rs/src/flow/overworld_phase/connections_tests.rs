@@ -451,7 +451,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 
 /// Littleroot Town's real north connection to Route 101 (`offset: 0`), crossed both ways.
 ///
-/// `(10, 19)` is also the Route 101 rescue trigger tile. With no `party_lead` the trigger
+/// `(10, 19)` is also the Route 101 rescue trigger tile. With no lead the trigger
 /// consumes itself without building a battle, so the walk is unaffected; see
 /// `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`.
 #[test]
@@ -460,7 +460,9 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         littleroot,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -468,7 +470,7 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     .expect("run `cargo xtask extract` first");
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
-    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
+    let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
 
     for _ in 0..2 {
         phase.step(held(Buttons::UP));
@@ -607,17 +609,20 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let route101 = MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         littleroot,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let mut phase = OverworldPhase::for_test(
+    let mut phase = OverworldPhase::for_test_with_source(
         scene,
         littleroot,
         PlayerState::new((10, 4), 3, Direction::North),
         None,
+        source,
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
     phase

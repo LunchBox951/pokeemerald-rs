@@ -16,8 +16,30 @@ pub(super) struct TempPackFile {
 }
 
 impl TempPackFile {
-    pub(super) fn write(path: &std::path::Path, bytes: Vec<u8>) -> Self {
-        std::fs::write(path, bytes).expect("the scratch directory is writable");
+    pub(super) fn write(path: &std::path::Path, bytes: &[u8]) -> Self {
+        use std::io::Write as _;
+        // `create_new` (O_EXCL) never follows a symlink at `path`. A stale
+        // occupant is unlinked (the link itself, never its target) and retried.
+        let mut file = None;
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(f) => {
+                    file = Some(f);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::fs::remove_file(path).expect("a stale scratch entry is removable");
+                }
+                Err(e) => panic!("the scratch directory is writable: {e}"),
+            }
+        }
+        file.expect("the scratch path is exclusively creatable")
+            .write_all(bytes)
+            .expect("the scratch pack is writable");
         Self {
             path: path.to_path_buf(),
         }
@@ -46,7 +68,7 @@ pub(super) fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
     const MESSAGE_BOX_HEIGHT: u32 = 16;
     const FONT_BIT_DEPTH: u8 = 2;
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/1",
             FRAME_SIDE,
@@ -89,4 +111,28 @@ pub(super) fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
             0,
         ),
     ])
+}
+
+#[cfg(unix)]
+#[test]
+fn scratch_pack_writer_does_not_follow_a_planted_symlink() {
+    let dir = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-symlink-probe-start-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).unwrap();
+    let victim = dir.join("victim");
+    std::fs::write(&victim, b"precious").unwrap();
+    let path = dir.join("scratch.pack");
+    std::os::unix::fs::symlink(&victim, &path).unwrap();
+    let fixture = TempPackFile::write(&path, &[1, 2, 3]);
+    let after = std::fs::read(&victim).unwrap();
+    drop(fixture);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        after, b"precious",
+        "the writer followed the symlink and clobbered its target"
+    );
 }

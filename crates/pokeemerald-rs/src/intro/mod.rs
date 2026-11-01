@@ -17,7 +17,7 @@
 
 mod speech;
 
-use assets::fonts::{FontId, OwnedFontGlyphSheet};
+use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
@@ -209,16 +209,17 @@ impl IntroScene {
     /// options from, pass [`NewGameOptions::DEFAULT`].
     #[must_use]
     pub(crate) fn new(
-        sheet: OwnedFontGlyphSheet,
+        sources: OwnedGlyphSources,
         frame: FrameAssets,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
         let pages = speech::pages();
         // The upstream speech printer enables held-A/B acceleration (src/main_menu.c:1339).
-        let printer = Printer::new(
+        let printer = Printer::with_sources(
             pages[0].clone(),
-            sheet,
+            sources,
+            FontId::Normal,
             speed,
             textbox::STANDARD_PRINTER_ORIGIN,
         )
@@ -289,14 +290,16 @@ impl IntroScene {
         pack: &AssetPack,
         options: NewGameOptions,
     ) -> Result<Self, IntroSceneError> {
-        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
+        let sources = GlyphSources::try_from_fn(|font| {
+            Ok::<_, IntroSceneError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
+        })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sheet, frame, speed, options))
+        Ok(Self::new(sources, frame, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -461,15 +464,17 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         bit_depth: 2,
         pixels: &pixels,
     };
-    let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-        .expect("this is the exact real glyph-sheet shape");
+    let sources = GlyphSources::try_from_fn(|font| {
+        OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+    })
+    .expect("this is the exact real glyph-sheet shape");
     let frame = FrameAssets {
         pixels: vec![0u8; (FRAME_WIDTH * FRAME_HEIGHT) as usize],
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; 16],
     };
-    let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant, NewGameOptions::DEFAULT);
+    let mut scene = IntroScene::new(sources, frame, TextSpeed::Instant, NewGameOptions::DEFAULT);
     let confirm_a = PrinterInput {
         a_pressed: true,
         b_pressed: false,

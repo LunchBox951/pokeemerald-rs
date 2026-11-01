@@ -12,9 +12,10 @@
 //! implemented, so an effect that would apply fails closed after consuming
 //! exactly the draw Emerald consumes.
 //!
-//! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`) and
+//! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`),
 //! [`EFFECT_CONFUSE_HIT`] (the `status2` `MOVE_EFFECT_CONFUSION` case,
-//! `:2528-2544`) are the two ported trampolines.
+//! `:2528-2544`) and [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
+//! case, `:2666-2683`) are the three ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -24,38 +25,11 @@ use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
-pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
-const EFFECT_BURN_HIT: MoveEffect = MoveEffect(4);
-const EFFECT_FREEZE_HIT: MoveEffect = MoveEffect(5);
-const EFFECT_PARALYZE_HIT: MoveEffect = MoveEffect(6);
-const EFFECT_FLINCH_HIT: MoveEffect = MoveEffect(31);
-const EFFECT_PAY_DAY: MoveEffect = MoveEffect(34);
-const EFFECT_TRI_ATTACK: MoveEffect = MoveEffect(36);
-const EFFECT_TRAP: MoveEffect = MoveEffect(42);
-const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
-const EFFECT_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
-const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
-const EFFECT_SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
-const EFFECT_SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
-const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
+pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
+/// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
+pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
-pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect(76);
-const EFFECT_THIEF: MoveEffect = MoveEffect(105);
-const EFFECT_THAW_HIT: MoveEffect = MoveEffect(125);
-const EFFECT_RAPID_SPIN: MoveEffect = MoveEffect(129);
-const EFFECT_DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
-const EFFECT_ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
-const EFFECT_ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
-const EFFECT_TWISTER: MoveEffect = MoveEffect(146);
-const EFFECT_FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
-const EFFECT_FAKE_OUT: MoveEffect = MoveEffect(158);
-const EFFECT_SUPERPOWER: MoveEffect = MoveEffect(182);
-const EFFECT_KNOCK_OFF: MoveEffect = MoveEffect(188);
-const EFFECT_DOUBLE_EDGE: MoveEffect = MoveEffect(198);
-const EFFECT_BLAZE_KICK: MoveEffect = MoveEffect(200);
-const EFFECT_POISON_FANG: MoveEffect = MoveEffect(202);
-const EFFECT_OVERHEAT: MoveEffect = MoveEffect(204);
-const EFFECT_POISON_TAIL: MoveEffect = MoveEffect(209);
+pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect::CONFUSE_HIT;
 
 /// Metadata for a damaging move-effect script ending in `setmoveeffect`
 /// followed immediately by `goto BattleScript_EffectHit`.
@@ -111,39 +85,42 @@ const fn certain_on_user(effect: MoveEffect, move_effect: &'static str) -> Tramp
 /// script suffix.
 pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
     chance_on_target(EFFECT_POISON_HIT, "MOVE_EFFECT_POISON"),
-    chance_on_target(EFFECT_BURN_HIT, "MOVE_EFFECT_BURN"),
-    chance_on_target(EFFECT_FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
-    chance_on_target(EFFECT_PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
-    chance_on_target(EFFECT_FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
-    chance_on_target(EFFECT_PAY_DAY, "MOVE_EFFECT_PAYDAY"),
-    chance_on_target(EFFECT_TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
-    chance_on_target(EFFECT_TRAP, "MOVE_EFFECT_WRAP"),
-    chance_on_target(EFFECT_ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
-    chance_on_target(EFFECT_DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
+    chance_on_target(MoveEffect::BURN_HIT, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
+    chance_on_target(MoveEffect::PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
+    chance_on_target(MoveEffect::FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::PAY_DAY, "MOVE_EFFECT_PAYDAY"),
+    chance_on_target(MoveEffect::TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
+    chance_on_target(MoveEffect::TRAP, "MOVE_EFFECT_WRAP"),
+    chance_on_target(MoveEffect::ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
+    chance_on_target(MoveEffect::DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
     chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
-    chance_on_target(EFFECT_SPECIAL_ATTACK_DOWN_HIT, "MOVE_EFFECT_SP_ATK_MINUS_1"),
     chance_on_target(
-        EFFECT_SPECIAL_DEFENSE_DOWN_HIT,
+        MoveEffect::SPECIAL_ATTACK_DOWN_HIT,
+        "MOVE_EFFECT_SP_ATK_MINUS_1",
+    ),
+    chance_on_target(
+        MoveEffect::SPECIAL_DEFENSE_DOWN_HIT,
         "MOVE_EFFECT_SP_DEF_MINUS_1",
     ),
-    chance_on_target(EFFECT_ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
+    chance_on_target(MoveEffect::ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
     chance_on_target(EFFECT_CONFUSE_HIT, "MOVE_EFFECT_CONFUSION"),
-    chance_on_target(EFFECT_THIEF, "MOVE_EFFECT_STEAL_ITEM"),
-    chance_on_target(EFFECT_THAW_HIT, "MOVE_EFFECT_BURN"),
-    certain_on_user(EFFECT_RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
-    chance_on_user(EFFECT_DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
-    chance_on_user(EFFECT_ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
-    chance_on_user(EFFECT_ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
-    chance_on_target(EFFECT_TWISTER, "MOVE_EFFECT_FLINCH"),
-    chance_on_target(EFFECT_FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
-    certain_on_target(EFFECT_FAKE_OUT, "MOVE_EFFECT_FLINCH"),
-    certain_on_user(EFFECT_SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
-    chance_on_target(EFFECT_KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
-    certain_on_user(EFFECT_DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
-    chance_on_target(EFFECT_BLAZE_KICK, "MOVE_EFFECT_BURN"),
-    chance_on_target(EFFECT_POISON_FANG, "MOVE_EFFECT_TOXIC"),
-    certain_on_user(EFFECT_OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
-    chance_on_target(EFFECT_POISON_TAIL, "MOVE_EFFECT_POISON"),
+    chance_on_target(MoveEffect::THIEF, "MOVE_EFFECT_STEAL_ITEM"),
+    chance_on_target(MoveEffect::THAW_HIT, "MOVE_EFFECT_BURN"),
+    certain_on_user(MoveEffect::RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
+    chance_on_user(MoveEffect::DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
+    chance_on_user(MoveEffect::ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
+    chance_on_user(MoveEffect::ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
+    chance_on_target(MoveEffect::TWISTER, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
+    certain_on_target(MoveEffect::FAKE_OUT, "MOVE_EFFECT_FLINCH"),
+    certain_on_user(MoveEffect::SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
+    chance_on_target(MoveEffect::KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
+    certain_on_user(MoveEffect::DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
+    chance_on_target(MoveEffect::BLAZE_KICK, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::POISON_FANG, "MOVE_EFFECT_TOXIC"),
+    certain_on_user(MoveEffect::OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
+    chance_on_target(MoveEffect::POISON_TAIL, "MOVE_EFFECT_POISON"),
 ];
 
 /// Returns `effect`'s secondary-effect trampoline metadata.
@@ -172,6 +149,27 @@ pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_CONFUSE_HIT
 }
 
+/// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], the third
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_SPEED_DOWN_HIT
+}
+
+/// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
+/// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
+/// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
+/// `SetMoveEffect` calls it (`battle_script_commands.c:6987-7007,7035-7037`).
+/// Each leaves the defender unchanged with no message, unlike the
+/// `STAT_CHANGE_ALLOW_PTR` path a stat-lowering move takes.
+#[must_use]
+fn speed_drop_can_land(defender: &BattlePokemon) -> bool {
+    !matches!(
+        defender.ability(),
+        AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
+    )
+}
+
 /// `SetMoveEffect`'s silent `STATUS1_POISON` guards
 /// (`battle_script_commands.c:2330-2337`), plus Shield Dust's silent block
 /// of a plain move's chance-based effect (`:2253-2255`), and Wonder Guard's
@@ -180,12 +178,23 @@ pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
 /// (`battle_script_commands.c:1409-1418`).
 #[must_use]
 fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
+    defender.status1().is_healthy() && poison_can_land_ignoring_status(move_type, defender)
+}
+
+/// [`poison_can_land`] without the primary-status guard, for the screen in
+/// [`ensure_admissible`]: that screen runs at construction and at each
+/// turn's start, before move order is decided, and a sleeping defender can
+/// wake on its own earlier action the same turn
+/// ([`crate::status1::tick_sleep`], including Early Bird's two-turn
+/// decrement) before this attacker's move executes. Only a sleeper's status
+/// is skipped here, because no other primary status can clear mid-turn.
+#[must_use]
+fn poison_can_land_ignoring_status(move_type: Type, defender: &BattlePokemon) -> bool {
     let types = defender.types();
     let is_poison_or_steel_type = types.contains(&Type::Poison) || types.contains(&Type::Steel);
     let wonder_guard_blocks = defender.ability() == AbilityId::WONDER_GUARD
         && aggregate_type_effectiveness(move_type, types) != Effectiveness::SuperEffective;
-    defender.status1().is_healthy()
-        && !is_poison_or_steel_type
+    !is_poison_or_steel_type
         && !wonder_guard_blocks
         && defender.ability() != AbilityId::IMMUNITY
         && defender.ability() != AbilityId::SHIELD_DUST
@@ -209,6 +218,14 @@ pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
         && !types.contains(&Type::Steel)
         && attacker.ability() != AbilityId::IMMUNITY
 }
+
+/// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
+/// chance branch passes. That branch still spends its `Random() % 100` draw,
+/// and both this value and Serene Grace's doubled 200 clear the same
+/// comparison, so the doubling is unobservable
+/// (`battle_script_commands.c:2912-2930`). The draw-free branch at `:2917`
+/// is chosen by a prepared `MOVE_EFFECT_CERTAIN` flag, never by this chance.
+const GUARANTEED_EFFECT_CHANCE: u8 = 100;
 
 /// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
 /// Own Tempo and an already-active confusion volatile both leave the byte
@@ -260,6 +277,11 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
+/// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
+/// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
+/// both values stay in the same chance branch, spend its `Random() % 100`
+/// draw, and clear the same comparison (`:2923-2930`), so the doubling
+/// changes neither outcome nor RNG use.
 ///
 /// # Errors
 ///
@@ -280,16 +302,27 @@ pub fn ensure_admissible(
             .move_type
             .battle_type()
             .ok_or(BattleError::UnsupportedMoveType(move_id))?;
-        if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(move_type, defender) {
+        let status_can_clear = defender.status1().is_asleep();
+        let could_land = if status_can_clear {
+            poison_can_land_ignoring_status(move_type, defender)
+        } else {
+            poison_can_land(move_type, defender)
+        };
+        if attacker.ability() == AbilityId::SERENE_GRACE && could_land {
             return Err(BattleError::UnportedAbilityInteraction(
                 AbilityId::SERENE_GRACE,
             ));
         }
         return Ok(());
     }
-    if is_confuse_hit_effect(mv.effect)
+    let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
+        confuse_hit_could_ever_land(defender)
+    } else {
+        is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
+    };
+    if status_could_ever_land
+        && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
         && attacker.ability() == AbilityId::SERENE_GRACE
-        && confuse_hit_could_ever_land(defender)
     {
         return Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE,
@@ -319,6 +352,11 @@ pub enum SecondaryApplication {
     /// check: the duration draw itself is inside the guard, not before it
     /// (`battle_script_commands.c:2529-2544`).
     Confuse,
+    /// The caller must lower the defender's Speed stage by one, subject to
+    /// the same post-damage faint check. A defender already at the minimum
+    /// stage is left unchanged without a message
+    /// (`battle_script_commands.c:7056-7059,7094-7095`).
+    SpeedDown,
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -331,8 +369,8 @@ pub enum SecondaryApplication {
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect other than [`EFFECT_POISON_HIT`] or
-/// [`EFFECT_CONFUSE_HIT`], or Struggle's certain recoil effect, would apply,
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
+/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -375,6 +413,14 @@ pub fn spend_effect_chance_draw(
     if is_confuse_hit_effect(mv.effect) {
         return Ok(if confuse_hit_can_land(defender) {
             SecondaryApplication::Confuse
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_speed_down_hit_effect(mv.effect) {
+        return Ok(if speed_drop_can_land(defender) {
+            SecondaryApplication::SpeedDown
         } else {
             SecondaryApplication::None
         });

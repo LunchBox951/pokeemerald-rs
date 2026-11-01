@@ -3,7 +3,8 @@ use super::{
     MainMenuSceneError, MainMenuType, HEADER_TEXT_BG, HEADER_TEXT_FG,
 };
 use crate::textbox::{self, Coverage};
-use assets::pack::{AssetPack, ImageRef, PackError};
+use assets::pack::{AssetPack, PackError};
+use engine::text::Token;
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
 const DARKEN_WEIGHT: u8 = 7;
@@ -18,19 +19,9 @@ const OPAQUE_FOREGROUND_FONT_INDEX: u8 = 1;
 #[test]
 fn render_label_reveals_one_glyph_per_character_left_to_right() {
     let pixels = vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let image = ImageRef {
-        width: assets::fonts::SHEET_WIDTH,
-        height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: FONT_BIT_DEPTH,
-        pixels: &pixels,
-    };
-    let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
-        assets::fonts::FontId::Normal,
-        image,
-    ))
-    .unwrap();
+    let sources = super::blank_sources(&pixels);
 
-    let glyphs = render_label("AB", sheet);
+    let glyphs = render_label("AB", &sources);
     assert_eq!(glyphs.len(), 2);
     assert_eq!(glyphs[0].x, 0);
     assert!(
@@ -182,19 +173,9 @@ fn darken_outside_leaves_unpainted_backdrop_pixels_alone() {
 
 fn blit_header_glyph_of_index(index: u8) -> Framebuffer {
     let pixels = vec![index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let image = ImageRef {
-        width: assets::fonts::SHEET_WIDTH,
-        height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: FONT_BIT_DEPTH,
-        pixels: &pixels,
-    };
-    let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
-        assets::fonts::FontId::Normal,
-        image,
-    ))
-    .unwrap();
+    let sources = super::blank_sources(&pixels);
 
-    let glyphs = render_label("A", sheet);
+    let glyphs = render_label("A", &sources);
     assert_eq!(glyphs.len(), 1, "one character reveals exactly one glyph");
     let mut fb = Framebuffer::new();
     textbox::blit_glyphs_colored(
@@ -246,7 +227,7 @@ fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
 fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     use crate::pack_test_support::{image_entry, palette_entry_with_color};
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/1",
             FRAME_SIDE,
@@ -289,13 +270,22 @@ fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     ])
 }
 
+/// Owns a temporary pack path and removes it on drop. Cleanup is installed
+/// only once the path was exclusively claimed, so a failed claim never
+/// removes an entry this guard does not own.
 struct TempPackGuard {
     path: std::path::PathBuf,
 }
 
 impl TempPackGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path }
+    /// Exclusively claims `path` (never following a planted symlink or
+    /// truncating an occupant) and writes `bytes` through the claimed handle.
+    fn claim(path: std::path::PathBuf, bytes: &[u8]) -> Self {
+        use std::io::Write as _;
+        let mut file = crate::pack_test_support::claim_scratch_exclusive(&path);
+        let guard = Self { path };
+        file.write_all(bytes).unwrap();
+        guard
     }
 
     fn path(&self) -> &std::path::Path {
@@ -328,43 +318,120 @@ fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame, super::FRAME_ID)
 }
 
+fn synthetic_pack_path(font_index: u8, window_frame: u8) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}-{window_frame}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+fn claim_synthetic_pack(font_index: u8, window_frame: u8) -> TempPackGuard {
+    TempPackGuard::claim(
+        synthetic_pack_path(font_index, window_frame),
+        &synthetic_main_menu_pack_bytes(font_index),
+    )
+}
+
 fn load_synthetic_scene_inner(
     font_index: u8,
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> MainMenuScene {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}-{window_frame}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let temp_pack = TempPackGuard::new(path);
-    std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(font_index)).unwrap();
+    let temp_pack = claim_synthetic_pack(font_index, window_frame);
     let pack = AssetPack::load(temp_pack.path()).unwrap();
     MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame).unwrap()
 }
 
 #[test]
-fn temp_pack_cleanup_is_unwind_safe() {
+fn the_label_printer_carries_every_font_the_pack_provides() {
+    let temp_pack = claim_synthetic_pack(TRANSPARENT_FONT_INDEX, super::FRAME_ID);
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    let sources = super::load_sources(&pack).unwrap();
+    let printer = super::label_printer(vec![Token::End], &sources);
+    crate::pack_test_support::assert_carries_every_font(&printer);
+    assert_eq!(printer.selected_font(), assets::fonts::FontId::Normal);
+}
+
+#[test]
+fn a_pack_missing_an_alternate_font_sheet_is_refused() {
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-main-menu-unwind-test-{}-{:?}.pack",
+        "pokeemerald-rs-main-menu-missing-font-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
+    let bytes = crate::pack_test_support::pack_bytes(vec![crate::pack_test_support::image_entry(
+        "font/normal/glyphs",
+        assets::fonts::SHEET_WIDTH,
+        assets::fonts::SHEET_HEIGHT,
+        FONT_BIT_DEPTH,
+        0,
+    )]);
+    let temp_pack = TempPackGuard::claim(path, &bytes);
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    let err = super::load_sources(&pack).unwrap_err();
+    assert!(
+        matches!(&err, MainMenuSceneError::Pack(PackError::UnknownAsset(id)) if id == "font/small/glyphs"),
+        "unexpected error: {err}"
+    );
+}
 
-    let result = std::panic::catch_unwind(|| {
-        let temp_pack = TempPackGuard::new(path.clone());
-        std::fs::write(
-            temp_pack.path(),
-            synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
-        )
-        .unwrap();
-        assert!(temp_pack.path().exists());
+fn unwind_pack_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-main-menu-unwind-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+fn claim_unwind_pack() -> TempPackGuard {
+    TempPackGuard::claim(
+        unwind_pack_path(),
+        &synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
+    )
+}
+
+#[test]
+fn temp_pack_cleanup_is_unwind_safe() {
+    const DELIBERATE: &str = "deliberate panic to exercise temporary pack cleanup";
+
+    // Setup runs outside the unwind catch so a fixture failure fails the test
+    // instead of being mistaken for the deliberate panic.
+    let temp_pack = claim_unwind_pack();
+    let path = temp_pack.path().to_path_buf();
+    assert!(path.exists(), "the scratch pack must exist while in scope");
+
+    let result = std::panic::catch_unwind(move || {
+        let _temp_pack = temp_pack;
         panic!("deliberate panic to exercise temporary pack cleanup");
     });
 
-    assert!(result.is_err(), "the deliberate panic must be observed");
+    let payload = result.expect_err("the deliberate panic must be observed");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some(DELIBERATE),
+        "the unwind must come from the deliberate panic"
+    );
     assert!(!path.exists(), "temporary pack must be removed on unwind");
+}
+
+/// A symlink or an occupied file planted at a main-menu scratch pack's
+/// predictable path must be refused and left intact, never written through,
+/// truncated, or unlinked.
+#[test]
+fn the_main_menu_scratch_packs_never_write_through_a_planted_entry() {
+    let font_index = TRANSPARENT_FONT_INDEX;
+    let expected = synthetic_main_menu_pack_bytes(font_index);
+    crate::pack_test_support::assert_scratch_claim_is_exclusive(
+        &synthetic_pack_path(font_index, super::FRAME_ID),
+        &expected,
+        || claim_synthetic_pack(font_index, super::FRAME_ID),
+    );
+    crate::pack_test_support::assert_scratch_claim_is_exclusive(
+        &unwind_pack_path(),
+        &expected,
+        claim_unwind_pack,
+    );
 }
 
 #[test]
@@ -547,4 +614,60 @@ fn checkout_pack_composes_non_blank_deterministic_frames_for_both_selection_stat
         MainMenuItem::NewGame,
         "DPAD_UP on the first item must not wrap"
     );
+}
+
+#[test]
+fn compose_with_palette_fades_source_colors_before_the_highlight_darkening() {
+    use rendering::{NormalPaletteFade, PaletteFadeTarget};
+
+    // Independent 5-bit black fade of white at coefficient 8: 31 + (-31 * 8 >> 4)
+    // = 15, expanded to 123.
+    let faded_white = rgb(123, 123, 123);
+
+    let scene = load_synthetic_scene();
+    let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::Black);
+    while fade.bg_blend().coefficient() < 8 {
+        fade.update();
+    }
+    let fb = scene.compose_with_palette(fade.palette_stage());
+
+    assert_eq!(fb.pixel(18, 10), Some(faded_white), "selected header");
+    let unselected = fb.pixel(18, 42);
+    assert_eq!(
+        unselected,
+        Some(rendering::darken(faded_white, DARKEN_WEIGHT)),
+        "the fade runs before the darkening"
+    );
+    let darkened_then_faded = {
+        let d = rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT);
+        let fade5 = |c: u8| {
+            let c5 = i32::from(c >> 3);
+            let f = c5 + ((-c5 * 8) >> 4);
+            u8::try_from((f << 3) | (f >> 2)).unwrap()
+        };
+        rgb(fade5(d.r), fade5(d.g), fade5(d.b))
+    };
+    assert_ne!(unselected, Some(darkened_then_faded));
+
+    let backdrop = Bgr555::from_channels(4, 4, 16).to_rgb888();
+    let faded_backdrop = |c: u8| {
+        let c5 = i32::from(c >> 3);
+        let f = c5 + ((-c5 * 8) >> 4);
+        u8::try_from((f << 3) | (f >> 2)).unwrap()
+    };
+    assert_eq!(
+        fb.pixel(5, 130),
+        Some(rgb(
+            faded_backdrop(backdrop.r),
+            faded_backdrop(backdrop.g),
+            faded_backdrop(backdrop.b)
+        ))
+    );
+
+    let unchanged = scene.compose_with_palette(rendering::PaletteStage::default());
+    assert_eq!(unchanged.pixels(), scene.compose().pixels());
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
+    Rgb888 { r, g, b }
 }

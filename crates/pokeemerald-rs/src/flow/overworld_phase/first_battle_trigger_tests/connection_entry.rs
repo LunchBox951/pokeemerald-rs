@@ -13,7 +13,9 @@ use platform::{ButtonState, Buttons};
 fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         littleroot,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -22,7 +24,7 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
 
     // Two steps from the crossing along the walkable `x = 10` column (see `connections_tests`).
     let player = PlayerState::new((10, 1), 3, Direction::North);
-    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
+    let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
     assert_eq!(
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
         Ok(0),
@@ -62,7 +64,9 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
 fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         littleroot,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -70,9 +74,9 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
     .expect("run `cargo xtask extract` first");
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
-    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
-    // Stands in for the un-ported Birch-bag handout, as `load_default` assigns it.
-    phase.party_lead = Some(new_game::provisional_starter());
+    let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
+    // Stands in for the un-ported Birch-bag handout, as `OverworldPhase::load` assigns it.
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
 
     for _ in 0..3 {
         walk_one_tile(&mut phase, Buttons::UP);
@@ -104,8 +108,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
         );
     }
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the battle writes the lead mon back once it ends");
     assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
     assert!(

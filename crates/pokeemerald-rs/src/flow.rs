@@ -22,7 +22,13 @@
 //! `BeginNormalPaletteFade`/`UpdatePaletteFade` gate
 //! (`pokeemerald/src/title_screen.c:779-787,824-828`;
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
-//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
+//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves. The
+//! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
+//! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
+//! (`main_menu.c:583-608`). A fresh B on the main menu (checked after A, ahead
+//! of the D-pad) takes the same wait toward white and, once done, installs
+//! `CB2_InitTitleScreen` (`main_menu.c:895-902,1109-1120`), which
+//! [`AppScene::TitleInit`] runs on both entries to the title.
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -49,6 +55,7 @@
 //!   whenever a menu is open. There is deliberately **no** save on exit:
 //!   upstream writes nothing when the lid closes.
 
+use engine::save::ButtonMode;
 use engine::settings::GameSettings;
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
@@ -63,11 +70,15 @@ use fade_wait::{
     advance_title_fade_wait, MainMenuFadeIn, MainMenuFadeWait, TitleFadeWait,
 };
 use options::{advance_options, OptionsState};
+use title_init::advance_title_init;
+pub(crate) use title_init::TitleInit;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+#[cfg(test)]
+mod boot_setup_frames_tests;
 /// I-3 (issue #1329) front-end palette fade-wait states and the four
 /// [`advance_scene`] arms that drive them -- this module's own docs.
 mod fade_wait;
@@ -76,6 +87,9 @@ pub(crate) mod first_battle;
 /// and [`npc_trainer_battle`] -- see that module's docs for the RNG-state
 /// contract driving it.
 mod first_usable_move;
+/// The player-side lead screen every battle start shares -- see that module's
+/// docs.
+mod lead_screen;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for
 /// the stand-in answer it gives and exactly where the seam ends.
@@ -89,6 +103,8 @@ mod move_learn;
 pub(crate) mod npc_trainer_battle;
 mod options;
 #[cfg(test)]
+mod options_return_tests;
+#[cfg(test)]
 mod options_tests;
 pub(crate) mod overworld_phase;
 /// The scripted Route 103 rival battle's own choice of trainer:
@@ -101,6 +117,11 @@ pub(crate) mod overworld_phase;
 /// place both this module's own trigger and [`overworld_phase`]'s
 /// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
+/// `CB2_InitTitleScreen`'s setup frames and white fade-in on both entries to
+/// the title (I-2) -- this module's own docs.
+mod title_init;
+#[cfg(test)]
+mod title_init_tests;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
@@ -162,6 +183,12 @@ mod save_continue_window_frame_tests;
 #[cfg(test)]
 mod start_menu_tests;
 
+/// The main menu's B path back to the title (I-2): priority against A and
+/// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own
+/// module for the same reason as its siblings `(oop-boundaries)`.
+#[cfg(test)]
+mod main_menu_back_tests;
+
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
 /// scene, the tick most recently composed, and whether that frame has been
@@ -173,6 +200,22 @@ pub(crate) struct AnimatedTitle {
     pub(crate) scene: TitleScene,
     pub(crate) tick: u32,
     pub(crate) presented: bool,
+    /// The live session save a main-menu B carried back to the title, which
+    /// the next `Title` -> `MainMenu` reuses instead of re-reading the disk:
+    /// upstream's `gSaveBlock2Ptr` and `gSaveFileStatus` outlive the menu, so
+    /// settings committed in OPTION survive the round trip
+    /// (`pokeemerald/src/main_menu.c:1109-1120`). `None` on the boot title.
+    pub(crate) retained_save: Option<Box<SavedGame>>,
+}
+
+impl AnimatedTitle {
+    /// The retained session save's `optionsButtonMode`, or the default
+    /// `Normal` on a boot title with none ([`AppScene::button_mode`]).
+    fn button_mode(&self) -> ButtonMode {
+        self.retained_save
+            .as_ref()
+            .map_or(ButtonMode::Normal, |saved| saved.block2.options_button_mode)
+    }
 }
 
 /// [`crate::app::App`]'s real (windowed) game-flow state (module docs):
@@ -183,6 +226,11 @@ pub(crate) struct AnimatedTitle {
 /// itself stays cheap to move around
 /// (`clippy::large_enum_variant`).
 pub(crate) enum AppScene {
+    /// `CB2_InitTitleScreen` running its setup frames and white fade-in over
+    /// the loaded title, on a fresh boot and after the main menu's B (I-2).
+    /// Input is ignored until it installs `MainCB2`, which becomes
+    /// [`AppScene::Title`].
+    TitleInit(Box<TitleInit>),
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
@@ -191,17 +239,19 @@ pub(crate) enum AppScene {
     /// for the front-end palette fade" section). [`AnimatedTitle::tick`]
     /// stays fixed here -- the retained title stops animating, matching
     /// upstream parking `CB2_GoToMainMenu` on the fade rather than the
-    /// title task.
+    /// title task. The cloud scroll is held one tick behind it: the
+    /// confirming frame skips the background counter update but not
+    /// `AnimateSprites` (`title_screen.c:675-681, :782-787, :805-814`).
     TitleFadeWait(Box<TitleFadeWait>),
     /// The main menu (I-3, issue #216; I-6, issue #214): Up/Down move the
     /// selection, A confirms it (module docs on [`advance_scene`]'s
     /// `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuState>),
-    /// The highlight-only frame after a successful Up/Down (I-3, issue
-    /// #2223): upstream's navigation task only schedules a callback that
-    /// redraws the new highlight and reinstalls input without polling
-    /// (`pokeemerald/src/main_menu.c:878-881`, `:930-933`;
-    /// `pokeemerald/src/task.c:118-120`), so this step presents the new
+    /// The highlight-only frame after a successful Up/Down (I-3) or after the returning menu's windows are drawn (I-6):
+    /// upstream's navigation and display tasks only schedule a callback that
+    /// redraws the highlight and reinstalls input without polling
+    /// (`pokeemerald/src/main_menu.c:878-888`, `:930-933`;
+    /// `pokeemerald/src/task.c:118-120`), so this step presents the
     /// highlight and ignores every button before [`AppScene::MainMenu`]
     /// resumes.
     MainMenuHighlight(Box<MainMenuState>),
@@ -214,12 +264,14 @@ pub(crate) enum AppScene {
     /// The Options screen, opened from the main menu's `OPTION` item (I-6):
     /// it retains the menu it returns to.
     Options(Box<OptionsState>),
-    /// The main menu fading in from black after the Options screen returns
-    /// (`pokeemerald/src/main_menu.c:583-586`).
+    /// The main menu fading in -- from black after the Options screen
+    /// returns, from white after the title's fade-out -- then waiting out
+    /// upstream's save-check, battery-check and window-drawing tasks with
+    /// input ignored (`pokeemerald/src/main_menu.c:583-608,619-748`).
     MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
-    /// The intro finished, but [`OverworldPhase::load_default`] failed once
+    /// The intro finished, but [`OverworldPhase::load`] failed once
     /// already (module docs' "log-or-ignore is fine" policy, and
     /// [`advance_scene`]'s `Intro`/`OverworldLoadFailed` arms) -- kept
     /// distinct from [`AppScene::Intro`] so a still-failing pack load is
@@ -229,6 +281,58 @@ pub(crate) enum AppScene {
     /// The overworld loop: the player, movable, in
     /// [`crate::new_game::SPAWN_MAP_ID`].
     Overworld(Box<OverworldPhase>),
+}
+
+impl AppScene {
+    /// Whether this scene is the main menu's white fade back to the title
+    /// (B, `pokeemerald/src/main_menu.c:895-902`).
+    #[cfg(test)]
+    pub(crate) const fn returns_to_title(&self) -> bool {
+        matches!(self, Self::MainMenuFadeWait(wait) if wait.returns_to_title())
+    }
+
+    /// Whether this scene's next frame is `CB2_InitTitleScreen`'s state 4,
+    /// which starts `MUS_TITLE` (`pokeemerald/src/title_screen.c:662`). The
+    /// app starts the title music on the frame that follows a `true` here.
+    pub(crate) const fn starts_title_music(&self) -> bool {
+        matches!(self, Self::TitleInit(init) if init.starts_title_music())
+    }
+
+    /// Whether the title music, once started, should keep playing: the
+    /// settled title, and the initializer from the frame after state 4.
+    pub(crate) const fn holds_title_music(&self) -> bool {
+        match self {
+            Self::Title(_) => true,
+            Self::TitleInit(init) => init.title_music_started(),
+            _ => false,
+        }
+    }
+
+    /// The `optionsButtonMode` this scene's save carries
+    /// (`pokeemerald/src/main.c:279-288`'s source). Known gap: upstream loads
+    /// the save during the copyright screen, so L=A already applies on the
+    /// title; this port loads it only at the `Title` -> `MainMenu`
+    /// transition, so a boot title reads the default `Normal`; a title the main
+    /// menu's B returned to reads the live save it carries
+    /// ([`AnimatedTitle::retained_save`]). The intro
+    /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
+    fn button_mode(&self) -> ButtonMode {
+        match self {
+            Self::TitleInit(init) => init.button_mode(),
+            Self::Title(title) => title.button_mode(),
+            Self::TitleFadeWait(wait) => wait.button_mode(),
+            Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
+                state.saved.block2.options_button_mode
+            }
+            Self::MainMenuFadeWait(wait) => wait.state.saved.block2.options_button_mode,
+            Self::Options(state) => state.button_mode(),
+            Self::MainMenuFadeIn(fade) => fade.button_mode(),
+            Self::Intro(intro) | Self::OverworldLoadFailed(intro) => {
+                intro.new_game_options().button_mode
+            }
+            Self::Overworld(phase) => phase.button_mode(),
+        }
+    }
 }
 
 /// [`AppScene::MainMenu`]'s state: the rendered menu, plus the save the boot
@@ -350,7 +454,7 @@ fn title_advance_pressed(buttons: ButtonState) -> bool {
 }
 
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
-/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* A or B
+/// [`OverworldPhase::load`] this frame -- only on a *fresh* A or B
 /// edge, the same two dialogue-advance buttons [`AppScene::Intro`] itself
 /// reads (module docs on the finding this guards against: the previous
 /// behaviour re-attempted, and re-logged, the load every single frame while
@@ -379,7 +483,7 @@ fn intro_printer_input(buttons: ButtonState) -> PrinterInput {
 }
 
 /// Log the one-time proof that `phase`'s fresh save state
-/// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
+/// ([`OverworldPhase::load`]'s own doc comment, finding 1 of this
 /// module's review pass) actually reached the `Intro` -> `Overworld`
 /// handoff -- the same "log-or-ignore is fine" pipeline-liveness style
 /// [`crate::app::describe_newly_pressed`] already uses for input.
@@ -446,21 +550,33 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 fn title_to_main_menu(
     pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
+    retained_save: &mut Option<Box<SavedGame>>,
 ) -> Option<(AppScene, Box<Frame>)> {
-    let mut saved = save_slot.load();
-    apply_boot_defaults(&mut saved);
+    let was_retained = retained_save.is_some();
+    let saved = if let Some(saved) = retained_save.take() {
+        *saved
+    } else {
+        let mut saved = save_slot.load();
+        apply_boot_defaults(&mut saved);
+        saved
+    };
     match main_menu::load_with_window_frame(
         pack_source,
         menu_type_for(&saved),
         window_frame_for(&saved),
     ) {
         Ok(menu) => {
-            let state = MainMenuState { scene: menu, saved };
-            let frame = state.scene.compose_frame();
-            Some((AppScene::MainMenu(Box::new(state)), frame))
+            let state = Box::new(MainMenuState { scene: menu, saved });
+            let (fade, frame) = MainMenuFadeIn::from_title(state);
+            Some((AppScene::MainMenuFadeIn(Box::new(fade)), frame))
         }
         Err(err) => {
             eprintln!("{}", main_menu_load_failure_message(&err));
+            // `load_with_window_frame` took only a borrow, so the retained
+            // save is still intact to hand back to the recovered title.
+            if was_retained {
+                *retained_save = Some(Box::new(saved));
+            }
             None
         }
     }
@@ -509,7 +625,16 @@ pub(crate) fn advance_scene(
     save_slot: &mut SaveSlot,
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
+    // `ReadKeys` (`pokeemerald/src/main.c:279-288`) applies the saved L=A
+    // mode before any scene reads input, so the projection lives here, ahead
+    // of dispatch, using the mode the active scene's live save carries.
+    let buttons = if scene.button_mode() == ButtonMode::LEqualsA {
+        buttons.with_l_equals_a()
+    } else {
+        buttons
+    };
     match scene {
+        AppScene::TitleInit(init) => advance_title_init(init),
         AppScene::Title(title) => advance_title(title, buttons),
         AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),

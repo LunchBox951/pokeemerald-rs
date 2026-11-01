@@ -9,6 +9,7 @@ use assets::{
 };
 
 use super::direction::Direction;
+use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 
 /// Number of metatiles whose attributes belong to the primary tileset.
 pub const NUM_METATILES_IN_PRIMARY: u16 = 512;
@@ -67,6 +68,7 @@ pub struct MapRuntime<'a> {
     grid: LayoutGrid<'a>,
     primary_attrs: MetatileAttributeTable<'a>,
     secondary_attrs: MetatileAttributeTable<'a>,
+    object_events: Option<&'a ObjectEventCollection>,
 }
 
 impl<'a> MapRuntime<'a> {
@@ -87,7 +89,16 @@ impl<'a> MapRuntime<'a> {
             grid,
             primary_attrs,
             secondary_attrs,
+            object_events: None,
         }
+    }
+
+    /// Binds the map's live object events, so [`Self::object_events_at`]
+    /// queries live position and elevation instead of authored templates.
+    #[must_use]
+    pub const fn with_object_events(mut self, events: &'a ObjectEventCollection) -> Self {
+        self.object_events = Some(events);
+        self
     }
 
     /// Returns the bound map id.
@@ -153,25 +164,38 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns static object events at `(x, y, elevation)` in declaration
-    /// order.
+    /// Returns object events at `(x, y, elevation)` in declaration order.
     ///
-    /// Either the event or query elevation may be
-    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not filter
-    /// hidden templates; [`super::object_event::visible_object_event_at`]
+    /// With a bound collection ([`Self::with_object_events`]) the position
+    /// and elevation are each object's live ones and every result is its
+    /// authored template, whose own coordinates are not current; a bound
+    /// collection never falls back to authored coordinates. Unbound, the
+    /// authored coordinates are scanned. Either the event or query elevation
+    /// may be [`super::collision::ELEVATION_TRANSITION`]. This query does not
+    /// filter hidden templates; [`super::object_event::visible_object_event_at`]
     /// composes visibility with the ordered scan.
     pub fn object_events_at(
         &self,
         x: i32,
         y: i32,
         elevation: u8,
-    ) -> impl Iterator<Item = &'static ObjectEvent> {
-        let objects = self.events.object_events;
-        objects.iter().filter(move |o| {
+    ) -> impl Iterator<Item = &'static ObjectEvent> + 'a {
+        let live = self.object_events.map(|events| {
+            events
+                .object_events_at(x, y, elevation)
+                .map(LiveObjectEvent::template)
+        });
+        let authored = if self.object_events.is_none() {
+            self.events.object_events
+        } else {
+            &[]
+        };
+        let authored = authored.iter().filter(move |o| {
             i32::from(o.x) == x
                 && i32::from(o.y) == y
                 && super::collision::elevations_compatible(o.elevation, elevation)
-        })
+        });
+        live.into_iter().flatten().chain(authored)
     }
 
     /// Returns the first warp at `(x, y, elevation)`.
@@ -269,7 +293,7 @@ fn landing_position(
 ) -> Option<(i32, i32)> {
     match direction {
         Direction::South | Direction::North => {
-            let target_x = x - connection.offset;
+            let target_x = x.checked_sub(connection.offset)?;
             if target_x < 0 || target_x >= i32::from(target_width) {
                 return None;
             }
@@ -281,7 +305,7 @@ fn landing_position(
             Some((target_x, target_y))
         }
         Direction::West | Direction::East => {
-            let target_y = y - connection.offset;
+            let target_y = y.checked_sub(connection.offset)?;
             if target_y < 0 || target_y >= i32::from(target_height) {
                 return None;
             }
@@ -1001,6 +1025,68 @@ mod tests {
             .is_some());
         assert!(runtime
             .resolve_connection(Direction::South, out_of_bounds_target_x, 5, &dims)
+            .is_none());
+    }
+
+    fn runtime_with_connection(direction: assets::Direction, offset: i32) -> MapRuntime<'static> {
+        let connections: &'static [MapConnection] = Box::leak(Box::new([MapConnection {
+            direction,
+            offset,
+            target: MapId("MAP_NEIGHBOR"),
+        }]));
+        let hdr = header("MAP_HOME", connections);
+        let events = empty_events("MAP_HOME");
+        let bytes: &'static [u8] = Box::leak(grid_bytes(6, 6, cell(0, 0, 0)).into_boxed_slice());
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_HOME"),
+            name: "MapHome",
+            width: 6,
+            height: 6,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(bytes).unwrap();
+        MapRuntime::new(
+            MapId("MAP_HOME"),
+            Box::leak(Box::new(hdr)),
+            Box::leak(Box::new(events)),
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    #[test]
+    fn resolve_connection_refuses_offset_subtraction_overflowing_upward() {
+        let dims = |_: MapId| Some((10, 10));
+        let south = runtime_with_connection(assets::Direction::South, -1);
+        assert!(south
+            .resolve_connection(Direction::South, i32::MAX, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, -1);
+        assert!(east
+            .resolve_connection(Direction::East, 6, i32::MAX, &dims)
+            .is_none());
+    }
+
+    #[test]
+    fn resolve_connection_refuses_offset_subtraction_overflowing_downward() {
+        let dims = |_: MapId| Some((10, 10));
+        let south = runtime_with_connection(assets::Direction::South, i32::MIN);
+        assert!(south
+            .resolve_connection(Direction::South, 2, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, i32::MIN);
+        assert!(east
+            .resolve_connection(Direction::East, 6, 2, &dims)
+            .is_none());
+        let south = runtime_with_connection(assets::Direction::South, i32::MAX);
+        assert!(south
+            .resolve_connection(Direction::South, i32::MIN, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, i32::MAX);
+        assert!(east
+            .resolve_connection(Direction::East, 6, i32::MIN, &dims)
             .is_none());
     }
 

@@ -382,8 +382,20 @@ impl SaveFile {
     /// between this check and the open could otherwise slip through.
     #[cfg(not(windows))]
     fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
+        self.open_for_read_with(|| {})
+    }
+
+    /// [`Self::open_for_read`] with a hook run between the up-front
+    /// inspection and the open, so a test can swap the entry in exactly that
+    /// window without racing a thread against it.
+    #[cfg(not(windows))]
+    fn open_for_read_with(
+        &self,
+        after_inspection: impl FnOnce(),
+    ) -> Result<Option<std::fs::File>, SaveFileError> {
         refuse_an_unusable_entry(&self.path)
             .map_err(|unusable| self.unusable_entry_error(unusable))?;
+        after_inspection();
 
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
@@ -464,8 +476,15 @@ impl SaveFile {
     /// is best-effort synchronised after the rename; see the private
     /// `SaveFile::ensure_parent_directory`.
     ///
+    /// A save path that is the directory's lock entry is refused, guard or
+    /// not, before anything is staged: the rename would replace the inode
+    /// every locker holds.
+    ///
     /// # Errors
     ///
+    /// [`SaveFileError::LockPathIsSave`] if this save path is the
+    /// directory's lock entry or resolves to the same file;
+    /// [`SaveFileError::Lock`] if either could not be inspected;
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place, or if something replaced
@@ -500,6 +519,7 @@ impl SaveFile {
     ) -> Result<(), SaveFileError> {
         let held = self.held_directory.current();
         self.refuse_a_retargeted_parent(held.as_deref())?;
+        self.refuse_the_lock_entry()?;
         self.ensure_parent_directory()?;
 
         let write_error = |source: std::io::Error| SaveFileError::Write {

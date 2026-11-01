@@ -1,11 +1,11 @@
 //! Main-menu scene composition and selection.
 
-use assets::fonts::{FontGlyphSheet, FontId};
+use assets::fonts::{FontGlyphSheet, FontId, GlyphSources};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::Token;
-use rendering::{Bgr555, Framebuffer, Rgb888};
+use rendering::{Bgr555, Framebuffer, PaletteStage, Rgb888};
 
 use crate::textbox::{self, FrameAssets};
 
@@ -14,6 +14,11 @@ const MENU_WIDTH: i32 = 26;
 const WINDOW_FRAME_THICKNESS_TILES: i32 = 1;
 const HIGHLIGHT_SHADOW_PADDING_PX: i32 = 1;
 const UNSELECTED_DARKEN_AMOUNT: u8 = 7;
+/// An empty highlight rectangle: nothing is spared from the darkening.
+const NO_HIGHLIGHT: (i32, i32, i32, i32) = (0, 0, 0, 0);
+/// `WIN0` over the whole `DISPLAY_WIDTH` x `DISPLAY_HEIGHT` screen
+/// (`pokeemerald/src/main_menu.c:898-900`): nothing is darkened.
+const FULL_SCREEN_WINDOW: (i32, i32, i32, i32) = (0, 0, 240, 160);
 const LABEL_TOP_OFFSET_PX: i32 = 1;
 
 const TILE_SIZE_PX: i32 = 8;
@@ -120,17 +125,16 @@ impl MainMenuScene {
             .copied()
             .unwrap_or(Rgb888::BLACK);
 
-        let font_image = pack.font(FontId::Normal)?;
-        let sheet = FontGlyphSheet::new(font_image)?;
+        let sources = load_sources(pack)?;
 
-        Ok(Self::from_assets(frame, background, menu_type, sheet))
+        Ok(Self::from_assets(frame, background, menu_type, &sources))
     }
 
     fn from_assets(
         frame: FrameAssets,
         background: Rgb888,
         menu_type: MainMenuType,
-        sheet: FontGlyphSheet<'_>,
+        sources: &GlyphSources<FontGlyphSheet<'_>>,
     ) -> Self {
         let rendered_items = menu_type
             .items()
@@ -140,7 +144,7 @@ impl MainMenuScene {
                 window: menu_type
                     .window(item)
                     .expect("every item in a menu type's own list has a window in that list"),
-                glyphs: render_label(item.label(), sheet),
+                glyphs: render_label(item.label(), sources),
             })
             .collect();
 
@@ -197,19 +201,67 @@ impl MainMenuScene {
     /// Composes the current menu frame.
     #[must_use]
     pub fn compose(&self) -> Framebuffer {
+        self.compose_with_palette(PaletteStage::default())
+    }
+
+    /// Composes the current menu with `palette`'s BG transform applied to
+    /// every BG-palette-derived colour (backdrop, window fill, frame and
+    /// text) before the highlight darkening. The menu draws no sprites, so
+    /// the OBJ transform has no effect.
+    #[must_use]
+    pub(crate) fn compose_with_palette(&self, palette: PaletteStage<'_>) -> Framebuffer {
+        let highlight = highlight_rect(self.rendered_items[self.selected_index].window);
+        self.compose_darkened_outside(palette, highlight)
+    }
+
+    /// [`Self::compose_with_palette`] with `WIN0` opened over the whole screen,
+    /// as the B press does (`SetGpuReg(REG_OFFSET_WIN0H/V, ...)`,
+    /// `pokeemerald/src/main_menu.c:898-900`): the BG0 darkening is a colour
+    /// effect disabled inside `WIN0` (`:747-753`), so every window shows
+    /// undarkened while the white fade runs.
+    #[must_use]
+    pub(crate) fn compose_with_open_window(&self, palette: PaletteStage<'_>) -> Framebuffer {
+        self.compose_darkened_outside(palette, FULL_SCREEN_WINDOW)
+    }
+
+    /// Composes the windows with every one darkened: `Task_DisplayMainMenu`
+    /// draws them before `Task_HighlightSelectedMainMenuItem` opens the
+    /// selection's highlight a frame later
+    /// (`pokeemerald/src/main_menu.c:747-753`, `:884-888`, `:1170-1201`).
+    #[must_use]
+    pub(crate) fn compose_before_highlight(&self) -> Framebuffer {
+        self.compose_darkened_outside(PaletteStage::default(), NO_HIGHLIGHT)
+    }
+
+    fn compose_darkened_outside(
+        &self,
+        palette: PaletteStage<'_>,
+        highlight: (i32, i32, i32, i32),
+    ) -> Framebuffer {
+        let map = |color: Rgb888| palette.bg.map_or(color, |blend| blend.transform(color));
+        let frame_palette: Vec<Rgb888> = self.frame.palette.iter().map(|&c| map(c)).collect();
+        let glyph_colors = HEADER_GLYPH_COLORS.map(|color| color.map(map));
+        let header_background = map(HEADER_TEXT_BG);
+
         let mut fb = Framebuffer::new();
-        fb.fill(self.background);
+        fb.fill(map(self.background));
 
         let mut painted_bg0 = textbox::Coverage::recording();
         for item in &self.rendered_items {
-            draw_item(&mut fb, &mut painted_bg0, &self.frame, item);
+            draw_item(
+                &mut fb,
+                &mut painted_bg0,
+                &self.frame,
+                item,
+                &MenuColors {
+                    frame_palette: &frame_palette,
+                    header_background,
+                    glyphs: &glyph_colors,
+                },
+            );
         }
 
-        darken_outside(
-            &mut fb,
-            &painted_bg0,
-            highlight_rect(self.rendered_items[self.selected_index].window),
-        );
+        darken_outside(&mut fb, &painted_bg0, highlight);
 
         fb
     }
@@ -231,11 +283,19 @@ impl MainMenuScene {
     }
 }
 
+/// The palette-derived source colours one menu composition draws with.
+struct MenuColors<'a> {
+    frame_palette: &'a [Rgb888],
+    header_background: Rgb888,
+    glyphs: &'a [Option<Rgb888>; 4],
+}
+
 fn draw_item(
     fb: &mut Framebuffer,
     painted_bg0: &mut textbox::Coverage,
     frame: &FrameAssets,
     item: &RenderedMenuItem,
+    colors: &MenuColors<'_>,
 ) {
     let ItemWindow { top, height } = item.window;
     let content_origin = (MENU_LEFT * TILE_SIZE_PX, top * TILE_SIZE_PX);
@@ -247,11 +307,11 @@ fn draw_item(
         content_origin,
         content_size.0,
         content_size.1,
-        HEADER_TEXT_BG,
+        colors.header_background,
     );
 
     let tiles = msgwin::border_tiles(MENU_LEFT, top, MENU_WIDTH, height);
-    textbox::blit_frame_tiles_tracked(fb, painted_bg0, &tiles, frame.image(), &frame.palette);
+    textbox::blit_frame_tiles_tracked(fb, painted_bg0, &tiles, frame.image(), colors.frame_palette);
 
     let label_origin = (content_origin.0, content_origin.1 + LABEL_TOP_OFFSET_PX);
     let label_bounds = (content_size.0, content_size.1 - LABEL_TOP_OFFSET_PX);
@@ -261,7 +321,7 @@ fn draw_item(
         &item.glyphs,
         label_origin,
         label_bounds,
-        &HEADER_GLYPH_COLORS,
+        colors.glyphs,
     );
 }
 
@@ -342,12 +402,34 @@ pub(crate) fn load_with_window_frame(
     MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame)
 }
 
-fn render_label(label: &str, sheet: FontGlyphSheet<'_>) -> Vec<RevealedGlyph> {
+/// Every modelled Latin font's sheet, which a main-menu label's printer
+/// carries so a later `FONT` control can select one.
+fn load_sources(pack: &AssetPack) -> Result<GlyphSources<FontGlyphSheet<'_>>, MainMenuSceneError> {
+    GlyphSources::try_from_fn(|font| {
+        Ok::<_, MainMenuSceneError>(FontGlyphSheet::new(pack.font(font)?)?)
+    })
+}
+
+/// The instant Normal-font printer that renders `tokens`.
+fn label_printer<'a>(
+    tokens: Vec<Token>,
+    sources: &GlyphSources<FontGlyphSheet<'a>>,
+) -> Printer<FontGlyphSheet<'a>> {
+    Printer::with_sources(
+        tokens,
+        sources.clone(),
+        FontId::Normal,
+        TextSpeed::Instant,
+        (0, 0),
+    )
+}
+
+fn render_label(label: &str, sources: &GlyphSources<FontGlyphSheet<'_>>) -> Vec<RevealedGlyph> {
     let mut tokens: Vec<Token> = label.chars().map(Token::Char).collect();
     tokens.push(Token::End);
     let tick_limit = tokens.len();
 
-    let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
+    let mut printer = label_printer(tokens, sources);
     let mut glyphs = Vec::with_capacity(label.chars().count());
     for _ in 0..tick_limit {
         match printer.tick(PrinterInput::none()) {
@@ -359,19 +441,28 @@ fn render_label(label: &str, sheet: FontGlyphSheet<'_>) -> Vec<RevealedGlyph> {
     glyphs
 }
 
+/// A blank sheet for every font, each identified as its own [`FontId`].
 #[cfg(test)]
-pub(crate) fn synthetic_scene(menu_type: MainMenuType) -> MainMenuScene {
+pub(crate) fn blank_sources(pixels: &[u8]) -> GlyphSources<FontGlyphSheet<'_>> {
     use assets::fonts::FontImageRef;
     use assets::pack::ImageRef;
 
+    GlyphSources::try_from_fn(|font| {
+        let image = ImageRef {
+            width: assets::fonts::SHEET_WIDTH,
+            height: assets::fonts::SHEET_HEIGHT,
+            bit_depth: 2,
+            pixels,
+        };
+        FontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+    })
+    .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_scene(menu_type: MainMenuType) -> MainMenuScene {
     let pixels = vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let image = ImageRef {
-        width: assets::fonts::SHEET_WIDTH,
-        height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: 2,
-        pixels: &pixels,
-    };
-    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap();
+    let sources = blank_sources(&pixels);
 
     let frame = FrameAssets {
         pixels: vec![0u8; 24 * 24],
@@ -380,7 +471,7 @@ pub(crate) fn synthetic_scene(menu_type: MainMenuType) -> MainMenuScene {
         palette: vec![Rgb888::BLACK; 16],
     };
 
-    MainMenuScene::from_assets(frame, Rgb888::BLACK, menu_type, sheet)
+    MainMenuScene::from_assets(frame, Rgb888::BLACK, menu_type, &sources)
 }
 
 #[cfg(test)]

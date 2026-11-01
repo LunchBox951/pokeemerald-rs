@@ -374,6 +374,66 @@ pub struct BattleMessageRoots {
     pub specials: &'static [SpecialMessageRoot],
 }
 
+/// One field message and the upstream symbol it is.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldMessageRoot {
+    /// The upstream symbol, which must be the matching entry of
+    /// `assets::pack::FieldMessage::ALL`. Recorded so a profile whose roots
+    /// drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the message's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+}
+
+/// One battle-animation program: a label and where its commands start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimProgramRoot {
+    /// The upstream label (`Move_POUND`), which names the catalog program.
+    pub symbol: &'static str,
+    /// Where the program's first command is. Labels with no commands between
+    /// them share an address.
+    pub addr: GbaPtr,
+    /// The program's bytes, from its first command through its first
+    /// terminator (`end`, `return`, `goto`, or `choosetwoturnanim`).
+    pub len: u16,
+}
+
+/// A sprite template or task function a script command names by address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimSymbolRoot {
+    /// The upstream C identifier, as the catalog spells it.
+    pub symbol: &'static str,
+    /// The address the command operand holds. A task function is code, so
+    /// its operand keeps the Thumb bit.
+    pub addr: GbaPtr,
+}
+
+/// The battle-animation scripts (`data/battle_anim_scripts.s`).
+///
+/// The four selector tables hold one pointer per slot, and a branch operand
+/// holds a program's address. Labels that share an address cannot be told
+/// apart by it, so the roots name each slot's program and a branch operand
+/// resolves to the first program at its address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleAnimationRoots {
+    /// `gBattleAnims_Moves`, `gBattleAnims_StatusConditions`,
+    /// `gBattleAnims_General`, and `gBattleAnims_Special`, in
+    /// `assets::AnimationTable::ALL` order.
+    pub tables: [GbaPtr; 4],
+    /// Every program, in catalog order: a program's position is its id.
+    pub programs: &'static [AnimProgramRoot],
+    /// Every `createsprite` template the programs name.
+    pub templates: &'static [AnimSymbolRoot],
+    /// Every `createvisualtask` and `createsoundtask` function the programs name.
+    pub tasks: &'static [AnimSymbolRoot],
+    /// The program each selector runs, as a position in `programs`: the
+    /// tables' slots in `tables` order.
+    pub selectors: &'static [u16],
+}
+
 /// The ordinary-bag assets (`graphics/bag` and the item icons).
 ///
 /// Holds the pack ids the checkout extractor emits under `bag/`: the fixed
@@ -388,6 +448,80 @@ pub struct BagRoots {
     pub palettes: &'static [PaletteRoot],
     /// Every `bag/raw/*` entry.
     pub raws: &'static [BlobRoot],
+}
+
+/// The starter chooser's graphics (`graphics/starter_choose`).
+///
+/// The three sheets' images and palettes plus the two Birch background
+/// tilemaps, under the `starter-chooser/` pack ids the checkout extractor
+/// emits. The starters' shared battler art is the battler family's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StarterChooserRoots {
+    /// Every `starter-chooser/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `starter-chooser/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `starter-chooser/raw/*` entry.
+    pub tilemaps: &'static [BlobRoot],
+}
+
+/// Birch's speech scene and the wall clock (`graphics/birch_speech`,
+/// `graphics/wallclock`, and Lotad's front picture and normal palette).
+///
+/// The sheets, palettes, and tilemaps under the `opening-scene/` pack ids the
+/// checkout extractor emits. Lotad's normal palette is stored compressed;
+/// every other palette is a raw `.gbapal` run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpeningSceneRoots {
+    /// Every `opening-scene/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `opening-scene/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `opening-scene/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
+/// The battle textbox, menu text, and singles health-box graphics
+/// (`graphics/battle_interface`).
+///
+/// The textbox sheet, its composed 32-colour palette and tilemap, and the
+/// battle-window and PP text palettes, under the `battle-interface/` pack ids
+/// the checkout extractor emits. The singles player and opponent frames
+/// (`gHealthboxSinglesPlayerGfx`, `gHealthboxSinglesOpponentGfx`,
+/// `src/graphics.c:628-629`) and the enemy shadow (`gEnemyMonShadow_Gfx`,
+/// `:1037`) are further `.4bpp.lz` [`ImageRoot`]s in `images`, each frame with
+/// its own metatile shape; the two ball palettes
+/// (`gBattleInterface_BallStatusBarPal`, `gBattleInterface_BallDisplayPal`,
+/// `:354,356`) are raw 16-colour [`PaletteRoot`]s in `palettes`. The textbox palette is one ROM root: the
+/// build concatenates `textbox_0.pal` and `textbox_1.pal` into a single
+/// `gBattleTextboxPalette`.
+///
+/// The health-box element table and the battle bar are raw 4bpp tile runs,
+/// recorded as [`BlobRoot`]s beside the textbox records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleInterfaceRoots {
+    /// Every `battle-interface/image/*` entry: the textbox sheet, the two
+    /// singles frames, and the enemy shadow.
+    pub images: &'static [ImageRoot],
+    /// Every `battle-interface/palette/*` entry: the three text palettes and
+    /// the two ball palettes.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `battle-interface/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+    /// The thirteen `battle-interface/raw/healthbox_element/*` records, in
+    /// `gHealthboxElementsGfxTable` order.
+    ///
+    /// The table (`src/graphics.c:358-370`) is one uncompressed `INCBIN_U8`
+    /// run of the thirteen `.4bpp` files, so each root is a raw slice that
+    /// starts where the one before it ends. The importer checks that order,
+    /// each record's length, and that contiguity rather than trust the
+    /// addresses alone. Empty, or all thirteen.
+    pub healthbox_elements: &'static [BlobRoot],
+    /// `battle-interface/raw/battle_bar`: `gBattleInterfaceGfx_BattleBar`
+    /// (`src/graphics.c:169`), an LZ77 stream of `hpbar_anim_unused`,
+    /// `numbers1`, and `numbers2` concatenated in that order
+    /// (`graphics_file_rules.mk:90-93`). `None` writes nothing.
+    pub battle_bar: Option<BlobRoot>,
 }
 
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
@@ -432,7 +566,7 @@ pub struct BattlerRoots {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Roots {
-    /// The five tilesets Littleroot Town's layout family references.
+    /// The tilesets the checkpoint maps' layouts reference.
     pub tilesets: &'static [TilesetRoot],
     /// The title screen.
     pub title_screen: TitleScreenRoots,
@@ -450,8 +584,18 @@ pub struct Roots {
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,
+    /// The field-message token table.
+    pub field_messages: &'static [FieldMessageRoot],
+    /// The battle-animation program catalog.
+    pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
     pub bag: BagRoots,
+    /// The starter chooser's sheets, palettes, and background tilemaps.
+    pub starter_chooser: StarterChooserRoots,
+    /// Birch's speech scene and the wall clock.
+    pub opening_scene: OpeningSceneRoots,
+    /// The battle textbox and menu text palettes.
+    pub battle_interface: BattleInterfaceRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
 }
@@ -492,7 +636,12 @@ impl Roots {
             programmable_wave: &[],
         },
         battle_messages: BattleMessageRoots::NONE,
+        field_messages: &[],
+        battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
+        starter_chooser: StarterChooserRoots::NONE,
+        opening_scene: OpeningSceneRoots::NONE,
+        battle_interface: BattleInterfaceRoots::NONE,
         battlers: BattlerRoots::NONE,
     };
 
@@ -512,6 +661,9 @@ impl Roots {
             .chain(self.sprites.sheets.iter())
             .chain(self.text_window.images.iter())
             .chain(self.bag.images.iter())
+            .chain(self.starter_chooser.images.iter())
+            .chain(self.opening_scene.images.iter())
+            .chain(self.battle_interface.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -530,6 +682,9 @@ impl Roots {
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
             .chain(self.bag.palettes.iter())
+            .chain(self.starter_chooser.palettes.iter())
+            .chain(self.opening_scene.palettes.iter())
+            .chain(self.battle_interface.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -547,12 +702,52 @@ impl BattleMessageRoots {
     };
 }
 
+impl BattleAnimationRoots {
+    /// No battle-animation roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        tables: [GbaPtr::AT_BASE; 4],
+        programs: &[],
+        templates: &[],
+        tasks: &[],
+        selectors: &[],
+    };
+}
+
 impl BagRoots {
     /// No bag roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
         images: &[],
         palettes: &[],
         raws: &[],
+    };
+}
+
+impl StarterChooserRoots {
+    /// No starter-chooser roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl OpeningSceneRoots {
+    /// No opening-scene roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl BattleInterfaceRoots {
+    /// No battle-interface roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+        healthbox_elements: &[],
+        battle_bar: None,
     };
 }
 
@@ -575,7 +770,7 @@ impl Default for Roots {
 
 #[cfg(test)]
 mod tests {
-    use super::{Encoding, ImageRoot, Roots};
+    use super::{BattleAnimationRoots, Encoding, ImageRoot, Roots};
     use crate::reader::GbaPtr;
 
     fn image(id: &'static str, depth: u8, tiles: u32) -> ImageRoot {
@@ -600,6 +795,7 @@ mod tests {
         assert_eq!(roots.palettes().count(), 0);
         assert_eq!(Roots::default(), Roots::NONE);
         assert!(roots.battle_messages.specials.is_empty());
+        assert_eq!(roots.battle_anims, BattleAnimationRoots::NONE);
     }
 
     #[test]

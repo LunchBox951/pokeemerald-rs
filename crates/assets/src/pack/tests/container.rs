@@ -251,3 +251,36 @@ fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
         root.display()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn write_pack_does_not_follow_a_preplanted_symlink() {
+    const SENTINEL: &[u8] = b"precious";
+    let hint = "symlink-regression";
+    let link = super::shared::pack_fixture_path(hint, 0);
+    let _ = std::fs::remove_file(&link);
+    // Exclusively created, so the sentinel itself never follows a planted link.
+    let target = write_pack("symlink-regression-target", SENTINEL);
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let bytes = synthetic_pack();
+    let path = write_pack(hint, &bytes);
+
+    let target_after = std::fs::read(&target).unwrap();
+    let written = std::fs::read(&path).unwrap();
+    let link_is_symlink = std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink();
+    let distinct = path != link;
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&target);
+
+    assert!(target_after == SENTINEL, "symlink target was modified");
+    assert!(
+        link_is_symlink && distinct,
+        "fixture reused the symlink path"
+    );
+    assert!(written == bytes, "fixture bytes differ");
+}

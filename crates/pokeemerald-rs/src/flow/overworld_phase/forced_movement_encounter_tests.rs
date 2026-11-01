@@ -102,7 +102,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
         "fixture precondition: the doormat's warp event is stored at elevation 3"
     );
 
-    let mut phase = OverworldPhase::for_test(
+    let mut phase = OverworldPhase::for_test_with_source(
         crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
@@ -111,6 +111,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
         CENTER,
         PlayerState::new((7, 7), 3, Direction::South),
         None,
+        crate::pack_source::PackSource::Repo,
     );
 
     // The poll stays shut while the step is outstanding (`arrow_poll_open`),
@@ -240,10 +241,10 @@ fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
 /// `SaveObjectEvents` copies the player's object event whole
 /// (`pokeemerald/src/load_save.c:180-186`), so a save opened on a
 /// perpendicular slide's landing frame -- where `ProcessPlayerFieldInput`
-/// claims START ahead of `PlayerStep` (`overworld.c:1444-1455`), before
-/// `ForcedMovement_None` can resynchronise the two
-/// (`field_player_avatar.c:429-440`) -- keeps `movementDirection` on the
-/// slide while `facingDirection` stays locked on the entrant.
+/// claims START ahead of `PlayerStep` (`overworld.c:1444-1455`) -- still
+/// reaches `ShowStartMenu`, whose `StopPlayerAvatar` resets
+/// `movementDirection` to the locked facing (`start_menu.c:581-588`,
+/// `field_player_avatar.c:1223-1228`), so both nibbles save North.
 #[test]
 fn a_save_on_a_slides_landing_frame_keeps_both_direction_nibbles() {
     let mut phase = phase_on_a_perpendicular_slides_landing_frame();
@@ -259,13 +260,47 @@ fn a_save_on_a_slides_landing_frame_keeps_both_direction_nibbles() {
         phase.save1.player_object_event,
         engine::save::SavedObjectEvent {
             facing_direction: Direction::North.to_dir_id(),
-            movement_direction: Direction::East.to_dir_id(),
+            movement_direction: Direction::North.to_dir_id(),
             active: true,
             current_elevation: phase.player.elevation(),
             previous_elevation: phase.player.previous_elevation(),
         },
-        "the locked facing and the slide's movement direction are saved \
-         into their own nibbles"
+        "StopPlayerAvatar resets the slide's movement direction to the \
+         locked facing, so both nibbles save North"
+    );
+}
+
+/// `ShowStartMenu` resets movement direction to facing the moment the menu
+/// opens (`start_menu.c:581-588`, `field_player_avatar.c:1223-1228`).
+#[test]
+fn start_on_a_slides_landing_frame_resets_movement_direction_to_facing() {
+    let mut phase = phase_on_a_perpendicular_slides_landing_frame();
+    phase.step(pressed(Buttons::START));
+    assert!(phase.start_menu().is_some());
+    assert_eq!(phase.player.facing(), Direction::North);
+    assert_eq!(phase.player.movement_direction(), Direction::North);
+}
+
+/// The same landing-frame START, saved through the real SAVE flow and
+/// reloaded from the file, stores North in both direction nibbles.
+#[test]
+fn a_real_save_flow_from_a_slides_landing_frame_stores_north_in_both_nibbles() {
+    let temp = crate::flow::tests::TempSave::new("slide-landing-save");
+    let mut slot = temp.slot();
+    let mut phase = phase_on_a_perpendicular_slides_landing_frame();
+    phase.step(pressed(Buttons::START));
+    assert!(phase.start_menu().is_some(), "setup: START opens the menu");
+
+    crate::flow::save_continue_support::drive_start_menu(&mut phase, &mut slot, &[]);
+
+    let saved = slot.load();
+    assert_eq!(
+        saved.block1.player_object_event.facing_direction,
+        Direction::North.to_dir_id()
+    );
+    assert_eq!(
+        saved.block1.player_object_event.movement_direction,
+        Direction::North.to_dir_id()
     );
 }
 

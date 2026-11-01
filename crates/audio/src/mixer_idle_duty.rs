@@ -5,16 +5,11 @@ use super::*;
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::CgbChannelNumber;
 
-/// Fixture: a voice whose initial trigger has already been written to
-/// hardware, so stopping it retires real hardware state. A note stopped
-/// before its first frame never wrote anything (`Mixer::stop_track`).
 fn committed_voice(mut voice: CgbVoice) -> CgbVoice {
     voice.begin_frame(false);
     voice
 }
 
-/// A note taking over an occupied square slot must pick the duty phase up
-/// where the note it replaced left it (`SquareChannel::continue_duty_from`'s doc).
 #[test]
 fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
     const TRACK: usize = 0;
@@ -34,8 +29,6 @@ fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
         "the two mixers must still be identical before the re-attack",
     );
 
-    // Same track, same key, same priority: the slot is reusable, so this note
-    // replaces the sounding one for the next frame.
     assert!(retriggered.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
 
     retriggered.mix_frame(&mut retriggered_out);
@@ -47,9 +40,6 @@ fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
     );
 }
 
-/// A note landing on a square slot that `stop_track` vacated must continue
-/// the duty index the slot's free-running register would have reached over
-/// that silence, not restart at zero (`CgbVoice::advance_idle_duty`'s doc).
 #[test]
 fn a_square_note_on_a_slot_stop_track_vacated_continues_the_idle_duty_phase() {
     const TRACK: usize = 0;
@@ -58,9 +48,7 @@ fn a_square_note_on_a_slot_stop_track_vacated_continues_the_idle_duty_phase() {
 
     let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
     let mut vacated = Mixer::new(MAX_MASTER_VOLUME, 1);
-    // A slot's off-write truncates its frequency the instant it idles
-    // (`CgbVoice::apply_hardware_off_write`'s doc); a slot rated the same
-    // way and left occupied for the same span is the oracle.
+    // Oracle: an occupied slot already at the idle rate.
     let mut idle_rate_reference = cgb_keyed_voice(TRACK, KEY);
     idle_rate_reference.apply_hardware_off_write();
     assert!(occupied.add_cgb_voice(idle_rate_reference));
@@ -91,8 +79,6 @@ fn a_square_note_on_a_slot_stop_track_vacated_continues_the_idle_duty_phase() {
     );
 }
 
-/// The same continuation, this time through natural envelope retirement
-/// instead of `stop_track`.
 #[test]
 fn a_square_note_on_a_naturally_retired_slot_continues_the_idle_duty_phase() {
     const TRACK: usize = 0;
@@ -111,9 +97,7 @@ fn a_square_note_on_a_naturally_retired_slot_continues_the_idle_duty_phase() {
     let mut frames_to_retire = 0;
     while retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some() {
         retired.mix_frame(&mut retired_out);
-        // The instant a slot idles, its off-write truncates the rate its
-        // duty catch-up measures by; switch the still-sounding oracle to
-        // that same rate, at the same instant, to track it.
+        // Switch the oracle to the idle rate at the instant the slot idles.
         if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
             let mut idle_rate_reference = cgb_keyed_voice(TRACK, KEY);
             idle_rate_reference.apply_hardware_off_write();
@@ -149,9 +133,7 @@ fn a_square_note_on_a_naturally_retired_slot_continues_the_idle_duty_phase() {
     );
 }
 
-// Overflows at trigger, muting the hardware from frame 0 while the
-// envelope keeps running (`square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger`,
-// cgb_voice.rs).
+/// Sweep that overflows at trigger: hardware muted from frame 0, envelope running.
 const OVERFLOWING_SWEEP_AT_TRIGGER: u8 = 0x31;
 const OVERFLOW_KEY: u8 = 120;
 
@@ -184,10 +166,7 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
     const IDLE_FRAMES: usize = 3;
     const MAX_FRAMES_TO_RETIRE: usize = 32;
 
-    // Committing the trigger first matters: a pending trigger stopped
-    // before its first frame is cancelled and retires no hardware at all
-    // (`CgbVoice::begin_frame` marks it cancelled), which would leave the
-    // retirement frame unexercised.
+    // A trigger stopped before its first frame is cancelled and retires no hardware.
     let slot = CgbChannelNumber::Square1.slot();
     let muted = committed_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY));
     assert!(muted.initial_trigger_committed());
@@ -208,8 +187,6 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
             "a muted voice must render silence while it still holds the slot"
         );
         if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
-            // The oracle idles through `stop_track`, which counts the frame
-            // once, at the same vacated instant.
             assert!(occupied.add_cgb_voice(muted.clone()));
             occupied.stop_track(TRACK);
             assert!(occupied.cgb_voices()[slot].is_none());
@@ -250,8 +227,6 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
     );
 }
 
-/// Mixes `idle_frames` over a Square1 slot `stop_track` vacated from a voice
-/// carrying `sweep`, then plays an unswept note on it and returns that frame.
 fn frame_after_idling_a_stopped_square1(
     sweep: Option<u8>,
     key: u8,
@@ -271,9 +246,6 @@ fn frame_after_idling_a_stopped_square1(
     out
 }
 
-/// A vacated Square1 slot's hardware sweep keeps ticking and retuning while
-/// it idles, so the next note inherits a different duty phase than an
-/// unswept slot's (`CgbVoice::advance_idle_duty`'s doc).
 #[test]
 fn verify_idle_square1_sweep_keeps_ticking_after_stop_track() {
     const KEY: u8 = 60;
@@ -286,10 +258,9 @@ fn verify_idle_square1_sweep_keeps_ticking_after_stop_track() {
     );
 }
 
-/// A pending replacement cancelled before its first frame never wrote its
-/// NR10/NR13 (upstream START|STOP jumps straight to the oscillator-off), so
-/// the established note's hardware, not the cancelled note's, takes the
-/// off-write and is inherited by the next audible note.
+/// Upstream START|STOP jumps straight to oscillator-off, so a replacement
+/// cancelled before its first frame leaves the established note's hardware
+/// to take the off-write the next audible note inherits.
 #[test]
 fn cancelled_pending_square_preserves_committed_hardware() {
     for (channel, old_sweep, pending_sweep) in [
@@ -329,6 +300,180 @@ fn cancelled_pending_square_preserves_committed_hardware() {
             assert_eq!(
                 actual, expected,
                 "later audible note must inherit identical duty"
+            );
+        }
+    }
+}
+
+/// Retires `voice` after `settled_frames` of sound, applying
+/// `retiring_key_shift` on the retiring frame, and returns the idle-tail frames
+/// (plus a replacement note's first frame for a square). Upstream discards that
+/// pitch write (`pokeemerald/src/m4a.c:1053-1056`, `:1196-1203`).
+fn retire_with_key_shift(
+    voice: &CgbVoice,
+    slot: usize,
+    settled_frames: usize,
+    retiring_key_shift: Option<i32>,
+    replacement: Option<CgbVoice>,
+) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const IDLE_FRAMES: usize = 40;
+    const MAX_FRAMES_TO_RETIRE: usize = 32;
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(mixer.add_cgb_voice(voice.clone()));
+    let mut frame = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut rendered = Vec::new();
+    for _ in 0..settled_frames {
+        mixer.mix_frame(&mut frame);
+    }
+    mixer.note_off_track(TRACK, 60);
+    if let Some(shift) = retiring_key_shift {
+        mixer.set_track_pitch(TRACK, shift, 0);
+    }
+    for _ in 0..MAX_FRAMES_TO_RETIRE {
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+        if mixer.cgb_voices()[slot].is_none() {
+            break;
+        }
+    }
+    assert!(mixer.cgb_voices()[slot].is_none(), "the voice must retire");
+    for _ in 0..IDLE_FRAMES {
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+    }
+    if let Some(next) = replacement {
+        assert!(mixer.add_cgb_voice(next));
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+    }
+    rendered
+}
+
+#[test]
+fn a_pitch_write_on_the_retiring_frame_never_reaches_the_retained_square() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    let voice = committed_voice(cgb_keyed_voice(TRACK, KEY));
+    let slot = CgbChannelNumber::Square1.slot();
+    let replacement = || Some(cgb_keyed_voice(TRACK, KEY));
+    assert_eq!(
+        retire_with_key_shift(&voice, slot, 0, None, replacement()),
+        retire_with_key_shift(&voice, slot, 0, Some(7), replacement()),
+        "a retiring square's discarded pitch write must not move the duty \
+         phase the next note continues from",
+    );
+}
+
+#[test]
+fn a_pitch_write_on_the_retiring_frame_never_reaches_the_retained_noise_latch() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    const SLOW_KEY_SHIFT: i32 = -39;
+    const SETTLE_FRAME_RANGE: std::ops::Range<usize> = 0..24;
+    let voice = CgbVoice::noise(
+        CgbAdsr::flat(),
+        KEY,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        KEY,
+        TRACK,
+        0,
+        0,
+        0,
+    );
+    let slot = CgbChannelNumber::Noise.slot();
+    // The latch depends on the clock phase at retirement.
+    for settled_frames in SETTLE_FRAME_RANGE {
+        let plain = retire_with_key_shift(&voice, slot, settled_frames, None, None);
+        let shifted =
+            retire_with_key_shift(&voice, slot, settled_frames, Some(SLOW_KEY_SHIFT), None);
+        assert_eq!(
+            plain, shifted,
+            "after {settled_frames} frames a retiring noise voice must \
+             off-write its committed clock, not the discarded pitch",
+        );
+    }
+}
+
+/// `MPlayExtender` writes `NR12`/`NR22` = 0x08 and `NR14`/`NR24` = 0x80
+/// (`pokeemerald/src/m4a.c:268-273`), triggering both squares at frequency 0
+/// before any note; their duty index then free-runs, and the first note's
+/// register write catches it up (`mgba/src/gb/audio.c:162-171,493-510`).
+const SILENT_LEAD_IN_FRAMES: usize = 3;
+
+fn first_square_frame_after_lead_in(channel: CgbChannelNumber, lead_in: usize) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for _ in 0..lead_in {
+        mixer.mix_frame(&mut out);
+        assert!(out.iter().all(|&sample| sample == 0.0));
+    }
+    assert!(mixer.add_cgb_voice(cgb_square_voice(channel, TRACK, KEY, None)));
+    mixer.mix_frame(&mut out);
+    out
+}
+
+/// The initialized-hardware oracle: the same square channel explicitly triggered
+/// at frequency 0 on the slot, committed, then idled for `lead_in` frames.
+fn first_square_frame_after_explicit_init(channel: CgbChannelNumber, lead_in: usize) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let init = CgbVoice::square(
+        channel,
+        0,
+        None,
+        CgbAdsr::flat(),
+        0,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        0,
+        TRACK,
+        0,
+        0,
+        0,
+    )
+    .with_square_frequency_register(0);
+    mixer.idle_cgb_hardware[channel.slot()] = Some(committed_voice(init));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for _ in 0..lead_in {
+        mixer.mix_frame(&mut out);
+    }
+    assert!(mixer.add_cgb_voice(cgb_square_voice(channel, TRACK, KEY, None)));
+    mixer.mix_frame(&mut out);
+    out
+}
+
+#[test]
+fn a_first_square_note_after_silent_frames_inherits_the_elapsed_idle_duty_phase() {
+    for channel in [CgbChannelNumber::Square1, CgbChannelNumber::Square2] {
+        assert_ne!(
+            first_square_frame_after_lead_in(channel, SILENT_LEAD_IN_FRAMES),
+            first_square_frame_after_lead_in(channel, 0),
+            "{channel:?}: the silent lead-in must advance the initialized duty index",
+        );
+    }
+}
+
+#[test]
+fn a_first_square_note_matches_an_explicitly_initialized_hardware_oracle() {
+    for channel in [CgbChannelNumber::Square1, CgbChannelNumber::Square2] {
+        for lead_in in [0, 1, SILENT_LEAD_IN_FRAMES] {
+            assert_eq!(
+                first_square_frame_after_lead_in(channel, lead_in),
+                first_square_frame_after_explicit_init(channel, lead_in),
+                "{channel:?} after {lead_in} silent frames",
             );
         }
     }

@@ -1,12 +1,21 @@
 //! The asset inventories extraction fixes and `gen-rom-profile` requires.
 //!
-//! One list per domain, read by both the extractor and the profile generator
-//! so a pack missing a root is refused rather than half-described.
+//! One list per domain, read by the extractor and, for each domain the ROM
+//! profile covers, by the profile generator so a pack missing a root is
+//! refused rather than half-described. The naming-screen inventory is
+//! extraction-only until the generator gains that family.
 
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_interface::healthbox_battle_bar_pack_id;
+use super::battle_interface::healthbox_element_pack_ids;
+use super::battle_interface::healthbox_frame_pack_ids;
+use super::battle_interface::healthbox_table_pack_ids;
+use super::battle_interface::pack_ids as battle_interface_pack_ids;
+use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
+use super::starter_chooser::pack_ids as chooser_pack_ids;
 use super::ExtractError;
 
 #[derive(Clone, Copy)]
@@ -54,7 +63,7 @@ pub(crate) fn tileset_animation_ids() -> Vec<String> {
         .collect()
 }
 
-pub(crate) const TILESETS: [TilesetSource; 5] = [
+pub(crate) const TILESETS: [TilesetSource; 9] = [
     TilesetSource {
         category: "primary",
         name: "general",
@@ -78,6 +87,26 @@ pub(crate) const TILESETS: [TilesetSource; 5] = [
     TilesetSource {
         category: "secondary",
         name: "lab",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "generic_building",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "pokemon_center",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "shop",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "inside_of_truck",
         animations: &[],
     },
 ];
@@ -220,9 +249,95 @@ pub(crate) const PEOPLE_SHEETS: [&str; 133] = [
     "youngster",
 ];
 
-/// Every required people sprite sheet id, in manifest order.
+/// A non-people object-event sheet: its directory under
+/// `graphics/object_events/pics` and its file stem. The pack id is
+/// `sprite/<dir>/<stem>`, which no people sheet's `sprite/<stem>` can equal.
+#[derive(Clone, Copy)]
+pub(crate) struct ObjectSheet {
+    pub(crate) dir: &'static str,
+    pub(crate) stem: &'static str,
+}
+
+impl ObjectSheet {
+    /// The pack id of this sheet.
+    pub(crate) fn pack_id(self) -> String {
+        format!("sprite/{}/{}", self.dir, self.stem)
+    }
+}
+
+// The non-people `gObjectEventGraphicsInfo_*` pictures the checkpoint maps'
+// fixed object events name (`data/maps/*/map.json`, `graphics_id`): the
+// truck and moving box, Birch's bag, item balls, cuttable trees, the
+// Vigoroth and Zigzagoon, the two bedroom dolls, and the berry-tree stages
+// (`dirt_pile`, `sprout`) with the Cheri and Leppa sheets Route 103 grows.
+pub(crate) const OBJECT_SHEETS: [ObjectSheet; 13] = [
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "cheri",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "dirt_pile",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "leppa",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "sprout",
+    },
+    ObjectSheet {
+        dir: "dolls",
+        stem: "pichu_doll",
+    },
+    ObjectSheet {
+        dir: "dolls",
+        stem: "swablu_doll",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "birchs_bag",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "cuttable_tree",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "item_ball",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "moving_box",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "truck",
+    },
+    ObjectSheet {
+        dir: "pokemon",
+        stem: "enemy_zigzagoon",
+    },
+    ObjectSheet {
+        dir: "pokemon",
+        stem: "vigoroth",
+    },
+];
+
+/// The palettes beside the generic `npc_*` banks that those pictures load
+/// through `sObjectEventSpritePalettes`.
+pub(crate) const OBJECT_PALETTES: [&str; 4] =
+    ["enemy_zigzagoon", "moving_box", "truck", "vigoroth"];
+
+/// Every required object-event sheet id: the people sheets, then the
+/// non-people ones, in manifest order.
 pub(crate) fn sprite_sheet_ids() -> Vec<String> {
-    PEOPLE_SHEETS.map(|stem| format!("sprite/{stem}")).to_vec()
+    PEOPLE_SHEETS
+        .map(|stem| format!("sprite/{stem}"))
+        .into_iter()
+        .chain(OBJECT_SHEETS.map(ObjectSheet::pack_id))
+        .collect()
 }
 
 /// Every required sprite palette id, in extraction order.
@@ -234,6 +349,7 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
             (FIRST_GENERIC_NPC_PALETTE..=LAST_GENERIC_NPC_PALETTE)
                 .map(|n| format!("sprite/palette/npc_{n}")),
         )
+        .chain(OBJECT_PALETTES.map(|name| format!("sprite/palette/{name}")))
         .collect()
 }
 
@@ -262,6 +378,12 @@ pub(crate) const TITLE_SCREEN_FILE_PALETTES: [&str; 3] =
 
 // `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with this limit.
 pub(crate) const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
+
+/// The pack id of the main-menu background palette.
+pub(crate) const MAIN_MENU_BG_PALETTE_ID: &str = "interface/palette/main_menu_bg";
+
+/// Every interface palette pack id extraction writes and the generator requires.
+pub(crate) const INTERFACE_PALETTE_IDS: [&str; 1] = [MAIN_MENU_BG_PALETTE_ID];
 
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {
@@ -309,7 +431,7 @@ pub(crate) struct LayoutSource {
     pub(crate) pack_name: &'static str,
 }
 
-pub(crate) const LAYOUTS: [LayoutSource; 10] = [
+pub(crate) const LAYOUTS: [LayoutSource; 16] = [
     LayoutSource {
         upstream_id: "LAYOUT_LITTLEROOT_TOWN",
         pack_name: "littleroot_town",
@@ -349,6 +471,30 @@ pub(crate) const LAYOUTS: [LayoutSource; 10] = [
     LayoutSource {
         upstream_id: "LAYOUT_ROUTE103",
         pack_name: "route103",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_INSIDE_OF_TRUCK",
+        pack_name: "inside_of_truck",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_HOUSE1",
+        pack_name: "house1",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_HOUSE2",
+        pack_name: "house2",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_MART",
+        pack_name: "mart",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_POKEMON_CENTER_1F",
+        pack_name: "pokemon_center_1f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_POKEMON_CENTER_2F",
+        pack_name: "pokemon_center_2f",
     },
 ];
 
@@ -473,4 +619,141 @@ pub(crate) const BATTLERS: [BattlerSource; 3] = [
 /// [`ExtractError`] if the checkout's icon table cannot be read.
 pub(crate) fn bag_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
     Ok([fixed_ids(), icon_ids(upstream)?].concat())
+}
+
+/// Every `starter-chooser/` pack id extraction emits: three sheets, their
+/// palettes, and two background tilemaps.
+pub(crate) fn starter_chooser_ids() -> Vec<String> {
+    chooser_pack_ids()
+}
+
+/// Every `opening-scene/` pack id extraction emits: five sheets, eight
+/// palettes, and three tilemaps.
+pub(crate) fn opening_scene_ids() -> Vec<String> {
+    opening_scene_pack_ids()
+}
+
+/// Where the naming screen's sources live, relative to the checkout.
+pub(crate) const NAMING_SCREEN_DIRECTORY: &str = "graphics/naming_screen";
+
+/// One naming-screen sheet: its file stem, its PNG's size, and how many of its
+/// leading 8x8 tiles upstream's build keeps (`None` keeps the whole sheet).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NamingScreenSheet {
+    pub(crate) stem: &'static str,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kept_tiles: Option<u32>,
+}
+
+const fn whole_sheet(stem: &'static str, width: u32, height: u32) -> NamingScreenSheet {
+    NamingScreenSheet {
+        stem,
+        width,
+        height,
+        kept_tiles: None,
+    }
+}
+
+/// The cursor sheets are built with `-num_tiles 5` (`graphics.c:1410-1412`).
+const fn cursor_sheet(stem: &'static str) -> NamingScreenSheet {
+    NamingScreenSheet {
+        stem,
+        width: 16,
+        height: 24,
+        kept_tiles: Some(5),
+    }
+}
+
+/// Naming-screen sheets as `naming-screen/image/<stem>`: `graphics.c:1403-1414`
+/// plus the two PC icons `naming_screen.c:185-186` declares locally. The
+/// walking sheets the player icon shows are the sprite manifest's.
+pub(crate) const NAMING_SCREEN_SHEETS: [NamingScreenSheet; 15] = [
+    whole_sheet("menu", 24, 128),
+    whole_sheet("page_swap_frame", 40, 32),
+    whole_sheet("back_button", 40, 24),
+    whole_sheet("ok_button", 40, 24),
+    whole_sheet("page_swap_upper", 40, 8),
+    whole_sheet("page_swap_lower", 40, 8),
+    whole_sheet("page_swap_others", 40, 8),
+    cursor_sheet("cursor"),
+    cursor_sheet("cursor_squished"),
+    cursor_sheet("cursor_filled"),
+    whole_sheet("page_swap_button", 32, 16),
+    whole_sheet("input_arrow", 8, 8),
+    whole_sheet("underscore", 8, 8),
+    whole_sheet("pc_icon_off", 16, 24),
+    whole_sheet("pc_icon_on", 16, 24),
+];
+
+/// Naming-screen palettes as `naming-screen/palette/<stem>`: the six rows of
+/// `gNamingScreenMenu_Pal` (`graphics.c:1394-1402`), then `sKeyboard_Pal`
+/// (`naming_screen.c:187`). `rival.pal` is unused upstream (`:188`).
+pub(crate) const NAMING_SCREEN_PALETTES: [&str; 7] = [
+    "menu",
+    "page_swap_upper",
+    "page_swap_lower",
+    "page_swap_others",
+    "buttons",
+    "cursor",
+    "keyboard",
+];
+
+/// Naming-screen tilemaps as `naming-screen/raw/<stem>` (`graphics.c:1416-1419`).
+pub(crate) const NAMING_SCREEN_TILEMAPS: [&str; 4] = [
+    "background",
+    "keyboard_upper",
+    "keyboard_lower",
+    "keyboard_symbols",
+];
+
+/// A 32x20 tilemap of 2-byte entries.
+pub(crate) const NAMING_SCREEN_TILEMAP_BYTES: usize = 32 * 20 * 2;
+
+/// Every `naming-screen/` pack id extraction emits: sheets, then palettes,
+/// then tilemaps.
+pub(crate) fn naming_screen_ids() -> Vec<String> {
+    let images = NAMING_SCREEN_SHEETS
+        .iter()
+        .map(|sheet| format!("naming-screen/image/{}", sheet.stem));
+    let palettes = NAMING_SCREEN_PALETTES
+        .iter()
+        .map(|stem| format!("naming-screen/palette/{stem}"));
+    let tilemaps = NAMING_SCREEN_TILEMAPS
+        .iter()
+        .map(|stem| format!("naming-screen/raw/{stem}"));
+    images.chain(palettes).chain(tilemaps).collect()
+}
+
+/// Every `battle-interface/` pack id extraction emits: the textbox sheet,
+/// its three palettes, and the textbox tilemap.
+pub(crate) fn battle_interface_ids() -> Vec<String> {
+    battle_interface_pack_ids()
+}
+
+/// Every `battle-interface/` pack id the health-box extractor emits: the
+/// thirteen health-box elements and the battle bar. ROM import claims all
+/// fourteen; the frames are [`healthbox_frame_ids`].
+pub(crate) fn healthbox_element_ids() -> Vec<String> {
+    healthbox_element_pack_ids()
+}
+
+/// The thirteen constituents of `gHealthboxElementsGfxTable`
+/// (`src/graphics.c:358-370`), in table order.
+pub(crate) fn healthbox_table_ids() -> Vec<String> {
+    healthbox_table_pack_ids()
+}
+
+/// The battle bar's pack id: `gBattleInterfaceGfx_BattleBar`, the
+/// concatenation of `hpbar_anim_unused`, `numbers1`, and `numbers2`.
+pub(crate) fn healthbox_battle_bar_id() -> String {
+    healthbox_battle_bar_pack_id()
+}
+
+/// Every `battle-interface/` pack id the health-box frame extractor emits: the
+/// singles player and opponent frames, the enemy shadow, and the two ball
+/// palettes. ROM import claims all five, so profile generation requires them
+/// beside the textbox and element ids.
+pub(crate) fn healthbox_frame_ids() -> Vec<String> {
+    healthbox_frame_pack_ids()
 }

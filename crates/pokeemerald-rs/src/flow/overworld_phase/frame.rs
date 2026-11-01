@@ -1,11 +1,9 @@
-//! Dialog ticking and frame composition (a submodule of
-//! [`crate::flow::overworld_phase`], `oop-boundaries`): an open
-//! [`crate::overworld::NpcDialog`] getting its own input edge
-//! ([`OverworldPhase::advance_dialog_frame`], called from
-//! [`OverworldPhase::step`]), and the one place a finished frame is
-//! actually drawn ([`OverworldPhase::compose_frame`], called by
-//! [`crate::flow`]'s scene dispatch), with the open dialog composited over
-//! the base scene.
+//! Dialog ticking and frame composition for [`OverworldPhase`].
+//!
+//! [`OverworldPhase::advance_dialog_frame`] gives an open
+//! [`crate::overworld::NpcDialog`] its input each frame;
+//! [`OverworldPhase::compose_frame`] draws the base scene, then the dialog,
+//! then the start menu, into the platform framebuffer.
 
 use platform::{ButtonState, Frame};
 
@@ -15,22 +13,14 @@ use crate::overworld::DialogOutcome;
 use super::OverworldPhase;
 
 impl OverworldPhase {
-    /// Tick an open [`NpcDialog`](crate::overworld::NpcDialog), if any.
-    /// Returns whether a dialog owned this frame -- `true` freezes movement
-    /// for it exactly as
-    /// [`OverworldPhase::advance_active_battle_frame`] does
-    /// for a battle, and closing it consumes the same frame. Split from
-    /// [`OverworldPhase::step`] purely along that existing
-    /// frame-ownership seam.
+    /// Ticks the open [`NpcDialog`](crate::overworld::NpcDialog), if any, and
+    /// returns whether a dialog owned this frame. An owned frame freezes
+    /// movement, as [`OverworldPhase::advance_active_battle_frame`] does for a
+    /// battle, and the frame that closes the dialog is also owned.
     ///
-    /// `buttons` is narrowed to the four A/B pressed/held bits
-    /// [`NpcDialog::tick`](crate::overworld::NpcDialog::tick) needs by
-    /// [`confirm_printer_input`] -- upstream's own
-    /// `TextPrinterWaitWithDownArrow`/`RENDER_STATE_HANDLE_CHAR` never
-    /// distinguish which button did it (that function's own doc comment),
-    /// and this box opts into held-A/B print speed-up
-    /// (`NpcDialog::new`'s doc comment, issue #393), so both the press and
-    /// the hold matter now, not just the edge.
+    /// Both A and B, pressed or held, reach the dialog through
+    /// [`confirm_printer_input`]: upstream's text printer does not distinguish
+    /// the two buttons, and this dialog speeds up printing while one is held.
     pub(super) fn advance_dialog_frame(&mut self, buttons: ButtonState) -> bool {
         let Some(dialog) = &mut self.dialog else {
             return false;
@@ -42,29 +32,29 @@ impl OverworldPhase {
         true
     }
 
-    /// Takes the field lock on the frame an owner commits: `PlayerFreeze`
-    /// runs before that frame is drawn (`overworld.c:1465-1476`).
+    /// Releases the player's turn lock and drops any pending turn on the
+    /// frame an owner takes control, because upstream runs `PlayerFreeze`
+    /// before that frame is drawn (`overworld.c:1465-1476`).
     pub(super) const fn take_field_lock(&mut self) {
         self.player.clear_turn_lock();
         self.pending_turn = None;
     }
 
-    /// [`crate::overworld::OverworldScene::compose`] against this phase's
-    /// current player state and event-flag store, then (issue #161)
-    /// [`NpcDialog::compose_over`](crate::overworld::NpcDialog::compose_over)
-    /// on top if [`OverworldPhase::dialog`] is open, then (issue #232) the
-    /// field start menu's own windows over that if one is open.
+    /// Composes the finished frame: the scene for the current player,
+    /// event flags and animation tick, then the open dialog, then the open
+    /// start menu, converted to the platform framebuffer.
     ///
-    /// The two overlays are never both open -- an open message box holds
-    /// `LockPlayerFieldControls`, so `START` cannot reach the start menu
-    /// ([`super::start_menu`]'s module docs) -- but each is drawn on its
-    /// own condition rather than in an either/or, so a future state that
-    /// *does* stack them draws in upstream's own order: the field message
-    /// box below, the menu windows above.
+    /// The dialog and the start menu are never open together, since an open
+    /// message box locks field controls and `START` cannot reach the menu.
+    /// Each overlay is still drawn on its own condition, in upstream's order:
+    /// message box below, menu windows above.
     pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
-        let base = self
-            .scene
-            .compose(&self.player, &self.save1.event_data, self.tick);
+        let base = self.scene.compose_live(
+            &self.player,
+            &self.save1.event_data,
+            self.tick,
+            &self.object_events,
+        );
         let composed = match &self.dialog {
             Some(dialog) => dialog.compose_over(base),
             None => base,

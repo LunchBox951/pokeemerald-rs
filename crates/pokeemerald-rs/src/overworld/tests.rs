@@ -25,21 +25,40 @@ fn default_room_map_id_matches_new_games_spawn_map_id() {
 }
 
 #[test]
-fn resolve_tileset_pack_name_covers_every_bundled_tileset() {
-    assert_eq!(resolve_tileset_pack_name("gTileset_General"), Ok("general"));
+fn resolve_tileset_pack_name_maps_each_bundled_symbol_to_its_pack_name() {
+    let expected = [
+        ("gTileset_General", "general"),
+        ("gTileset_Building", "building"),
+        ("gTileset_Petalburg", "petalburg"),
+        ("gTileset_BrendansMaysHouse", "brendans_mays_house"),
+        ("gTileset_Lab", "lab"),
+        ("gTileset_GenericBuilding", "generic_building"),
+        ("gTileset_PokemonCenter", "pokemon_center"),
+        ("gTileset_Shop", "shop"),
+        ("gTileset_InsideOfTruck", "inside_of_truck"),
+    ];
+    for (symbol, pack_name) in expected {
+        assert_eq!(resolve_tileset_pack_name(symbol), Ok(pack_name), "{symbol}");
+    }
     assert_eq!(
-        resolve_tileset_pack_name("gTileset_Building"),
-        Ok("building")
+        assets::bundled_overworld::BUNDLED_TILESETS.len(),
+        expected.len(),
+        "a newly bundled tileset needs its expected pack name here"
     );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_Petalburg"),
-        Ok("petalburg")
-    );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_BrendansMaysHouse"),
-        Ok("brendans_mays_house")
-    );
-    assert_eq!(resolve_tileset_pack_name("gTileset_Lab"), Ok("lab"));
+}
+
+#[test]
+fn resolve_tileset_pack_name_resolves_both_tilesets_of_every_bundled_layout() {
+    let layouts = assets::LayoutTable::new();
+    for id in assets::bundled_overworld::BUNDLED_LAYOUT_IDS {
+        let layout = layouts.layout(*id).unwrap();
+        for symbol in [layout.primary_tileset, layout.secondary_tileset] {
+            assert!(
+                resolve_tileset_pack_name(symbol).is_ok(),
+                "{id:?} names unresolved tileset {symbol}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -133,6 +152,22 @@ impl Drop for TempPackGuard {
     }
 }
 
+/// Claims `path` through `claim` and writes `bytes` through the handle it
+/// returns, yielding the guard that removes `path` on drop. The guard is
+/// built only once `claim` has succeeded, so a failed claim never removes an
+/// entry the guard does not own; a write panic after it still cleans up.
+fn claim_pack_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+) -> TempPackGuard {
+    use std::io::Write as _;
+    let mut file = claim(path);
+    let guard = TempPackGuard(path.to_path_buf());
+    file.write_all(bytes).unwrap();
+    guard
+}
+
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
@@ -149,6 +184,21 @@ fn with_palette_at(
     color_count: u16,
     check: impl FnOnce(assets::PaletteRef<'_>),
 ) {
+    with_palette_claimed(
+        path,
+        color_count,
+        crate::pack_test_support::claim_scratch_exclusive,
+        check,
+    );
+}
+
+/// [`with_palette_at`], claiming `path` through `claim`.
+fn with_palette_claimed(
+    path: &std::path::Path,
+    color_count: u16,
+    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
+    check: impl FnOnce(assets::PaletteRef<'_>),
+) {
     let payload: Vec<u8> = (0..color_count)
         .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
         .collect();
@@ -158,8 +208,7 @@ fn with_palette_at(
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let _guard = TempPackGuard(path.to_path_buf());
-    std::fs::write(path, bytes).unwrap();
+    let _guard = claim_pack_with(path, &bytes, claim);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -169,6 +218,32 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
         "pokeemerald-rs-palette-bank-{name}-{}.pack",
         std::process::id()
     ))
+}
+
+#[test]
+fn a_failed_claim_leaves_the_unowned_entry_in_place() {
+    let path = regression_pack_path("failed-claim-unowned");
+    let _ = std::fs::remove_file(&path);
+    let outcome = std::panic::catch_unwind(|| {
+        with_palette_claimed(
+            &path,
+            3,
+            |path| {
+                // Another owner holds `path`, so this claim loses.
+                std::fs::write(path, b"not ours").unwrap();
+                panic!("the claim lost the path");
+            },
+            |_| unreachable!("a lost claim never loads the pack"),
+        );
+    });
+    let survivor = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(outcome.is_err(), "the failed claim must propagate");
+    assert_eq!(
+        survivor.ok().as_deref(),
+        Some(&b"not ours"[..]),
+        "a guard must not remove an entry it never claimed"
+    );
 }
 
 #[test]
@@ -526,7 +601,7 @@ fn hblank_budget_regression_fixture() -> (
     });
     let object_events: &'static [ObjectEvent] = Box::leak(object_events.into_boxed_slice());
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-        id: assets::MapId("MAP_TEST"),
+        id: assets::MapId("MAP_ROUTE122"),
         shared_events_map: None,
         object_events,
         warp_events: &[],
@@ -991,26 +1066,21 @@ fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission()
     );
 }
 
-/// Loads the *real* local pack (`cargo xtask extract`'s output) and
-/// exercises the full `load_default_room` + `compose` pipeline against
-/// the protagonist's bedroom (Brendan's house 2F) -- proof this module's
-/// decoding agrees with the real extracted overworld assets, not just the
-/// synthetic fixture above. Needs a local pack: run `cargo xtask extract`
-/// first, then `cargo test -p pokeemerald-rs -- --ignored`.
+/// `OverworldScene` loaded from the checkout pack for the protagonist's
+/// bedroom (Brendan's house 2F) composes deterministic, non-blank frames,
+/// and a different frame when the player's position and facing change
+/// together. Needs a local pack: run `cargo xtask extract` first, then
+/// `cargo test -p pokeemerald-rs -- --ignored`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
-    // The production fresh-save flag store, so the bedroom renders exactly
-    // as it would for a real new game -- same reasoning as
-    // `fresh_save_event_data` below: a fixture that claims to *be*
-    // production state has to come from production state.
+    // Fresh-save flags, so the bedroom's object events resolve as in a new game.
     let event_data = fresh_save_event_data();
     let scene =
         super::load_repo_default_room(&event_data).expect("run `cargo xtask extract` first");
 
-    // A couple of on-foot player states across the bedroom's 9x8 interior
-    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
-    // so the scroll-lag path is exercised too.
+    // Two on-foot player states inside the bedroom's 9x8 interior
+    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`).
     let standing = PlayerState::new((5, 5), 3, Direction::South);
     let frame_a = scene.compose(&standing, &event_data, 0);
     let frame_b = scene.compose(&standing, &event_data, 0);
@@ -1043,43 +1113,35 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     );
 }
 
-// -- Real-pack NPC rendering (issue #161) ------------------------------------
+// -- Real-pack NPC rendering -------------------------------------------------
 
-/// Brendan's House 1F: the only bundled map whose *fresh-save* object
-/// events include NPCs this module actually draws (Mom at `(2, 6)` and the
-/// rival's mom at `(2, 7)`, hidden on a fresh male save); the bedroom's own two events both resolve to
-/// nothing renderable on a fresh save, which is why these tests use 1F.
+/// Brendan's House 1F: the bundled map whose fresh-save object events
+/// include a drawn NPC (Mom at `(2, 6)`); the rival's mom at `(2, 7)` is
+/// hidden on a fresh male save. The bedroom's two object events resolve to
+/// nothing renderable on a fresh save, so the NPC tests use 1F.
 const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM`
-/// (`include/constants/flags.h:809`) -- deliberately *not* one of
+/// (`include/constants/flags.h:809`). It is not in
 /// [`assets::RESET_MAP_FLAGS`], so Mom is visible on a fresh save and
-/// setting this id is an observable change.
+/// setting the flag hides her.
 const FLAG_HIDE_BRENDANS_HOUSE_MOM: u16 = 0x2F6;
 
-/// The fresh-save flag store [`crate::new_game::init_save_blocks_for_new_game`]
-/// builds, so these tests see exactly the object-event visibility a real new
-/// game would.
-///
-/// **Delegates to the production constructor** rather than rebuilding the
-/// flag set from [`assets::RESET_MAP_FLAGS`]. It used to do the latter,
-/// which silently stopped matching its own doc comment the moment
-/// `init_save_blocks` grew a second effect (the skipped truck sequence's
-/// gender branch -- `crate::new_game::apply_truck_intro_flags`): the tests
-/// below kept passing against a flag set no real save ever has. A helper
-/// that claims to *be* production state has to come from production state.
+/// The `EventData` that [`crate::new_game::init_save_blocks_for_new_game`]
+/// builds, so object-event visibility matches a real new game. It calls the
+/// production constructor instead of rebuilding the flag set, so every flag
+/// the new-game path sets (reset-map flags, the wall-clock Vigoroth flags,
+/// the truck-intro gender flags) is present.
 fn fresh_save_event_data() -> engine::event_data::EventData {
     let (block1, _) = crate::new_game::init_save_blocks_for_new_game();
     block1.event_data
 }
 
-/// The issue's own "NPCs actually reach the framebuffer" guard, and the
-/// mutation guard for [`super::sprites::SceneSprites::entries`]' NPC half:
-/// composing 1F with a fresh save must differ, pixel for pixel, from
-/// composing it with Mom's hide flag set. Both halves are load-bearing --
-/// it pins that Mom *draws* (a no-op NPC OAM step would make the two
-/// frames identical) and that the hide-flag gate reaches rendering (an
-/// unfiltered NPC list would too).
+/// Composing 1F on a fresh save differs pixel for pixel from composing it
+/// with Mom's hide flag set. That pins both that Mom is drawn by
+/// [`super::sprites::SceneSprites::entries`] (without NPC entries the two
+/// frames would match) and that the hide flag reaches rendering (an
+/// unfiltered NPC list would match too).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
@@ -1126,11 +1188,10 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
     );
 }
 
-/// The OAM half of the same guard, against the *real*
-/// [`assets::MapEventsTable`] entry rather than a hand-built fixture: the
-/// exact entries 1F yields on a fresh save, including each NPC's resolved
-/// frame block in the scene's combined sprite tileset and its generic
-/// palette bank.
+/// [`super::sprites::SceneSprites::entries`] for 1F on a fresh save yields
+/// exactly the player and Mom, with Mom's frame block in the combined sprite
+/// tileset, generic palette bank, facing, and screen position taken from the
+/// real [`assets::MapEventsTable`] entry.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
@@ -1148,15 +1209,11 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(
         entries.len(),
         2,
-        "the player and Mom, and nobody else. 1F's Vigoroths are hidden \
-         by the skipped wall-clock script's flags \
-         (`crate::new_game::apply_wall_clock_vigoroth_flags`); its \
-         dad and the rival are hidden by RESET_MAP_FLAGS; and the rival's \
-         *mom* and *sibling* are hidden by the male branch of the skipped \
-         truck sequence (`crate::new_game::apply_truck_intro_flags`). This \
-         assertion was `3` while that branch went unapplied -- a second, \
-         duplicated mother standing in the player's own house, which is \
-         exactly the bug it now guards"
+        "the player and Mom, and nobody else: 1F's Vigoroths are hidden by \
+         `crate::new_game::apply_wall_clock_vigoroth_flags`; its dad and \
+         the rival are hidden by RESET_MAP_FLAGS; the rival's mom and \
+         sibling are hidden by the male branch of \
+         `crate::new_game::apply_truck_intro_flags`"
     );
 
     // Entry 0 is always the player, at its fixed screen position.
@@ -1167,11 +1224,10 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(entries[0].y(), super::avatar::PLAYER_OBJ_Y);
     assert_eq!(entries[0].palette_bank(), 0);
 
-    // The one NPC entry. Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which
-    // reuses the west stand frame h-flipped (`avatar::stand_frame_for`), and
-    // sits in the combined sprite tileset at the first `FRAME_BLOCK_TILES`
-    // stride after the player's own block -- her sheet is packed first, as
-    // `object_events[0]`.
+    // Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west
+    // stand frame h-flipped (`avatar::stand_frame_for`). Her sheet is packed
+    // first (`object_events[0]`), one `FRAME_BLOCK_TILES` stride after the
+    // player's block.
     let block = super::avatar::FRAME_BLOCK_TILES;
     let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
@@ -1193,9 +1249,8 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
         "one metatile north of the player: Mom stands at (2, 6)"
     );
 
-    // The rival's mother is *not* drawn: her object event at (2, 7) --
-    // this fixture's own player tile, where she would have overlapped the
-    // player exactly -- is hidden by the truck sequence's male branch.
+    // The rival's mother is not drawn: her object event at (2, 7), the
+    // player's own tile, is hidden by the truck sequence's male branch.
     let rival_mom = assets::MapEventsTable::new()
         .resolve(ONE_F)
         .unwrap()
@@ -1210,33 +1265,29 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
          male player (InsideOfTruck/scripts.inc:29)"
     );
 
-    // The bindings those tile indices address, cross-checked against the
-    // packing order `npc::resolve_bindings` walks.
+    // Bindings follow the packing order `npc::resolve_bindings` walks.
     let bindings = scene.sprites.bindings();
     assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
     assert!(
         bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
-        "the rival is bound (to the player's own sheet) even though \
-         RESET_MAP_FLAGS hides him: bindings are per-`graphics_id`, not \
-         per-visibility"
+        "the rival is bound to the player's own sheet even though \
+         RESET_MAP_FLAGS hides him: bindings are per `graphics_id`, not per \
+         visibility"
     );
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
 }
 
-/// The opposite-gender rival regression against the *real* pack, both ways
-/// round: the rival object event a player can actually meet lives in the
-/// other protagonist's house and carries that protagonist's graphics id
+/// `SceneSprites::bindings` binds the opposite-gender rival for either
+/// player. The rival a player can meet lives in the other protagonist's
+/// house and carries that protagonist's graphics id
 /// (`LittlerootTown_MaysHouse_2F/map.json:19` ->
-/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a binding must
-/// resolve for it whichever gender this run is. Before the fix, playing as
-/// Brendan resolved a binding only for `..._RIVAL_BRENDAN_NORMAL` -- the id
-/// that stays hidden in his own house -- leaving the real rival undrawn
-/// once its hide flag cleared.
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a Brendan player
+/// must bind `..._RIVAL_MAY_NORMAL` and a May player `..._RIVAL_BRENDAN_NORMAL`.
 ///
-/// Real-pack, because the point is partly that both protagonists' walking
-/// sheets *and* palettes are actually extracted and decodable
-/// (`sprite/{brendan,may}/walking`, `sprite/palette/{brendan,may}`).
+/// Uses the real pack because both protagonists' walking sheets and palettes
+/// must be extracted and decodable (`sprite/{brendan,may}/walking`,
+/// `sprite/palette/{brendan,may}`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
@@ -1293,9 +1344,8 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
         "the two configurations are mirror images -- same bank, same stride"
     );
 
-    // And the *resident's own* id still binds, to the already-loaded player
-    // sheet at bank 0 / base tile 0 (it is hidden in play, but the binding
-    // is correct rather than absent).
+    // The resident's own id binds to the player's sheet at bank 0 / base
+    // tile 0, even though that object event is hidden in play.
     let brendan_at_home = scene_for(BRENDANS_2F, super::PlayerCharacter::Brendan);
     let own = brendan_at_home
         .sprites
@@ -1306,23 +1356,17 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
     assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }
 
-/// The rendering half of [`super::npc`]'s `OBJ_EVENT_GFX_VAR_0` exception
-/// (issue #248): Route 103's real rival object event shares that exact
-/// `graphics_id` with every bedroom decoration placeholder, so this proves
-/// the *scene-decode* path -- not just [`super::npc::resolve_sprite_source`]
-/// in isolation -- resolves it to a real sprite binding once
-/// `VAR_OBJ_GFX_ID_0` names a real rival id, using the real
-/// [`assets::MapEventsTable`] entry against the real pack.
+/// With `VAR_OBJ_GFX_ID_0` naming a rival graphics id, `SceneSprites` binds
+/// Route 103's `OBJ_EVENT_GFX_VAR_0` rival object event to the opposite
+/// protagonist's sheet. This exercises scene decode (not just
+/// [`super::npc::resolve_sprite_source`]) against the real
+/// [`assets::MapEventsTable`] entry and pack.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
     // `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`) and
-    // `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`'s own numeric id
-    // (`include/constants/event_objects.h:112`) -- independently
-    // transcribed here too, the same convention every module citing these
-    // ids uses (`crate::flow::overworld_phase::route103_rival_trigger`'s
-    // own docs).
+    // `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL` (`include/constants/event_objects.h:112`).
     const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
     const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 
@@ -1351,10 +1395,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         .bindings()
         .get("OBJ_EVENT_GFX_VAR_0")
         .copied()
-        .expect(
-            "VAR_OBJ_GFX_ID_0 naming a real rival id must bind a sprite, not stay `None` \
-             like a bedroom decoration",
-        );
+        .expect("VAR_OBJ_GFX_ID_0 naming a rival id must bind a sprite for OBJ_EVENT_GFX_VAR_0");
     assert_ne!(
         binding.palette_bank(),
         0,
@@ -1368,22 +1409,16 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     );
 }
 
-// -- Real-pack Oldale Town / Route 103 background NPCs (issue #262) --------
+// -- Real-pack Oldale Town / Route 103 background NPCs -----------------------
 
-/// One [`super::npc::SpriteBinding`]'s worth of proof that a newly-bound
-/// background-NPC `graphics_id` really decodes against the real extracted
-/// pack -- not just that [`super::npc::resolve_sprite_source`] names a
-/// `sprite/<path>` id (already pinned pack-free by
-/// `npc::binding_tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
-/// but that `AssetPack::sprite` actually finds that entry and
-/// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
-/// mismatch is a real, real-pack-only failure mode --
-/// [`super::OverworldSceneError::SpriteSheetWrongDimensions`]/
-/// `ImagePixelCountMismatch`/`ImageNotTileAligned`). A nonzero base tile and
-/// the expected `npc_<n>` palette bank rule out the two ways a binding could
-/// silently be wrong instead of simply absent: reusing the player's own
-/// block (base tile `0`) or a different generic palette than upstream's
-/// `.paletteTag` names.
+/// Asserts that `graphics_id` has a [`super::npc::SpriteBinding`] in
+/// `bindings` with `expected_palette_bank` and its own frame block. The
+/// binding exists only if `AssetPack::sprite` finds the entry and
+/// `avatar::pack_people_sheet_frames` accepts its dimensions
+/// ([`super::OverworldSceneError::SpriteSheetWrongDimensions`],
+/// `ImagePixelCountMismatch`, `ImageNotTileAligned`). A nonzero base tile
+/// rules out reusing the player's block (base tile `0`), and the palette
+/// bank must match the upstream `.paletteTag` of the graphics info.
 fn assert_background_npc_binds(
     bindings: &HashMap<&'static str, super::npc::SpriteBinding>,
     graphics_id: &str,
@@ -1406,40 +1441,30 @@ fn assert_background_npc_binds(
     );
 }
 
-/// The other half of "no longer invisible": a [`super::npc::SpriteBinding`]
-/// alone still draws nothing unless [`super::npc::oam_entries`] actually
-/// emits an entry for the object event using it. Mirrors
-/// [`real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`]'s
-/// mechanics -- binding frame block, palette bank, 16x32 shape, and screen
-/// position derived from the player's own fixed one -- for a single
-/// `graphics_id`, one at a time rather than over a shared player position:
-/// `engine::overworld::object_event_is_in_view`'s spawn window is only ~17
-/// metatiles wide, and Route 103's trainers are spread across a 70-tile
-/// route, so no one player tile holds them all. The player is parked one
-/// metatile *north* of the NPC's own template tile, which puts it in that
-/// window and makes the expected entry position exactly one metatile south
-/// of [`super::avatar::PLAYER_OBJ_Y`] -- the same relationship the 1F test
-/// asserts for Mom, with the signs swapped.
+/// Asserts that [`super::sprites::SceneSprites::entries`] emits exactly one
+/// OAM entry for the fresh-save-visible object event using `graphics_id`,
+/// with the binding's frame block and palette bank, a 16x32 shape, and the
+/// player's column.
 ///
-/// Matching is by frame block rather than by count: bindings' blocks are
-/// disjoint by construction, so "exactly one entry addressing this
-/// binding's block" identifies this NPC's entry without assuming anything
-/// about how many *other* object events happen to share the window (Route
-/// 103's berry and cuttable trees are still unbound, and its twins are
-/// declared twice).
+/// Each `graphics_id` is checked alone because
+/// `engine::overworld::object_event_is_in_view` covers only ~17 metatiles
+/// and Route 103's trainers span a 70-tile route. The player stands one
+/// metatile north of the NPC, so the entry sits one metatile south of
+/// [`super::avatar::PLAYER_OBJ_Y`].
+///
+/// The entry is found by frame block rather than by count: binding blocks
+/// are disjoint, and other object events share the window (Route 103's
+/// berry and cuttable trees are unbound, and its twins are declared twice).
 fn assert_background_npc_draws_an_oam_entry(
     scene: &super::OverworldScene,
     map: assets::MapId,
     data: &engine::event_data::EventData,
     graphics_id: &str,
 ) {
-    // `oldale_town_npc_reposition::resolve_map_events` (issue #281), not a
-    // bare `MapEventsTable::resolve`: `scene` above was itself built through
-    // `load_room`, which already resolves through that same wrapper, so the
-    // expected position/facing this assertion computes below must agree --
-    // for Oldale Town's own footprints man and mart employee, that means
-    // their post-`OldaleTown_OnTransition` tiles, not their bare map.json
-    // ones. A no-op for every other map, Route 103 included.
+    // `load_room` resolves events through `resolve_map_events`, so the
+    // expected position must too: Oldale Town's footprints man and mart
+    // employee stand at their post-`OldaleTown_OnTransition` tiles, not the
+    // map.json ones. Other maps, Route 103 included, are unchanged.
     let event = super::oldale_town_npc_reposition::resolve_map_events(map, data)
         .unwrap()
         .object_events
@@ -1469,9 +1494,8 @@ fn assert_background_npc_draws_an_oam_entry(
     assert_eq!(
         drawn.len(),
         1,
-        "{graphics_id} must contribute exactly one OAM entry, drawn from \
-         its own binding's frame block -- a bound but never-emitted NPC is \
-         still invisible, which is the bug issue #262 fixes"
+        "{graphics_id} must contribute exactly one OAM entry drawn from its \
+         own binding's frame block; a bound but never-emitted NPC is invisible"
     );
 
     let entry = drawn[0];
@@ -1498,7 +1522,7 @@ fn assert_background_npc_draws_an_oam_entry(
     );
 }
 
-/// Oldale Town's three fresh-save-visible background NPCs (issue #262):
+/// Oldale Town's three fresh-save-visible background NPCs bind and draw:
 /// the girl (`GIRL_3`, `data/maps/OldaleTown/map.json:33-45`), the mart
 /// employee (`MART_EMPLOYEE`, `:46-59`), and the footprints man/maniac
 /// (`MANIAC`, `:60-73`) -- all `"flag": "0"`, so all three are always
@@ -1530,11 +1554,11 @@ fn real_pack_oldale_town_binds_its_background_npcs() {
     }
 }
 
-/// Route 103's own background NPCs/trainers (issue #262), every one of them
-/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`) -- unlike
-/// its own rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
-/// (`FLAG_HIDE_ROUTE_103_BIRCH`, already bound before this slice). Palette
-/// banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`.
+/// Route 103's background NPCs and trainers bind and draw. Each is
+/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`), unlike its
+/// rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
+/// (`FLAG_HIDE_ROUTE_103_BIRCH`). Palette banks follow each id's
+/// `gObjectEventGraphicsInfo_*.paletteTag`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_103_binds_its_background_npcs() {
@@ -1565,10 +1589,10 @@ fn real_pack_route_103_binds_its_background_npcs() {
     }
 }
 
-/// A female saved game must build Route 103 around May's player assets,
-/// while the map's variable graphics object resolves independently to
-/// Brendan as her rival. This pins the public `load_room` boundary where
-/// the saved-gender selection used to be discarded in favor of Brendan.
+/// Loading Route 103 for a `PlayerCharacter::May` save uses May's sheet and
+/// palette bank 0 for the player's `SceneSprites` tiles, while the map's
+/// `OBJ_EVENT_GFX_VAR_0` object resolves independently to Brendan as the
+/// rival.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
@@ -1588,8 +1612,7 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
         &event_data,
     )
     .expect("run `cargo xtask extract` first");
-    // The reference sheets below must come from the same pack the scene
-    // just read.
+    // Reference sheets come from the same pack the scene read.
     let pack = assets::pack::AssetPack::load_repo().unwrap();
 
     let may_pixels = pack.sprite("may/walking").unwrap();
@@ -1643,19 +1666,18 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
     }
 }
 
-// -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
+// -- Real-pack elevation-driven OBJ priority --------------------------------
 
-/// The visual counterpart to
-/// `flow::overworld_phase::step_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
-/// (this crate's collision-side pin for the same issue): standing on the
-/// protagonist bedroom bed's raised elevation-4 edge tile must draw the
-/// player OBJ at the raised OAM priority
-/// ([`super::avatar::priority_for_elevation`]), not the flat default every
-/// position drew before this fix. Real-pack, because the point is that this
-/// flows all the way through the production [`super::sprites::SceneSprites::entries`]
-/// list built from the real bedroom's own layout, not just
-/// [`super::avatar::player_entry`] in isolation (already unit-tested
-/// directly in `avatar`'s own module against synthetic elevations).
+/// The player OBJ's priority follows elevation on the real bedroom map.
+/// Standing on the bed's raised elevation-4 edge tile draws the player at the
+/// raised OAM priority ([`super::avatar::priority_for_elevation`]), not the
+/// default priority of ordinary floor. Real-pack so the priority is read from
+/// the production [`super::sprites::SceneSprites::entries`] list built from the
+/// bedroom's own layout, not just [`super::avatar::player_entry`] on synthetic
+/// elevations.
+///
+/// The collision-side counterpart for the same tiles is
+/// `flow::overworld_phase::bedroom_collision_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
@@ -1675,43 +1697,31 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     assert_eq!(
         floor_entries[0].priority(),
         super::avatar::PLAYER_OBJ_PRIORITY,
-        "entry 0 is always the player (this module's other real-pack OAM \
-         tests); ordinary floor elevation (3) draws at the default priority"
+        "entry 0 is the player; ordinary floor (elevation 3) draws at the default priority"
     );
 
-    // (0, 5): the bed's own raised west-edge tile, elevation 4 -- real
-    // authored data, not a synthetic fixture (cross-checked against
-    // `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin` by
-    // this crate's `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`).
+    // (0, 5): the bed's raised west-edge tile, elevation 4. This is authored
+    // data from `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
+    // the same tile the collision-side test above checks.
     let on_the_bed_edge = PlayerState::new((0, 5), 4, Direction::North);
     let bed_entries = scene.sprites.entries(&on_the_bed_edge, &data);
     assert_eq!(
         bed_entries[0].priority(),
         1,
-        "the bed's raised elevation-4 edge must draw the player OBJ at the \
-         raised priority (sElevationToPriority[4] == 1) -- the same-priority-\
-         favors-the-sprite tie rule (`rendering::compositor`) then draws it \
-         in front of the top BG layer instead of behind, matching a raised \
-         surface visually standing above whatever would otherwise occlude \
-         a player on ordinary floor"
+        "the bed's raised elevation-4 edge must draw the player OBJ at priority 1 \
+         (sElevationToPriority[4]); the compositor's same-priority tie rule \
+         (`rendering::compositor`) then puts the sprite in front of the top BG layer"
     );
 
-    // (0, 6): the bed's south-edge ELEVATION_TRANSITION tile, *stepped
-    // onto* from the raised edge. `PlayerState::new` seeds both elevation
-    // fields identically, so the drifted stance this issue is about --
-    // standing on the elevation-0 wildcard while `previous_elevation()`
-    // still reads the raised 4 -- is only reachable through the real
-    // movement path, exactly as
-    // `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
-    // walks it on the collision side. (The south edge rather than the
-    // north one: with no on-transition script run here, the fresh event
-    // data leaves the bedroom's decoration placeholder object standing on
-    // the north-edge tile, and that same walk test proves the south edge
-    // object-free.)
+    // (0, 6): the bed's south-edge ELEVATION_TRANSITION tile, stepped onto
+    // from the raised edge. `PlayerState::new` seeds both elevation fields
+    // identically, so the drifted stance (elevation 0 on the wildcard tile
+    // while `previous_elevation()` still reads 4) is reachable only through
+    // `PlayerState::step`, as in the collision-side walk test. The south edge
+    // is used because the fresh event data leaves a decoration placeholder
+    // object on the north-edge tile.
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let runtime = scene.runtime();
     let mut walker = PlayerState::new((0, 5), 4, Direction::South);
     walker.step(Some(Direction::South), &runtime, &no_connections, &data);
     while walker.in_transit() {
@@ -1721,28 +1731,25 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     assert_eq!(
         (walker.elevation(), walker.previous_elevation()),
         (0, 4),
-        "fixture precondition: the wildcard tile drifts the two fields apart"
+        "precondition: the wildcard tile drifts the two elevation fields apart"
     );
     let drifted_entries = scene.sprites.entries(&walker, &data);
     assert_eq!(
         drifted_entries[0].priority(),
         1,
-        "the player OBJ's priority must follow previous_elevation (the \
-         raised 4), not the wildcard tile's own 0 -- \
-         ObjectEventUpdateElevation leaves currentElevation's *rendering* \
-         consequence on the last concrete elevation, so the sprite keeps \
-         the raised priority instead of flickering to the default for the \
-         frames it stands on the transition tile"
+        "the player OBJ priority must follow previous_elevation (4), not the \
+         wildcard tile's own 0 (ObjectEventUpdateElevation keeps the last \
+         concrete elevation), so the sprite stays at the raised priority while \
+         it stands on the transition tile"
     );
 }
 
-// -- Real-pack tileset tile animation (issue #160) ---------------------------
+// -- Real-pack tileset tile animation ---------------------------------------
 
-/// Upstream `tileset_anims.c`'s General primary-tileset animated tile
-/// ranges -- the same literals `crate::overworld::tileset_anims`'s own
-/// module docs table pins, transcribed independently here rather than
-/// imported, so this test doesn't just check that module agrees with
-/// itself.
+/// The General primary tileset's animated tile ranges from upstream
+/// `tileset_anims.c`. They match `GENERAL_REGIONS` in
+/// `crate::overworld::tileset_anims` but are transcribed here instead of
+/// imported, so the tests do not compare that module with itself.
 const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
     508..512, // flower (4 tiles)
     432..462, // water (30 tiles)
@@ -1751,53 +1758,45 @@ const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
     480..490, // land/water edge (10 tiles)
 ];
 
-/// A player position inside `MAP_LITTLEROOT_TOWN` -- the only bundled map on
-/// the animated "general" primary tileset (`tileset_anims`'s own scope
-/// docs: every bundled interior uses "building", whose one animated
-/// metatile, the TV, no bundled interior's own `map.bin` actually places) --
-/// whose standing (not-in-transit, so zero-scroll/unpadded -- module docs'
-/// camera model) viewport draws animated tiles on screen.
+/// A standing (not in transit) player position in `MAP_LITTLEROOT_TOWN` whose
+/// viewport draws animated tiles. Littleroot is on the animated "general"
+/// primary tileset; the bundled interiors use "building", whose one animated
+/// metatile (the TV) no interior `map.bin` places.
 ///
-/// **Flower is the only animated region any bundled map ever puts on
-/// screen.** Measured against the real pack, at this position 24 on-screen
-/// BG tile cells reference the flower range and *zero* reference
-/// `water`/`sand_water_edge`/`waterfall`/`land_water_edge`; sweeping every
-/// cell of `MAP_LITTLEROOT_TOWN` at every standing position, flower peaks at
-/// 36 cells (at `(0, 14)`) and the other four regions stay at 0 everywhere
-/// -- Littleroot has no water in its own layout, and no other bundled map
-/// uses the "general" tileset at all. So [`GENERAL_ANIMATED_TILE_RANGES`]'s
-/// other four ranges are pinned by `tileset_anims`' own unit tests, not by
-/// any rendered pixel here. Found empirically against the real pack
-/// (`overworld::tests` has no typed access to `map.json`'s authored content
-/// otherwise).
+/// Flower is the only animated region Littleroot puts on screen. Measured on
+/// the real pack, 24 on-screen BG cells at this position reference the flower
+/// range and none reference water, sand/water edge, waterfall, or land/water
+/// edge. Over every standing position in Littleroot, flower peaks at 36 cells
+/// (at `(0, 14)`) and the other four regions stay at 0. So the other four
+/// ranges of [`GENERAL_ANIMATED_TILE_RANGES`] are pinned by
+/// `tileset_anims`' unit tests, not by a rendered pixel here. This position is a
+/// Littleroot view where the flower region is on screen.
 const LITTLEROOT_TOWN_FLOWER_VIEW: (i32, i32) = (10, 17);
 
-/// The screen-pixel rectangles [`GENERAL_ANIMATED_TILE_RANGES`] paints for
-/// `scene`/`player`'s current viewport: every 8x8 BG tile cell whose
-/// bottom, middle, or top sub-layer entry names a tile index in one of
-/// those ranges, as its `(x0, y0, x1, y1)` on-screen rect. Reaches into
-/// [`super::OverworldScene`]'s private fields directly (this module is one
-/// of its descendants) to rebuild the same tilemaps [`super::OverworldScene::compose`]
-/// would, the same way [`super::viewport`]'s own tests do.
+/// The screen-pixel rectangles that [`GENERAL_ANIMATED_TILE_RANGES`] paints for
+/// `scene` and `player`'s viewport: the `(x0, y0, x1, y1)` rect of every 8x8 BG
+/// tile cell whose bottom, middle, or top entry names a tile index in one of
+/// those ranges. It rebuilds the tilemaps [`super::OverworldScene::compose`]
+/// uses from [`super::OverworldScene`]'s private fields (this module is a
+/// descendant), as [`super::viewport`]'s own tests do.
 ///
-/// A resting viewport still carries `RESTING_SCROLL_Y`'s 8px baseline
-/// vertical scroll (issue #977), so a tile's raw pixel row is shifted by
-/// `viewport.scroll_y` (never `scroll_x`: horizontal scroll is zero at
-/// rest) to reach its actual screen row; a row that shift pushes fully
-/// off-screen is dropped, since no test here samples outside `0..160`.
+/// A resting viewport carries `RESTING_SCROLL_Y`'s 8px vertical scroll, so a
+/// tile's raw pixel row is shifted by `viewport.scroll_y` (horizontal scroll is
+/// zero at rest). Rects pushed fully off-screen are dropped, since no test
+/// samples outside `0..160`.
 ///
 /// # Panics
 ///
-/// If `player` [`PlayerState::in_transit`] -- the padded/scrolled viewport
-/// that produces doesn't map tile `(col, row)` to screen pixel `(col * 8,
-/// row * 8 - scroll_y)` in general, and no test here needs it.
+/// If `player` [`PlayerState::in_transit`]: the padded, scrolled viewport that
+/// produces does not map tile `(col, row)` to pixel `(col * 8, row * 8 -
+/// scroll_y)` in general.
 fn animated_tile_screen_rects(
     scene: &super::OverworldScene,
     player: &PlayerState,
 ) -> Vec<(usize, usize, usize, usize)> {
     assert!(
         !player.in_transit(),
-        "helper assumes an unpadded, resting-baseline-only scroll (doc comment)"
+        "helper assumes an unpadded viewport with only the resting scroll"
     );
     let grid = scene
         .layout
@@ -1807,10 +1806,9 @@ fn animated_tile_screen_rects(
         assets::BorderGrid::new(&scene.border_bytes).expect("border_bytes validated in from_pack");
     let primary_attrs = assets::MetatileAttributeTable::new(&scene.primary_attrs_bytes);
     let secondary_attrs = assets::MetatileAttributeTable::new(&scene.secondary_attrs_bytes);
-    // Issue #253: rebuild the same per-connection grids `Self::frame_viewport`
-    // would, so this helper stays a faithful stand-in for it even though
-    // Littleroot Town's own North connection never actually resolves at
-    // this helper's own on-screen-flower fixture positions.
+    // Rebuild the per-connection grids `OverworldScene::frame_viewport` builds,
+    // so this helper matches it even though Littleroot's North connection
+    // never resolves at the flower fixture position.
     let connections: Vec<super::viewport::ConnectionView<'_>> = scene
         .connections
         .iter()
@@ -1867,17 +1865,14 @@ fn animated_tile_screen_rects(
     rects
 }
 
-/// The issue #160 acceptance test's "differs" half: composing
-/// `MAP_LITTLEROOT_TOWN` at two different ticks changes pixels only inside
-/// the on-screen rects [`animated_tile_screen_rects`] identifies -- proving
-/// [`super::OverworldScene::compose`]'s `tick` parameter actually reaches
-/// rendered pixels, and only the pixels its own animated tile ranges own,
-/// for a real map/pack. `tick` 60 is arbitrary but deliberate: General
-/// flower -- the one region this map puts on screen at all
-/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs) -- fires at ticks 16, 32, 48,
-/// and 64, so at tick 60 it has latched sequence position 3 (`Frame2`), a
-/// frame distinct from the base art tick 0 shows
-/// (`tileset_anims::latched_frame`'s doc comment and its own unit tests).
+/// Composing `MAP_LITTLEROOT_TOWN` at two ticks changes pixels only inside the
+/// on-screen rects [`animated_tile_screen_rects`] returns. So
+/// [`super::OverworldScene::compose`]'s `tick` reaches rendered pixels, and
+/// only the pixels the animated tile ranges own. Tick 60 is chosen because
+/// General flower, the one region this map puts on screen
+/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]), fires at ticks 16, 32, 48, and 64, so at
+/// tick 60 it has latched sequence position 3 (`Frame2`), a frame distinct from
+/// the base art at tick 0 (see `tileset_anims::latched_frame`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
@@ -1895,8 +1890,7 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     let rects = animated_tile_screen_rects(&scene, &player);
     assert!(
         !rects.is_empty(),
-        "this fixture position's own premise: at least one on-screen tile must \
-         reference one of GENERAL_ANIMATED_TILE_RANGES"
+        "at least one on-screen tile must reference one of GENERAL_ANIMATED_TILE_RANGES"
     );
     let in_any_rect = |px: usize, py: usize| {
         rects
@@ -1927,29 +1921,25 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     );
 }
 
-/// The issue #160 acceptance test's "repeats" half: two ticks a full
-/// cadence period apart compose pixel-identically. 128 is the LCM of every
-/// region [`crate::overworld::tileset_anims`] ports (General
-/// water/sand-water-edge at 128, every other region's own cycle a divisor of
-/// it -- that module's own doc comment).
+/// Two ticks a full cadence period apart compose pixel-identically. 128 is the
+/// least common multiple of the cycles of every region
+/// [`crate::overworld::tileset_anims`] ports: General water and sand/water edge
+/// run at 128, and every other region's cycle divides it.
 ///
-/// **The invariant is "for every tick >= 16", not "for any tick".** Below a
-/// region's own first fire it shows the *base* art rather than any frame of
-/// its sequence, and the base art is not in general equal to the frame the
-/// same region shows 128 ticks later: on a map with water on screen,
-/// `compose(0)` and `compose(128)` would genuinely differ (water latches
-/// sequence position 0 at tick 128, and `water/0` is not the base tile art).
-/// 16 is the largest `first_fire` over every region this slice ports (the
-/// `phase == 0` regions' `interval`), so from tick 16 on every region has
-/// latched and the period is exact everywhere.
+/// The invariant holds for every tick >= 16, not for any tick. Before a
+/// region's first fire it shows the base art, which in general differs from the
+/// frame it shows 128 ticks later: on a map with water on screen, `compose(0)`
+/// and `compose(128)` would differ, because water latches sequence position 0
+/// at tick 128 and `water/0` is not the base tile art. 16 is the largest first
+/// fire of any ported region (the `phase == 0` regions' `interval`), so from
+/// tick 16 every region has latched and the period is exact.
 ///
-/// Ticks 0, 1, and 8 are still exercised below, but only because *this*
-/// map/position happens to make them true: General flower is the sole
-/// animated region on screen here ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs)
-/// and its `sequence[0]` frame is pixel-identical to the base art it
-/// overwrites, so "pre-first-fire" and "latched frame 0" render the same.
-/// They are not evidence for the general invariant -- the ticks from 16 up
-/// are.
+/// Ticks 0, 1, and 8 are exercised only because this map and position make
+/// them hold: General flower is the sole animated region on screen
+/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]) and its `sequence[0]` frame is
+/// pixel-identical to the base art, so before-first-fire and latched frame 0
+/// render the same. Only the ticks from 16 up are evidence for the general
+/// invariant.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
@@ -1966,8 +1956,9 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
 
-    // 0/1/8: this map/position only (doc comment). 16/60/127: the real,
-    // map-independent invariant -- every region has fired by tick 16.
+    // 0/1/8 hold for this map and position only (see the doc comment).
+    // 16/60/127 cover the map-independent invariant: every region has fired
+    // by tick 16.
     for tick in [0, 1, 8, 16, 60, 127] {
         let a = scene.compose(&player, &event_data, tick);
         let b = scene.compose(&player, &event_data, tick + FULL_CADENCE_PERIOD);
@@ -1981,26 +1972,22 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     }
 }
 
-// -- Real-pack connected-map rendering (issue #253, I-4/V-4) ----------------
+// -- Real-pack connected-map rendering --------------------------------------
 
-/// Littleroot Town ↔ Route 101's own real cross-boundary continuity: a
-/// camera near Littleroot's north edge (`MAP_LITTLEROOT_TOWN`'s only
-/// declared connection, `Direction::North`, `offset: 0`, into
-/// `MAP_ROUTE101` -- `crates/assets/src/map_headers.rs`) must show Route
-/// 101's own tiles, not a hard cut to the border block, and must show
-/// *exactly* the tiles Route 101's own layout renders at the corresponding
-/// world position -- no seam.
+/// A camera near Littleroot's north edge renders Route 101's tiles with no
+/// seam. `MAP_LITTLEROOT_TOWN`'s only declared connection is `Direction::North`
+/// with `offset: 0` into `MAP_ROUTE101` (`crates/assets/src/map_headers.rs`).
+/// The strip north of the edge must show the tiles Route 101's own layout
+/// renders at the corresponding world position, not a hard cut to the border
+/// block.
 ///
-/// A deterministic pixel comparison, not a golden image: rather than
-/// pinning specific upstream colors (which would break the moment either
-/// map's art changes), this composes the same physical world strip two
-/// ways -- once via Littleroot's own north-edge connection fallback, once
-/// by loading Route 101 directly and centering the camera on the
-/// corresponding position on *its* side (offset 0 means the x axes line up
-/// 1:1; the constants below derive the y alignment from that same
-/// [`super::PlayerCharacter`]/camera-centering math [`super::viewport`]'s
-/// own module docs describe) -- and asserts the two agree, pixel for
-/// pixel, everywhere in the shared strip.
+/// It is a pixel comparison, not a golden image, so it survives art changes.
+/// The same world strip is composed two ways: through Littleroot's north-edge
+/// connection, and by loading Route 101 directly with the camera on the
+/// corresponding position of its side (offset 0 lines the x axes up 1:1; the
+/// constants below derive the y alignment from the camera-centering math in
+/// [`super::viewport`]'s module docs). The two compositions must agree pixel
+/// for pixel everywhere in the shared strip.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge() {
@@ -2014,11 +2001,9 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    // The pre-#253 shape: the same room, its own declared connections
-    // stripped, so composing it reproduces exactly what a hard cut to the
-    // border block used to render -- `overworld::tests` is a descendant
-    // module of `overworld`, so it can reach this private field directly
-    // (the same access `animated_tile_screen_rects` above already uses).
+    // The same room with its declared connections stripped, so composing it
+    // renders a hard cut to the border block. The private `connections` field
+    // is reachable because this module is a descendant of `overworld`.
     let mut scene_border_only = super::load_room_from_source(
         &crate::pack_source::PackSource::Repo,
         LITTLEROOT,
@@ -2036,40 +2021,33 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     .expect("run `cargo xtask extract` first");
 
     let data = fresh_save_event_data();
-    // Standing just inside Littleroot's own north edge (row 1 of its own
-    // 20x20 grid -- `crates/assets/src/map_layouts.rs`), facing north: at
-    // rest, the resting viewport's own anchor (`anchor_y == y -
-    // PLAYER_VIEW_ROW == 1 - 5 == -4`, `super::viewport`'s module docs)
-    // samples world rows `-4..=5` -- the top four rows (screen rows 0..=3,
-    // world rows `-4..=-1`) already fall north of Littleroot's own y == 0
-    // edge, squarely in this connection's own territory. All four are
-    // inside `viewport::within_backup_map_band`'s own `y >= -7` cover, so
-    // the band bound never trims this strip. `RESTING_SCROLL_Y`'s 8px
-    // resting scroll (issue #977) shifts those rows to screen pixel rows
-    // `0..56`, not `0..64`: `(56 + 8) / 16 == 4` is the first screen row
-    // that samples world row `-4 + 4 == 0`, Littleroot's own in-bounds
-    // interior rather than the connection strip.
+    // Standing at row 1 of Littleroot's 20x20 grid
+    // (`crates/assets/src/map_layouts.rs`), facing north. The resting viewport
+    // anchor is `anchor_y == y - PLAYER_VIEW_ROW == 1 - 5 == -4`
+    // (`super::viewport`'s module docs), so it samples world rows `-4..=6` (the last is the resting-scroll row).
+    // Screen rows 0..=3 (world rows `-4..=-1`) lie north of Littleroot's
+    // y == 0 edge, in the connection's territory, and all are inside
+    // `viewport::within_backup_map_band`'s `y >= -7` cover. `RESTING_SCROLL_Y`'s
+    // 8px scroll shifts them to screen pixel rows `0..56`, not `0..64`:
+    // `(56 + 8) / 16 == 4` is the first screen row that samples world row 0,
+    // Littleroot's own interior.
     let player = PlayerState::new((10, 1), 3, Direction::North);
     let frame = scene.compose(&player, &data, 0);
     let frame_border_only = scene_border_only.compose(&player, &data, 0);
 
-    // Route 101's own camera, centered so the *same* screen pixel samples
-    // the *same* world position `connected_cell_at`'s North-connection
-    // formula names (`target_y == connected_height + y`, offset 0 leaves x
-    // untouched): matching x (10) and a y whose own `anchor_y` lines up
-    // Route 101's local row 19 (its own south edge) with Littleroot's local
-    // row -1 (screen row 3 in both compositions) -- `21 - 5 == 16`, and
-    // `16 + 3 == 19`, against Littleroot's own `-4 + 3 == -1`.
+    // Route 101's camera is placed so the same screen pixel samples the same
+    // world position as `connected_cell_at`'s North-connection formula
+    // (`target_y == connected_height + y`; offset 0 leaves x untouched): same
+    // x (10), and a y whose `anchor_y` puts Route 101's row 19 (its south edge)
+    // on Littleroot's row -1, screen row 3 in both compositions. That is
+    // `21 - 5 == 16` and `16 + 3 == 19`, against Littleroot's `-4 + 3 == -1`.
     let route_101_player = PlayerState::new((10, 21), 3, Direction::North);
     let frame_route_101 = route_101.compose(&route_101_player, &data, 0);
 
-    // The shared strip: screen pixel rows `0..56` -- 4 metatile rows, the
-    // full width -- entirely north of Littleroot's own grid at this player
-    // position, per the anchor math above. The last of them (screen rows
-    // 40..56, world row -1 on Littleroot's side, Route 101's own row 19) is
-    // the row immediately adjacent to the seam, the one the comparison most
-    // needs to cover (review of #253: the strip used to stop at `0..48`,
-    // three rows, excluding exactly that row).
+    // The shared strip is screen pixel rows `0..56`: 4 metatile rows at full
+    // width, all north of Littleroot's grid per the anchor math above. Its last
+    // row (pixel rows 40..56, Littleroot world row -1, Route 101 row 19) is
+    // adjacent to the seam, so a seam error shows there first.
     let mut any_pixel_changed_by_the_connection = false;
     for py in 0..56usize {
         for px in 0..240usize {
@@ -2088,21 +2066,18 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     }
     assert!(
         any_pixel_changed_by_the_connection,
-        "the connection must actually change at least one pixel versus the pre-#253 \
-         border-only fallback, or the two comparisons above would be trivially \
-         satisfied by an all-border strip"
+        "the connection must change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be satisfied by an all-border strip"
     );
 }
 
-/// The same seam proof for the cluster's *other* live outdoor edge:
-/// Route 101's only North connection (`MAP_OLDALE_TOWN`, `offset: 0` --
-/// `crates/assets/src/map_headers.rs`), newly resolvable now that
-/// `cargo xtask extract`'s `LAYOUTS` table bundles Oldale Town's grid
-/// bytes (issue #248). Identical geometry to
+/// The same seam check for Route 101's only North connection, `MAP_OLDALE_TOWN`
+/// with `offset: 0` (`crates/assets/src/map_headers.rs`), which resolves
+/// because the `LAYOUTS` table bundles Oldale Town's grid bytes. The geometry
+/// is identical to
 /// [`real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge`]
-/// -- both layouts are 20x20 and the offset is 0 -- so the same anchor
-/// math covers the same four-row strip; see that test's comments for the
-/// derivation.
+/// (both layouts are 20x20, offset 0), so the same anchor math covers the same
+/// four-row strip; see that test's comments for the derivation.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_edge() {
@@ -2158,9 +2133,8 @@ fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_e
     }
     assert!(
         any_pixel_changed_by_the_connection,
-        "the connection must actually change at least one pixel versus the border-only \
-         fallback, or the comparisons above would be trivially satisfied by an \
-         all-border strip"
+        "the connection must change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be satisfied by an all-border strip"
     );
 }
 
@@ -2198,7 +2172,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             flag: "0",
         }]));
         let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-            id: assets::MapId("MAP_TEST"),
+            id: assets::MapId("MAP_ROUTE122"),
             shared_events_map: None,
             object_events,
             warp_events: &[],
@@ -2349,4 +2323,157 @@ fn compose_paints_each_latched_flower_frame_into_the_animated_tile_range() {
         color(0x7C00),
         "tick 48 latches sequence position 3 -- flower asset 2 (blue)"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn with_palette_refuses_a_planted_symlink() {
+    let path = regression_pack_path("planted-symlink");
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        with_palette_at(&path, 3, |_| {});
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn scene_scratch_pack_refuses_a_planted_symlink() {
+    let path = super::test_support::scene_scratch_pack_path();
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        let _ = super::test_support::synthetic_scene_result(
+            super::test_support::write_synthetic_pack(Vec::new()),
+            "none",
+            1,
+            1,
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn layout_pack_writers_refuse_a_planted_symlink() {
+    let path = regression_pack_path("planted-layout-symlink");
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_oldale_layout_pack(&path, &[]);
+    });
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_route101_oldale_layout_pack(&path, &[], &[]);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn scratch_writer_refuses_a_planted_symlink_and_keeps_the_link() {
+    let path = regression_pack_path("planted-symlink-kept");
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_scratch_exclusive(&path, b"fresh scratch pack");
+    });
+}
+
+/// The inputs of a room that is internally coherent: Route 122's header and
+/// events over a 4x4 synthetic petalburg layout.
+fn route_122_room_inputs() -> (
+    assets::MapHeader,
+    assets::MapLayout,
+    &'static assets::MapEvents,
+) {
+    let map = assets::MapId("MAP_ROUTE122");
+    let layout = assets::MapLayout {
+        id: LayoutId("LAYOUT_MAP_TEST"),
+        name: "MapTest",
+        width: 4,
+        height: 4,
+        primary_tileset: "gTileset_Petalburg",
+        secondary_tileset: "gTileset_Petalburg",
+    };
+    let header = assets::MapHeader {
+        layout: layout.id,
+        connections: &[],
+        ..*assets::MapHeaderTable::new().header(map).unwrap()
+    };
+    let events = assets::MapEventsTable::new().resolve(map).unwrap();
+    (header, layout, events)
+}
+
+fn build_route_122_scene(
+    header: &assets::MapHeader,
+    layout: &assets::MapLayout,
+    events: &assets::MapEvents,
+) -> Result<super::OverworldScene, OverworldSceneError> {
+    let path = super::test_support::scene_scratch_pack_path();
+    super::test_support::write_scratch_exclusive(
+        &path,
+        synthetic_overworld_pack_bytes_for("petalburg", 4, 4),
+    );
+    let pack = AssetPack::load(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    super::OverworldScene::from_pack(
+        &pack,
+        header,
+        layout,
+        super::PlayerCharacter::Brendan,
+        events,
+        &engine::event_data::EventData::new(),
+    )
+}
+
+/// Control for the two mismatch regressions below: the coherent inputs load,
+/// so a refusal there is the mismatch and not the fixture.
+#[test]
+fn from_pack_loads_a_coherent_room() {
+    let (header, layout, events) = route_122_room_inputs();
+    build_route_122_scene(&header, &layout, events).expect("coherent inputs load");
+}
+
+/// A layout the header does not name is another room's grid: collision and
+/// rendering would answer for one room under another's connections.
+#[test]
+fn from_pack_rejects_a_layout_the_header_does_not_name() {
+    let (header, layout, events) = route_122_room_inputs();
+    let foreign = assets::MapHeader {
+        layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+        ..header
+    };
+    let err = build_route_122_scene(&foreign, &layout, events)
+        .expect_err("a header naming another layout must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::LayoutNotOfHeader {
+            map: header.id,
+            header_layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+            layout: layout.id,
+        }
+    );
+}
+
+/// Events owned by another map put that map's NPCs, warps, and triggers in
+/// this room.
+#[test]
+fn from_pack_rejects_events_owned_by_another_map() {
+    let (header, layout, _) = route_122_room_inputs();
+    let other = assets::MapEventsTable::new()
+        .resolve(assets::MapId("MAP_EVER_GRANDE_CITY"))
+        .unwrap();
+    let err = build_route_122_scene(&header, &layout, other)
+        .expect_err("another map's events must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::EventsNotOfHeader {
+            map: header.id,
+            owner: assets::MapId("MAP_ROUTE122"),
+            events: other.id,
+        }
+    );
+}
+
+/// An aliased map's events resolve to their owner, and the scene's runtime
+/// answers for the map it was loaded for, not the owner.
+#[test]
+fn a_scene_runtime_answers_for_the_room_it_owns() {
+    let (header, layout, events) = route_122_room_inputs();
+    let scene = build_route_122_scene(&header, &layout, events).unwrap();
+    let runtime = scene.runtime();
+    assert_eq!(scene.map_id(), header.id);
+    assert_eq!(runtime.id(), header.id);
+    assert_eq!(runtime.header(), &header);
+    assert_eq!(scene.map_events(), events);
 }
