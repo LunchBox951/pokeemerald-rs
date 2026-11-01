@@ -303,10 +303,10 @@ fn a_root_replaced_during_cleanup_is_not_deleted() {
     let base = Fixture::claim("race-base");
     // Without a readable `/proc` cleanup falls back to the documented
     // path-based removal, which this race would rightly defeat.
-    if !base
+    if base
         .held
         .as_ref()
-        .is_some_and(|held| std::fs::read_dir(through_proc(held)).is_ok())
+        .is_none_or(|held| std::fs::read_dir(through_proc(held)).is_err())
     {
         return;
     }
