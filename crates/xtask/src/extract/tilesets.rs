@@ -4,9 +4,7 @@
 use std::path::Path;
 
 use super::scope::TilesetSource;
-use super::{
-    collect_pngs_sorted, push_palette_entry, push_png_entry, push_raw_entry, ExtractError,
-};
+use super::{push_palette_entry, push_png_entry, push_raw_entry, ExtractError};
 use pack_format::PackWriter;
 
 const TILESET_PALETTE_COUNT: u8 = 16;
@@ -41,16 +39,11 @@ pub(super) fn extract_tileset(
 
     let anim_dir = base.join("anim");
     require_animation_sources(&anim_dir, source)?;
-    if anim_dir.is_dir() {
-        for png_path in collect_pngs_sorted(&anim_dir)? {
-            let rel = png_path
-                .strip_prefix(&anim_dir)
-                .expect("collect_pngs_sorted only returns paths under anim_dir")
-                .with_extension("");
-            let rel_id = rel.to_string_lossy().replace('\\', "/");
+    for &(anim, frames) in source.animations {
+        for n in 0..frames {
             push_png_entry(
-                &png_path,
-                format!("tileset/{}/anim/{rel_id}", source.name),
+                &anim_dir.join(anim).join(format!("{n}.png")),
+                format!("tileset/{}/anim/{anim}/{n}", source.name),
                 writer,
             )?;
         }
@@ -82,7 +75,88 @@ pub(super) fn extract_tileset(
 #[cfg(test)]
 mod tests {
     use super::{extract_tileset, ExtractError, PackWriter, TILESET_PALETTE_COUNT};
-    use crate::extract::scope::TILESETS;
+    use crate::extract::scope::{TilesetSource, TILESETS};
+
+    /// A synthetic checkout holding every source `extract_tileset` reads for
+    /// `source`, each decodable.
+    fn synthetic_tileset_checkout(tag: &str, source: TilesetSource) -> std::path::PathBuf {
+        let upstream = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&upstream);
+        let base = upstream
+            .join("data/tilesets")
+            .join(source.category)
+            .join(source.name);
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::create_dir_all(base.join("palettes")).expect("dir");
+        std::fs::write(base.join("tiles.png"), &png).expect("tiles");
+        for slot in 0..TILESET_PALETTE_COUNT {
+            let pal = base.join("palettes").join(format!("{slot:02}.pal"));
+            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
+        }
+        std::fs::write(base.join("metatiles.bin"), [0u8; 16]).expect("metatiles");
+        std::fs::write(base.join("metatile_attributes.bin"), [0u8; 2]).expect("attrs");
+        for &(name, frames) in source.animations {
+            let dir = base.join("anim").join(name);
+            std::fs::create_dir_all(&dir).expect("dir");
+            for n in 0..frames {
+                std::fs::write(dir.join(format!("{n}.png")), &png).expect("frame");
+            }
+        }
+        upstream
+    }
+
+    #[test]
+    fn untracked_animation_pngs_are_not_packed_and_ids_match_the_manifest() {
+        for source in [TILESETS[0], TILESETS[1]] {
+            assert!(!source.animations.is_empty(), "{}", source.name);
+            let upstream = synthetic_tileset_checkout("untracked-anim", source);
+            let anim = upstream
+                .join("data/tilesets")
+                .join(source.category)
+                .join(source.name)
+                .join("anim");
+            let first = source.animations[0].0;
+            // Neither decodable nor in the manifest: a manifest-driven
+            // extractor never opens them, so a directory walk would fail.
+            std::fs::write(anim.join("zz_untracked.png"), b"not a png").expect("stray");
+            std::fs::write(anim.join(first).join("99.png"), b"not a png").expect("stray");
+            std::fs::write(anim.join(first).join("zz.PNG"), b"not a png").expect("stray");
+            std::fs::create_dir_all(anim.join("zz_dir")).expect("dir");
+            std::fs::write(anim.join("zz_dir/0.png"), b"not a png").expect("stray");
+            // Decodable but not in the manifest: a walk that skipped decode
+            // failures would still pack them as surplus animation ids.
+            let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+            std::fs::write(anim.join("zz_valid.png"), &png).expect("stray");
+            std::fs::write(anim.join(first).join("98.png"), &png).expect("stray");
+
+            let mut writer = PackWriter::new();
+            let result = extract_tileset(&upstream, source, &mut writer);
+            let _ = std::fs::remove_dir_all(&upstream);
+            result.expect("complete");
+            let bytes = writer.finish().expect("finish");
+            let ids: Vec<String> = pack_format::parse_directory(&bytes)
+                .expect("pack parses")
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect();
+
+            let name = source.name;
+            let mut expected = vec![
+                source.tiles_id(),
+                format!("tileset/{name}/metatiles"),
+                format!("tileset/{name}/metatile-attributes"),
+            ];
+            expected.extend(source.animation_ids());
+            expected.extend(
+                (0..TILESET_PALETTE_COUNT).map(|n| format!("tileset/{name}/palette/{n:02}")),
+            );
+            expected.sort();
+            assert_eq!(ids, expected, "{name}");
+        }
+    }
 
     #[test]
     fn a_checkout_missing_a_required_animation_frame_is_refused() {

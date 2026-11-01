@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::scope::{sprite_palette_ids, ObjectSheet, OBJECT_SHEETS, PEOPLE_SHEETS};
-use super::{collect_pngs_sorted, push_palette_entry, push_png_entry, ExtractError};
+use super::{push_palette_entry, push_png_entry, ExtractError};
 use pack_format::PackWriter;
 
 pub(super) const FIRST_GENERIC_NPC_PALETTE: u8 = 1;
@@ -34,13 +34,12 @@ pub(super) fn extract_sprites(
 ) -> Result<(), ExtractError> {
     let people_dir = upstream.join("graphics/object_events/pics/people");
     require_sprite_sources(&people_dir)?;
-    for png_path in collect_pngs_sorted(&people_dir)? {
-        let rel = png_path
-            .strip_prefix(&people_dir)
-            .expect("collect_pngs_sorted only returns paths under people_dir")
-            .with_extension("");
-        let rel_id = rel.to_string_lossy().replace('\\', "/");
-        push_png_entry(&png_path, format!("sprite/{rel_id}"), writer)?;
+    for stem in PEOPLE_SHEETS {
+        push_png_entry(
+            &people_dir.join(format!("{stem}.png")),
+            format!("sprite/{stem}"),
+            writer,
+        )?;
     }
 
     let pics_dir = upstream.join("graphics/object_events/pics");
@@ -69,6 +68,73 @@ mod tests {
         extract_sprites, object_sheet_path, sprite_palette_ids, ExtractError, ObjectSheet,
         PackWriter, OBJECT_SHEETS, PEOPLE_SHEETS,
     };
+    use crate::extract::scope::sprite_sheet_ids;
+    use std::path::{Path, PathBuf};
+
+    /// A synthetic checkout holding every pinned sprite source, each decodable.
+    fn synthetic_sprite_checkout(tag: &str) -> PathBuf {
+        let upstream = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&upstream);
+        let people = upstream.join("graphics/object_events/pics/people");
+        let palettes = upstream.join("graphics/object_events/palettes");
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::create_dir_all(&palettes).expect("dir");
+        for id in sprite_palette_ids() {
+            let name = id.strip_prefix("sprite/palette/").expect("palette id");
+            let pal = palettes.join(format!("{name}.pal"));
+            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
+        }
+        for stem in PEOPLE_SHEETS {
+            let path = people.join(format!("{stem}.png"));
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+            std::fs::write(path, &png).expect("sheet");
+        }
+        let pics = upstream.join("graphics/object_events/pics");
+        for sheet in OBJECT_SHEETS {
+            let path = object_sheet_path(&pics, sheet);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+            std::fs::write(path, &png).expect("object sheet");
+        }
+        upstream
+    }
+
+    fn packed_ids(upstream: &Path) -> Vec<String> {
+        let mut writer = PackWriter::new();
+        let result = extract_sprites(upstream, &mut writer);
+        let _ = std::fs::remove_dir_all(upstream);
+        result.expect("complete");
+        let bytes = writer.finish().expect("finish");
+        pack_format::parse_directory(&bytes)
+            .expect("pack parses")
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect()
+    }
+
+    #[test]
+    fn untracked_people_files_are_not_packed_and_ids_match_the_manifest() {
+        let upstream = synthetic_sprite_checkout("untracked-sprite");
+        let people = upstream.join("graphics/object_events/pics/people");
+        // Neither decodable nor in the manifest: a manifest-driven extractor
+        // never opens them, so a directory walk would fail on them.
+        std::fs::write(people.join("zz_untracked.png"), b"not a png").expect("stray");
+        std::fs::write(people.join("brendan/zz_untracked.PNG"), b"not a png").expect("stray");
+        std::fs::create_dir_all(people.join("zz_dir")).expect("dir");
+        std::fs::write(people.join("zz_dir/nested.png"), b"not a png").expect("stray");
+        // Decodable but not in the manifest: a walk that skipped decode
+        // failures would still pack them as surplus `sprite/*` ids.
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::write(people.join("zz_valid.png"), &png).expect("stray");
+        std::fs::write(people.join("zz_dir/valid.png"), &png).expect("stray");
+
+        let mut expected: Vec<String> = sprite_sheet_ids();
+        expected.extend(sprite_palette_ids());
+        expected.sort();
+        assert_eq!(packed_ids(&upstream), expected);
+    }
 
     #[test]
     fn a_checkout_missing_a_required_sprite_sheet_is_refused() {
