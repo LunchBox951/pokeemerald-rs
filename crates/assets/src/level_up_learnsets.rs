@@ -1,0 +1,5602 @@
+//! Canonical level-up move sequences for every species.
+//!
+//! Sequence order is behaviour: equal-level entries and level-one starting
+//! moves stay in their canonical order. The reserved [`SpeciesId::NONE`] slot
+//! intentionally shares [`SpeciesId::BULBASAUR`]'s learnset.
+//!
+//! The packed source format stores the level in the high seven bits and the
+//! [`MoveId`] in the low nine bits of a `u16`. Slices replace its all-ones
+//! terminator while [`LevelUpMove::packed`] preserves the serialization boundary.
+
+use crate::battle_moves::MoveId;
+use crate::error::AssetError;
+use crate::species::{SpeciesId, SPECIES_COUNT as CANONICAL_SPECIES_COUNT};
+
+/// The number of species slots in the learnset table.
+pub const SPECIES_COUNT: usize = CANONICAL_SPECIES_COUNT;
+
+const MOVE_ID_BITS: u16 = 9;
+const MOVE_ID_MASK: u16 = (1 << MOVE_ID_BITS) - 1;
+const MAX_PACKED_LEVEL: u8 = (u16::MAX >> MOVE_ID_BITS) as u8;
+const PACKED_END: u16 = u16::MAX;
+
+/// One move learned at a particular level.
+///
+/// `level` and `move_id` always fit the packed format's seven- and nine-bit
+/// fields, and their combination never collides with the all-ones terminator:
+/// every constructor enforces all three, so [`LevelUpMove::packed`] never
+/// loses bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LevelUpMove {
+    level: u8,
+    move_id: MoveId,
+}
+
+impl LevelUpMove {
+    /// Builds an entry, or `None` if `level` or `move_id` overflow the packed
+    /// format's seven- and nine-bit fields, or their combination packs to the
+    /// all-ones terminator.
+    #[must_use]
+    pub const fn new(level: u8, move_id: MoveId) -> Option<Self> {
+        if level > MAX_PACKED_LEVEL || move_id.index() > MOVE_ID_MASK {
+            return None;
+        }
+        if level == MAX_PACKED_LEVEL && move_id.index() == MOVE_ID_MASK {
+            return None;
+        }
+        Some(Self { level, move_id })
+    }
+
+    /// Builds an entry from source data already known to fit the packed
+    /// format; only this module's own compile-time table may call it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `level` or `move_id` overflow the packed format's seven- and
+    /// nine-bit fields, or if their combination packs to the all-ones
+    /// terminator.
+    const fn checked(level: u8, move_id: MoveId) -> Self {
+        assert!(
+            level <= MAX_PACKED_LEVEL,
+            "level overflows the packed format's 7-bit field"
+        );
+        assert!(
+            move_id.index() <= MOVE_ID_MASK,
+            "move_id overflows the packed format's 9-bit field"
+        );
+        assert!(
+            level != MAX_PACKED_LEVEL || move_id.index() != MOVE_ID_MASK,
+            "level and move_id together collide with the packed all-ones terminator"
+        );
+        Self { level, move_id }
+    }
+
+    /// The level at which the move is learned.
+    #[must_use]
+    pub const fn level(self) -> u8 {
+        self.level
+    }
+
+    /// The move learned.
+    #[must_use]
+    pub const fn move_id(self) -> MoveId {
+        self.move_id
+    }
+
+    /// Decodes one packed entry, or `None` for the all-ones terminator.
+    #[must_use]
+    pub const fn from_packed(packed: u16) -> Option<Self> {
+        if packed == PACKED_END {
+            None
+        } else {
+            Some(Self {
+                level: (packed >> MOVE_ID_BITS) as u8,
+                move_id: MoveId(packed & MOVE_ID_MASK),
+            })
+        }
+    }
+
+    /// Encodes this entry in the packed source format.
+    #[must_use]
+    pub const fn packed(self) -> u16 {
+        ((self.level as u16) << MOVE_ID_BITS) | self.move_id.index()
+    }
+}
+
+macro_rules! learn {
+    ($level:literal, $move_id:ident) => {
+        LevelUpMove::checked($level, MoveId::$move_id)
+    };
+}
+
+const LEARNSET_ABRA: &[LevelUpMove] = &[learn!(1, TELEPORT)];
+const LEARNSET_ABSOL: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(5, LEER),
+    learn!(9, TAUNT),
+    learn!(13, QUICK_ATTACK),
+    learn!(17, RAZOR_WIND),
+    learn!(21, BITE),
+    learn!(26, SWORDS_DANCE),
+    learn!(31, DOUBLE_TEAM),
+    learn!(36, SLASH),
+    learn!(41, FUTURE_SIGHT),
+    learn!(46, PERISH_SONG),
+];
+const LEARNSET_AERODACTYL: &[LevelUpMove] = &[
+    learn!(1, WING_ATTACK),
+    learn!(8, AGILITY),
+    learn!(15, BITE),
+    learn!(22, SUPERSONIC),
+    learn!(29, ANCIENT_POWER),
+    learn!(36, SCARY_FACE),
+    learn!(43, TAKE_DOWN),
+    learn!(50, HYPER_BEAM),
+];
+const LEARNSET_AGGRON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(1, MUD_SLAP),
+    learn!(1, HEADBUTT),
+    learn!(4, HARDEN),
+    learn!(7, MUD_SLAP),
+    learn!(10, HEADBUTT),
+    learn!(13, METAL_CLAW),
+    learn!(17, IRON_DEFENSE),
+    learn!(21, ROAR),
+    learn!(25, TAKE_DOWN),
+    learn!(29, IRON_TAIL),
+    learn!(37, PROTECT),
+    learn!(50, METAL_SOUND),
+    learn!(63, DOUBLE_EDGE),
+];
+const LEARNSET_AIPOM: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, TAIL_WHIP),
+    learn!(6, SAND_ATTACK),
+    learn!(13, ASTONISH),
+    learn!(18, BATON_PASS),
+    learn!(25, TICKLE),
+    learn!(31, FURY_SWIPES),
+    learn!(38, SWIFT),
+    learn!(43, SCREECH),
+    learn!(50, AGILITY),
+];
+const LEARNSET_ALAKAZAM: &[LevelUpMove] = &[
+    learn!(1, TELEPORT),
+    learn!(1, KINESIS),
+    learn!(1, CONFUSION),
+    learn!(16, CONFUSION),
+    learn!(18, DISABLE),
+    learn!(21, PSYBEAM),
+    learn!(23, REFLECT),
+    learn!(25, RECOVER),
+    learn!(30, FUTURE_SIGHT),
+    learn!(33, CALM_MIND),
+    learn!(36, PSYCHIC),
+    learn!(43, TRICK),
+];
+const LEARNSET_ALTARIA: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(1, ASTONISH),
+    learn!(1, SING),
+    learn!(8, ASTONISH),
+    learn!(11, SING),
+    learn!(18, FURY_ATTACK),
+    learn!(21, SAFEGUARD),
+    learn!(28, MIST),
+    learn!(31, TAKE_DOWN),
+    learn!(35, DRAGON_BREATH),
+    learn!(40, DRAGON_DANCE),
+    learn!(45, REFRESH),
+    learn!(54, PERISH_SONG),
+    learn!(59, SKY_ATTACK),
+];
+const LEARNSET_AMPHAROS: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, THUNDER_SHOCK),
+    learn!(1, THUNDER_WAVE),
+    learn!(9, THUNDER_SHOCK),
+    learn!(18, THUNDER_WAVE),
+    learn!(27, COTTON_SPORE),
+    learn!(30, THUNDER_PUNCH),
+    learn!(42, LIGHT_SCREEN),
+    learn!(57, THUNDER),
+];
+const LEARNSET_ANORITH: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(7, HARDEN),
+    learn!(13, MUD_SPORT),
+    learn!(19, WATER_GUN),
+    learn!(25, METAL_CLAW),
+    learn!(31, PROTECT),
+    learn!(37, ANCIENT_POWER),
+    learn!(43, FURY_CUTTER),
+    learn!(49, SLASH),
+    learn!(55, ROCK_BLAST),
+];
+const LEARNSET_ARBOK: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(1, LEER),
+    learn!(1, POISON_STING),
+    learn!(1, BITE),
+    learn!(8, POISON_STING),
+    learn!(13, BITE),
+    learn!(20, GLARE),
+    learn!(28, SCREECH),
+    learn!(38, ACID),
+    learn!(46, STOCKPILE),
+    learn!(46, SWALLOW),
+    learn!(46, SPIT_UP),
+    learn!(56, HAZE),
+];
+const LEARNSET_ARCANINE: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, ROAR),
+    learn!(1, EMBER),
+    learn!(1, ODOR_SLEUTH),
+    learn!(49, EXTREME_SPEED),
+];
+const LEARNSET_ARIADOS: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(1, STRING_SHOT),
+    learn!(1, SCARY_FACE),
+    learn!(1, CONSTRICT),
+    learn!(6, SCARY_FACE),
+    learn!(11, CONSTRICT),
+    learn!(17, NIGHT_SHADE),
+    learn!(25, LEECH_LIFE),
+    learn!(34, FURY_SWIPES),
+    learn!(43, SPIDER_WEB),
+    learn!(53, AGILITY),
+    learn!(63, PSYCHIC),
+];
+const LEARNSET_ARMALDO: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(1, MUD_SPORT),
+    learn!(1, WATER_GUN),
+    learn!(7, HARDEN),
+    learn!(13, MUD_SPORT),
+    learn!(19, WATER_GUN),
+    learn!(25, METAL_CLAW),
+    learn!(31, PROTECT),
+    learn!(37, ANCIENT_POWER),
+    learn!(46, FURY_CUTTER),
+    learn!(55, SLASH),
+    learn!(64, ROCK_BLAST),
+];
+const LEARNSET_ARON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, HARDEN),
+    learn!(7, MUD_SLAP),
+    learn!(10, HEADBUTT),
+    learn!(13, METAL_CLAW),
+    learn!(17, IRON_DEFENSE),
+    learn!(21, ROAR),
+    learn!(25, TAKE_DOWN),
+    learn!(29, IRON_TAIL),
+    learn!(34, PROTECT),
+    learn!(39, METAL_SOUND),
+    learn!(44, DOUBLE_EDGE),
+];
+const LEARNSET_ARTICUNO: &[LevelUpMove] = &[
+    learn!(1, GUST),
+    learn!(1, POWDER_SNOW),
+    learn!(13, MIST),
+    learn!(25, AGILITY),
+    learn!(37, MIND_READER),
+    learn!(49, ICE_BEAM),
+    learn!(61, REFLECT),
+    learn!(73, BLIZZARD),
+    learn!(85, SHEER_COLD),
+];
+const LEARNSET_AZUMARILL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, TAIL_WHIP),
+    learn!(1, WATER_GUN),
+    learn!(3, DEFENSE_CURL),
+    learn!(6, TAIL_WHIP),
+    learn!(10, WATER_GUN),
+    learn!(15, ROLLOUT),
+    learn!(24, BUBBLE_BEAM),
+    learn!(34, DOUBLE_EDGE),
+    learn!(45, RAIN_DANCE),
+    learn!(57, HYDRO_PUMP),
+];
+const LEARNSET_AZURILL: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(3, CHARM),
+    learn!(6, TAIL_WHIP),
+    learn!(10, BUBBLE),
+    learn!(15, SLAM),
+    learn!(21, WATER_GUN),
+];
+const LEARNSET_BAGON: &[LevelUpMove] = &[
+    learn!(1, RAGE),
+    learn!(5, BITE),
+    learn!(9, LEER),
+    learn!(17, HEADBUTT),
+    learn!(21, FOCUS_ENERGY),
+    learn!(25, EMBER),
+    learn!(33, DRAGON_BREATH),
+    learn!(37, SCARY_FACE),
+    learn!(41, CRUNCH),
+    learn!(49, DRAGON_CLAW),
+    learn!(53, DOUBLE_EDGE),
+];
+const LEARNSET_BALTOY: &[LevelUpMove] = &[
+    learn!(1, CONFUSION),
+    learn!(3, HARDEN),
+    learn!(5, RAPID_SPIN),
+    learn!(7, MUD_SLAP),
+    learn!(11, PSYBEAM),
+    learn!(15, ROCK_TOMB),
+    learn!(19, SELF_DESTRUCT),
+    learn!(25, ANCIENT_POWER),
+    learn!(31, SANDSTORM),
+    learn!(37, COSMIC_POWER),
+    learn!(45, EXPLOSION),
+];
+const LEARNSET_BANETTE: &[LevelUpMove] = &[
+    learn!(1, KNOCK_OFF),
+    learn!(1, SCREECH),
+    learn!(1, NIGHT_SHADE),
+    learn!(1, CURSE),
+    learn!(8, SCREECH),
+    learn!(13, NIGHT_SHADE),
+    learn!(20, CURSE),
+    learn!(25, SPITE),
+    learn!(32, WILL_O_WISP),
+    learn!(39, FAINT_ATTACK),
+    learn!(48, SHADOW_BALL),
+    learn!(55, SNATCH),
+    learn!(64, GRUDGE),
+];
+const LEARNSET_BARBOACH: &[LevelUpMove] = &[
+    learn!(1, MUD_SLAP),
+    learn!(6, MUD_SPORT),
+    learn!(6, WATER_SPORT),
+    learn!(11, WATER_GUN),
+    learn!(16, MAGNITUDE),
+    learn!(21, AMNESIA),
+    learn!(26, REST),
+    learn!(26, SNORE),
+    learn!(31, EARTHQUAKE),
+    learn!(36, FUTURE_SIGHT),
+    learn!(41, FISSURE),
+];
+const LEARNSET_BAYLEEF: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, RAZOR_LEAF),
+    learn!(1, REFLECT),
+    learn!(8, RAZOR_LEAF),
+    learn!(12, REFLECT),
+    learn!(15, POISON_POWDER),
+    learn!(23, SYNTHESIS),
+    learn!(31, BODY_SLAM),
+    learn!(39, LIGHT_SCREEN),
+    learn!(47, SAFEGUARD),
+    learn!(55, SOLAR_BEAM),
+];
+const LEARNSET_BEAUTIFLY: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(10, ABSORB),
+    learn!(13, GUST),
+    learn!(17, STUN_SPORE),
+    learn!(20, MORNING_SUN),
+    learn!(24, MEGA_DRAIN),
+    learn!(27, WHIRLWIND),
+    learn!(31, ATTRACT),
+    learn!(34, SILVER_WIND),
+    learn!(38, GIGA_DRAIN),
+];
+const LEARNSET_BEEDRILL: &[LevelUpMove] = &[
+    learn!(1, FURY_ATTACK),
+    learn!(10, FURY_ATTACK),
+    learn!(15, FOCUS_ENERGY),
+    learn!(20, TWINEEDLE),
+    learn!(25, RAGE),
+    learn!(30, PURSUIT),
+    learn!(35, PIN_MISSILE),
+    learn!(40, AGILITY),
+    learn!(45, ENDEAVOR),
+];
+const LEARNSET_BELDUM: &[LevelUpMove] = &[learn!(1, TAKE_DOWN)];
+const LEARNSET_BELLOSSOM: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(1, SWEET_SCENT),
+    learn!(1, STUN_SPORE),
+    learn!(1, MAGICAL_LEAF),
+    learn!(44, PETAL_DANCE),
+    learn!(55, SOLAR_BEAM),
+];
+const LEARNSET_BELLSPROUT: &[LevelUpMove] = &[
+    learn!(1, VINE_WHIP),
+    learn!(6, GROWTH),
+    learn!(11, WRAP),
+    learn!(15, SLEEP_POWDER),
+    learn!(17, POISON_POWDER),
+    learn!(19, STUN_SPORE),
+    learn!(23, ACID),
+    learn!(30, SWEET_SCENT),
+    learn!(37, RAZOR_LEAF),
+    learn!(45, SLAM),
+];
+const LEARNSET_BLASTOISE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, BUBBLE),
+    learn!(1, WITHDRAW),
+    learn!(4, TAIL_WHIP),
+    learn!(7, BUBBLE),
+    learn!(10, WITHDRAW),
+    learn!(13, WATER_GUN),
+    learn!(19, BITE),
+    learn!(25, RAPID_SPIN),
+    learn!(31, PROTECT),
+    learn!(42, RAIN_DANCE),
+    learn!(55, SKULL_BASH),
+    learn!(68, HYDRO_PUMP),
+];
+const LEARNSET_BLAZIKEN: &[LevelUpMove] = &[
+    learn!(1, FIRE_PUNCH),
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, EMBER),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, EMBER),
+    learn!(16, DOUBLE_KICK),
+    learn!(17, PECK),
+    learn!(21, SAND_ATTACK),
+    learn!(28, BULK_UP),
+    learn!(32, QUICK_ATTACK),
+    learn!(36, BLAZE_KICK),
+    learn!(42, SLASH),
+    learn!(49, MIRROR_MOVE),
+    learn!(59, SKY_UPPERCUT),
+];
+const LEARNSET_BLISSEY: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, GROWL),
+    learn!(4, TAIL_WHIP),
+    learn!(7, REFRESH),
+    learn!(10, SOFT_BOILED),
+    learn!(13, DOUBLE_SLAP),
+    learn!(18, MINIMIZE),
+    learn!(23, SING),
+    learn!(28, EGG_BOMB),
+    learn!(33, DEFENSE_CURL),
+    learn!(40, LIGHT_SCREEN),
+    learn!(47, DOUBLE_EDGE),
+];
+const LEARNSET_BRELOOM: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(1, TACKLE),
+    learn!(1, STUN_SPORE),
+    learn!(1, LEECH_SEED),
+    learn!(4, TACKLE),
+    learn!(7, STUN_SPORE),
+    learn!(10, LEECH_SEED),
+    learn!(16, MEGA_DRAIN),
+    learn!(22, HEADBUTT),
+    learn!(23, MACH_PUNCH),
+    learn!(28, COUNTER),
+    learn!(36, SKY_UPPERCUT),
+    learn!(45, MIND_READER),
+    learn!(54, DYNAMIC_PUNCH),
+];
+const LEARNSET_BULBASAUR: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, GROWL),
+    learn!(7, LEECH_SEED),
+    learn!(10, VINE_WHIP),
+    learn!(15, POISON_POWDER),
+    learn!(15, SLEEP_POWDER),
+    learn!(20, RAZOR_LEAF),
+    learn!(25, SWEET_SCENT),
+    learn!(32, GROWTH),
+    learn!(39, SYNTHESIS),
+    learn!(46, SOLAR_BEAM),
+];
+const LEARNSET_BUTTERFREE: &[LevelUpMove] = &[
+    learn!(1, CONFUSION),
+    learn!(10, CONFUSION),
+    learn!(13, POISON_POWDER),
+    learn!(14, STUN_SPORE),
+    learn!(15, SLEEP_POWDER),
+    learn!(18, SUPERSONIC),
+    learn!(23, WHIRLWIND),
+    learn!(28, GUST),
+    learn!(34, PSYBEAM),
+    learn!(40, SAFEGUARD),
+    learn!(47, SILVER_WIND),
+];
+const LEARNSET_CACNEA: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(1, LEER),
+    learn!(5, ABSORB),
+    learn!(9, GROWTH),
+    learn!(13, LEECH_SEED),
+    learn!(17, SAND_ATTACK),
+    learn!(21, PIN_MISSILE),
+    learn!(25, INGRAIN),
+    learn!(29, FAINT_ATTACK),
+    learn!(33, SPIKES),
+    learn!(37, NEEDLE_ARM),
+    learn!(41, COTTON_SPORE),
+    learn!(45, SANDSTORM),
+];
+const LEARNSET_CACTURNE: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(1, LEER),
+    learn!(1, ABSORB),
+    learn!(1, GROWTH),
+    learn!(5, ABSORB),
+    learn!(9, GROWTH),
+    learn!(13, LEECH_SEED),
+    learn!(17, SAND_ATTACK),
+    learn!(21, PIN_MISSILE),
+    learn!(25, INGRAIN),
+    learn!(29, FAINT_ATTACK),
+    learn!(35, SPIKES),
+    learn!(41, NEEDLE_ARM),
+    learn!(47, COTTON_SPORE),
+    learn!(53, SANDSTORM),
+];
+const LEARNSET_CAMERUPT: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, TACKLE),
+    learn!(1, EMBER),
+    learn!(1, MAGNITUDE),
+    learn!(11, EMBER),
+    learn!(19, MAGNITUDE),
+    learn!(25, FOCUS_ENERGY),
+    learn!(29, TAKE_DOWN),
+    learn!(31, AMNESIA),
+    learn!(33, ROCK_SLIDE),
+    learn!(37, EARTHQUAKE),
+    learn!(45, ERUPTION),
+    learn!(55, FISSURE),
+];
+const LEARNSET_CARVANHA: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, BITE),
+    learn!(7, RAGE),
+    learn!(13, FOCUS_ENERGY),
+    learn!(16, SCARY_FACE),
+    learn!(22, CRUNCH),
+    learn!(28, SCREECH),
+    learn!(31, TAKE_DOWN),
+    learn!(37, SWAGGER),
+    learn!(43, AGILITY),
+];
+const LEARNSET_CASCOON: &[LevelUpMove] = &[learn!(1, HARDEN), learn!(7, HARDEN)];
+const LEARNSET_CASTFORM: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(10, WATER_GUN),
+    learn!(10, EMBER),
+    learn!(10, POWDER_SNOW),
+    learn!(20, RAIN_DANCE),
+    learn!(20, SUNNY_DAY),
+    learn!(20, HAIL),
+    learn!(30, WEATHER_BALL),
+];
+const LEARNSET_CATERPIE: &[LevelUpMove] = &[learn!(1, TACKLE), learn!(1, STRING_SHOT)];
+const LEARNSET_CELEBI: &[LevelUpMove] = &[
+    learn!(1, LEECH_SEED),
+    learn!(1, CONFUSION),
+    learn!(1, RECOVER),
+    learn!(1, HEAL_BELL),
+    learn!(10, SAFEGUARD),
+    learn!(20, ANCIENT_POWER),
+    learn!(30, FUTURE_SIGHT),
+    learn!(40, BATON_PASS),
+    learn!(50, PERISH_SONG),
+];
+const LEARNSET_CHANSEY: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, GROWL),
+    learn!(5, TAIL_WHIP),
+    learn!(9, REFRESH),
+    learn!(13, SOFT_BOILED),
+    learn!(17, DOUBLE_SLAP),
+    learn!(23, MINIMIZE),
+    learn!(29, SING),
+    learn!(35, EGG_BOMB),
+    learn!(41, DEFENSE_CURL),
+    learn!(49, LIGHT_SCREEN),
+    learn!(57, DOUBLE_EDGE),
+];
+const LEARNSET_CHARIZARD: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(1, EMBER),
+    learn!(1, SMOKESCREEN),
+    learn!(7, EMBER),
+    learn!(13, SMOKESCREEN),
+    learn!(20, RAGE),
+    learn!(27, SCARY_FACE),
+    learn!(34, FLAMETHROWER),
+    learn!(36, WING_ATTACK),
+    learn!(44, SLASH),
+    learn!(54, DRAGON_RAGE),
+    learn!(64, FIRE_SPIN),
+];
+const LEARNSET_CHARMANDER: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(7, EMBER),
+    learn!(13, SMOKESCREEN),
+    learn!(19, RAGE),
+    learn!(25, SCARY_FACE),
+    learn!(31, FLAMETHROWER),
+    learn!(37, SLASH),
+    learn!(43, DRAGON_RAGE),
+    learn!(49, FIRE_SPIN),
+];
+const LEARNSET_CHARMELEON: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(1, EMBER),
+    learn!(7, EMBER),
+    learn!(13, SMOKESCREEN),
+    learn!(20, RAGE),
+    learn!(27, SCARY_FACE),
+    learn!(34, FLAMETHROWER),
+    learn!(41, SLASH),
+    learn!(48, DRAGON_RAGE),
+    learn!(55, FIRE_SPIN),
+];
+const LEARNSET_CHIKORITA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(8, RAZOR_LEAF),
+    learn!(12, REFLECT),
+    learn!(15, POISON_POWDER),
+    learn!(22, SYNTHESIS),
+    learn!(29, BODY_SLAM),
+    learn!(36, LIGHT_SCREEN),
+    learn!(43, SAFEGUARD),
+    learn!(50, SOLAR_BEAM),
+];
+const LEARNSET_CHIMECHO: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(6, GROWL),
+    learn!(9, ASTONISH),
+    learn!(14, CONFUSION),
+    learn!(17, TAKE_DOWN),
+    learn!(22, UPROAR),
+    learn!(25, YAWN),
+    learn!(30, PSYWAVE),
+    learn!(33, DOUBLE_EDGE),
+    learn!(38, HEAL_BELL),
+    learn!(41, SAFEGUARD),
+    learn!(46, PSYCHIC),
+];
+const LEARNSET_CHINCHOU: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, THUNDER_WAVE),
+    learn!(5, SUPERSONIC),
+    learn!(13, FLAIL),
+    learn!(17, WATER_GUN),
+    learn!(25, SPARK),
+    learn!(29, CONFUSE_RAY),
+    learn!(37, TAKE_DOWN),
+    learn!(41, HYDRO_PUMP),
+    learn!(49, CHARGE),
+];
+const LEARNSET_CLAMPERL: &[LevelUpMove] = &[
+    learn!(1, CLAMP),
+    learn!(1, WATER_GUN),
+    learn!(1, WHIRLPOOL),
+    learn!(1, IRON_DEFENSE),
+];
+const LEARNSET_CLAYDOL: &[LevelUpMove] = &[
+    learn!(1, TELEPORT),
+    learn!(1, CONFUSION),
+    learn!(1, HARDEN),
+    learn!(1, RAPID_SPIN),
+    learn!(3, HARDEN),
+    learn!(5, RAPID_SPIN),
+    learn!(7, MUD_SLAP),
+    learn!(11, PSYBEAM),
+    learn!(15, ROCK_TOMB),
+    learn!(19, SELF_DESTRUCT),
+    learn!(25, ANCIENT_POWER),
+    learn!(31, SANDSTORM),
+    learn!(36, HYPER_BEAM),
+    learn!(42, COSMIC_POWER),
+    learn!(55, EXPLOSION),
+];
+const LEARNSET_CLEFABLE: &[LevelUpMove] = &[
+    learn!(1, SING),
+    learn!(1, DOUBLE_SLAP),
+    learn!(1, MINIMIZE),
+    learn!(1, METRONOME),
+];
+const LEARNSET_CLEFAIRY: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, GROWL),
+    learn!(5, ENCORE),
+    learn!(9, SING),
+    learn!(13, DOUBLE_SLAP),
+    learn!(17, FOLLOW_ME),
+    learn!(21, MINIMIZE),
+    learn!(25, DEFENSE_CURL),
+    learn!(29, METRONOME),
+    learn!(33, COSMIC_POWER),
+    learn!(37, MOONLIGHT),
+    learn!(41, LIGHT_SCREEN),
+    learn!(45, METEOR_MASH),
+];
+const LEARNSET_CLEFFA: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, CHARM),
+    learn!(4, ENCORE),
+    learn!(8, SING),
+    learn!(13, SWEET_KISS),
+];
+const LEARNSET_CLOYSTER: &[LevelUpMove] = &[
+    learn!(1, WITHDRAW),
+    learn!(1, SUPERSONIC),
+    learn!(1, AURORA_BEAM),
+    learn!(1, PROTECT),
+    learn!(33, SPIKES),
+    learn!(41, SPIKE_CANNON),
+];
+const LEARNSET_COMBUSKEN: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, EMBER),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, EMBER),
+    learn!(16, DOUBLE_KICK),
+    learn!(17, PECK),
+    learn!(21, SAND_ATTACK),
+    learn!(28, BULK_UP),
+    learn!(32, QUICK_ATTACK),
+    learn!(39, SLASH),
+    learn!(43, MIRROR_MOVE),
+    learn!(50, SKY_UPPERCUT),
+];
+const LEARNSET_CORPHISH: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(7, HARDEN),
+    learn!(10, VICE_GRIP),
+    learn!(13, LEER),
+    learn!(20, BUBBLE_BEAM),
+    learn!(23, PROTECT),
+    learn!(26, KNOCK_OFF),
+    learn!(32, TAUNT),
+    learn!(35, CRABHAMMER),
+    learn!(38, SWORDS_DANCE),
+    learn!(44, GUILLOTINE),
+];
+const LEARNSET_CORSOLA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(6, HARDEN),
+    learn!(12, BUBBLE),
+    learn!(17, RECOVER),
+    learn!(17, REFRESH),
+    learn!(23, BUBBLE_BEAM),
+    learn!(28, SPIKE_CANNON),
+    learn!(34, ROCK_BLAST),
+    learn!(39, MIRROR_COAT),
+    learn!(45, ANCIENT_POWER),
+];
+const LEARNSET_CRADILY: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(1, CONSTRICT),
+    learn!(1, ACID),
+    learn!(1, INGRAIN),
+    learn!(8, CONSTRICT),
+    learn!(15, ACID),
+    learn!(22, INGRAIN),
+    learn!(29, CONFUSE_RAY),
+    learn!(36, AMNESIA),
+    learn!(48, ANCIENT_POWER),
+    learn!(60, STOCKPILE),
+    learn!(60, SPIT_UP),
+    learn!(60, SWALLOW),
+];
+const LEARNSET_CRAWDAUNT: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, HARDEN),
+    learn!(1, VICE_GRIP),
+    learn!(1, LEER),
+    learn!(7, HARDEN),
+    learn!(10, VICE_GRIP),
+    learn!(13, LEER),
+    learn!(20, BUBBLE_BEAM),
+    learn!(23, PROTECT),
+    learn!(26, KNOCK_OFF),
+    learn!(34, TAUNT),
+    learn!(39, CRABHAMMER),
+    learn!(44, SWORDS_DANCE),
+    learn!(52, GUILLOTINE),
+];
+const LEARNSET_CROBAT: &[LevelUpMove] = &[
+    learn!(1, SCREECH),
+    learn!(1, LEECH_LIFE),
+    learn!(1, SUPERSONIC),
+    learn!(1, ASTONISH),
+    learn!(6, SUPERSONIC),
+    learn!(11, ASTONISH),
+    learn!(16, BITE),
+    learn!(21, WING_ATTACK),
+    learn!(28, CONFUSE_RAY),
+    learn!(35, AIR_CUTTER),
+    learn!(42, MEAN_LOOK),
+    learn!(49, POISON_FANG),
+    learn!(56, HAZE),
+];
+const LEARNSET_CROCONAW: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(1, RAGE),
+    learn!(7, RAGE),
+    learn!(13, WATER_GUN),
+    learn!(21, BITE),
+    learn!(28, SCARY_FACE),
+    learn!(37, SLASH),
+    learn!(45, SCREECH),
+    learn!(55, HYDRO_PUMP),
+];
+const LEARNSET_CUBONE: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(5, TAIL_WHIP),
+    learn!(9, BONE_CLUB),
+    learn!(13, HEADBUTT),
+    learn!(17, LEER),
+    learn!(21, FOCUS_ENERGY),
+    learn!(25, BONEMERANG),
+    learn!(29, RAGE),
+    learn!(33, FALSE_SWIPE),
+    learn!(37, THRASH),
+    learn!(41, BONE_RUSH),
+    learn!(45, DOUBLE_EDGE),
+];
+const LEARNSET_CYNDAQUIL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, LEER),
+    learn!(6, SMOKESCREEN),
+    learn!(12, EMBER),
+    learn!(19, QUICK_ATTACK),
+    learn!(27, FLAME_WHEEL),
+    learn!(36, SWIFT),
+    learn!(46, FLAMETHROWER),
+];
+const LEARNSET_DELCATTY: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, ATTRACT),
+    learn!(1, SING),
+    learn!(1, DOUBLE_SLAP),
+];
+const LEARNSET_DELIBIRD: &[LevelUpMove] = &[learn!(1, PRESENT)];
+const LEARNSET_DEOXYS: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, WRAP),
+    learn!(5, NIGHT_SHADE),
+    learn!(10, DOUBLE_TEAM),
+    learn!(15, KNOCK_OFF),
+    learn!(20, PURSUIT),
+    learn!(25, PSYCHIC),
+    learn!(30, SWIFT),
+    learn!(35, AGILITY),
+    learn!(40, RECOVER),
+    learn!(45, PSYCHO_BOOST),
+    learn!(50, EXTREME_SPEED),
+];
+const LEARNSET_DEWGONG: &[LevelUpMove] = &[
+    learn!(1, HEADBUTT),
+    learn!(1, GROWL),
+    learn!(1, ICY_WIND),
+    learn!(1, AURORA_BEAM),
+    learn!(9, GROWL),
+    learn!(17, ICY_WIND),
+    learn!(21, AURORA_BEAM),
+    learn!(29, REST),
+    learn!(34, SHEER_COLD),
+    learn!(42, TAKE_DOWN),
+    learn!(51, ICE_BEAM),
+    learn!(64, SAFEGUARD),
+];
+const LEARNSET_DIGLETT: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, SAND_ATTACK),
+    learn!(5, GROWL),
+    learn!(9, MAGNITUDE),
+    learn!(17, DIG),
+    learn!(25, MUD_SLAP),
+    learn!(33, SLASH),
+    learn!(41, EARTHQUAKE),
+    learn!(49, FISSURE),
+];
+const LEARNSET_DITTO: &[LevelUpMove] = &[learn!(1, TRANSFORM)];
+const LEARNSET_DODRIO: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(1, PURSUIT),
+    learn!(1, FURY_ATTACK),
+    learn!(9, PURSUIT),
+    learn!(13, FURY_ATTACK),
+    learn!(21, TRI_ATTACK),
+    learn!(25, RAGE),
+    learn!(38, UPROAR),
+    learn!(47, DRILL_PECK),
+    learn!(60, AGILITY),
+];
+const LEARNSET_DODUO: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(9, PURSUIT),
+    learn!(13, FURY_ATTACK),
+    learn!(21, TRI_ATTACK),
+    learn!(25, RAGE),
+    learn!(33, UPROAR),
+    learn!(37, DRILL_PECK),
+    learn!(45, AGILITY),
+];
+const LEARNSET_DONPHAN: &[LevelUpMove] = &[
+    learn!(1, ODOR_SLEUTH),
+    learn!(1, HORN_ATTACK),
+    learn!(1, GROWL),
+    learn!(9, DEFENSE_CURL),
+    learn!(17, FLAIL),
+    learn!(25, FURY_ATTACK),
+    learn!(33, ROLLOUT),
+    learn!(41, RAPID_SPIN),
+    learn!(49, EARTHQUAKE),
+];
+const LEARNSET_DRAGONAIR: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(1, LEER),
+    learn!(1, THUNDER_WAVE),
+    learn!(1, TWISTER),
+    learn!(8, THUNDER_WAVE),
+    learn!(15, TWISTER),
+    learn!(22, DRAGON_RAGE),
+    learn!(29, SLAM),
+    learn!(38, AGILITY),
+    learn!(47, SAFEGUARD),
+    learn!(56, OUTRAGE),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_DRAGONITE: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(1, LEER),
+    learn!(1, THUNDER_WAVE),
+    learn!(1, TWISTER),
+    learn!(8, THUNDER_WAVE),
+    learn!(15, TWISTER),
+    learn!(22, DRAGON_RAGE),
+    learn!(29, SLAM),
+    learn!(38, AGILITY),
+    learn!(47, SAFEGUARD),
+    learn!(55, WING_ATTACK),
+    learn!(61, OUTRAGE),
+    learn!(75, HYPER_BEAM),
+];
+const LEARNSET_DRATINI: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(1, LEER),
+    learn!(8, THUNDER_WAVE),
+    learn!(15, TWISTER),
+    learn!(22, DRAGON_RAGE),
+    learn!(29, SLAM),
+    learn!(36, AGILITY),
+    learn!(43, SAFEGUARD),
+    learn!(50, OUTRAGE),
+    learn!(57, HYPER_BEAM),
+];
+const LEARNSET_DROWZEE: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, HYPNOSIS),
+    learn!(10, DISABLE),
+    learn!(18, CONFUSION),
+    learn!(25, HEADBUTT),
+    learn!(31, POISON_GAS),
+    learn!(36, MEDITATE),
+    learn!(40, PSYCHIC),
+    learn!(43, PSYCH_UP),
+    learn!(45, FUTURE_SIGHT),
+];
+const LEARNSET_DUGTRIO: &[LevelUpMove] = &[
+    learn!(1, TRI_ATTACK),
+    learn!(1, SCRATCH),
+    learn!(1, SAND_ATTACK),
+    learn!(1, GROWL),
+    learn!(5, GROWL),
+    learn!(9, MAGNITUDE),
+    learn!(17, DIG),
+    learn!(25, MUD_SLAP),
+    learn!(26, SAND_TOMB),
+    learn!(38, SLASH),
+    learn!(51, EARTHQUAKE),
+    learn!(64, FISSURE),
+];
+const LEARNSET_DUNSPARCE: &[LevelUpMove] = &[
+    learn!(1, RAGE),
+    learn!(4, DEFENSE_CURL),
+    learn!(11, YAWN),
+    learn!(14, GLARE),
+    learn!(21, SPITE),
+    learn!(24, PURSUIT),
+    learn!(31, SCREECH),
+    learn!(34, TAKE_DOWN),
+    learn!(41, ENDEAVOR),
+];
+const LEARNSET_DUSCLOPS: &[LevelUpMove] = &[
+    learn!(1, BIND),
+    learn!(1, LEER),
+    learn!(1, NIGHT_SHADE),
+    learn!(1, DISABLE),
+    learn!(5, DISABLE),
+    learn!(12, FORESIGHT),
+    learn!(16, ASTONISH),
+    learn!(23, CONFUSE_RAY),
+    learn!(27, PURSUIT),
+    learn!(34, CURSE),
+    learn!(37, SHADOW_PUNCH),
+    learn!(41, WILL_O_WISP),
+    learn!(51, MEAN_LOOK),
+    learn!(58, FUTURE_SIGHT),
+];
+const LEARNSET_DUSKULL: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, NIGHT_SHADE),
+    learn!(5, DISABLE),
+    learn!(12, FORESIGHT),
+    learn!(16, ASTONISH),
+    learn!(23, CONFUSE_RAY),
+    learn!(27, PURSUIT),
+    learn!(34, CURSE),
+    learn!(38, WILL_O_WISP),
+    learn!(45, MEAN_LOOK),
+    learn!(49, FUTURE_SIGHT),
+];
+const LEARNSET_DUSTOX: &[LevelUpMove] = &[
+    learn!(1, CONFUSION),
+    learn!(10, CONFUSION),
+    learn!(13, GUST),
+    learn!(17, PROTECT),
+    learn!(20, MOONLIGHT),
+    learn!(24, PSYBEAM),
+    learn!(27, WHIRLWIND),
+    learn!(31, LIGHT_SCREEN),
+    learn!(34, SILVER_WIND),
+    learn!(38, TOXIC),
+];
+const LEARNSET_EEVEE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, GROWL),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, BITE),
+    learn!(36, BATON_PASS),
+    learn!(42, TAKE_DOWN),
+];
+const LEARNSET_EKANS: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(1, LEER),
+    learn!(8, POISON_STING),
+    learn!(13, BITE),
+    learn!(20, GLARE),
+    learn!(25, SCREECH),
+    learn!(32, ACID),
+    learn!(37, STOCKPILE),
+    learn!(37, SWALLOW),
+    learn!(37, SPIT_UP),
+    learn!(44, HAZE),
+];
+const LEARNSET_ELECTABUZZ: &[LevelUpMove] = &[
+    learn!(1, QUICK_ATTACK),
+    learn!(1, LEER),
+    learn!(1, THUNDER_PUNCH),
+    learn!(9, THUNDER_PUNCH),
+    learn!(17, LIGHT_SCREEN),
+    learn!(25, SWIFT),
+    learn!(36, SCREECH),
+    learn!(47, THUNDERBOLT),
+    learn!(58, THUNDER),
+];
+const LEARNSET_ELECTRIKE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, THUNDER_WAVE),
+    learn!(9, LEER),
+    learn!(12, HOWL),
+    learn!(17, QUICK_ATTACK),
+    learn!(20, SPARK),
+    learn!(25, ODOR_SLEUTH),
+    learn!(28, ROAR),
+    learn!(33, BITE),
+    learn!(36, THUNDER),
+    learn!(41, CHARGE),
+];
+const LEARNSET_ELECTRODE: &[LevelUpMove] = &[
+    learn!(1, CHARGE),
+    learn!(1, TACKLE),
+    learn!(1, SCREECH),
+    learn!(1, SONIC_BOOM),
+    learn!(8, SCREECH),
+    learn!(15, SONIC_BOOM),
+    learn!(21, SPARK),
+    learn!(27, SELF_DESTRUCT),
+    learn!(34, ROLLOUT),
+    learn!(41, LIGHT_SCREEN),
+    learn!(48, SWIFT),
+    learn!(54, EXPLOSION),
+    learn!(59, MIRROR_COAT),
+];
+const LEARNSET_ELEKID: &[LevelUpMove] = &[
+    learn!(1, QUICK_ATTACK),
+    learn!(1, LEER),
+    learn!(9, THUNDER_PUNCH),
+    learn!(17, LIGHT_SCREEN),
+    learn!(25, SWIFT),
+    learn!(33, SCREECH),
+    learn!(41, THUNDERBOLT),
+    learn!(49, THUNDER),
+];
+const LEARNSET_ENTEI: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(11, EMBER),
+    learn!(21, ROAR),
+    learn!(31, FIRE_SPIN),
+    learn!(41, STOMP),
+    learn!(51, FLAMETHROWER),
+    learn!(61, SWAGGER),
+    learn!(71, FIRE_BLAST),
+    learn!(81, CALM_MIND),
+];
+const LEARNSET_ESPEON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, CONFUSION),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, SWIFT),
+    learn!(36, PSYBEAM),
+    learn!(42, PSYCH_UP),
+    learn!(47, PSYCHIC),
+    learn!(52, MORNING_SUN),
+];
+const LEARNSET_EXEGGCUTE: &[LevelUpMove] = &[
+    learn!(1, BARRAGE),
+    learn!(1, UPROAR),
+    learn!(1, HYPNOSIS),
+    learn!(7, REFLECT),
+    learn!(13, LEECH_SEED),
+    learn!(19, CONFUSION),
+    learn!(25, STUN_SPORE),
+    learn!(31, POISON_POWDER),
+    learn!(37, SLEEP_POWDER),
+    learn!(43, SOLAR_BEAM),
+];
+const LEARNSET_EXEGGUTOR: &[LevelUpMove] = &[
+    learn!(1, BARRAGE),
+    learn!(1, HYPNOSIS),
+    learn!(1, CONFUSION),
+    learn!(19, STOMP),
+    learn!(31, EGG_BOMB),
+];
+const LEARNSET_EXPLOUD: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, UPROAR),
+    learn!(1, ASTONISH),
+    learn!(1, HOWL),
+    learn!(5, UPROAR),
+    learn!(11, ASTONISH),
+    learn!(15, HOWL),
+    learn!(23, SUPERSONIC),
+    learn!(29, STOMP),
+    learn!(37, SCREECH),
+    learn!(40, HYPER_BEAM),
+    learn!(45, ROAR),
+    learn!(55, REST),
+    learn!(55, SLEEP_TALK),
+    learn!(63, HYPER_VOICE),
+];
+const LEARNSET_FARFETCHD: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(6, SAND_ATTACK),
+    learn!(11, LEER),
+    learn!(16, FURY_ATTACK),
+    learn!(21, KNOCK_OFF),
+    learn!(26, FURY_CUTTER),
+    learn!(31, SWORDS_DANCE),
+    learn!(36, AGILITY),
+    learn!(41, SLASH),
+    learn!(46, FALSE_SWIPE),
+];
+const LEARNSET_FEAROW: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(1, LEER),
+    learn!(1, FURY_ATTACK),
+    learn!(7, LEER),
+    learn!(13, FURY_ATTACK),
+    learn!(26, PURSUIT),
+    learn!(32, MIRROR_MOVE),
+    learn!(40, DRILL_PECK),
+    learn!(47, AGILITY),
+];
+const LEARNSET_FEEBAS: &[LevelUpMove] = &[learn!(1, SPLASH), learn!(15, TACKLE), learn!(30, FLAIL)];
+const LEARNSET_FERALIGATR: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(1, RAGE),
+    learn!(1, WATER_GUN),
+    learn!(7, RAGE),
+    learn!(13, WATER_GUN),
+    learn!(21, BITE),
+    learn!(28, SCARY_FACE),
+    learn!(38, SLASH),
+    learn!(47, SCREECH),
+    learn!(58, HYDRO_PUMP),
+];
+const LEARNSET_FLAAFFY: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, THUNDER_SHOCK),
+    learn!(9, THUNDER_SHOCK),
+    learn!(18, THUNDER_WAVE),
+    learn!(27, COTTON_SPORE),
+    learn!(36, LIGHT_SCREEN),
+    learn!(45, THUNDER),
+];
+const LEARNSET_FLAREON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, EMBER),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, BITE),
+    learn!(36, FIRE_SPIN),
+    learn!(42, SMOG),
+    learn!(47, LEER),
+    learn!(52, FLAMETHROWER),
+];
+const LEARNSET_FLYGON: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, SAND_ATTACK),
+    learn!(1, FAINT_ATTACK),
+    learn!(1, SAND_TOMB),
+    learn!(9, SAND_ATTACK),
+    learn!(17, FAINT_ATTACK),
+    learn!(25, SAND_TOMB),
+    learn!(33, CRUNCH),
+    learn!(35, DRAGON_BREATH),
+    learn!(41, SCREECH),
+    learn!(53, SANDSTORM),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_FORRETRESS: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, PROTECT),
+    learn!(1, SELF_DESTRUCT),
+    learn!(8, SELF_DESTRUCT),
+    learn!(15, TAKE_DOWN),
+    learn!(22, RAPID_SPIN),
+    learn!(29, BIDE),
+    learn!(39, EXPLOSION),
+    learn!(49, SPIKES),
+    learn!(59, DOUBLE_EDGE),
+];
+const LEARNSET_FURRET: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, QUICK_ATTACK),
+    learn!(4, DEFENSE_CURL),
+    learn!(7, QUICK_ATTACK),
+    learn!(12, FURY_SWIPES),
+    learn!(19, HELPING_HAND),
+    learn!(28, SLAM),
+    learn!(37, FOLLOW_ME),
+    learn!(48, REST),
+    learn!(59, AMNESIA),
+];
+const LEARNSET_GARDEVOIR: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, CONFUSION),
+    learn!(1, DOUBLE_TEAM),
+    learn!(1, TELEPORT),
+    learn!(6, CONFUSION),
+    learn!(11, DOUBLE_TEAM),
+    learn!(16, TELEPORT),
+    learn!(21, CALM_MIND),
+    learn!(26, PSYCHIC),
+    learn!(33, IMPRISON),
+    learn!(42, FUTURE_SIGHT),
+    learn!(51, HYPNOSIS),
+    learn!(60, DREAM_EATER),
+];
+const LEARNSET_GASTLY: &[LevelUpMove] = &[
+    learn!(1, HYPNOSIS),
+    learn!(1, LICK),
+    learn!(8, SPITE),
+    learn!(13, MEAN_LOOK),
+    learn!(16, CURSE),
+    learn!(21, NIGHT_SHADE),
+    learn!(28, CONFUSE_RAY),
+    learn!(33, DREAM_EATER),
+    learn!(36, DESTINY_BOND),
+];
+const LEARNSET_GENGAR: &[LevelUpMove] = &[
+    learn!(1, HYPNOSIS),
+    learn!(1, LICK),
+    learn!(1, SPITE),
+    learn!(8, SPITE),
+    learn!(13, MEAN_LOOK),
+    learn!(16, CURSE),
+    learn!(21, NIGHT_SHADE),
+    learn!(25, SHADOW_PUNCH),
+    learn!(31, CONFUSE_RAY),
+    learn!(39, DREAM_EATER),
+    learn!(48, DESTINY_BOND),
+];
+const LEARNSET_GEODUDE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, DEFENSE_CURL),
+    learn!(6, MUD_SPORT),
+    learn!(11, ROCK_THROW),
+    learn!(16, MAGNITUDE),
+    learn!(21, SELF_DESTRUCT),
+    learn!(26, ROLLOUT),
+    learn!(31, ROCK_BLAST),
+    learn!(36, EARTHQUAKE),
+    learn!(41, EXPLOSION),
+    learn!(46, DOUBLE_EDGE),
+];
+const LEARNSET_GIRAFARIG: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(7, ASTONISH),
+    learn!(13, CONFUSION),
+    learn!(19, STOMP),
+    learn!(25, ODOR_SLEUTH),
+    learn!(31, AGILITY),
+    learn!(37, BATON_PASS),
+    learn!(43, PSYBEAM),
+    learn!(49, CRUNCH),
+];
+const LEARNSET_GLALIE: &[LevelUpMove] = &[
+    learn!(1, POWDER_SNOW),
+    learn!(1, LEER),
+    learn!(1, DOUBLE_TEAM),
+    learn!(1, BITE),
+    learn!(7, DOUBLE_TEAM),
+    learn!(10, BITE),
+    learn!(16, ICY_WIND),
+    learn!(19, HEADBUTT),
+    learn!(25, PROTECT),
+    learn!(28, CRUNCH),
+    learn!(34, ICE_BEAM),
+    learn!(42, HAIL),
+    learn!(53, BLIZZARD),
+    learn!(61, SHEER_COLD),
+];
+const LEARNSET_GLIGAR: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(6, SAND_ATTACK),
+    learn!(13, HARDEN),
+    learn!(20, QUICK_ATTACK),
+    learn!(28, FAINT_ATTACK),
+    learn!(36, SLASH),
+    learn!(44, SCREECH),
+    learn!(52, GUILLOTINE),
+];
+const LEARNSET_GLOOM: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(1, SWEET_SCENT),
+    learn!(1, POISON_POWDER),
+    learn!(7, SWEET_SCENT),
+    learn!(14, POISON_POWDER),
+    learn!(16, STUN_SPORE),
+    learn!(18, SLEEP_POWDER),
+    learn!(24, ACID),
+    learn!(35, MOONLIGHT),
+    learn!(44, PETAL_DANCE),
+];
+const LEARNSET_GOLBAT: &[LevelUpMove] = &[
+    learn!(1, SCREECH),
+    learn!(1, LEECH_LIFE),
+    learn!(1, SUPERSONIC),
+    learn!(1, ASTONISH),
+    learn!(6, SUPERSONIC),
+    learn!(11, ASTONISH),
+    learn!(16, BITE),
+    learn!(21, WING_ATTACK),
+    learn!(28, CONFUSE_RAY),
+    learn!(35, AIR_CUTTER),
+    learn!(42, MEAN_LOOK),
+    learn!(49, POISON_FANG),
+    learn!(56, HAZE),
+];
+const LEARNSET_GOLDEEN: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, TAIL_WHIP),
+    learn!(1, WATER_SPORT),
+    learn!(10, SUPERSONIC),
+    learn!(15, HORN_ATTACK),
+    learn!(24, FLAIL),
+    learn!(29, FURY_ATTACK),
+    learn!(38, WATERFALL),
+    learn!(43, HORN_DRILL),
+    learn!(52, AGILITY),
+];
+const LEARNSET_GOLDUCK: &[LevelUpMove] = &[
+    learn!(1, WATER_SPORT),
+    learn!(1, SCRATCH),
+    learn!(1, TAIL_WHIP),
+    learn!(1, DISABLE),
+    learn!(5, TAIL_WHIP),
+    learn!(10, DISABLE),
+    learn!(16, CONFUSION),
+    learn!(23, SCREECH),
+    learn!(31, PSYCH_UP),
+    learn!(44, FURY_SWIPES),
+    learn!(58, HYDRO_PUMP),
+];
+const LEARNSET_GOLEM: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, MUD_SPORT),
+    learn!(1, ROCK_THROW),
+    learn!(6, MUD_SPORT),
+    learn!(11, ROCK_THROW),
+    learn!(16, MAGNITUDE),
+    learn!(21, SELF_DESTRUCT),
+    learn!(29, ROLLOUT),
+    learn!(37, ROCK_BLAST),
+    learn!(45, EARTHQUAKE),
+    learn!(53, EXPLOSION),
+    learn!(62, DOUBLE_EDGE),
+];
+const LEARNSET_GOREBYSS: &[LevelUpMove] = &[
+    learn!(1, WHIRLPOOL),
+    learn!(8, CONFUSION),
+    learn!(15, AGILITY),
+    learn!(22, WATER_PULSE),
+    learn!(29, AMNESIA),
+    learn!(36, PSYCHIC),
+    learn!(43, BATON_PASS),
+    learn!(50, HYDRO_PUMP),
+];
+const LEARNSET_GRANBULL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SCARY_FACE),
+    learn!(4, TAIL_WHIP),
+    learn!(8, CHARM),
+    learn!(13, BITE),
+    learn!(19, LICK),
+    learn!(28, ROAR),
+    learn!(38, RAGE),
+    learn!(49, TAKE_DOWN),
+    learn!(61, CRUNCH),
+];
+const LEARNSET_GRAVELER: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, MUD_SPORT),
+    learn!(1, ROCK_THROW),
+    learn!(6, MUD_SPORT),
+    learn!(11, ROCK_THROW),
+    learn!(16, MAGNITUDE),
+    learn!(21, SELF_DESTRUCT),
+    learn!(29, ROLLOUT),
+    learn!(37, ROCK_BLAST),
+    learn!(45, EARTHQUAKE),
+    learn!(53, EXPLOSION),
+    learn!(62, DOUBLE_EDGE),
+];
+const LEARNSET_GRIMER: &[LevelUpMove] = &[
+    learn!(1, POISON_GAS),
+    learn!(1, POUND),
+    learn!(4, HARDEN),
+    learn!(8, DISABLE),
+    learn!(13, SLUDGE),
+    learn!(19, MINIMIZE),
+    learn!(26, SCREECH),
+    learn!(34, ACID_ARMOR),
+    learn!(43, SLUDGE_BOMB),
+    learn!(53, MEMENTO),
+];
+const LEARNSET_GROUDON: &[LevelUpMove] = &[
+    learn!(1, MUD_SHOT),
+    learn!(5, SCARY_FACE),
+    learn!(15, ANCIENT_POWER),
+    learn!(20, SLASH),
+    learn!(30, BULK_UP),
+    learn!(35, EARTHQUAKE),
+    learn!(45, FIRE_BLAST),
+    learn!(50, REST),
+    learn!(60, FISSURE),
+    learn!(65, SOLAR_BEAM),
+    learn!(75, ERUPTION),
+];
+const LEARNSET_GROVYLE: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, LEER),
+    learn!(1, ABSORB),
+    learn!(1, QUICK_ATTACK),
+    learn!(6, ABSORB),
+    learn!(11, QUICK_ATTACK),
+    learn!(16, FURY_CUTTER),
+    learn!(17, PURSUIT),
+    learn!(23, SCREECH),
+    learn!(29, LEAF_BLADE),
+    learn!(35, AGILITY),
+    learn!(41, SLAM),
+    learn!(47, DETECT),
+    learn!(53, FALSE_SWIPE),
+];
+const LEARNSET_GROWLITHE: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, ROAR),
+    learn!(7, EMBER),
+    learn!(13, LEER),
+    learn!(19, ODOR_SLEUTH),
+    learn!(25, TAKE_DOWN),
+    learn!(31, FLAME_WHEEL),
+    learn!(37, HELPING_HAND),
+    learn!(43, AGILITY),
+    learn!(49, FLAMETHROWER),
+];
+const LEARNSET_GRUMPIG: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(1, PSYWAVE),
+    learn!(1, ODOR_SLEUTH),
+    learn!(1, PSYBEAM),
+    learn!(7, PSYWAVE),
+    learn!(10, ODOR_SLEUTH),
+    learn!(16, PSYBEAM),
+    learn!(19, PSYCH_UP),
+    learn!(25, CONFUSE_RAY),
+    learn!(28, MAGIC_COAT),
+    learn!(37, PSYCHIC),
+    learn!(43, REST),
+    learn!(43, SNORE),
+    learn!(55, BOUNCE),
+];
+const LEARNSET_GULPIN: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(6, YAWN),
+    learn!(9, POISON_GAS),
+    learn!(14, SLUDGE),
+    learn!(17, AMNESIA),
+    learn!(23, ENCORE),
+    learn!(28, TOXIC),
+    learn!(34, STOCKPILE),
+    learn!(34, SPIT_UP),
+    learn!(34, SWALLOW),
+    learn!(39, SLUDGE_BOMB),
+];
+const LEARNSET_GYARADOS: &[LevelUpMove] = &[
+    learn!(1, THRASH),
+    learn!(20, BITE),
+    learn!(25, DRAGON_RAGE),
+    learn!(30, LEER),
+    learn!(35, TWISTER),
+    learn!(40, HYDRO_PUMP),
+    learn!(45, RAIN_DANCE),
+    learn!(50, DRAGON_DANCE),
+    learn!(55, HYPER_BEAM),
+];
+const LEARNSET_HARIYAMA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, SAND_ATTACK),
+    learn!(1, ARM_THRUST),
+    learn!(4, SAND_ATTACK),
+    learn!(10, ARM_THRUST),
+    learn!(13, VITAL_THROW),
+    learn!(19, FAKE_OUT),
+    learn!(22, WHIRLWIND),
+    learn!(29, KNOCK_OFF),
+    learn!(33, SMELLING_SALT),
+    learn!(40, BELLY_DRUM),
+    learn!(44, ENDURE),
+    learn!(51, SEISMIC_TOSS),
+    learn!(55, REVERSAL),
+];
+const LEARNSET_HAUNTER: &[LevelUpMove] = &[
+    learn!(1, HYPNOSIS),
+    learn!(1, LICK),
+    learn!(1, SPITE),
+    learn!(8, SPITE),
+    learn!(13, MEAN_LOOK),
+    learn!(16, CURSE),
+    learn!(21, NIGHT_SHADE),
+    learn!(25, SHADOW_PUNCH),
+    learn!(31, CONFUSE_RAY),
+    learn!(39, DREAM_EATER),
+    learn!(48, DESTINY_BOND),
+];
+const LEARNSET_HERACROSS: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, LEER),
+    learn!(6, HORN_ATTACK),
+    learn!(11, ENDURE),
+    learn!(17, FURY_ATTACK),
+    learn!(23, BRICK_BREAK),
+    learn!(30, COUNTER),
+    learn!(37, TAKE_DOWN),
+    learn!(45, REVERSAL),
+    learn!(53, MEGAHORN),
+];
+const LEARNSET_HITMONCHAN: &[LevelUpMove] = &[
+    learn!(1, REVENGE),
+    learn!(1, COMET_PUNCH),
+    learn!(7, AGILITY),
+    learn!(13, PURSUIT),
+    learn!(20, MACH_PUNCH),
+    learn!(26, THUNDER_PUNCH),
+    learn!(26, ICE_PUNCH),
+    learn!(26, FIRE_PUNCH),
+    learn!(32, SKY_UPPERCUT),
+    learn!(38, MEGA_PUNCH),
+    learn!(44, DETECT),
+    learn!(50, COUNTER),
+];
+const LEARNSET_HITMONLEE: &[LevelUpMove] = &[
+    learn!(1, REVENGE),
+    learn!(1, DOUBLE_KICK),
+    learn!(6, MEDITATE),
+    learn!(11, ROLLING_KICK),
+    learn!(16, JUMP_KICK),
+    learn!(20, BRICK_BREAK),
+    learn!(21, FOCUS_ENERGY),
+    learn!(26, HI_JUMP_KICK),
+    learn!(31, MIND_READER),
+    learn!(36, FORESIGHT),
+    learn!(41, ENDURE),
+    learn!(46, MEGA_KICK),
+    learn!(51, REVERSAL),
+];
+const LEARNSET_HITMONTOP: &[LevelUpMove] = &[
+    learn!(1, REVENGE),
+    learn!(1, ROLLING_KICK),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, PURSUIT),
+    learn!(19, QUICK_ATTACK),
+    learn!(20, TRIPLE_KICK),
+    learn!(25, RAPID_SPIN),
+    learn!(31, COUNTER),
+    learn!(37, AGILITY),
+    learn!(43, DETECT),
+    learn!(49, ENDEAVOR),
+];
+const LEARNSET_HO_OH: &[LevelUpMove] = &[
+    learn!(1, WHIRLWIND),
+    learn!(11, SAFEGUARD),
+    learn!(22, GUST),
+    learn!(33, RECOVER),
+    learn!(44, FIRE_BLAST),
+    learn!(55, SUNNY_DAY),
+    learn!(66, SWIFT),
+    learn!(77, SACRED_FIRE),
+    learn!(88, ANCIENT_POWER),
+    learn!(99, FUTURE_SIGHT),
+];
+const LEARNSET_HOOTHOOT: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(6, FORESIGHT),
+    learn!(11, PECK),
+    learn!(16, HYPNOSIS),
+    learn!(22, REFLECT),
+    learn!(28, TAKE_DOWN),
+    learn!(34, CONFUSION),
+    learn!(48, DREAM_EATER),
+];
+const LEARNSET_HOPPIP: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(5, SYNTHESIS),
+    learn!(5, TAIL_WHIP),
+    learn!(10, TACKLE),
+    learn!(13, POISON_POWDER),
+    learn!(15, STUN_SPORE),
+    learn!(17, SLEEP_POWDER),
+    learn!(20, LEECH_SEED),
+    learn!(25, COTTON_SPORE),
+    learn!(30, MEGA_DRAIN),
+];
+const LEARNSET_HORSEA: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(8, SMOKESCREEN),
+    learn!(15, LEER),
+    learn!(22, WATER_GUN),
+    learn!(29, TWISTER),
+    learn!(36, AGILITY),
+    learn!(43, HYDRO_PUMP),
+    learn!(50, DRAGON_DANCE),
+];
+const LEARNSET_HOUNDOOM: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, EMBER),
+    learn!(1, HOWL),
+    learn!(7, HOWL),
+    learn!(13, SMOG),
+    learn!(19, ROAR),
+    learn!(27, BITE),
+    learn!(35, ODOR_SLEUTH),
+    learn!(43, FAINT_ATTACK),
+    learn!(51, FLAMETHROWER),
+    learn!(59, CRUNCH),
+];
+const LEARNSET_HOUNDOUR: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, EMBER),
+    learn!(7, HOWL),
+    learn!(13, SMOG),
+    learn!(19, ROAR),
+    learn!(25, BITE),
+    learn!(31, ODOR_SLEUTH),
+    learn!(37, FAINT_ATTACK),
+    learn!(43, FLAMETHROWER),
+    learn!(49, CRUNCH),
+];
+const LEARNSET_HUNTAIL: &[LevelUpMove] = &[
+    learn!(1, WHIRLPOOL),
+    learn!(8, BITE),
+    learn!(15, SCREECH),
+    learn!(22, WATER_PULSE),
+    learn!(29, SCARY_FACE),
+    learn!(36, CRUNCH),
+    learn!(43, BATON_PASS),
+    learn!(50, HYDRO_PUMP),
+];
+const LEARNSET_HYPNO: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, HYPNOSIS),
+    learn!(1, DISABLE),
+    learn!(1, CONFUSION),
+    learn!(10, DISABLE),
+    learn!(18, CONFUSION),
+    learn!(25, HEADBUTT),
+    learn!(33, POISON_GAS),
+    learn!(40, MEDITATE),
+    learn!(49, PSYCHIC),
+    learn!(55, PSYCH_UP),
+    learn!(60, FUTURE_SIGHT),
+];
+const LEARNSET_IGGLYBUFF: &[LevelUpMove] = &[
+    learn!(1, SING),
+    learn!(1, CHARM),
+    learn!(4, DEFENSE_CURL),
+    learn!(9, POUND),
+    learn!(14, SWEET_KISS),
+];
+const LEARNSET_ILLUMISE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, SWEET_SCENT),
+    learn!(9, CHARM),
+    learn!(13, MOONLIGHT),
+    learn!(17, QUICK_ATTACK),
+    learn!(21, WISH),
+    learn!(25, ENCORE),
+    learn!(29, FLATTER),
+    learn!(33, HELPING_HAND),
+    learn!(37, COVET),
+];
+const LEARNSET_IVYSAUR: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, LEECH_SEED),
+    learn!(4, GROWL),
+    learn!(7, LEECH_SEED),
+    learn!(10, VINE_WHIP),
+    learn!(15, POISON_POWDER),
+    learn!(15, SLEEP_POWDER),
+    learn!(22, RAZOR_LEAF),
+    learn!(29, SWEET_SCENT),
+    learn!(38, GROWTH),
+    learn!(47, SYNTHESIS),
+    learn!(56, SOLAR_BEAM),
+];
+const LEARNSET_JIGGLYPUFF: &[LevelUpMove] = &[
+    learn!(1, SING),
+    learn!(4, DEFENSE_CURL),
+    learn!(9, POUND),
+    learn!(14, DISABLE),
+    learn!(19, ROLLOUT),
+    learn!(24, DOUBLE_SLAP),
+    learn!(29, REST),
+    learn!(34, BODY_SLAM),
+    learn!(39, MIMIC),
+    learn!(44, HYPER_VOICE),
+    learn!(49, DOUBLE_EDGE),
+];
+const LEARNSET_JIRACHI: &[LevelUpMove] = &[
+    learn!(1, WISH),
+    learn!(1, CONFUSION),
+    learn!(5, REST),
+    learn!(10, SWIFT),
+    learn!(15, HELPING_HAND),
+    learn!(20, PSYCHIC),
+    learn!(25, REFRESH),
+    learn!(30, REST),
+    learn!(35, DOUBLE_EDGE),
+    learn!(40, FUTURE_SIGHT),
+    learn!(45, COSMIC_POWER),
+    learn!(50, DOOM_DESIRE),
+];
+const LEARNSET_JOLTEON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, THUNDER_SHOCK),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, DOUBLE_KICK),
+    learn!(36, PIN_MISSILE),
+    learn!(42, THUNDER_WAVE),
+    learn!(47, AGILITY),
+    learn!(52, THUNDER),
+];
+const LEARNSET_JUMPLUFF: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(1, SYNTHESIS),
+    learn!(1, TAIL_WHIP),
+    learn!(1, TACKLE),
+    learn!(5, SYNTHESIS),
+    learn!(5, TAIL_WHIP),
+    learn!(10, TACKLE),
+    learn!(13, POISON_POWDER),
+    learn!(15, STUN_SPORE),
+    learn!(17, SLEEP_POWDER),
+    learn!(22, LEECH_SEED),
+    learn!(33, COTTON_SPORE),
+    learn!(44, MEGA_DRAIN),
+];
+const LEARNSET_JYNX: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, LICK),
+    learn!(1, LOVELY_KISS),
+    learn!(1, POWDER_SNOW),
+    learn!(9, LOVELY_KISS),
+    learn!(13, POWDER_SNOW),
+    learn!(21, DOUBLE_SLAP),
+    learn!(25, ICE_PUNCH),
+    learn!(35, MEAN_LOOK),
+    learn!(41, FAKE_TEARS),
+    learn!(51, BODY_SLAM),
+    learn!(57, PERISH_SONG),
+    learn!(67, BLIZZARD),
+];
+const LEARNSET_KABUTO: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(13, ABSORB),
+    learn!(19, LEER),
+    learn!(25, MUD_SHOT),
+    learn!(31, SAND_ATTACK),
+    learn!(37, ENDURE),
+    learn!(43, METAL_SOUND),
+    learn!(49, MEGA_DRAIN),
+    learn!(55, ANCIENT_POWER),
+];
+const LEARNSET_KABUTOPS: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(1, ABSORB),
+    learn!(13, ABSORB),
+    learn!(19, LEER),
+    learn!(25, MUD_SHOT),
+    learn!(31, SAND_ATTACK),
+    learn!(37, ENDURE),
+    learn!(40, SLASH),
+    learn!(46, METAL_SOUND),
+    learn!(55, MEGA_DRAIN),
+    learn!(65, ANCIENT_POWER),
+];
+const LEARNSET_KADABRA: &[LevelUpMove] = &[
+    learn!(1, TELEPORT),
+    learn!(1, KINESIS),
+    learn!(1, CONFUSION),
+    learn!(16, CONFUSION),
+    learn!(18, DISABLE),
+    learn!(21, PSYBEAM),
+    learn!(23, REFLECT),
+    learn!(25, RECOVER),
+    learn!(30, FUTURE_SIGHT),
+    learn!(33, ROLE_PLAY),
+    learn!(36, PSYCHIC),
+    learn!(43, TRICK),
+];
+const LEARNSET_KAKUNA: &[LevelUpMove] = &[learn!(1, HARDEN), learn!(7, HARDEN)];
+const LEARNSET_KANGASKHAN: &[LevelUpMove] = &[
+    learn!(1, COMET_PUNCH),
+    learn!(1, LEER),
+    learn!(7, BITE),
+    learn!(13, TAIL_WHIP),
+    learn!(19, FAKE_OUT),
+    learn!(25, MEGA_PUNCH),
+    learn!(31, RAGE),
+    learn!(37, ENDURE),
+    learn!(43, DIZZY_PUNCH),
+    learn!(49, REVERSAL),
+];
+const LEARNSET_KECLEON: &[LevelUpMove] = &[
+    learn!(1, THIEF),
+    learn!(1, TAIL_WHIP),
+    learn!(1, ASTONISH),
+    learn!(1, LICK),
+    learn!(1, SCRATCH),
+    learn!(4, BIND),
+    learn!(7, FAINT_ATTACK),
+    learn!(12, FURY_SWIPES),
+    learn!(17, PSYBEAM),
+    learn!(24, SCREECH),
+    learn!(31, SLASH),
+    learn!(40, SUBSTITUTE),
+    learn!(49, ANCIENT_POWER),
+];
+const LEARNSET_KINGDRA: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, SMOKESCREEN),
+    learn!(1, LEER),
+    learn!(1, WATER_GUN),
+    learn!(8, SMOKESCREEN),
+    learn!(15, LEER),
+    learn!(22, WATER_GUN),
+    learn!(29, TWISTER),
+    learn!(40, AGILITY),
+    learn!(51, HYDRO_PUMP),
+    learn!(62, DRAGON_DANCE),
+];
+const LEARNSET_KINGLER: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, LEER),
+    learn!(1, VICE_GRIP),
+    learn!(5, LEER),
+    learn!(12, VICE_GRIP),
+    learn!(16, HARDEN),
+    learn!(23, MUD_SHOT),
+    learn!(27, STOMP),
+    learn!(38, GUILLOTINE),
+    learn!(49, PROTECT),
+    learn!(57, CRABHAMMER),
+];
+const LEARNSET_KIRLIA: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, CONFUSION),
+    learn!(1, DOUBLE_TEAM),
+    learn!(1, TELEPORT),
+    learn!(6, CONFUSION),
+    learn!(11, DOUBLE_TEAM),
+    learn!(16, TELEPORT),
+    learn!(21, CALM_MIND),
+    learn!(26, PSYCHIC),
+    learn!(33, IMPRISON),
+    learn!(40, FUTURE_SIGHT),
+    learn!(47, HYPNOSIS),
+    learn!(54, DREAM_EATER),
+];
+const LEARNSET_KOFFING: &[LevelUpMove] = &[
+    learn!(1, POISON_GAS),
+    learn!(1, TACKLE),
+    learn!(9, SMOG),
+    learn!(17, SELF_DESTRUCT),
+    learn!(21, SLUDGE),
+    learn!(25, SMOKESCREEN),
+    learn!(33, HAZE),
+    learn!(41, EXPLOSION),
+    learn!(45, DESTINY_BOND),
+    learn!(49, MEMENTO),
+];
+const LEARNSET_KRABBY: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(5, LEER),
+    learn!(12, VICE_GRIP),
+    learn!(16, HARDEN),
+    learn!(23, MUD_SHOT),
+    learn!(27, STOMP),
+    learn!(34, GUILLOTINE),
+    learn!(41, PROTECT),
+    learn!(45, CRABHAMMER),
+];
+const LEARNSET_KYOGRE: &[LevelUpMove] = &[
+    learn!(1, WATER_PULSE),
+    learn!(5, SCARY_FACE),
+    learn!(15, ANCIENT_POWER),
+    learn!(20, BODY_SLAM),
+    learn!(30, CALM_MIND),
+    learn!(35, ICE_BEAM),
+    learn!(45, HYDRO_PUMP),
+    learn!(50, REST),
+    learn!(60, SHEER_COLD),
+    learn!(65, DOUBLE_EDGE),
+    learn!(75, WATER_SPOUT),
+];
+const LEARNSET_LAIRON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(1, MUD_SLAP),
+    learn!(1, HEADBUTT),
+    learn!(4, HARDEN),
+    learn!(7, MUD_SLAP),
+    learn!(10, HEADBUTT),
+    learn!(13, METAL_CLAW),
+    learn!(17, IRON_DEFENSE),
+    learn!(21, ROAR),
+    learn!(25, TAKE_DOWN),
+    learn!(29, IRON_TAIL),
+    learn!(37, PROTECT),
+    learn!(45, METAL_SOUND),
+    learn!(53, DOUBLE_EDGE),
+];
+const LEARNSET_LANTURN: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, THUNDER_WAVE),
+    learn!(1, SUPERSONIC),
+    learn!(5, SUPERSONIC),
+    learn!(13, FLAIL),
+    learn!(17, WATER_GUN),
+    learn!(25, SPARK),
+    learn!(32, CONFUSE_RAY),
+    learn!(43, TAKE_DOWN),
+    learn!(50, HYDRO_PUMP),
+    learn!(61, CHARGE),
+];
+const LEARNSET_LAPRAS: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, GROWL),
+    learn!(1, SING),
+    learn!(7, MIST),
+    learn!(13, BODY_SLAM),
+    learn!(19, CONFUSE_RAY),
+    learn!(25, PERISH_SONG),
+    learn!(31, ICE_BEAM),
+    learn!(37, RAIN_DANCE),
+    learn!(43, SAFEGUARD),
+    learn!(49, HYDRO_PUMP),
+    learn!(55, SHEER_COLD),
+];
+const LEARNSET_LARVITAR: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(8, SANDSTORM),
+    learn!(15, SCREECH),
+    learn!(22, ROCK_SLIDE),
+    learn!(29, THRASH),
+    learn!(36, SCARY_FACE),
+    learn!(43, CRUNCH),
+    learn!(50, EARTHQUAKE),
+    learn!(57, HYPER_BEAM),
+];
+const LEARNSET_LATIAS: &[LevelUpMove] = &[
+    learn!(1, PSYWAVE),
+    learn!(5, WISH),
+    learn!(10, HELPING_HAND),
+    learn!(15, SAFEGUARD),
+    learn!(20, DRAGON_BREATH),
+    learn!(25, WATER_SPORT),
+    learn!(30, REFRESH),
+    learn!(35, MIST_BALL),
+    learn!(40, PSYCHIC),
+    learn!(45, RECOVER),
+    learn!(50, CHARM),
+];
+const LEARNSET_LATIOS: &[LevelUpMove] = &[
+    learn!(1, PSYWAVE),
+    learn!(5, MEMENTO),
+    learn!(10, HELPING_HAND),
+    learn!(15, SAFEGUARD),
+    learn!(20, DRAGON_BREATH),
+    learn!(25, PROTECT),
+    learn!(30, REFRESH),
+    learn!(35, LUSTER_PURGE),
+    learn!(40, PSYCHIC),
+    learn!(45, RECOVER),
+    learn!(50, DRAGON_DANCE),
+];
+const LEARNSET_LEDIAN: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SUPERSONIC),
+    learn!(8, SUPERSONIC),
+    learn!(15, COMET_PUNCH),
+    learn!(24, LIGHT_SCREEN),
+    learn!(24, REFLECT),
+    learn!(24, SAFEGUARD),
+    learn!(33, BATON_PASS),
+    learn!(42, SWIFT),
+    learn!(51, AGILITY),
+    learn!(60, DOUBLE_EDGE),
+];
+const LEARNSET_LEDYBA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(8, SUPERSONIC),
+    learn!(15, COMET_PUNCH),
+    learn!(22, LIGHT_SCREEN),
+    learn!(22, REFLECT),
+    learn!(22, SAFEGUARD),
+    learn!(29, BATON_PASS),
+    learn!(36, SWIFT),
+    learn!(43, AGILITY),
+    learn!(50, DOUBLE_EDGE),
+];
+const LEARNSET_LICKITUNG: &[LevelUpMove] = &[
+    learn!(1, LICK),
+    learn!(7, SUPERSONIC),
+    learn!(12, DEFENSE_CURL),
+    learn!(18, KNOCK_OFF),
+    learn!(23, STOMP),
+    learn!(29, WRAP),
+    learn!(34, DISABLE),
+    learn!(40, SLAM),
+    learn!(45, SCREECH),
+    learn!(51, REFRESH),
+];
+const LEARNSET_LILEEP: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(8, CONSTRICT),
+    learn!(15, ACID),
+    learn!(22, INGRAIN),
+    learn!(29, CONFUSE_RAY),
+    learn!(36, AMNESIA),
+    learn!(43, ANCIENT_POWER),
+    learn!(50, STOCKPILE),
+    learn!(50, SPIT_UP),
+    learn!(50, SWALLOW),
+];
+const LEARNSET_LINOONE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HEADBUTT),
+    learn!(5, TAIL_WHIP),
+    learn!(9, HEADBUTT),
+    learn!(13, SAND_ATTACK),
+    learn!(17, ODOR_SLEUTH),
+    learn!(23, MUD_SPORT),
+    learn!(29, FURY_SWIPES),
+    learn!(35, COVET),
+    learn!(41, SLASH),
+    learn!(47, REST),
+    learn!(53, BELLY_DRUM),
+];
+const LEARNSET_LOMBRE: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(3, GROWL),
+    learn!(7, ABSORB),
+    learn!(13, NATURE_POWER),
+    learn!(19, FAKE_OUT),
+    learn!(25, FURY_SWIPES),
+    learn!(31, WATER_SPORT),
+    learn!(37, THIEF),
+    learn!(43, UPROAR),
+    learn!(49, HYDRO_PUMP),
+];
+const LEARNSET_LOTAD: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(3, GROWL),
+    learn!(7, ABSORB),
+    learn!(13, NATURE_POWER),
+    learn!(21, MIST),
+    learn!(31, RAIN_DANCE),
+    learn!(43, MEGA_DRAIN),
+];
+const LEARNSET_LOUDRED: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, UPROAR),
+    learn!(1, ASTONISH),
+    learn!(1, HOWL),
+    learn!(5, UPROAR),
+    learn!(11, ASTONISH),
+    learn!(15, HOWL),
+    learn!(23, SUPERSONIC),
+    learn!(29, STOMP),
+    learn!(37, SCREECH),
+    learn!(43, ROAR),
+    learn!(51, REST),
+    learn!(51, SLEEP_TALK),
+    learn!(57, HYPER_VOICE),
+];
+const LEARNSET_LUDICOLO: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(1, GROWL),
+    learn!(1, ABSORB),
+    learn!(1, NATURE_POWER),
+];
+const LEARNSET_LUGIA: &[LevelUpMove] = &[
+    learn!(1, WHIRLWIND),
+    learn!(11, SAFEGUARD),
+    learn!(22, GUST),
+    learn!(33, RECOVER),
+    learn!(44, HYDRO_PUMP),
+    learn!(55, RAIN_DANCE),
+    learn!(66, SWIFT),
+    learn!(77, AEROBLAST),
+    learn!(88, ANCIENT_POWER),
+    learn!(99, FUTURE_SIGHT),
+];
+const LEARNSET_LUNATONE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(7, CONFUSION),
+    learn!(13, ROCK_THROW),
+    learn!(19, HYPNOSIS),
+    learn!(25, PSYWAVE),
+    learn!(31, COSMIC_POWER),
+    learn!(37, PSYCHIC),
+    learn!(43, FUTURE_SIGHT),
+    learn!(49, EXPLOSION),
+];
+const LEARNSET_LUVDISC: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, CHARM),
+    learn!(12, WATER_GUN),
+    learn!(16, AGILITY),
+    learn!(24, TAKE_DOWN),
+    learn!(28, ATTRACT),
+    learn!(36, SWEET_KISS),
+    learn!(40, FLAIL),
+    learn!(48, SAFEGUARD),
+];
+const LEARNSET_MACHAMP: &[LevelUpMove] = &[
+    learn!(1, LOW_KICK),
+    learn!(1, LEER),
+    learn!(1, FOCUS_ENERGY),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, KARATE_CHOP),
+    learn!(19, SEISMIC_TOSS),
+    learn!(22, FORESIGHT),
+    learn!(25, REVENGE),
+    learn!(33, VITAL_THROW),
+    learn!(41, SUBMISSION),
+    learn!(46, CROSS_CHOP),
+    learn!(51, SCARY_FACE),
+    learn!(59, DYNAMIC_PUNCH),
+];
+const LEARNSET_MACHOKE: &[LevelUpMove] = &[
+    learn!(1, LOW_KICK),
+    learn!(1, LEER),
+    learn!(1, FOCUS_ENERGY),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, KARATE_CHOP),
+    learn!(19, SEISMIC_TOSS),
+    learn!(22, FORESIGHT),
+    learn!(25, REVENGE),
+    learn!(33, VITAL_THROW),
+    learn!(41, SUBMISSION),
+    learn!(46, CROSS_CHOP),
+    learn!(51, SCARY_FACE),
+    learn!(59, DYNAMIC_PUNCH),
+];
+const LEARNSET_MACHOP: &[LevelUpMove] = &[
+    learn!(1, LOW_KICK),
+    learn!(1, LEER),
+    learn!(7, FOCUS_ENERGY),
+    learn!(13, KARATE_CHOP),
+    learn!(19, SEISMIC_TOSS),
+    learn!(22, FORESIGHT),
+    learn!(25, REVENGE),
+    learn!(31, VITAL_THROW),
+    learn!(37, SUBMISSION),
+    learn!(40, CROSS_CHOP),
+    learn!(43, SCARY_FACE),
+    learn!(49, DYNAMIC_PUNCH),
+];
+const LEARNSET_MAGBY: &[LevelUpMove] = &[
+    learn!(1, EMBER),
+    learn!(7, LEER),
+    learn!(13, SMOG),
+    learn!(19, FIRE_PUNCH),
+    learn!(25, SMOKESCREEN),
+    learn!(31, SUNNY_DAY),
+    learn!(37, FLAMETHROWER),
+    learn!(43, CONFUSE_RAY),
+    learn!(49, FIRE_BLAST),
+];
+const LEARNSET_MAGCARGO: &[LevelUpMove] = &[
+    learn!(1, YAWN),
+    learn!(1, SMOG),
+    learn!(1, EMBER),
+    learn!(1, ROCK_THROW),
+    learn!(8, EMBER),
+    learn!(15, ROCK_THROW),
+    learn!(22, HARDEN),
+    learn!(29, AMNESIA),
+    learn!(36, FLAMETHROWER),
+    learn!(48, ROCK_SLIDE),
+    learn!(60, BODY_SLAM),
+];
+const LEARNSET_MAGIKARP: &[LevelUpMove] =
+    &[learn!(1, SPLASH), learn!(15, TACKLE), learn!(30, FLAIL)];
+const LEARNSET_MAGMAR: &[LevelUpMove] = &[
+    learn!(1, EMBER),
+    learn!(1, LEER),
+    learn!(1, SMOG),
+    learn!(1, FIRE_PUNCH),
+    learn!(7, LEER),
+    learn!(13, SMOG),
+    learn!(19, FIRE_PUNCH),
+    learn!(25, SMOKESCREEN),
+    learn!(33, SUNNY_DAY),
+    learn!(41, FLAMETHROWER),
+    learn!(49, CONFUSE_RAY),
+    learn!(57, FIRE_BLAST),
+];
+const LEARNSET_MAGNEMITE: &[LevelUpMove] = &[
+    learn!(1, METAL_SOUND),
+    learn!(1, TACKLE),
+    learn!(6, THUNDER_SHOCK),
+    learn!(11, SUPERSONIC),
+    learn!(16, SONIC_BOOM),
+    learn!(21, THUNDER_WAVE),
+    learn!(26, SPARK),
+    learn!(32, LOCK_ON),
+    learn!(38, SWIFT),
+    learn!(44, SCREECH),
+    learn!(50, ZAP_CANNON),
+];
+const LEARNSET_MAGNETON: &[LevelUpMove] = &[
+    learn!(1, METAL_SOUND),
+    learn!(1, TACKLE),
+    learn!(1, THUNDER_SHOCK),
+    learn!(1, SUPERSONIC),
+    learn!(6, THUNDER_SHOCK),
+    learn!(11, SUPERSONIC),
+    learn!(16, SONIC_BOOM),
+    learn!(21, THUNDER_WAVE),
+    learn!(26, SPARK),
+    learn!(35, LOCK_ON),
+    learn!(44, TRI_ATTACK),
+    learn!(53, SCREECH),
+    learn!(62, ZAP_CANNON),
+];
+const LEARNSET_MAKUHITA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, FOCUS_ENERGY),
+    learn!(4, SAND_ATTACK),
+    learn!(10, ARM_THRUST),
+    learn!(13, VITAL_THROW),
+    learn!(19, FAKE_OUT),
+    learn!(22, WHIRLWIND),
+    learn!(28, KNOCK_OFF),
+    learn!(31, SMELLING_SALT),
+    learn!(37, BELLY_DRUM),
+    learn!(40, ENDURE),
+    learn!(46, SEISMIC_TOSS),
+    learn!(49, REVERSAL),
+];
+const LEARNSET_MANECTRIC: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, THUNDER_WAVE),
+    learn!(1, LEER),
+    learn!(1, HOWL),
+    learn!(4, THUNDER_WAVE),
+    learn!(9, LEER),
+    learn!(12, HOWL),
+    learn!(17, QUICK_ATTACK),
+    learn!(20, SPARK),
+    learn!(25, ODOR_SLEUTH),
+    learn!(31, ROAR),
+    learn!(39, BITE),
+    learn!(45, THUNDER),
+    learn!(53, CHARGE),
+];
+const LEARNSET_MANKEY: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(9, LOW_KICK),
+    learn!(15, KARATE_CHOP),
+    learn!(21, FURY_SWIPES),
+    learn!(27, FOCUS_ENERGY),
+    learn!(33, SEISMIC_TOSS),
+    learn!(39, CROSS_CHOP),
+    learn!(45, SCREECH),
+    learn!(51, THRASH),
+];
+const LEARNSET_MANTINE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, BUBBLE),
+    learn!(8, SUPERSONIC),
+    learn!(15, BUBBLE_BEAM),
+    learn!(22, TAKE_DOWN),
+    learn!(29, AGILITY),
+    learn!(36, WING_ATTACK),
+    learn!(43, WATER_PULSE),
+    learn!(50, CONFUSE_RAY),
+];
+const LEARNSET_MAREEP: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(9, THUNDER_SHOCK),
+    learn!(16, THUNDER_WAVE),
+    learn!(23, COTTON_SPORE),
+    learn!(30, LIGHT_SCREEN),
+    learn!(37, THUNDER),
+];
+const LEARNSET_MARILL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(3, DEFENSE_CURL),
+    learn!(6, TAIL_WHIP),
+    learn!(10, WATER_GUN),
+    learn!(15, ROLLOUT),
+    learn!(21, BUBBLE_BEAM),
+    learn!(28, DOUBLE_EDGE),
+    learn!(36, RAIN_DANCE),
+    learn!(45, HYDRO_PUMP),
+];
+const LEARNSET_MAROWAK: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, TAIL_WHIP),
+    learn!(1, BONE_CLUB),
+    learn!(1, HEADBUTT),
+    learn!(5, TAIL_WHIP),
+    learn!(9, BONE_CLUB),
+    learn!(13, HEADBUTT),
+    learn!(17, LEER),
+    learn!(21, FOCUS_ENERGY),
+    learn!(25, BONEMERANG),
+    learn!(32, RAGE),
+    learn!(39, FALSE_SWIPE),
+    learn!(46, THRASH),
+    learn!(53, BONE_RUSH),
+    learn!(61, DOUBLE_EDGE),
+];
+const LEARNSET_MARSHTOMP: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, MUD_SLAP),
+    learn!(1, WATER_GUN),
+    learn!(6, MUD_SLAP),
+    learn!(10, WATER_GUN),
+    learn!(15, BIDE),
+    learn!(16, MUD_SHOT),
+    learn!(20, FORESIGHT),
+    learn!(25, MUD_SPORT),
+    learn!(31, TAKE_DOWN),
+    learn!(37, MUDDY_WATER),
+    learn!(42, PROTECT),
+    learn!(46, EARTHQUAKE),
+    learn!(53, ENDEAVOR),
+];
+const LEARNSET_MASQUERAIN: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, QUICK_ATTACK),
+    learn!(1, SWEET_SCENT),
+    learn!(1, WATER_SPORT),
+    learn!(7, QUICK_ATTACK),
+    learn!(13, SWEET_SCENT),
+    learn!(19, WATER_SPORT),
+    learn!(26, GUST),
+    learn!(33, SCARY_FACE),
+    learn!(40, STUN_SPORE),
+    learn!(47, SILVER_WIND),
+    learn!(53, WHIRLWIND),
+];
+const LEARNSET_MAWILE: &[LevelUpMove] = &[
+    learn!(1, ASTONISH),
+    learn!(6, FAKE_TEARS),
+    learn!(11, BITE),
+    learn!(16, SWEET_SCENT),
+    learn!(21, VICE_GRIP),
+    learn!(26, FAINT_ATTACK),
+    learn!(31, BATON_PASS),
+    learn!(36, CRUNCH),
+    learn!(41, IRON_DEFENSE),
+    learn!(46, STOCKPILE),
+    learn!(46, SWALLOW),
+    learn!(46, SPIT_UP),
+];
+const LEARNSET_MEDICHAM: &[LevelUpMove] = &[
+    learn!(1, FIRE_PUNCH),
+    learn!(1, THUNDER_PUNCH),
+    learn!(1, ICE_PUNCH),
+    learn!(1, BIDE),
+    learn!(1, MEDITATE),
+    learn!(1, CONFUSION),
+    learn!(1, DETECT),
+    learn!(4, MEDITATE),
+    learn!(9, CONFUSION),
+    learn!(12, DETECT),
+    learn!(18, HIDDEN_POWER),
+    learn!(22, MIND_READER),
+    learn!(28, CALM_MIND),
+    learn!(32, HI_JUMP_KICK),
+    learn!(40, PSYCH_UP),
+    learn!(46, REVERSAL),
+    learn!(54, RECOVER),
+];
+const LEARNSET_MEDITITE: &[LevelUpMove] = &[
+    learn!(1, BIDE),
+    learn!(4, MEDITATE),
+    learn!(9, CONFUSION),
+    learn!(12, DETECT),
+    learn!(18, HIDDEN_POWER),
+    learn!(22, MIND_READER),
+    learn!(28, CALM_MIND),
+    learn!(32, HI_JUMP_KICK),
+    learn!(38, PSYCH_UP),
+    learn!(42, REVERSAL),
+    learn!(48, RECOVER),
+];
+const LEARNSET_MEGANIUM: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, RAZOR_LEAF),
+    learn!(1, REFLECT),
+    learn!(8, RAZOR_LEAF),
+    learn!(12, REFLECT),
+    learn!(15, POISON_POWDER),
+    learn!(23, SYNTHESIS),
+    learn!(31, BODY_SLAM),
+    learn!(41, LIGHT_SCREEN),
+    learn!(51, SAFEGUARD),
+    learn!(61, SOLAR_BEAM),
+];
+const LEARNSET_MEOWTH: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(11, BITE),
+    learn!(20, PAY_DAY),
+    learn!(28, FAINT_ATTACK),
+    learn!(35, SCREECH),
+    learn!(41, FURY_SWIPES),
+    learn!(46, SLASH),
+    learn!(50, FAKE_OUT),
+];
+const LEARNSET_METAGROSS: &[LevelUpMove] = &[
+    learn!(1, TAKE_DOWN),
+    learn!(1, CONFUSION),
+    learn!(1, METAL_CLAW),
+    learn!(1, SCARY_FACE),
+    learn!(20, CONFUSION),
+    learn!(20, METAL_CLAW),
+    learn!(26, SCARY_FACE),
+    learn!(32, PURSUIT),
+    learn!(38, PSYCHIC),
+    learn!(44, IRON_DEFENSE),
+    learn!(55, METEOR_MASH),
+    learn!(66, AGILITY),
+    learn!(77, HYPER_BEAM),
+];
+const LEARNSET_METANG: &[LevelUpMove] = &[
+    learn!(1, TAKE_DOWN),
+    learn!(20, CONFUSION),
+    learn!(20, METAL_CLAW),
+    learn!(26, SCARY_FACE),
+    learn!(32, PURSUIT),
+    learn!(38, PSYCHIC),
+    learn!(44, IRON_DEFENSE),
+    learn!(50, METEOR_MASH),
+    learn!(56, AGILITY),
+    learn!(62, HYPER_BEAM),
+];
+const LEARNSET_METAPOD: &[LevelUpMove] = &[learn!(1, HARDEN), learn!(7, HARDEN)];
+const LEARNSET_MEW: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(10, TRANSFORM),
+    learn!(20, MEGA_PUNCH),
+    learn!(30, METRONOME),
+    learn!(40, PSYCHIC),
+    learn!(50, ANCIENT_POWER),
+];
+const LEARNSET_MEWTWO: &[LevelUpMove] = &[
+    learn!(1, CONFUSION),
+    learn!(1, DISABLE),
+    learn!(11, BARRIER),
+    learn!(22, SWIFT),
+    learn!(33, PSYCH_UP),
+    learn!(44, FUTURE_SIGHT),
+    learn!(55, MIST),
+    learn!(66, PSYCHIC),
+    learn!(77, AMNESIA),
+    learn!(88, RECOVER),
+    learn!(99, SAFEGUARD),
+];
+const LEARNSET_MIGHTYENA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HOWL),
+    learn!(1, SAND_ATTACK),
+    learn!(1, BITE),
+    learn!(5, HOWL),
+    learn!(9, SAND_ATTACK),
+    learn!(13, BITE),
+    learn!(17, ODOR_SLEUTH),
+    learn!(22, ROAR),
+    learn!(27, SWAGGER),
+    learn!(32, SCARY_FACE),
+    learn!(37, TAKE_DOWN),
+    learn!(42, TAUNT),
+    learn!(47, CRUNCH),
+    learn!(52, THIEF),
+];
+const LEARNSET_MILOTIC: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(5, WRAP),
+    learn!(10, WATER_SPORT),
+    learn!(15, REFRESH),
+    learn!(20, WATER_PULSE),
+    learn!(25, TWISTER),
+    learn!(30, RECOVER),
+    learn!(35, RAIN_DANCE),
+    learn!(40, HYDRO_PUMP),
+    learn!(45, ATTRACT),
+    learn!(50, SAFEGUARD),
+];
+const LEARNSET_MILTANK: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, GROWL),
+    learn!(8, DEFENSE_CURL),
+    learn!(13, STOMP),
+    learn!(19, MILK_DRINK),
+    learn!(26, BIDE),
+    learn!(34, ROLLOUT),
+    learn!(43, BODY_SLAM),
+    learn!(53, HEAL_BELL),
+];
+const LEARNSET_MINUN: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(4, THUNDER_WAVE),
+    learn!(10, QUICK_ATTACK),
+    learn!(13, HELPING_HAND),
+    learn!(19, SPARK),
+    learn!(22, ENCORE),
+    learn!(28, CHARM),
+    learn!(31, CHARGE),
+    learn!(37, THUNDER),
+    learn!(40, BATON_PASS),
+    learn!(47, AGILITY),
+];
+const LEARNSET_MISDREAVUS: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, PSYWAVE),
+    learn!(6, SPITE),
+    learn!(11, ASTONISH),
+    learn!(17, CONFUSE_RAY),
+    learn!(23, MEAN_LOOK),
+    learn!(30, PSYBEAM),
+    learn!(37, PAIN_SPLIT),
+    learn!(45, PERISH_SONG),
+    learn!(53, GRUDGE),
+];
+const LEARNSET_MOLTRES: &[LevelUpMove] = &[
+    learn!(1, WING_ATTACK),
+    learn!(1, EMBER),
+    learn!(13, FIRE_SPIN),
+    learn!(25, AGILITY),
+    learn!(37, ENDURE),
+    learn!(49, FLAMETHROWER),
+    learn!(61, SAFEGUARD),
+    learn!(73, HEAT_WAVE),
+    learn!(85, SKY_ATTACK),
+];
+const LEARNSET_MR_MIME: &[LevelUpMove] = &[
+    learn!(1, BARRIER),
+    learn!(5, CONFUSION),
+    learn!(9, SUBSTITUTE),
+    learn!(13, MEDITATE),
+    learn!(17, DOUBLE_SLAP),
+    learn!(21, LIGHT_SCREEN),
+    learn!(21, REFLECT),
+    learn!(25, ENCORE),
+    learn!(29, PSYBEAM),
+    learn!(33, RECYCLE),
+    learn!(37, TRICK),
+    learn!(41, ROLE_PLAY),
+    learn!(45, PSYCHIC),
+    learn!(49, BATON_PASS),
+    learn!(53, SAFEGUARD),
+];
+const LEARNSET_MUDKIP: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(6, MUD_SLAP),
+    learn!(10, WATER_GUN),
+    learn!(15, BIDE),
+    learn!(19, FORESIGHT),
+    learn!(24, MUD_SPORT),
+    learn!(28, TAKE_DOWN),
+    learn!(33, WHIRLPOOL),
+    learn!(37, PROTECT),
+    learn!(42, HYDRO_PUMP),
+    learn!(46, ENDEAVOR),
+];
+const LEARNSET_MUK: &[LevelUpMove] = &[
+    learn!(1, POISON_GAS),
+    learn!(1, POUND),
+    learn!(1, HARDEN),
+    learn!(4, HARDEN),
+    learn!(8, DISABLE),
+    learn!(13, SLUDGE),
+    learn!(19, MINIMIZE),
+    learn!(26, SCREECH),
+    learn!(34, ACID_ARMOR),
+    learn!(47, SLUDGE_BOMB),
+    learn!(61, MEMENTO),
+];
+const LEARNSET_MURKROW: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(9, ASTONISH),
+    learn!(14, PURSUIT),
+    learn!(22, HAZE),
+    learn!(27, NIGHT_SHADE),
+    learn!(35, FAINT_ATTACK),
+    learn!(40, TAUNT),
+    learn!(48, MEAN_LOOK),
+];
+const LEARNSET_NATU: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, LEER),
+    learn!(10, NIGHT_SHADE),
+    learn!(20, TELEPORT),
+    learn!(30, WISH),
+    learn!(30, FUTURE_SIGHT),
+    learn!(40, CONFUSE_RAY),
+    learn!(50, PSYCHIC),
+];
+const LEARNSET_NIDOKING: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, DOUBLE_KICK),
+    learn!(1, POISON_STING),
+    learn!(23, THRASH),
+];
+const LEARNSET_NIDOQUEEN: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, TAIL_WHIP),
+    learn!(1, DOUBLE_KICK),
+    learn!(1, POISON_STING),
+    learn!(23, BODY_SLAM),
+];
+const LEARNSET_NIDORAN_F: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, SCRATCH),
+    learn!(8, TAIL_WHIP),
+    learn!(12, DOUBLE_KICK),
+    learn!(17, POISON_STING),
+    learn!(20, BITE),
+    learn!(23, HELPING_HAND),
+    learn!(30, FURY_SWIPES),
+    learn!(38, FLATTER),
+    learn!(47, CRUNCH),
+];
+const LEARNSET_NIDORAN_M: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, PECK),
+    learn!(8, FOCUS_ENERGY),
+    learn!(12, DOUBLE_KICK),
+    learn!(17, POISON_STING),
+    learn!(20, HORN_ATTACK),
+    learn!(23, HELPING_HAND),
+    learn!(30, FURY_ATTACK),
+    learn!(38, FLATTER),
+    learn!(47, HORN_DRILL),
+];
+const LEARNSET_NIDORINA: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, SCRATCH),
+    learn!(8, TAIL_WHIP),
+    learn!(12, DOUBLE_KICK),
+    learn!(18, POISON_STING),
+    learn!(22, BITE),
+    learn!(26, HELPING_HAND),
+    learn!(34, FURY_SWIPES),
+    learn!(43, FLATTER),
+    learn!(53, CRUNCH),
+];
+const LEARNSET_NIDORINO: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, PECK),
+    learn!(8, FOCUS_ENERGY),
+    learn!(12, DOUBLE_KICK),
+    learn!(18, POISON_STING),
+    learn!(22, HORN_ATTACK),
+    learn!(26, HELPING_HAND),
+    learn!(34, FURY_ATTACK),
+    learn!(43, FLATTER),
+    learn!(53, HORN_DRILL),
+];
+const LEARNSET_NINCADA: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(5, LEECH_LIFE),
+    learn!(9, SAND_ATTACK),
+    learn!(14, FURY_SWIPES),
+    learn!(19, MIND_READER),
+    learn!(25, FALSE_SWIPE),
+    learn!(31, MUD_SLAP),
+    learn!(38, METAL_CLAW),
+    learn!(45, DIG),
+];
+const LEARNSET_NINETALES: &[LevelUpMove] = &[
+    learn!(1, EMBER),
+    learn!(1, QUICK_ATTACK),
+    learn!(1, CONFUSE_RAY),
+    learn!(1, SAFEGUARD),
+    learn!(45, FIRE_SPIN),
+];
+const LEARNSET_NINJASK: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(1, LEECH_LIFE),
+    learn!(1, SAND_ATTACK),
+    learn!(5, LEECH_LIFE),
+    learn!(9, SAND_ATTACK),
+    learn!(14, FURY_SWIPES),
+    learn!(19, MIND_READER),
+    learn!(20, DOUBLE_TEAM),
+    learn!(20, FURY_CUTTER),
+    learn!(20, SCREECH),
+    learn!(25, SWORDS_DANCE),
+    learn!(31, SLASH),
+    learn!(38, AGILITY),
+    learn!(45, BATON_PASS),
+];
+const LEARNSET_NOCTOWL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, FORESIGHT),
+    learn!(1, PECK),
+    learn!(6, FORESIGHT),
+    learn!(11, PECK),
+    learn!(16, HYPNOSIS),
+    learn!(25, REFLECT),
+    learn!(33, TAKE_DOWN),
+    learn!(41, CONFUSION),
+    learn!(57, DREAM_EATER),
+];
+const LEARNSET_NOSEPASS: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(7, HARDEN),
+    learn!(13, ROCK_THROW),
+    learn!(16, BLOCK),
+    learn!(22, THUNDER_WAVE),
+    learn!(28, ROCK_SLIDE),
+    learn!(31, SANDSTORM),
+    learn!(37, REST),
+    learn!(43, ZAP_CANNON),
+    learn!(46, LOCK_ON),
+];
+const LEARNSET_NUMEL: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, TACKLE),
+    learn!(11, EMBER),
+    learn!(19, MAGNITUDE),
+    learn!(25, FOCUS_ENERGY),
+    learn!(29, TAKE_DOWN),
+    learn!(31, AMNESIA),
+    learn!(35, EARTHQUAKE),
+    learn!(41, FLAMETHROWER),
+    learn!(49, DOUBLE_EDGE),
+];
+const LEARNSET_NUZLEAF: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(3, HARDEN),
+    learn!(7, GROWTH),
+    learn!(13, NATURE_POWER),
+    learn!(19, FAKE_OUT),
+    learn!(25, TORMENT),
+    learn!(31, FAINT_ATTACK),
+    learn!(37, RAZOR_WIND),
+    learn!(43, SWAGGER),
+    learn!(49, EXTRASENSORY),
+];
+const LEARNSET_OCTILLERY: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(11, CONSTRICT),
+    learn!(22, PSYBEAM),
+    learn!(22, AURORA_BEAM),
+    learn!(22, BUBBLE_BEAM),
+    learn!(25, OCTAZOOKA),
+    learn!(38, FOCUS_ENERGY),
+    learn!(54, ICE_BEAM),
+    learn!(70, HYPER_BEAM),
+];
+const LEARNSET_ODDISH: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(7, SWEET_SCENT),
+    learn!(14, POISON_POWDER),
+    learn!(16, STUN_SPORE),
+    learn!(18, SLEEP_POWDER),
+    learn!(23, ACID),
+    learn!(32, MOONLIGHT),
+    learn!(39, PETAL_DANCE),
+];
+const LEARNSET_OMANYTE: &[LevelUpMove] = &[
+    learn!(1, CONSTRICT),
+    learn!(1, WITHDRAW),
+    learn!(13, BITE),
+    learn!(19, WATER_GUN),
+    learn!(25, MUD_SHOT),
+    learn!(31, LEER),
+    learn!(37, PROTECT),
+    learn!(43, TICKLE),
+    learn!(49, ANCIENT_POWER),
+    learn!(55, HYDRO_PUMP),
+];
+const LEARNSET_OMASTAR: &[LevelUpMove] = &[
+    learn!(1, CONSTRICT),
+    learn!(1, WITHDRAW),
+    learn!(1, BITE),
+    learn!(13, BITE),
+    learn!(19, WATER_GUN),
+    learn!(25, MUD_SHOT),
+    learn!(31, LEER),
+    learn!(37, PROTECT),
+    learn!(40, SPIKE_CANNON),
+    learn!(46, TICKLE),
+    learn!(55, ANCIENT_POWER),
+    learn!(65, HYDRO_PUMP),
+];
+const LEARNSET_ONIX: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SCREECH),
+    learn!(9, BIND),
+    learn!(13, ROCK_THROW),
+    learn!(21, HARDEN),
+    learn!(25, RAGE),
+    learn!(33, SANDSTORM),
+    learn!(37, SLAM),
+    learn!(45, IRON_TAIL),
+    learn!(49, SAND_TOMB),
+    learn!(57, DOUBLE_EDGE),
+];
+const LEARNSET_PARAS: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(7, STUN_SPORE),
+    learn!(13, POISON_POWDER),
+    learn!(19, LEECH_LIFE),
+    learn!(25, SPORE),
+    learn!(31, SLASH),
+    learn!(37, GROWTH),
+    learn!(43, GIGA_DRAIN),
+    learn!(49, AROMATHERAPY),
+];
+const LEARNSET_PARASECT: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, STUN_SPORE),
+    learn!(1, POISON_POWDER),
+    learn!(7, STUN_SPORE),
+    learn!(13, POISON_POWDER),
+    learn!(19, LEECH_LIFE),
+    learn!(27, SPORE),
+    learn!(35, SLASH),
+    learn!(43, GROWTH),
+    learn!(51, GIGA_DRAIN),
+    learn!(59, AROMATHERAPY),
+];
+const LEARNSET_PELIPPER: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(1, WATER_SPORT),
+    learn!(1, WING_ATTACK),
+    learn!(3, WATER_GUN),
+    learn!(7, SUPERSONIC),
+    learn!(13, WING_ATTACK),
+    learn!(21, MIST),
+    learn!(25, PROTECT),
+    learn!(33, STOCKPILE),
+    learn!(33, SWALLOW),
+    learn!(47, SPIT_UP),
+    learn!(61, HYDRO_PUMP),
+];
+const LEARNSET_PERSIAN: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(1, BITE),
+    learn!(11, BITE),
+    learn!(20, PAY_DAY),
+    learn!(29, FAINT_ATTACK),
+    learn!(38, SCREECH),
+    learn!(46, FURY_SWIPES),
+    learn!(53, SLASH),
+    learn!(59, FAKE_OUT),
+];
+const LEARNSET_PHANPY: &[LevelUpMove] = &[
+    learn!(1, ODOR_SLEUTH),
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(9, DEFENSE_CURL),
+    learn!(17, FLAIL),
+    learn!(25, TAKE_DOWN),
+    learn!(33, ROLLOUT),
+    learn!(41, ENDURE),
+    learn!(49, DOUBLE_EDGE),
+];
+const LEARNSET_PICHU: &[LevelUpMove] = &[
+    learn!(1, THUNDER_SHOCK),
+    learn!(1, CHARM),
+    learn!(6, TAIL_WHIP),
+    learn!(8, THUNDER_WAVE),
+    learn!(11, SWEET_KISS),
+];
+const LEARNSET_PIDGEOT: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SAND_ATTACK),
+    learn!(1, GUST),
+    learn!(1, QUICK_ATTACK),
+    learn!(5, SAND_ATTACK),
+    learn!(9, GUST),
+    learn!(13, QUICK_ATTACK),
+    learn!(20, WHIRLWIND),
+    learn!(27, WING_ATTACK),
+    learn!(34, FEATHER_DANCE),
+    learn!(48, AGILITY),
+    learn!(62, MIRROR_MOVE),
+];
+const LEARNSET_PIDGEOTTO: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SAND_ATTACK),
+    learn!(1, GUST),
+    learn!(5, SAND_ATTACK),
+    learn!(9, GUST),
+    learn!(13, QUICK_ATTACK),
+    learn!(20, WHIRLWIND),
+    learn!(27, WING_ATTACK),
+    learn!(34, FEATHER_DANCE),
+    learn!(43, AGILITY),
+    learn!(52, MIRROR_MOVE),
+];
+const LEARNSET_PIDGEY: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, SAND_ATTACK),
+    learn!(9, GUST),
+    learn!(13, QUICK_ATTACK),
+    learn!(19, WHIRLWIND),
+    learn!(25, WING_ATTACK),
+    learn!(31, FEATHER_DANCE),
+    learn!(39, AGILITY),
+    learn!(47, MIRROR_MOVE),
+];
+const LEARNSET_PIKACHU: &[LevelUpMove] = &[
+    learn!(1, THUNDER_SHOCK),
+    learn!(1, GROWL),
+    learn!(6, TAIL_WHIP),
+    learn!(8, THUNDER_WAVE),
+    learn!(11, QUICK_ATTACK),
+    learn!(15, DOUBLE_TEAM),
+    learn!(20, SLAM),
+    learn!(26, THUNDERBOLT),
+    learn!(33, AGILITY),
+    learn!(41, THUNDER),
+    learn!(50, LIGHT_SCREEN),
+];
+const LEARNSET_PILOSWINE: &[LevelUpMove] = &[
+    learn!(1, HORN_ATTACK),
+    learn!(1, ODOR_SLEUTH),
+    learn!(1, POWDER_SNOW),
+    learn!(1, ENDURE),
+    learn!(10, POWDER_SNOW),
+    learn!(19, ENDURE),
+    learn!(28, TAKE_DOWN),
+    learn!(33, FURY_ATTACK),
+    learn!(42, MIST),
+    learn!(56, BLIZZARD),
+    learn!(70, AMNESIA),
+];
+const LEARNSET_PINECO: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, PROTECT),
+    learn!(8, SELF_DESTRUCT),
+    learn!(15, TAKE_DOWN),
+    learn!(22, RAPID_SPIN),
+    learn!(29, BIDE),
+    learn!(36, EXPLOSION),
+    learn!(43, SPIKES),
+    learn!(50, DOUBLE_EDGE),
+];
+const LEARNSET_PINSIR: &[LevelUpMove] = &[
+    learn!(1, VICE_GRIP),
+    learn!(1, FOCUS_ENERGY),
+    learn!(7, BIND),
+    learn!(13, SEISMIC_TOSS),
+    learn!(19, HARDEN),
+    learn!(25, REVENGE),
+    learn!(31, BRICK_BREAK),
+    learn!(37, GUILLOTINE),
+    learn!(43, SUBMISSION),
+    learn!(49, SWORDS_DANCE),
+];
+const LEARNSET_PLUSLE: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(4, THUNDER_WAVE),
+    learn!(10, QUICK_ATTACK),
+    learn!(13, HELPING_HAND),
+    learn!(19, SPARK),
+    learn!(22, ENCORE),
+    learn!(28, FAKE_TEARS),
+    learn!(31, CHARGE),
+    learn!(37, THUNDER),
+    learn!(40, BATON_PASS),
+    learn!(47, AGILITY),
+];
+const LEARNSET_POLITOED: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, HYPNOSIS),
+    learn!(1, DOUBLE_SLAP),
+    learn!(1, PERISH_SONG),
+    learn!(35, PERISH_SONG),
+    learn!(51, SWAGGER),
+];
+const LEARNSET_POLIWAG: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(7, HYPNOSIS),
+    learn!(13, WATER_GUN),
+    learn!(19, DOUBLE_SLAP),
+    learn!(25, RAIN_DANCE),
+    learn!(31, BODY_SLAM),
+    learn!(37, BELLY_DRUM),
+    learn!(43, HYDRO_PUMP),
+];
+const LEARNSET_POLIWHIRL: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, HYPNOSIS),
+    learn!(1, WATER_GUN),
+    learn!(7, HYPNOSIS),
+    learn!(13, WATER_GUN),
+    learn!(19, DOUBLE_SLAP),
+    learn!(27, RAIN_DANCE),
+    learn!(35, BODY_SLAM),
+    learn!(43, BELLY_DRUM),
+    learn!(51, HYDRO_PUMP),
+];
+const LEARNSET_POLIWRATH: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, HYPNOSIS),
+    learn!(1, DOUBLE_SLAP),
+    learn!(1, SUBMISSION),
+    learn!(35, SUBMISSION),
+    learn!(51, MIND_READER),
+];
+const LEARNSET_PONYTA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, GROWL),
+    learn!(9, TAIL_WHIP),
+    learn!(14, EMBER),
+    learn!(19, STOMP),
+    learn!(25, FIRE_SPIN),
+    learn!(31, TAKE_DOWN),
+    learn!(38, AGILITY),
+    learn!(45, BOUNCE),
+    learn!(53, FIRE_BLAST),
+];
+const LEARNSET_POOCHYENA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, HOWL),
+    learn!(9, SAND_ATTACK),
+    learn!(13, BITE),
+    learn!(17, ODOR_SLEUTH),
+    learn!(21, ROAR),
+    learn!(25, SWAGGER),
+    learn!(29, SCARY_FACE),
+    learn!(33, TAKE_DOWN),
+    learn!(37, TAUNT),
+    learn!(41, CRUNCH),
+    learn!(45, THIEF),
+];
+const LEARNSET_PORYGON2: &[LevelUpMove] = &[
+    learn!(1, CONVERSION_2),
+    learn!(1, TACKLE),
+    learn!(1, CONVERSION),
+    learn!(9, AGILITY),
+    learn!(12, PSYBEAM),
+    learn!(20, RECOVER),
+    learn!(24, DEFENSE_CURL),
+    learn!(32, LOCK_ON),
+    learn!(36, TRI_ATTACK),
+    learn!(44, RECYCLE),
+    learn!(48, ZAP_CANNON),
+];
+const LEARNSET_PORYGON: &[LevelUpMove] = &[
+    learn!(1, CONVERSION_2),
+    learn!(1, TACKLE),
+    learn!(1, CONVERSION),
+    learn!(9, AGILITY),
+    learn!(12, PSYBEAM),
+    learn!(20, RECOVER),
+    learn!(24, SHARPEN),
+    learn!(32, LOCK_ON),
+    learn!(36, TRI_ATTACK),
+    learn!(44, RECYCLE),
+    learn!(48, ZAP_CANNON),
+];
+const LEARNSET_PRIMEAPE: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(1, LOW_KICK),
+    learn!(1, RAGE),
+    learn!(9, LOW_KICK),
+    learn!(15, KARATE_CHOP),
+    learn!(21, FURY_SWIPES),
+    learn!(27, FOCUS_ENERGY),
+    learn!(28, RAGE),
+    learn!(36, SEISMIC_TOSS),
+    learn!(45, CROSS_CHOP),
+    learn!(54, SCREECH),
+    learn!(63, THRASH),
+];
+const LEARNSET_PSYDUCK: &[LevelUpMove] = &[
+    learn!(1, WATER_SPORT),
+    learn!(1, SCRATCH),
+    learn!(5, TAIL_WHIP),
+    learn!(10, DISABLE),
+    learn!(16, CONFUSION),
+    learn!(23, SCREECH),
+    learn!(31, PSYCH_UP),
+    learn!(40, FURY_SWIPES),
+    learn!(50, HYDRO_PUMP),
+];
+const LEARNSET_PUPITAR: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(1, SANDSTORM),
+    learn!(1, SCREECH),
+    learn!(8, SANDSTORM),
+    learn!(15, SCREECH),
+    learn!(22, ROCK_SLIDE),
+    learn!(29, THRASH),
+    learn!(38, SCARY_FACE),
+    learn!(47, CRUNCH),
+    learn!(56, EARTHQUAKE),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_QUAGSIRE: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, TAIL_WHIP),
+    learn!(11, SLAM),
+    learn!(16, MUD_SHOT),
+    learn!(23, AMNESIA),
+    learn!(35, YAWN),
+    learn!(42, EARTHQUAKE),
+    learn!(49, RAIN_DANCE),
+    learn!(61, MIST),
+    learn!(61, HAZE),
+];
+const LEARNSET_QUILAVA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, LEER),
+    learn!(1, SMOKESCREEN),
+    learn!(6, SMOKESCREEN),
+    learn!(12, EMBER),
+    learn!(21, QUICK_ATTACK),
+    learn!(31, FLAME_WHEEL),
+    learn!(42, SWIFT),
+    learn!(54, FLAMETHROWER),
+];
+const LEARNSET_QWILFISH: &[LevelUpMove] = &[
+    learn!(1, SPIKES),
+    learn!(1, TACKLE),
+    learn!(1, POISON_STING),
+    learn!(10, HARDEN),
+    learn!(10, MINIMIZE),
+    learn!(19, WATER_GUN),
+    learn!(28, PIN_MISSILE),
+    learn!(37, TAKE_DOWN),
+    learn!(46, HYDRO_PUMP),
+];
+const LEARNSET_RAICHU: &[LevelUpMove] = &[
+    learn!(1, THUNDER_SHOCK),
+    learn!(1, TAIL_WHIP),
+    learn!(1, QUICK_ATTACK),
+    learn!(1, THUNDERBOLT),
+];
+const LEARNSET_RAIKOU: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(11, THUNDER_SHOCK),
+    learn!(21, ROAR),
+    learn!(31, QUICK_ATTACK),
+    learn!(41, SPARK),
+    learn!(51, REFLECT),
+    learn!(61, CRUNCH),
+    learn!(71, THUNDER),
+    learn!(81, CALM_MIND),
+];
+const LEARNSET_RALTS: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(6, CONFUSION),
+    learn!(11, DOUBLE_TEAM),
+    learn!(16, TELEPORT),
+    learn!(21, CALM_MIND),
+    learn!(26, PSYCHIC),
+    learn!(31, IMPRISON),
+    learn!(36, FUTURE_SIGHT),
+    learn!(41, HYPNOSIS),
+    learn!(46, DREAM_EATER),
+];
+const LEARNSET_RAPIDASH: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, TAIL_WHIP),
+    learn!(1, EMBER),
+    learn!(5, GROWL),
+    learn!(9, TAIL_WHIP),
+    learn!(14, EMBER),
+    learn!(19, STOMP),
+    learn!(25, FIRE_SPIN),
+    learn!(31, TAKE_DOWN),
+    learn!(38, AGILITY),
+    learn!(40, FURY_ATTACK),
+    learn!(50, BOUNCE),
+    learn!(63, FIRE_BLAST),
+];
+const LEARNSET_RATICATE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, QUICK_ATTACK),
+    learn!(7, QUICK_ATTACK),
+    learn!(13, HYPER_FANG),
+    learn!(20, SCARY_FACE),
+    learn!(30, PURSUIT),
+    learn!(40, SUPER_FANG),
+    learn!(50, ENDEAVOR),
+];
+const LEARNSET_RATTATA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(7, QUICK_ATTACK),
+    learn!(13, HYPER_FANG),
+    learn!(20, FOCUS_ENERGY),
+    learn!(27, PURSUIT),
+    learn!(34, SUPER_FANG),
+    learn!(41, ENDEAVOR),
+];
+const LEARNSET_RAYQUAZA: &[LevelUpMove] = &[
+    learn!(1, TWISTER),
+    learn!(5, SCARY_FACE),
+    learn!(15, ANCIENT_POWER),
+    learn!(20, DRAGON_CLAW),
+    learn!(30, DRAGON_DANCE),
+    learn!(35, CRUNCH),
+    learn!(45, FLY),
+    learn!(50, REST),
+    learn!(60, EXTREME_SPEED),
+    learn!(65, OUTRAGE),
+    learn!(75, HYPER_BEAM),
+];
+const LEARNSET_REGICE: &[LevelUpMove] = &[
+    learn!(1, EXPLOSION),
+    learn!(9, ICY_WIND),
+    learn!(17, CURSE),
+    learn!(25, SUPERPOWER),
+    learn!(33, ANCIENT_POWER),
+    learn!(41, AMNESIA),
+    learn!(49, ZAP_CANNON),
+    learn!(57, LOCK_ON),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_REGIROCK: &[LevelUpMove] = &[
+    learn!(1, EXPLOSION),
+    learn!(9, ROCK_THROW),
+    learn!(17, CURSE),
+    learn!(25, SUPERPOWER),
+    learn!(33, ANCIENT_POWER),
+    learn!(41, IRON_DEFENSE),
+    learn!(49, ZAP_CANNON),
+    learn!(57, LOCK_ON),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_REGISTEEL: &[LevelUpMove] = &[
+    learn!(1, EXPLOSION),
+    learn!(9, METAL_CLAW),
+    learn!(17, CURSE),
+    learn!(25, SUPERPOWER),
+    learn!(33, ANCIENT_POWER),
+    learn!(41, IRON_DEFENSE),
+    learn!(41, AMNESIA),
+    learn!(49, ZAP_CANNON),
+    learn!(57, LOCK_ON),
+    learn!(65, HYPER_BEAM),
+];
+const LEARNSET_RELICANTH: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(8, WATER_GUN),
+    learn!(15, ROCK_TOMB),
+    learn!(22, YAWN),
+    learn!(29, TAKE_DOWN),
+    learn!(36, MUD_SPORT),
+    learn!(43, ANCIENT_POWER),
+    learn!(50, REST),
+    learn!(57, DOUBLE_EDGE),
+    learn!(64, HYDRO_PUMP),
+];
+const LEARNSET_REMORAID: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(11, LOCK_ON),
+    learn!(22, PSYBEAM),
+    learn!(22, AURORA_BEAM),
+    learn!(22, BUBBLE_BEAM),
+    learn!(33, FOCUS_ENERGY),
+    learn!(44, ICE_BEAM),
+    learn!(55, HYPER_BEAM),
+];
+const LEARNSET_RHYDON: &[LevelUpMove] = &[
+    learn!(1, HORN_ATTACK),
+    learn!(1, TAIL_WHIP),
+    learn!(1, STOMP),
+    learn!(1, FURY_ATTACK),
+    learn!(10, STOMP),
+    learn!(15, FURY_ATTACK),
+    learn!(24, SCARY_FACE),
+    learn!(29, ROCK_BLAST),
+    learn!(38, HORN_DRILL),
+    learn!(46, TAKE_DOWN),
+    learn!(58, EARTHQUAKE),
+    learn!(66, MEGAHORN),
+];
+const LEARNSET_RHYHORN: &[LevelUpMove] = &[
+    learn!(1, HORN_ATTACK),
+    learn!(1, TAIL_WHIP),
+    learn!(10, STOMP),
+    learn!(15, FURY_ATTACK),
+    learn!(24, SCARY_FACE),
+    learn!(29, ROCK_BLAST),
+    learn!(38, HORN_DRILL),
+    learn!(43, TAKE_DOWN),
+    learn!(52, EARTHQUAKE),
+    learn!(57, MEGAHORN),
+];
+const LEARNSET_ROSELIA: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(5, GROWTH),
+    learn!(9, POISON_STING),
+    learn!(13, STUN_SPORE),
+    learn!(17, MEGA_DRAIN),
+    learn!(21, LEECH_SEED),
+    learn!(25, MAGICAL_LEAF),
+    learn!(29, GRASS_WHISTLE),
+    learn!(33, GIGA_DRAIN),
+    learn!(37, SWEET_SCENT),
+    learn!(41, INGRAIN),
+    learn!(45, TOXIC),
+    learn!(49, PETAL_DANCE),
+    learn!(53, AROMATHERAPY),
+    learn!(57, SYNTHESIS),
+];
+const LEARNSET_SABLEYE: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, SCRATCH),
+    learn!(5, FORESIGHT),
+    learn!(9, NIGHT_SHADE),
+    learn!(13, ASTONISH),
+    learn!(17, FURY_SWIPES),
+    learn!(21, FAKE_OUT),
+    learn!(25, DETECT),
+    learn!(29, FAINT_ATTACK),
+    learn!(33, KNOCK_OFF),
+    learn!(37, CONFUSE_RAY),
+    learn!(41, SHADOW_BALL),
+    learn!(45, MEAN_LOOK),
+];
+const LEARNSET_SALAMENCE: &[LevelUpMove] = &[
+    learn!(1, RAGE),
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(1, HEADBUTT),
+    learn!(5, BITE),
+    learn!(9, LEER),
+    learn!(17, HEADBUTT),
+    learn!(21, FOCUS_ENERGY),
+    learn!(25, EMBER),
+    learn!(30, PROTECT),
+    learn!(38, DRAGON_BREATH),
+    learn!(47, SCARY_FACE),
+    learn!(50, FLY),
+    learn!(61, CRUNCH),
+    learn!(79, DRAGON_CLAW),
+    learn!(93, DOUBLE_EDGE),
+];
+const LEARNSET_SANDSHREW: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(6, DEFENSE_CURL),
+    learn!(11, SAND_ATTACK),
+    learn!(17, POISON_STING),
+    learn!(23, SLASH),
+    learn!(30, SWIFT),
+    learn!(37, FURY_SWIPES),
+    learn!(45, SAND_TOMB),
+    learn!(53, SANDSTORM),
+];
+const LEARNSET_SANDSLASH: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, SAND_ATTACK),
+    learn!(6, DEFENSE_CURL),
+    learn!(11, SAND_ATTACK),
+    learn!(17, POISON_STING),
+    learn!(24, SLASH),
+    learn!(33, SWIFT),
+    learn!(42, FURY_SWIPES),
+    learn!(52, SAND_TOMB),
+    learn!(62, SANDSTORM),
+];
+const LEARNSET_SCEPTILE: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, LEER),
+    learn!(1, ABSORB),
+    learn!(1, QUICK_ATTACK),
+    learn!(6, ABSORB),
+    learn!(11, QUICK_ATTACK),
+    learn!(16, FURY_CUTTER),
+    learn!(17, PURSUIT),
+    learn!(23, SCREECH),
+    learn!(29, LEAF_BLADE),
+    learn!(35, AGILITY),
+    learn!(43, SLAM),
+    learn!(51, DETECT),
+    learn!(59, FALSE_SWIPE),
+];
+const LEARNSET_SCIZOR: &[LevelUpMove] = &[
+    learn!(1, QUICK_ATTACK),
+    learn!(1, LEER),
+    learn!(6, FOCUS_ENERGY),
+    learn!(11, PURSUIT),
+    learn!(16, FALSE_SWIPE),
+    learn!(21, AGILITY),
+    learn!(26, METAL_CLAW),
+    learn!(31, SLASH),
+    learn!(36, SWORDS_DANCE),
+    learn!(41, DOUBLE_TEAM),
+    learn!(46, FURY_CUTTER),
+];
+const LEARNSET_SCYTHER: &[LevelUpMove] = &[
+    learn!(1, QUICK_ATTACK),
+    learn!(1, LEER),
+    learn!(6, FOCUS_ENERGY),
+    learn!(11, PURSUIT),
+    learn!(16, FALSE_SWIPE),
+    learn!(21, AGILITY),
+    learn!(26, WING_ATTACK),
+    learn!(31, SLASH),
+    learn!(36, SWORDS_DANCE),
+    learn!(41, DOUBLE_TEAM),
+    learn!(46, FURY_CUTTER),
+];
+const LEARNSET_SEADRA: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(1, SMOKESCREEN),
+    learn!(1, LEER),
+    learn!(1, WATER_GUN),
+    learn!(8, SMOKESCREEN),
+    learn!(15, LEER),
+    learn!(22, WATER_GUN),
+    learn!(29, TWISTER),
+    learn!(40, AGILITY),
+    learn!(51, HYDRO_PUMP),
+    learn!(62, DRAGON_DANCE),
+];
+const LEARNSET_SEAKING: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, TAIL_WHIP),
+    learn!(1, WATER_SPORT),
+    learn!(1, SUPERSONIC),
+    learn!(10, SUPERSONIC),
+    learn!(15, HORN_ATTACK),
+    learn!(24, FLAIL),
+    learn!(29, FURY_ATTACK),
+    learn!(41, WATERFALL),
+    learn!(49, HORN_DRILL),
+    learn!(61, AGILITY),
+];
+const LEARNSET_SEALEO: &[LevelUpMove] = &[
+    learn!(1, POWDER_SNOW),
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(1, ENCORE),
+    learn!(7, ENCORE),
+    learn!(13, ICE_BALL),
+    learn!(19, BODY_SLAM),
+    learn!(25, AURORA_BEAM),
+    learn!(31, HAIL),
+    learn!(39, REST),
+    learn!(39, SNORE),
+    learn!(47, BLIZZARD),
+    learn!(55, SHEER_COLD),
+];
+const LEARNSET_SEEDOT: &[LevelUpMove] = &[
+    learn!(1, BIDE),
+    learn!(3, HARDEN),
+    learn!(7, GROWTH),
+    learn!(13, NATURE_POWER),
+    learn!(21, SYNTHESIS),
+    learn!(31, SUNNY_DAY),
+    learn!(43, EXPLOSION),
+];
+const LEARNSET_SEEL: &[LevelUpMove] = &[
+    learn!(1, HEADBUTT),
+    learn!(9, GROWL),
+    learn!(17, ICY_WIND),
+    learn!(21, AURORA_BEAM),
+    learn!(29, REST),
+    learn!(37, TAKE_DOWN),
+    learn!(41, ICE_BEAM),
+    learn!(49, SAFEGUARD),
+];
+const LEARNSET_SENTRET: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(4, DEFENSE_CURL),
+    learn!(7, QUICK_ATTACK),
+    learn!(12, FURY_SWIPES),
+    learn!(17, HELPING_HAND),
+    learn!(24, SLAM),
+    learn!(31, FOLLOW_ME),
+    learn!(40, REST),
+    learn!(49, AMNESIA),
+];
+const LEARNSET_SEVIPER: &[LevelUpMove] = &[
+    learn!(1, WRAP),
+    learn!(7, LICK),
+    learn!(10, BITE),
+    learn!(16, POISON_TAIL),
+    learn!(19, SCREECH),
+    learn!(25, GLARE),
+    learn!(28, CRUNCH),
+    learn!(34, POISON_FANG),
+    learn!(37, SWAGGER),
+    learn!(43, HAZE),
+];
+const LEARNSET_SHARPEDO: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, BITE),
+    learn!(1, RAGE),
+    learn!(1, FOCUS_ENERGY),
+    learn!(7, RAGE),
+    learn!(13, FOCUS_ENERGY),
+    learn!(16, SCARY_FACE),
+    learn!(22, CRUNCH),
+    learn!(28, SCREECH),
+    learn!(33, SLASH),
+    learn!(38, TAUNT),
+    learn!(43, SWAGGER),
+    learn!(48, SKULL_BASH),
+    learn!(53, AGILITY),
+];
+const LEARNSET_SHEDINJA: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, HARDEN),
+    learn!(5, LEECH_LIFE),
+    learn!(9, SAND_ATTACK),
+    learn!(14, FURY_SWIPES),
+    learn!(19, MIND_READER),
+    learn!(25, SPITE),
+    learn!(31, CONFUSE_RAY),
+    learn!(38, SHADOW_BALL),
+    learn!(45, GRUDGE),
+];
+const LEARNSET_SHELGON: &[LevelUpMove] = &[
+    learn!(1, RAGE),
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(1, HEADBUTT),
+    learn!(5, BITE),
+    learn!(9, LEER),
+    learn!(17, HEADBUTT),
+    learn!(21, FOCUS_ENERGY),
+    learn!(25, EMBER),
+    learn!(30, PROTECT),
+    learn!(38, DRAGON_BREATH),
+    learn!(47, SCARY_FACE),
+    learn!(56, CRUNCH),
+    learn!(69, DRAGON_CLAW),
+    learn!(78, DOUBLE_EDGE),
+];
+const LEARNSET_SHELLDER: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, WITHDRAW),
+    learn!(9, SUPERSONIC),
+    learn!(17, AURORA_BEAM),
+    learn!(25, PROTECT),
+    learn!(33, LEER),
+    learn!(41, CLAMP),
+    learn!(49, ICE_BEAM),
+];
+const LEARNSET_SHIFTRY: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, HARDEN),
+    learn!(1, GROWTH),
+    learn!(1, NATURE_POWER),
+];
+const LEARNSET_SHROOMISH: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(4, TACKLE),
+    learn!(7, STUN_SPORE),
+    learn!(10, LEECH_SEED),
+    learn!(16, MEGA_DRAIN),
+    learn!(22, HEADBUTT),
+    learn!(28, POISON_POWDER),
+    learn!(36, GROWTH),
+    learn!(45, GIGA_DRAIN),
+    learn!(54, SPORE),
+];
+const LEARNSET_SHUCKLE: &[LevelUpMove] = &[
+    learn!(1, CONSTRICT),
+    learn!(1, WITHDRAW),
+    learn!(9, WRAP),
+    learn!(14, ENCORE),
+    learn!(23, SAFEGUARD),
+    learn!(28, BIDE),
+    learn!(37, REST),
+];
+const LEARNSET_SHUPPET: &[LevelUpMove] = &[
+    learn!(1, KNOCK_OFF),
+    learn!(8, SCREECH),
+    learn!(13, NIGHT_SHADE),
+    learn!(20, CURSE),
+    learn!(25, SPITE),
+    learn!(32, WILL_O_WISP),
+    learn!(37, FAINT_ATTACK),
+    learn!(44, SHADOW_BALL),
+    learn!(49, SNATCH),
+    learn!(56, GRUDGE),
+];
+const LEARNSET_SILCOON: &[LevelUpMove] = &[learn!(1, HARDEN), learn!(7, HARDEN)];
+const LEARNSET_SKARMORY: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, PECK),
+    learn!(10, SAND_ATTACK),
+    learn!(13, SWIFT),
+    learn!(16, AGILITY),
+    learn!(26, FURY_ATTACK),
+    learn!(29, AIR_CUTTER),
+    learn!(32, STEEL_WING),
+    learn!(42, SPIKES),
+    learn!(45, METAL_SOUND),
+];
+const LEARNSET_SKIPLOOM: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(1, SYNTHESIS),
+    learn!(1, TAIL_WHIP),
+    learn!(1, TACKLE),
+    learn!(5, SYNTHESIS),
+    learn!(5, TAIL_WHIP),
+    learn!(10, TACKLE),
+    learn!(13, POISON_POWDER),
+    learn!(15, STUN_SPORE),
+    learn!(17, SLEEP_POWDER),
+    learn!(22, LEECH_SEED),
+    learn!(29, COTTON_SPORE),
+    learn!(36, MEGA_DRAIN),
+];
+const LEARNSET_SKITTY: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, TACKLE),
+    learn!(3, TAIL_WHIP),
+    learn!(7, ATTRACT),
+    learn!(13, SING),
+    learn!(15, DOUBLE_SLAP),
+    learn!(19, ASSIST),
+    learn!(25, CHARM),
+    learn!(27, FAINT_ATTACK),
+    learn!(31, COVET),
+    learn!(37, HEAL_BELL),
+    learn!(39, DOUBLE_EDGE),
+];
+const LEARNSET_SLAKING: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, YAWN),
+    learn!(1, ENCORE),
+    learn!(1, SLACK_OFF),
+    learn!(7, ENCORE),
+    learn!(13, SLACK_OFF),
+    learn!(19, FAINT_ATTACK),
+    learn!(25, AMNESIA),
+    learn!(31, COVET),
+    learn!(36, SWAGGER),
+    learn!(37, COUNTER),
+    learn!(43, FLAIL),
+];
+const LEARNSET_SLAKOTH: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, YAWN),
+    learn!(7, ENCORE),
+    learn!(13, SLACK_OFF),
+    learn!(19, FAINT_ATTACK),
+    learn!(25, AMNESIA),
+    learn!(31, COVET),
+    learn!(37, COUNTER),
+    learn!(43, FLAIL),
+];
+const LEARNSET_SLOWBRO: &[LevelUpMove] = &[
+    learn!(1, CURSE),
+    learn!(1, YAWN),
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(6, GROWL),
+    learn!(15, WATER_GUN),
+    learn!(20, CONFUSION),
+    learn!(29, DISABLE),
+    learn!(34, HEADBUTT),
+    learn!(37, WITHDRAW),
+    learn!(46, AMNESIA),
+    learn!(54, PSYCHIC),
+];
+const LEARNSET_SLOWKING: &[LevelUpMove] = &[
+    learn!(1, CURSE),
+    learn!(1, YAWN),
+    learn!(1, TACKLE),
+    learn!(6, GROWL),
+    learn!(15, WATER_GUN),
+    learn!(20, CONFUSION),
+    learn!(29, DISABLE),
+    learn!(34, HEADBUTT),
+    learn!(43, SWAGGER),
+    learn!(48, PSYCHIC),
+];
+const LEARNSET_SLOWPOKE: &[LevelUpMove] = &[
+    learn!(1, CURSE),
+    learn!(1, YAWN),
+    learn!(1, TACKLE),
+    learn!(6, GROWL),
+    learn!(15, WATER_GUN),
+    learn!(20, CONFUSION),
+    learn!(29, DISABLE),
+    learn!(34, HEADBUTT),
+    learn!(43, AMNESIA),
+    learn!(48, PSYCHIC),
+];
+const LEARNSET_SLUGMA: &[LevelUpMove] = &[
+    learn!(1, YAWN),
+    learn!(1, SMOG),
+    learn!(8, EMBER),
+    learn!(15, ROCK_THROW),
+    learn!(22, HARDEN),
+    learn!(29, AMNESIA),
+    learn!(36, FLAMETHROWER),
+    learn!(43, ROCK_SLIDE),
+    learn!(50, BODY_SLAM),
+];
+const LEARNSET_SMEARGLE: &[LevelUpMove] = &[
+    learn!(1, SKETCH),
+    learn!(11, SKETCH),
+    learn!(21, SKETCH),
+    learn!(31, SKETCH),
+    learn!(41, SKETCH),
+    learn!(51, SKETCH),
+    learn!(61, SKETCH),
+    learn!(71, SKETCH),
+    learn!(81, SKETCH),
+    learn!(91, SKETCH),
+];
+const LEARNSET_SMOOCHUM: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, LICK),
+    learn!(9, SWEET_KISS),
+    learn!(13, POWDER_SNOW),
+    learn!(21, CONFUSION),
+    learn!(25, SING),
+    learn!(33, MEAN_LOOK),
+    learn!(37, FAKE_TEARS),
+    learn!(45, PSYCHIC),
+    learn!(49, PERISH_SONG),
+    learn!(57, BLIZZARD),
+];
+const LEARNSET_SNEASEL: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(1, TAUNT),
+    learn!(8, QUICK_ATTACK),
+    learn!(15, SCREECH),
+    learn!(22, FAINT_ATTACK),
+    learn!(29, FURY_SWIPES),
+    learn!(36, AGILITY),
+    learn!(43, ICY_WIND),
+    learn!(50, SLASH),
+    learn!(57, BEAT_UP),
+    learn!(64, METAL_CLAW),
+];
+const LEARNSET_SNORLAX: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(6, AMNESIA),
+    learn!(10, DEFENSE_CURL),
+    learn!(15, BELLY_DRUM),
+    learn!(19, HEADBUTT),
+    learn!(24, YAWN),
+    learn!(28, REST),
+    learn!(28, SNORE),
+    learn!(33, BODY_SLAM),
+    learn!(37, BLOCK),
+    learn!(42, COVET),
+    learn!(46, ROLLOUT),
+    learn!(51, HYPER_BEAM),
+];
+const LEARNSET_SNORUNT: &[LevelUpMove] = &[
+    learn!(1, POWDER_SNOW),
+    learn!(1, LEER),
+    learn!(7, DOUBLE_TEAM),
+    learn!(10, BITE),
+    learn!(16, ICY_WIND),
+    learn!(19, HEADBUTT),
+    learn!(25, PROTECT),
+    learn!(28, CRUNCH),
+    learn!(34, ICE_BEAM),
+    learn!(37, HAIL),
+    learn!(43, BLIZZARD),
+];
+const LEARNSET_SNUBBULL: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SCARY_FACE),
+    learn!(4, TAIL_WHIP),
+    learn!(8, CHARM),
+    learn!(13, BITE),
+    learn!(19, LICK),
+    learn!(26, ROAR),
+    learn!(34, RAGE),
+    learn!(43, TAKE_DOWN),
+    learn!(53, CRUNCH),
+];
+const LEARNSET_SOLROCK: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(7, CONFUSION),
+    learn!(13, ROCK_THROW),
+    learn!(19, FIRE_SPIN),
+    learn!(25, PSYWAVE),
+    learn!(31, COSMIC_POWER),
+    learn!(37, ROCK_SLIDE),
+    learn!(43, SOLAR_BEAM),
+    learn!(49, EXPLOSION),
+];
+const LEARNSET_SPEAROW: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(7, LEER),
+    learn!(13, FURY_ATTACK),
+    learn!(19, PURSUIT),
+    learn!(25, AERIAL_ACE),
+    learn!(31, MIRROR_MOVE),
+    learn!(37, DRILL_PECK),
+    learn!(43, AGILITY),
+];
+const LEARNSET_SPECIES252: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES253: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES254: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES255: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES256: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES257: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES258: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES259: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES260: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES261: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES262: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES263: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES264: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES265: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES266: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES267: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES268: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES269: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES270: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES271: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES272: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES273: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES274: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES275: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPECIES276: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_SPHEAL: &[LevelUpMove] = &[
+    learn!(1, POWDER_SNOW),
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(7, ENCORE),
+    learn!(13, ICE_BALL),
+    learn!(19, BODY_SLAM),
+    learn!(25, AURORA_BEAM),
+    learn!(31, HAIL),
+    learn!(37, REST),
+    learn!(37, SNORE),
+    learn!(43, BLIZZARD),
+    learn!(49, SHEER_COLD),
+];
+const LEARNSET_SPINARAK: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(1, STRING_SHOT),
+    learn!(6, SCARY_FACE),
+    learn!(11, CONSTRICT),
+    learn!(17, NIGHT_SHADE),
+    learn!(23, LEECH_LIFE),
+    learn!(30, FURY_SWIPES),
+    learn!(37, SPIDER_WEB),
+    learn!(45, AGILITY),
+    learn!(53, PSYCHIC),
+];
+const LEARNSET_SPINDA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, UPROAR),
+    learn!(12, FAINT_ATTACK),
+    learn!(16, PSYBEAM),
+    learn!(23, HYPNOSIS),
+    learn!(27, DIZZY_PUNCH),
+    learn!(34, TEETER_DANCE),
+    learn!(38, PSYCH_UP),
+    learn!(45, DOUBLE_EDGE),
+    learn!(49, FLAIL),
+    learn!(56, THRASH),
+];
+const LEARNSET_SPOINK: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(7, PSYWAVE),
+    learn!(10, ODOR_SLEUTH),
+    learn!(16, PSYBEAM),
+    learn!(19, PSYCH_UP),
+    learn!(25, CONFUSE_RAY),
+    learn!(28, MAGIC_COAT),
+    learn!(34, PSYCHIC),
+    learn!(37, REST),
+    learn!(37, SNORE),
+    learn!(43, BOUNCE),
+];
+const LEARNSET_SQUIRTLE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, TAIL_WHIP),
+    learn!(7, BUBBLE),
+    learn!(10, WITHDRAW),
+    learn!(13, WATER_GUN),
+    learn!(18, BITE),
+    learn!(23, RAPID_SPIN),
+    learn!(28, PROTECT),
+    learn!(33, RAIN_DANCE),
+    learn!(40, SKULL_BASH),
+    learn!(47, HYDRO_PUMP),
+];
+const LEARNSET_STANTLER: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(7, LEER),
+    learn!(13, ASTONISH),
+    learn!(19, HYPNOSIS),
+    learn!(25, STOMP),
+    learn!(31, SAND_ATTACK),
+    learn!(37, TAKE_DOWN),
+    learn!(43, CONFUSE_RAY),
+    learn!(49, CALM_MIND),
+];
+const LEARNSET_STARMIE: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, RAPID_SPIN),
+    learn!(1, RECOVER),
+    learn!(1, SWIFT),
+    learn!(33, CONFUSE_RAY),
+];
+const LEARNSET_STARYU: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, HARDEN),
+    learn!(6, WATER_GUN),
+    learn!(10, RAPID_SPIN),
+    learn!(15, RECOVER),
+    learn!(19, CAMOUFLAGE),
+    learn!(24, SWIFT),
+    learn!(28, BUBBLE_BEAM),
+    learn!(33, MINIMIZE),
+    learn!(37, LIGHT_SCREEN),
+    learn!(42, COSMIC_POWER),
+    learn!(46, HYDRO_PUMP),
+];
+const LEARNSET_STEELIX: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, SCREECH),
+    learn!(9, BIND),
+    learn!(13, ROCK_THROW),
+    learn!(21, HARDEN),
+    learn!(25, RAGE),
+    learn!(33, SANDSTORM),
+    learn!(37, SLAM),
+    learn!(45, IRON_TAIL),
+    learn!(49, CRUNCH),
+    learn!(57, DOUBLE_EDGE),
+];
+const LEARNSET_SUDOWOODO: &[LevelUpMove] = &[
+    learn!(1, ROCK_THROW),
+    learn!(1, MIMIC),
+    learn!(9, FLAIL),
+    learn!(17, LOW_KICK),
+    learn!(25, ROCK_SLIDE),
+    learn!(33, BLOCK),
+    learn!(41, FAINT_ATTACK),
+    learn!(49, SLAM),
+    learn!(57, DOUBLE_EDGE),
+];
+const LEARNSET_SUICUNE: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(11, BUBBLE_BEAM),
+    learn!(21, RAIN_DANCE),
+    learn!(31, GUST),
+    learn!(41, AURORA_BEAM),
+    learn!(51, MIST),
+    learn!(61, MIRROR_COAT),
+    learn!(71, HYDRO_PUMP),
+    learn!(81, CALM_MIND),
+];
+const LEARNSET_SUNFLORA: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(1, POUND),
+    learn!(6, GROWTH),
+    learn!(13, RAZOR_LEAF),
+    learn!(18, INGRAIN),
+    learn!(25, BULLET_SEED),
+    learn!(30, SUNNY_DAY),
+    learn!(37, PETAL_DANCE),
+    learn!(42, SOLAR_BEAM),
+];
+const LEARNSET_SUNKERN: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(6, GROWTH),
+    learn!(13, MEGA_DRAIN),
+    learn!(18, INGRAIN),
+    learn!(25, ENDEAVOR),
+    learn!(30, SUNNY_DAY),
+    learn!(37, SYNTHESIS),
+    learn!(42, GIGA_DRAIN),
+];
+const LEARNSET_SURSKIT: &[LevelUpMove] = &[
+    learn!(1, BUBBLE),
+    learn!(7, QUICK_ATTACK),
+    learn!(13, SWEET_SCENT),
+    learn!(19, WATER_SPORT),
+    learn!(25, BUBBLE_BEAM),
+    learn!(31, AGILITY),
+    learn!(37, MIST),
+    learn!(37, HAZE),
+];
+const LEARNSET_SWABLU: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(8, ASTONISH),
+    learn!(11, SING),
+    learn!(18, FURY_ATTACK),
+    learn!(21, SAFEGUARD),
+    learn!(28, MIST),
+    learn!(31, TAKE_DOWN),
+    learn!(38, MIRROR_MOVE),
+    learn!(41, REFRESH),
+    learn!(48, PERISH_SONG),
+];
+const LEARNSET_SWALOT: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, YAWN),
+    learn!(1, POISON_GAS),
+    learn!(1, SLUDGE),
+    learn!(6, YAWN),
+    learn!(9, POISON_GAS),
+    learn!(14, SLUDGE),
+    learn!(17, AMNESIA),
+    learn!(23, ENCORE),
+    learn!(26, BODY_SLAM),
+    learn!(31, TOXIC),
+    learn!(40, STOCKPILE),
+    learn!(40, SPIT_UP),
+    learn!(40, SWALLOW),
+    learn!(48, SLUDGE_BOMB),
+];
+const LEARNSET_SWAMPERT: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, MUD_SLAP),
+    learn!(1, WATER_GUN),
+    learn!(6, MUD_SLAP),
+    learn!(10, WATER_GUN),
+    learn!(15, BIDE),
+    learn!(16, MUD_SHOT),
+    learn!(20, FORESIGHT),
+    learn!(25, MUD_SPORT),
+    learn!(31, TAKE_DOWN),
+    learn!(39, MUDDY_WATER),
+    learn!(46, PROTECT),
+    learn!(52, EARTHQUAKE),
+    learn!(61, ENDEAVOR),
+];
+const LEARNSET_SWELLOW: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, QUICK_ATTACK),
+    learn!(4, FOCUS_ENERGY),
+    learn!(8, QUICK_ATTACK),
+    learn!(13, WING_ATTACK),
+    learn!(19, DOUBLE_TEAM),
+    learn!(28, ENDEAVOR),
+    learn!(38, AERIAL_ACE),
+    learn!(49, AGILITY),
+];
+const LEARNSET_SWINUB: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, ODOR_SLEUTH),
+    learn!(10, POWDER_SNOW),
+    learn!(19, ENDURE),
+    learn!(28, TAKE_DOWN),
+    learn!(37, MIST),
+    learn!(46, BLIZZARD),
+    learn!(55, AMNESIA),
+];
+const LEARNSET_TAILLOW: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, GROWL),
+    learn!(4, FOCUS_ENERGY),
+    learn!(8, QUICK_ATTACK),
+    learn!(13, WING_ATTACK),
+    learn!(19, DOUBLE_TEAM),
+    learn!(26, ENDEAVOR),
+    learn!(34, AERIAL_ACE),
+    learn!(43, AGILITY),
+];
+const LEARNSET_TANGELA: &[LevelUpMove] = &[
+    learn!(1, INGRAIN),
+    learn!(1, CONSTRICT),
+    learn!(4, SLEEP_POWDER),
+    learn!(10, ABSORB),
+    learn!(13, GROWTH),
+    learn!(19, POISON_POWDER),
+    learn!(22, VINE_WHIP),
+    learn!(28, BIND),
+    learn!(31, MEGA_DRAIN),
+    learn!(37, STUN_SPORE),
+    learn!(40, SLAM),
+    learn!(46, TICKLE),
+];
+const LEARNSET_TAUROS: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(4, TAIL_WHIP),
+    learn!(8, RAGE),
+    learn!(13, HORN_ATTACK),
+    learn!(19, SCARY_FACE),
+    learn!(26, PURSUIT),
+    learn!(34, REST),
+    learn!(43, THRASH),
+    learn!(53, TAKE_DOWN),
+];
+const LEARNSET_TEDDIURSA: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(7, LICK),
+    learn!(13, FURY_SWIPES),
+    learn!(19, FAKE_TEARS),
+    learn!(25, FAINT_ATTACK),
+    learn!(31, REST),
+    learn!(37, SLASH),
+    learn!(43, SNORE),
+    learn!(49, THRASH),
+];
+const LEARNSET_TENTACOOL: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(6, SUPERSONIC),
+    learn!(12, CONSTRICT),
+    learn!(19, ACID),
+    learn!(25, BUBBLE_BEAM),
+    learn!(30, WRAP),
+    learn!(36, BARRIER),
+    learn!(43, SCREECH),
+    learn!(49, HYDRO_PUMP),
+];
+const LEARNSET_TENTACRUEL: &[LevelUpMove] = &[
+    learn!(1, POISON_STING),
+    learn!(1, SUPERSONIC),
+    learn!(1, CONSTRICT),
+    learn!(6, SUPERSONIC),
+    learn!(12, CONSTRICT),
+    learn!(19, ACID),
+    learn!(25, BUBBLE_BEAM),
+    learn!(30, WRAP),
+    learn!(38, BARRIER),
+    learn!(47, SCREECH),
+    learn!(55, HYDRO_PUMP),
+];
+const LEARNSET_TOGEPI: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, CHARM),
+    learn!(6, METRONOME),
+    learn!(11, SWEET_KISS),
+    learn!(16, YAWN),
+    learn!(21, ENCORE),
+    learn!(26, FOLLOW_ME),
+    learn!(31, WISH),
+    learn!(36, SAFEGUARD),
+    learn!(41, DOUBLE_EDGE),
+];
+const LEARNSET_TOGETIC: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, CHARM),
+    learn!(6, METRONOME),
+    learn!(11, SWEET_KISS),
+    learn!(16, YAWN),
+    learn!(21, ENCORE),
+    learn!(26, FOLLOW_ME),
+    learn!(31, WISH),
+    learn!(36, SAFEGUARD),
+    learn!(41, DOUBLE_EDGE),
+];
+const LEARNSET_TORCHIC: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, GROWL),
+    learn!(7, FOCUS_ENERGY),
+    learn!(10, EMBER),
+    learn!(16, PECK),
+    learn!(19, SAND_ATTACK),
+    learn!(25, FIRE_SPIN),
+    learn!(28, QUICK_ATTACK),
+    learn!(34, SLASH),
+    learn!(37, MIRROR_MOVE),
+    learn!(43, FLAMETHROWER),
+];
+const LEARNSET_TORKOAL: &[LevelUpMove] = &[
+    learn!(1, EMBER),
+    learn!(4, SMOG),
+    learn!(7, CURSE),
+    learn!(14, SMOKESCREEN),
+    learn!(17, FIRE_SPIN),
+    learn!(20, BODY_SLAM),
+    learn!(27, PROTECT),
+    learn!(30, FLAMETHROWER),
+    learn!(33, IRON_DEFENSE),
+    learn!(40, AMNESIA),
+    learn!(43, FLAIL),
+    learn!(46, HEAT_WAVE),
+];
+const LEARNSET_TOTODILE: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(7, RAGE),
+    learn!(13, WATER_GUN),
+    learn!(20, BITE),
+    learn!(27, SCARY_FACE),
+    learn!(35, SLASH),
+    learn!(43, SCREECH),
+    learn!(52, HYDRO_PUMP),
+];
+const LEARNSET_TRAPINCH: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(9, SAND_ATTACK),
+    learn!(17, FAINT_ATTACK),
+    learn!(25, SAND_TOMB),
+    learn!(33, CRUNCH),
+    learn!(41, DIG),
+    learn!(49, SANDSTORM),
+    learn!(57, HYPER_BEAM),
+];
+const LEARNSET_TREECKO: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(1, LEER),
+    learn!(6, ABSORB),
+    learn!(11, QUICK_ATTACK),
+    learn!(16, PURSUIT),
+    learn!(21, SCREECH),
+    learn!(26, MEGA_DRAIN),
+    learn!(31, AGILITY),
+    learn!(36, SLAM),
+    learn!(41, DETECT),
+    learn!(46, GIGA_DRAIN),
+];
+const LEARNSET_TROPIUS: &[LevelUpMove] = &[
+    learn!(1, LEER),
+    learn!(1, GUST),
+    learn!(7, GROWTH),
+    learn!(11, RAZOR_LEAF),
+    learn!(17, STOMP),
+    learn!(21, SWEET_SCENT),
+    learn!(27, WHIRLWIND),
+    learn!(31, MAGICAL_LEAF),
+    learn!(37, BODY_SLAM),
+    learn!(41, SOLAR_BEAM),
+    learn!(47, SYNTHESIS),
+];
+const LEARNSET_TYPHLOSION: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, LEER),
+    learn!(1, SMOKESCREEN),
+    learn!(1, EMBER),
+    learn!(6, SMOKESCREEN),
+    learn!(12, EMBER),
+    learn!(21, QUICK_ATTACK),
+    learn!(31, FLAME_WHEEL),
+    learn!(45, SWIFT),
+    learn!(60, FLAMETHROWER),
+];
+const LEARNSET_TYRANITAR: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, LEER),
+    learn!(1, SANDSTORM),
+    learn!(1, SCREECH),
+    learn!(8, SANDSTORM),
+    learn!(15, SCREECH),
+    learn!(22, ROCK_SLIDE),
+    learn!(29, THRASH),
+    learn!(38, SCARY_FACE),
+    learn!(47, CRUNCH),
+    learn!(61, EARTHQUAKE),
+    learn!(75, HYPER_BEAM),
+];
+const LEARNSET_TYROGUE: &[LevelUpMove] = &[learn!(1, TACKLE)];
+const LEARNSET_UMBREON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, PURSUIT),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, CONFUSE_RAY),
+    learn!(36, FAINT_ATTACK),
+    learn!(42, MEAN_LOOK),
+    learn!(47, SCREECH),
+    learn!(52, MOONLIGHT),
+];
+const LEARNSET_UNOWN: &[LevelUpMove] = &[learn!(1, HIDDEN_POWER)];
+const LEARNSET_URSARING: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, LEER),
+    learn!(1, LICK),
+    learn!(1, FURY_SWIPES),
+    learn!(7, LICK),
+    learn!(13, FURY_SWIPES),
+    learn!(19, FAKE_TEARS),
+    learn!(25, FAINT_ATTACK),
+    learn!(31, REST),
+    learn!(37, SLASH),
+    learn!(43, SNORE),
+    learn!(49, THRASH),
+];
+const LEARNSET_VAPOREON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, HELPING_HAND),
+    learn!(8, SAND_ATTACK),
+    learn!(16, WATER_GUN),
+    learn!(23, QUICK_ATTACK),
+    learn!(30, BITE),
+    learn!(36, AURORA_BEAM),
+    learn!(42, HAZE),
+    learn!(47, ACID_ARMOR),
+    learn!(52, HYDRO_PUMP),
+];
+const LEARNSET_VENOMOTH: &[LevelUpMove] = &[
+    learn!(1, SILVER_WIND),
+    learn!(1, TACKLE),
+    learn!(1, DISABLE),
+    learn!(1, FORESIGHT),
+    learn!(1, SUPERSONIC),
+    learn!(9, SUPERSONIC),
+    learn!(17, CONFUSION),
+    learn!(20, POISON_POWDER),
+    learn!(25, LEECH_LIFE),
+    learn!(28, STUN_SPORE),
+    learn!(31, GUST),
+    learn!(36, PSYBEAM),
+    learn!(42, SLEEP_POWDER),
+    learn!(52, PSYCHIC),
+];
+const LEARNSET_VENONAT: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, DISABLE),
+    learn!(1, FORESIGHT),
+    learn!(9, SUPERSONIC),
+    learn!(17, CONFUSION),
+    learn!(20, POISON_POWDER),
+    learn!(25, LEECH_LIFE),
+    learn!(28, STUN_SPORE),
+    learn!(33, PSYBEAM),
+    learn!(36, SLEEP_POWDER),
+    learn!(41, PSYCHIC),
+];
+const LEARNSET_VENUSAUR: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(1, LEECH_SEED),
+    learn!(1, VINE_WHIP),
+    learn!(4, GROWL),
+    learn!(7, LEECH_SEED),
+    learn!(10, VINE_WHIP),
+    learn!(15, POISON_POWDER),
+    learn!(15, SLEEP_POWDER),
+    learn!(22, RAZOR_LEAF),
+    learn!(29, SWEET_SCENT),
+    learn!(41, GROWTH),
+    learn!(53, SYNTHESIS),
+    learn!(65, SOLAR_BEAM),
+];
+const LEARNSET_VIBRAVA: &[LevelUpMove] = &[
+    learn!(1, BITE),
+    learn!(1, SAND_ATTACK),
+    learn!(1, FAINT_ATTACK),
+    learn!(1, SAND_TOMB),
+    learn!(9, SAND_ATTACK),
+    learn!(17, FAINT_ATTACK),
+    learn!(25, SAND_TOMB),
+    learn!(33, CRUNCH),
+    learn!(35, DRAGON_BREATH),
+    learn!(41, SCREECH),
+    learn!(49, SANDSTORM),
+    learn!(57, HYPER_BEAM),
+];
+const LEARNSET_VICTREEBEL: &[LevelUpMove] = &[
+    learn!(1, VINE_WHIP),
+    learn!(1, SLEEP_POWDER),
+    learn!(1, SWEET_SCENT),
+    learn!(1, RAZOR_LEAF),
+];
+const LEARNSET_VIGOROTH: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(1, FOCUS_ENERGY),
+    learn!(1, ENCORE),
+    learn!(1, UPROAR),
+    learn!(7, ENCORE),
+    learn!(13, UPROAR),
+    learn!(19, FURY_SWIPES),
+    learn!(25, ENDURE),
+    learn!(31, SLASH),
+    learn!(37, COUNTER),
+    learn!(43, FOCUS_PUNCH),
+    learn!(49, REVERSAL),
+];
+const LEARNSET_VILEPLUME: &[LevelUpMove] = &[
+    learn!(1, ABSORB),
+    learn!(1, AROMATHERAPY),
+    learn!(1, STUN_SPORE),
+    learn!(1, MEGA_DRAIN),
+    learn!(44, PETAL_DANCE),
+];
+const LEARNSET_VOLBEAT: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(5, CONFUSE_RAY),
+    learn!(9, DOUBLE_TEAM),
+    learn!(13, MOONLIGHT),
+    learn!(17, QUICK_ATTACK),
+    learn!(21, TAIL_GLOW),
+    learn!(25, SIGNAL_BEAM),
+    learn!(29, PROTECT),
+    learn!(33, HELPING_HAND),
+    learn!(37, DOUBLE_EDGE),
+];
+const LEARNSET_VOLTORB: &[LevelUpMove] = &[
+    learn!(1, CHARGE),
+    learn!(1, TACKLE),
+    learn!(8, SCREECH),
+    learn!(15, SONIC_BOOM),
+    learn!(21, SPARK),
+    learn!(27, SELF_DESTRUCT),
+    learn!(32, ROLLOUT),
+    learn!(37, LIGHT_SCREEN),
+    learn!(42, SWIFT),
+    learn!(46, EXPLOSION),
+    learn!(49, MIRROR_COAT),
+];
+const LEARNSET_VULPIX: &[LevelUpMove] = &[
+    learn!(1, EMBER),
+    learn!(5, TAIL_WHIP),
+    learn!(9, ROAR),
+    learn!(13, QUICK_ATTACK),
+    learn!(17, WILL_O_WISP),
+    learn!(21, CONFUSE_RAY),
+    learn!(25, IMPRISON),
+    learn!(29, FLAMETHROWER),
+    learn!(33, SAFEGUARD),
+    learn!(37, GRUDGE),
+    learn!(41, FIRE_SPIN),
+];
+const LEARNSET_WAILMER: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(5, GROWL),
+    learn!(10, WATER_GUN),
+    learn!(14, ROLLOUT),
+    learn!(19, WHIRLPOOL),
+    learn!(23, ASTONISH),
+    learn!(28, WATER_PULSE),
+    learn!(32, MIST),
+    learn!(37, REST),
+    learn!(41, WATER_SPOUT),
+    learn!(46, AMNESIA),
+    learn!(50, HYDRO_PUMP),
+];
+const LEARNSET_WAILORD: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(1, ROLLOUT),
+    learn!(5, GROWL),
+    learn!(10, WATER_GUN),
+    learn!(14, ROLLOUT),
+    learn!(19, WHIRLPOOL),
+    learn!(23, ASTONISH),
+    learn!(28, WATER_PULSE),
+    learn!(32, MIST),
+    learn!(37, REST),
+    learn!(44, WATER_SPOUT),
+    learn!(52, AMNESIA),
+    learn!(59, HYDRO_PUMP),
+];
+const LEARNSET_WALREIN: &[LevelUpMove] = &[
+    learn!(1, POWDER_SNOW),
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(1, ENCORE),
+    learn!(7, ENCORE),
+    learn!(13, ICE_BALL),
+    learn!(19, BODY_SLAM),
+    learn!(25, AURORA_BEAM),
+    learn!(31, HAIL),
+    learn!(39, REST),
+    learn!(39, SNORE),
+    learn!(50, BLIZZARD),
+    learn!(61, SHEER_COLD),
+];
+const LEARNSET_WARTORTLE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, TAIL_WHIP),
+    learn!(1, BUBBLE),
+    learn!(4, TAIL_WHIP),
+    learn!(7, BUBBLE),
+    learn!(10, WITHDRAW),
+    learn!(13, WATER_GUN),
+    learn!(19, BITE),
+    learn!(25, RAPID_SPIN),
+    learn!(31, PROTECT),
+    learn!(37, RAIN_DANCE),
+    learn!(45, SKULL_BASH),
+    learn!(53, HYDRO_PUMP),
+];
+const LEARNSET_WEEDLE: &[LevelUpMove] = &[learn!(1, POISON_STING), learn!(1, STRING_SHOT)];
+const LEARNSET_WEEPINBELL: &[LevelUpMove] = &[
+    learn!(1, VINE_WHIP),
+    learn!(1, GROWTH),
+    learn!(1, WRAP),
+    learn!(6, GROWTH),
+    learn!(11, WRAP),
+    learn!(15, SLEEP_POWDER),
+    learn!(17, POISON_POWDER),
+    learn!(19, STUN_SPORE),
+    learn!(24, ACID),
+    learn!(33, SWEET_SCENT),
+    learn!(42, RAZOR_LEAF),
+    learn!(54, SLAM),
+];
+const LEARNSET_WEEZING: &[LevelUpMove] = &[
+    learn!(1, POISON_GAS),
+    learn!(1, TACKLE),
+    learn!(1, SMOG),
+    learn!(1, SELF_DESTRUCT),
+    learn!(9, SMOG),
+    learn!(17, SELF_DESTRUCT),
+    learn!(21, SLUDGE),
+    learn!(25, SMOKESCREEN),
+    learn!(33, HAZE),
+    learn!(44, EXPLOSION),
+    learn!(51, DESTINY_BOND),
+    learn!(58, MEMENTO),
+];
+const LEARNSET_WHISCASH: &[LevelUpMove] = &[
+    learn!(1, TICKLE),
+    learn!(1, MUD_SLAP),
+    learn!(1, MUD_SPORT),
+    learn!(1, WATER_SPORT),
+    learn!(6, MUD_SPORT),
+    learn!(6, WATER_SPORT),
+    learn!(11, WATER_GUN),
+    learn!(16, MAGNITUDE),
+    learn!(21, AMNESIA),
+    learn!(26, REST),
+    learn!(26, SNORE),
+    learn!(36, EARTHQUAKE),
+    learn!(46, FUTURE_SIGHT),
+    learn!(56, FISSURE),
+];
+const LEARNSET_WHISMUR: &[LevelUpMove] = &[
+    learn!(1, POUND),
+    learn!(5, UPROAR),
+    learn!(11, ASTONISH),
+    learn!(15, HOWL),
+    learn!(21, SUPERSONIC),
+    learn!(25, STOMP),
+    learn!(31, SCREECH),
+    learn!(35, ROAR),
+    learn!(41, REST),
+    learn!(41, SLEEP_TALK),
+    learn!(45, HYPER_VOICE),
+];
+const LEARNSET_WIGGLYTUFF: &[LevelUpMove] = &[
+    learn!(1, SING),
+    learn!(1, DISABLE),
+    learn!(1, DEFENSE_CURL),
+    learn!(1, DOUBLE_SLAP),
+];
+const LEARNSET_WINGULL: &[LevelUpMove] = &[
+    learn!(1, GROWL),
+    learn!(1, WATER_GUN),
+    learn!(7, SUPERSONIC),
+    learn!(13, WING_ATTACK),
+    learn!(21, MIST),
+    learn!(31, QUICK_ATTACK),
+    learn!(43, PURSUIT),
+    learn!(55, AGILITY),
+];
+const LEARNSET_WOBBUFFET: &[LevelUpMove] = &[
+    learn!(1, COUNTER),
+    learn!(1, MIRROR_COAT),
+    learn!(1, SAFEGUARD),
+    learn!(1, DESTINY_BOND),
+];
+const LEARNSET_WOOPER: &[LevelUpMove] = &[
+    learn!(1, WATER_GUN),
+    learn!(1, TAIL_WHIP),
+    learn!(11, SLAM),
+    learn!(16, MUD_SHOT),
+    learn!(21, AMNESIA),
+    learn!(31, YAWN),
+    learn!(36, EARTHQUAKE),
+    learn!(41, RAIN_DANCE),
+    learn!(51, MIST),
+    learn!(51, HAZE),
+];
+const LEARNSET_WURMPLE: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, STRING_SHOT),
+    learn!(5, POISON_STING),
+];
+const LEARNSET_WYNAUT: &[LevelUpMove] = &[
+    learn!(1, SPLASH),
+    learn!(1, CHARM),
+    learn!(1, ENCORE),
+    learn!(15, COUNTER),
+    learn!(15, MIRROR_COAT),
+    learn!(15, SAFEGUARD),
+    learn!(15, DESTINY_BOND),
+];
+const LEARNSET_XATU: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, LEER),
+    learn!(10, NIGHT_SHADE),
+    learn!(20, TELEPORT),
+    learn!(35, WISH),
+    learn!(35, FUTURE_SIGHT),
+    learn!(50, CONFUSE_RAY),
+    learn!(65, PSYCHIC),
+];
+const LEARNSET_YANMA: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, FORESIGHT),
+    learn!(7, QUICK_ATTACK),
+    learn!(13, DOUBLE_TEAM),
+    learn!(19, SONIC_BOOM),
+    learn!(25, DETECT),
+    learn!(31, SUPERSONIC),
+    learn!(37, UPROAR),
+    learn!(43, WING_ATTACK),
+    learn!(49, SCREECH),
+];
+const LEARNSET_ZANGOOSE: &[LevelUpMove] = &[
+    learn!(1, SCRATCH),
+    learn!(4, LEER),
+    learn!(7, QUICK_ATTACK),
+    learn!(10, SWORDS_DANCE),
+    learn!(13, FURY_CUTTER),
+    learn!(19, SLASH),
+    learn!(25, PURSUIT),
+    learn!(31, CRUSH_CLAW),
+    learn!(37, TAUNT),
+    learn!(46, DETECT),
+    learn!(55, FALSE_SWIPE),
+];
+const LEARNSET_ZAPDOS: &[LevelUpMove] = &[
+    learn!(1, PECK),
+    learn!(1, THUNDER_SHOCK),
+    learn!(13, THUNDER_WAVE),
+    learn!(25, AGILITY),
+    learn!(37, DETECT),
+    learn!(49, DRILL_PECK),
+    learn!(61, CHARGE),
+    learn!(73, LIGHT_SCREEN),
+    learn!(85, THUNDER),
+];
+const LEARNSET_ZIGZAGOON: &[LevelUpMove] = &[
+    learn!(1, TACKLE),
+    learn!(1, GROWL),
+    learn!(5, TAIL_WHIP),
+    learn!(9, HEADBUTT),
+    learn!(13, SAND_ATTACK),
+    learn!(17, ODOR_SLEUTH),
+    learn!(21, MUD_SPORT),
+    learn!(25, PIN_MISSILE),
+    learn!(29, COVET),
+    learn!(33, FLAIL),
+    learn!(37, REST),
+    learn!(41, BELLY_DRUM),
+];
+const LEARNSET_ZUBAT: &[LevelUpMove] = &[
+    learn!(1, LEECH_LIFE),
+    learn!(6, SUPERSONIC),
+    learn!(11, ASTONISH),
+    learn!(16, BITE),
+    learn!(21, WING_ATTACK),
+    learn!(26, CONFUSE_RAY),
+    learn!(31, AIR_CUTTER),
+    learn!(36, MEAN_LOOK),
+    learn!(41, POISON_FANG),
+    learn!(46, HAZE),
+];
+
+macro_rules! define_learnsets {
+    ($($species:ident => $learnset:ident),+ $(,)?) => {
+        const LEARNSET_SPECIES: [SpeciesId; SPECIES_COUNT] = [$(SpeciesId::$species,)+];
+        const LEARNSETS: [&[LevelUpMove]; SPECIES_COUNT] = [$($learnset,)+];
+    };
+}
+
+define_learnsets! {
+    NONE => LEARNSET_BULBASAUR,
+    BULBASAUR => LEARNSET_BULBASAUR,
+    IVYSAUR => LEARNSET_IVYSAUR,
+    VENUSAUR => LEARNSET_VENUSAUR,
+    CHARMANDER => LEARNSET_CHARMANDER,
+    CHARMELEON => LEARNSET_CHARMELEON,
+    CHARIZARD => LEARNSET_CHARIZARD,
+    SQUIRTLE => LEARNSET_SQUIRTLE,
+    WARTORTLE => LEARNSET_WARTORTLE,
+    BLASTOISE => LEARNSET_BLASTOISE,
+    CATERPIE => LEARNSET_CATERPIE,
+    METAPOD => LEARNSET_METAPOD,
+    BUTTERFREE => LEARNSET_BUTTERFREE,
+    WEEDLE => LEARNSET_WEEDLE,
+    KAKUNA => LEARNSET_KAKUNA,
+    BEEDRILL => LEARNSET_BEEDRILL,
+    PIDGEY => LEARNSET_PIDGEY,
+    PIDGEOTTO => LEARNSET_PIDGEOTTO,
+    PIDGEOT => LEARNSET_PIDGEOT,
+    RATTATA => LEARNSET_RATTATA,
+    RATICATE => LEARNSET_RATICATE,
+    SPEAROW => LEARNSET_SPEAROW,
+    FEAROW => LEARNSET_FEAROW,
+    EKANS => LEARNSET_EKANS,
+    ARBOK => LEARNSET_ARBOK,
+    PIKACHU => LEARNSET_PIKACHU,
+    RAICHU => LEARNSET_RAICHU,
+    SANDSHREW => LEARNSET_SANDSHREW,
+    SANDSLASH => LEARNSET_SANDSLASH,
+    NIDORAN_F => LEARNSET_NIDORAN_F,
+    NIDORINA => LEARNSET_NIDORINA,
+    NIDOQUEEN => LEARNSET_NIDOQUEEN,
+    NIDORAN_M => LEARNSET_NIDORAN_M,
+    NIDORINO => LEARNSET_NIDORINO,
+    NIDOKING => LEARNSET_NIDOKING,
+    CLEFAIRY => LEARNSET_CLEFAIRY,
+    CLEFABLE => LEARNSET_CLEFABLE,
+    VULPIX => LEARNSET_VULPIX,
+    NINETALES => LEARNSET_NINETALES,
+    JIGGLYPUFF => LEARNSET_JIGGLYPUFF,
+    WIGGLYTUFF => LEARNSET_WIGGLYTUFF,
+    ZUBAT => LEARNSET_ZUBAT,
+    GOLBAT => LEARNSET_GOLBAT,
+    ODDISH => LEARNSET_ODDISH,
+    GLOOM => LEARNSET_GLOOM,
+    VILEPLUME => LEARNSET_VILEPLUME,
+    PARAS => LEARNSET_PARAS,
+    PARASECT => LEARNSET_PARASECT,
+    VENONAT => LEARNSET_VENONAT,
+    VENOMOTH => LEARNSET_VENOMOTH,
+    DIGLETT => LEARNSET_DIGLETT,
+    DUGTRIO => LEARNSET_DUGTRIO,
+    MEOWTH => LEARNSET_MEOWTH,
+    PERSIAN => LEARNSET_PERSIAN,
+    PSYDUCK => LEARNSET_PSYDUCK,
+    GOLDUCK => LEARNSET_GOLDUCK,
+    MANKEY => LEARNSET_MANKEY,
+    PRIMEAPE => LEARNSET_PRIMEAPE,
+    GROWLITHE => LEARNSET_GROWLITHE,
+    ARCANINE => LEARNSET_ARCANINE,
+    POLIWAG => LEARNSET_POLIWAG,
+    POLIWHIRL => LEARNSET_POLIWHIRL,
+    POLIWRATH => LEARNSET_POLIWRATH,
+    ABRA => LEARNSET_ABRA,
+    KADABRA => LEARNSET_KADABRA,
+    ALAKAZAM => LEARNSET_ALAKAZAM,
+    MACHOP => LEARNSET_MACHOP,
+    MACHOKE => LEARNSET_MACHOKE,
+    MACHAMP => LEARNSET_MACHAMP,
+    BELLSPROUT => LEARNSET_BELLSPROUT,
+    WEEPINBELL => LEARNSET_WEEPINBELL,
+    VICTREEBEL => LEARNSET_VICTREEBEL,
+    TENTACOOL => LEARNSET_TENTACOOL,
+    TENTACRUEL => LEARNSET_TENTACRUEL,
+    GEODUDE => LEARNSET_GEODUDE,
+    GRAVELER => LEARNSET_GRAVELER,
+    GOLEM => LEARNSET_GOLEM,
+    PONYTA => LEARNSET_PONYTA,
+    RAPIDASH => LEARNSET_RAPIDASH,
+    SLOWPOKE => LEARNSET_SLOWPOKE,
+    SLOWBRO => LEARNSET_SLOWBRO,
+    MAGNEMITE => LEARNSET_MAGNEMITE,
+    MAGNETON => LEARNSET_MAGNETON,
+    FARFETCHD => LEARNSET_FARFETCHD,
+    DODUO => LEARNSET_DODUO,
+    DODRIO => LEARNSET_DODRIO,
+    SEEL => LEARNSET_SEEL,
+    DEWGONG => LEARNSET_DEWGONG,
+    GRIMER => LEARNSET_GRIMER,
+    MUK => LEARNSET_MUK,
+    SHELLDER => LEARNSET_SHELLDER,
+    CLOYSTER => LEARNSET_CLOYSTER,
+    GASTLY => LEARNSET_GASTLY,
+    HAUNTER => LEARNSET_HAUNTER,
+    GENGAR => LEARNSET_GENGAR,
+    ONIX => LEARNSET_ONIX,
+    DROWZEE => LEARNSET_DROWZEE,
+    HYPNO => LEARNSET_HYPNO,
+    KRABBY => LEARNSET_KRABBY,
+    KINGLER => LEARNSET_KINGLER,
+    VOLTORB => LEARNSET_VOLTORB,
+    ELECTRODE => LEARNSET_ELECTRODE,
+    EXEGGCUTE => LEARNSET_EXEGGCUTE,
+    EXEGGUTOR => LEARNSET_EXEGGUTOR,
+    CUBONE => LEARNSET_CUBONE,
+    MAROWAK => LEARNSET_MAROWAK,
+    HITMONLEE => LEARNSET_HITMONLEE,
+    HITMONCHAN => LEARNSET_HITMONCHAN,
+    LICKITUNG => LEARNSET_LICKITUNG,
+    KOFFING => LEARNSET_KOFFING,
+    WEEZING => LEARNSET_WEEZING,
+    RHYHORN => LEARNSET_RHYHORN,
+    RHYDON => LEARNSET_RHYDON,
+    CHANSEY => LEARNSET_CHANSEY,
+    TANGELA => LEARNSET_TANGELA,
+    KANGASKHAN => LEARNSET_KANGASKHAN,
+    HORSEA => LEARNSET_HORSEA,
+    SEADRA => LEARNSET_SEADRA,
+    GOLDEEN => LEARNSET_GOLDEEN,
+    SEAKING => LEARNSET_SEAKING,
+    STARYU => LEARNSET_STARYU,
+    STARMIE => LEARNSET_STARMIE,
+    MR_MIME => LEARNSET_MR_MIME,
+    SCYTHER => LEARNSET_SCYTHER,
+    JYNX => LEARNSET_JYNX,
+    ELECTABUZZ => LEARNSET_ELECTABUZZ,
+    MAGMAR => LEARNSET_MAGMAR,
+    PINSIR => LEARNSET_PINSIR,
+    TAUROS => LEARNSET_TAUROS,
+    MAGIKARP => LEARNSET_MAGIKARP,
+    GYARADOS => LEARNSET_GYARADOS,
+    LAPRAS => LEARNSET_LAPRAS,
+    DITTO => LEARNSET_DITTO,
+    EEVEE => LEARNSET_EEVEE,
+    VAPOREON => LEARNSET_VAPOREON,
+    JOLTEON => LEARNSET_JOLTEON,
+    FLAREON => LEARNSET_FLAREON,
+    PORYGON => LEARNSET_PORYGON,
+    OMANYTE => LEARNSET_OMANYTE,
+    OMASTAR => LEARNSET_OMASTAR,
+    KABUTO => LEARNSET_KABUTO,
+    KABUTOPS => LEARNSET_KABUTOPS,
+    AERODACTYL => LEARNSET_AERODACTYL,
+    SNORLAX => LEARNSET_SNORLAX,
+    ARTICUNO => LEARNSET_ARTICUNO,
+    ZAPDOS => LEARNSET_ZAPDOS,
+    MOLTRES => LEARNSET_MOLTRES,
+    DRATINI => LEARNSET_DRATINI,
+    DRAGONAIR => LEARNSET_DRAGONAIR,
+    DRAGONITE => LEARNSET_DRAGONITE,
+    MEWTWO => LEARNSET_MEWTWO,
+    MEW => LEARNSET_MEW,
+    CHIKORITA => LEARNSET_CHIKORITA,
+    BAYLEEF => LEARNSET_BAYLEEF,
+    MEGANIUM => LEARNSET_MEGANIUM,
+    CYNDAQUIL => LEARNSET_CYNDAQUIL,
+    QUILAVA => LEARNSET_QUILAVA,
+    TYPHLOSION => LEARNSET_TYPHLOSION,
+    TOTODILE => LEARNSET_TOTODILE,
+    CROCONAW => LEARNSET_CROCONAW,
+    FERALIGATR => LEARNSET_FERALIGATR,
+    SENTRET => LEARNSET_SENTRET,
+    FURRET => LEARNSET_FURRET,
+    HOOTHOOT => LEARNSET_HOOTHOOT,
+    NOCTOWL => LEARNSET_NOCTOWL,
+    LEDYBA => LEARNSET_LEDYBA,
+    LEDIAN => LEARNSET_LEDIAN,
+    SPINARAK => LEARNSET_SPINARAK,
+    ARIADOS => LEARNSET_ARIADOS,
+    CROBAT => LEARNSET_CROBAT,
+    CHINCHOU => LEARNSET_CHINCHOU,
+    LANTURN => LEARNSET_LANTURN,
+    PICHU => LEARNSET_PICHU,
+    CLEFFA => LEARNSET_CLEFFA,
+    IGGLYBUFF => LEARNSET_IGGLYBUFF,
+    TOGEPI => LEARNSET_TOGEPI,
+    TOGETIC => LEARNSET_TOGETIC,
+    NATU => LEARNSET_NATU,
+    XATU => LEARNSET_XATU,
+    MAREEP => LEARNSET_MAREEP,
+    FLAAFFY => LEARNSET_FLAAFFY,
+    AMPHAROS => LEARNSET_AMPHAROS,
+    BELLOSSOM => LEARNSET_BELLOSSOM,
+    MARILL => LEARNSET_MARILL,
+    AZUMARILL => LEARNSET_AZUMARILL,
+    SUDOWOODO => LEARNSET_SUDOWOODO,
+    POLITOED => LEARNSET_POLITOED,
+    HOPPIP => LEARNSET_HOPPIP,
+    SKIPLOOM => LEARNSET_SKIPLOOM,
+    JUMPLUFF => LEARNSET_JUMPLUFF,
+    AIPOM => LEARNSET_AIPOM,
+    SUNKERN => LEARNSET_SUNKERN,
+    SUNFLORA => LEARNSET_SUNFLORA,
+    YANMA => LEARNSET_YANMA,
+    WOOPER => LEARNSET_WOOPER,
+    QUAGSIRE => LEARNSET_QUAGSIRE,
+    ESPEON => LEARNSET_ESPEON,
+    UMBREON => LEARNSET_UMBREON,
+    MURKROW => LEARNSET_MURKROW,
+    SLOWKING => LEARNSET_SLOWKING,
+    MISDREAVUS => LEARNSET_MISDREAVUS,
+    UNOWN => LEARNSET_UNOWN,
+    WOBBUFFET => LEARNSET_WOBBUFFET,
+    GIRAFARIG => LEARNSET_GIRAFARIG,
+    PINECO => LEARNSET_PINECO,
+    FORRETRESS => LEARNSET_FORRETRESS,
+    DUNSPARCE => LEARNSET_DUNSPARCE,
+    GLIGAR => LEARNSET_GLIGAR,
+    STEELIX => LEARNSET_STEELIX,
+    SNUBBULL => LEARNSET_SNUBBULL,
+    GRANBULL => LEARNSET_GRANBULL,
+    QWILFISH => LEARNSET_QWILFISH,
+    SCIZOR => LEARNSET_SCIZOR,
+    SHUCKLE => LEARNSET_SHUCKLE,
+    HERACROSS => LEARNSET_HERACROSS,
+    SNEASEL => LEARNSET_SNEASEL,
+    TEDDIURSA => LEARNSET_TEDDIURSA,
+    URSARING => LEARNSET_URSARING,
+    SLUGMA => LEARNSET_SLUGMA,
+    MAGCARGO => LEARNSET_MAGCARGO,
+    SWINUB => LEARNSET_SWINUB,
+    PILOSWINE => LEARNSET_PILOSWINE,
+    CORSOLA => LEARNSET_CORSOLA,
+    REMORAID => LEARNSET_REMORAID,
+    OCTILLERY => LEARNSET_OCTILLERY,
+    DELIBIRD => LEARNSET_DELIBIRD,
+    MANTINE => LEARNSET_MANTINE,
+    SKARMORY => LEARNSET_SKARMORY,
+    HOUNDOUR => LEARNSET_HOUNDOUR,
+    HOUNDOOM => LEARNSET_HOUNDOOM,
+    KINGDRA => LEARNSET_KINGDRA,
+    PHANPY => LEARNSET_PHANPY,
+    DONPHAN => LEARNSET_DONPHAN,
+    PORYGON2 => LEARNSET_PORYGON2,
+    STANTLER => LEARNSET_STANTLER,
+    SMEARGLE => LEARNSET_SMEARGLE,
+    TYROGUE => LEARNSET_TYROGUE,
+    HITMONTOP => LEARNSET_HITMONTOP,
+    SMOOCHUM => LEARNSET_SMOOCHUM,
+    ELEKID => LEARNSET_ELEKID,
+    MAGBY => LEARNSET_MAGBY,
+    MILTANK => LEARNSET_MILTANK,
+    BLISSEY => LEARNSET_BLISSEY,
+    RAIKOU => LEARNSET_RAIKOU,
+    ENTEI => LEARNSET_ENTEI,
+    SUICUNE => LEARNSET_SUICUNE,
+    LARVITAR => LEARNSET_LARVITAR,
+    PUPITAR => LEARNSET_PUPITAR,
+    TYRANITAR => LEARNSET_TYRANITAR,
+    LUGIA => LEARNSET_LUGIA,
+    HO_OH => LEARNSET_HO_OH,
+    CELEBI => LEARNSET_CELEBI,
+    OLD_UNOWN_B => LEARNSET_SPECIES252,
+    OLD_UNOWN_C => LEARNSET_SPECIES253,
+    OLD_UNOWN_D => LEARNSET_SPECIES254,
+    OLD_UNOWN_E => LEARNSET_SPECIES255,
+    OLD_UNOWN_F => LEARNSET_SPECIES256,
+    OLD_UNOWN_G => LEARNSET_SPECIES257,
+    OLD_UNOWN_H => LEARNSET_SPECIES258,
+    OLD_UNOWN_I => LEARNSET_SPECIES259,
+    OLD_UNOWN_J => LEARNSET_SPECIES260,
+    OLD_UNOWN_K => LEARNSET_SPECIES261,
+    OLD_UNOWN_L => LEARNSET_SPECIES262,
+    OLD_UNOWN_M => LEARNSET_SPECIES263,
+    OLD_UNOWN_N => LEARNSET_SPECIES264,
+    OLD_UNOWN_O => LEARNSET_SPECIES265,
+    OLD_UNOWN_P => LEARNSET_SPECIES266,
+    OLD_UNOWN_Q => LEARNSET_SPECIES267,
+    OLD_UNOWN_R => LEARNSET_SPECIES268,
+    OLD_UNOWN_S => LEARNSET_SPECIES269,
+    OLD_UNOWN_T => LEARNSET_SPECIES270,
+    OLD_UNOWN_U => LEARNSET_SPECIES271,
+    OLD_UNOWN_V => LEARNSET_SPECIES272,
+    OLD_UNOWN_W => LEARNSET_SPECIES273,
+    OLD_UNOWN_X => LEARNSET_SPECIES274,
+    OLD_UNOWN_Y => LEARNSET_SPECIES275,
+    OLD_UNOWN_Z => LEARNSET_SPECIES276,
+    TREECKO => LEARNSET_TREECKO,
+    GROVYLE => LEARNSET_GROVYLE,
+    SCEPTILE => LEARNSET_SCEPTILE,
+    TORCHIC => LEARNSET_TORCHIC,
+    COMBUSKEN => LEARNSET_COMBUSKEN,
+    BLAZIKEN => LEARNSET_BLAZIKEN,
+    MUDKIP => LEARNSET_MUDKIP,
+    MARSHTOMP => LEARNSET_MARSHTOMP,
+    SWAMPERT => LEARNSET_SWAMPERT,
+    POOCHYENA => LEARNSET_POOCHYENA,
+    MIGHTYENA => LEARNSET_MIGHTYENA,
+    ZIGZAGOON => LEARNSET_ZIGZAGOON,
+    LINOONE => LEARNSET_LINOONE,
+    WURMPLE => LEARNSET_WURMPLE,
+    SILCOON => LEARNSET_SILCOON,
+    BEAUTIFLY => LEARNSET_BEAUTIFLY,
+    CASCOON => LEARNSET_CASCOON,
+    DUSTOX => LEARNSET_DUSTOX,
+    LOTAD => LEARNSET_LOTAD,
+    LOMBRE => LEARNSET_LOMBRE,
+    LUDICOLO => LEARNSET_LUDICOLO,
+    SEEDOT => LEARNSET_SEEDOT,
+    NUZLEAF => LEARNSET_NUZLEAF,
+    SHIFTRY => LEARNSET_SHIFTRY,
+    NINCADA => LEARNSET_NINCADA,
+    NINJASK => LEARNSET_NINJASK,
+    SHEDINJA => LEARNSET_SHEDINJA,
+    TAILLOW => LEARNSET_TAILLOW,
+    SWELLOW => LEARNSET_SWELLOW,
+    SHROOMISH => LEARNSET_SHROOMISH,
+    BRELOOM => LEARNSET_BRELOOM,
+    SPINDA => LEARNSET_SPINDA,
+    WINGULL => LEARNSET_WINGULL,
+    PELIPPER => LEARNSET_PELIPPER,
+    SURSKIT => LEARNSET_SURSKIT,
+    MASQUERAIN => LEARNSET_MASQUERAIN,
+    WAILMER => LEARNSET_WAILMER,
+    WAILORD => LEARNSET_WAILORD,
+    SKITTY => LEARNSET_SKITTY,
+    DELCATTY => LEARNSET_DELCATTY,
+    KECLEON => LEARNSET_KECLEON,
+    BALTOY => LEARNSET_BALTOY,
+    CLAYDOL => LEARNSET_CLAYDOL,
+    NOSEPASS => LEARNSET_NOSEPASS,
+    TORKOAL => LEARNSET_TORKOAL,
+    SABLEYE => LEARNSET_SABLEYE,
+    BARBOACH => LEARNSET_BARBOACH,
+    WHISCASH => LEARNSET_WHISCASH,
+    LUVDISC => LEARNSET_LUVDISC,
+    CORPHISH => LEARNSET_CORPHISH,
+    CRAWDAUNT => LEARNSET_CRAWDAUNT,
+    FEEBAS => LEARNSET_FEEBAS,
+    MILOTIC => LEARNSET_MILOTIC,
+    CARVANHA => LEARNSET_CARVANHA,
+    SHARPEDO => LEARNSET_SHARPEDO,
+    TRAPINCH => LEARNSET_TRAPINCH,
+    VIBRAVA => LEARNSET_VIBRAVA,
+    FLYGON => LEARNSET_FLYGON,
+    MAKUHITA => LEARNSET_MAKUHITA,
+    HARIYAMA => LEARNSET_HARIYAMA,
+    ELECTRIKE => LEARNSET_ELECTRIKE,
+    MANECTRIC => LEARNSET_MANECTRIC,
+    NUMEL => LEARNSET_NUMEL,
+    CAMERUPT => LEARNSET_CAMERUPT,
+    SPHEAL => LEARNSET_SPHEAL,
+    SEALEO => LEARNSET_SEALEO,
+    WALREIN => LEARNSET_WALREIN,
+    CACNEA => LEARNSET_CACNEA,
+    CACTURNE => LEARNSET_CACTURNE,
+    SNORUNT => LEARNSET_SNORUNT,
+    GLALIE => LEARNSET_GLALIE,
+    LUNATONE => LEARNSET_LUNATONE,
+    SOLROCK => LEARNSET_SOLROCK,
+    AZURILL => LEARNSET_AZURILL,
+    SPOINK => LEARNSET_SPOINK,
+    GRUMPIG => LEARNSET_GRUMPIG,
+    PLUSLE => LEARNSET_PLUSLE,
+    MINUN => LEARNSET_MINUN,
+    MAWILE => LEARNSET_MAWILE,
+    MEDITITE => LEARNSET_MEDITITE,
+    MEDICHAM => LEARNSET_MEDICHAM,
+    SWABLU => LEARNSET_SWABLU,
+    ALTARIA => LEARNSET_ALTARIA,
+    WYNAUT => LEARNSET_WYNAUT,
+    DUSKULL => LEARNSET_DUSKULL,
+    DUSCLOPS => LEARNSET_DUSCLOPS,
+    ROSELIA => LEARNSET_ROSELIA,
+    SLAKOTH => LEARNSET_SLAKOTH,
+    VIGOROTH => LEARNSET_VIGOROTH,
+    SLAKING => LEARNSET_SLAKING,
+    GULPIN => LEARNSET_GULPIN,
+    SWALOT => LEARNSET_SWALOT,
+    TROPIUS => LEARNSET_TROPIUS,
+    WHISMUR => LEARNSET_WHISMUR,
+    LOUDRED => LEARNSET_LOUDRED,
+    EXPLOUD => LEARNSET_EXPLOUD,
+    CLAMPERL => LEARNSET_CLAMPERL,
+    HUNTAIL => LEARNSET_HUNTAIL,
+    GOREBYSS => LEARNSET_GOREBYSS,
+    ABSOL => LEARNSET_ABSOL,
+    SHUPPET => LEARNSET_SHUPPET,
+    BANETTE => LEARNSET_BANETTE,
+    SEVIPER => LEARNSET_SEVIPER,
+    ZANGOOSE => LEARNSET_ZANGOOSE,
+    RELICANTH => LEARNSET_RELICANTH,
+    ARON => LEARNSET_ARON,
+    LAIRON => LEARNSET_LAIRON,
+    AGGRON => LEARNSET_AGGRON,
+    CASTFORM => LEARNSET_CASTFORM,
+    VOLBEAT => LEARNSET_VOLBEAT,
+    ILLUMISE => LEARNSET_ILLUMISE,
+    LILEEP => LEARNSET_LILEEP,
+    CRADILY => LEARNSET_CRADILY,
+    ANORITH => LEARNSET_ANORITH,
+    ARMALDO => LEARNSET_ARMALDO,
+    RALTS => LEARNSET_RALTS,
+    KIRLIA => LEARNSET_KIRLIA,
+    GARDEVOIR => LEARNSET_GARDEVOIR,
+    BAGON => LEARNSET_BAGON,
+    SHELGON => LEARNSET_SHELGON,
+    SALAMENCE => LEARNSET_SALAMENCE,
+    BELDUM => LEARNSET_BELDUM,
+    METANG => LEARNSET_METANG,
+    METAGROSS => LEARNSET_METAGROSS,
+    REGIROCK => LEARNSET_REGIROCK,
+    REGICE => LEARNSET_REGICE,
+    REGISTEEL => LEARNSET_REGISTEEL,
+    KYOGRE => LEARNSET_KYOGRE,
+    GROUDON => LEARNSET_GROUDON,
+    RAYQUAZA => LEARNSET_RAYQUAZA,
+    LATIAS => LEARNSET_LATIAS,
+    LATIOS => LEARNSET_LATIOS,
+    JIRACHI => LEARNSET_JIRACHI,
+    DEOXYS => LEARNSET_DEOXYS,
+    CHIMECHO => LEARNSET_CHIMECHO,
+}
+
+/// Read-only access to every species' ordered level-up learnset.
+#[derive(Debug, Clone, Copy)]
+pub struct LevelUpLearnsets {
+    table: &'static [&'static [LevelUpMove]; SPECIES_COUNT],
+}
+
+impl LevelUpLearnsets {
+    /// The number of addressable species slots.
+    pub const LEN: usize = SPECIES_COUNT;
+
+    /// The number of addressable species slots in [`SpeciesId`]'s storage type.
+    pub const LEN_U16: u16 = {
+        assert!(SPECIES_COUNT <= u16::MAX as usize);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the preceding assertion proves the species count fits"
+        )]
+        {
+            SPECIES_COUNT as u16
+        }
+    };
+
+    /// Builds the canonical learnset table.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { table: &LEARNSETS }
+    }
+
+    /// Returns the ordered learnset for `species`, or `None` if it has no slot.
+    #[must_use]
+    pub fn get(&self, species: SpeciesId) -> Option<&'static [LevelUpMove]> {
+        let index = usize::from(species.index());
+        let learnset = self.table.get(index).copied()?;
+        (LEARNSET_SPECIES.get(index).copied() == Some(species)).then_some(learnset)
+    }
+
+    /// Returns the ordered learnset for `species`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::UnknownSpecies`] if `species` has no table slot.
+    pub fn learnset(&self, species: SpeciesId) -> Result<&'static [LevelUpMove], AssetError> {
+        self.get(species)
+            .ok_or(AssetError::UnknownSpecies(species.0))
+    }
+
+    /// Returns the number of species slots.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    /// Returns whether the table has no species slots.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+
+    /// Iterates in ascending [`SpeciesId`] order.
+    pub fn iter(&self) -> impl Iterator<Item = &'static [LevelUpMove]> + '_ {
+        self.table.iter().copied()
+    }
+}
+
+impl Default for LevelUpLearnsets {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LevelUpLearnsets, LevelUpMove, LEARNSET_SPECIES, MAX_PACKED_LEVEL, MOVE_ID_MASK,
+        PACKED_END, SPECIES_COUNT,
+    };
+    use crate::battle_moves::MoveId;
+    use crate::error::AssetError;
+    use crate::species::SpeciesId;
+
+    // These raw identities stay independent of the production constants and
+    // tables they validate.
+    const EXPECTED_SPECIES_COUNT: usize = 412;
+    const EXPECTED_SPECIES_NONE: SpeciesId = SpeciesId(0);
+    const EXPECTED_SPECIES_BULBASAUR: SpeciesId = SpeciesId(1);
+    const EXPECTED_SPECIES_PIKACHU: SpeciesId = SpeciesId(25);
+    const EXPECTED_SPECIES_CHIMECHO: SpeciesId = SpeciesId(411);
+    const EXPECTED_MOVE_SLAM: MoveId = MoveId(21);
+    const EXPECTED_MOVE_VINE_WHIP: MoveId = MoveId(22);
+    const EXPECTED_MOVE_TACKLE: MoveId = MoveId(33);
+    const EXPECTED_MOVE_WRAP: MoveId = MoveId(35);
+    const EXPECTED_MOVE_TAKE_DOWN: MoveId = MoveId(36);
+    const EXPECTED_MOVE_DOUBLE_EDGE: MoveId = MoveId(38);
+    const EXPECTED_MOVE_TAIL_WHIP: MoveId = MoveId(39);
+    const EXPECTED_MOVE_GROWL: MoveId = MoveId(45);
+    const EXPECTED_MOVE_LEECH_SEED: MoveId = MoveId(73);
+    const EXPECTED_MOVE_GROWTH: MoveId = MoveId(74);
+    const EXPECTED_MOVE_RAZOR_LEAF: MoveId = MoveId(75);
+    const EXPECTED_MOVE_SOLAR_BEAM: MoveId = MoveId(76);
+    const EXPECTED_MOVE_POISON_POWDER: MoveId = MoveId(77);
+    const EXPECTED_MOVE_SLEEP_POWDER: MoveId = MoveId(79);
+    const EXPECTED_MOVE_THUNDER_SHOCK: MoveId = MoveId(84);
+    const EXPECTED_MOVE_THUNDERBOLT: MoveId = MoveId(85);
+    const EXPECTED_MOVE_THUNDER_WAVE: MoveId = MoveId(86);
+    const EXPECTED_MOVE_THUNDER: MoveId = MoveId(87);
+    const EXPECTED_MOVE_CONFUSION: MoveId = MoveId(93);
+    const EXPECTED_MOVE_PSYCHIC: MoveId = MoveId(94);
+    const EXPECTED_MOVE_AGILITY: MoveId = MoveId(97);
+    const EXPECTED_MOVE_QUICK_ATTACK: MoveId = MoveId(98);
+    const EXPECTED_MOVE_DOUBLE_TEAM: MoveId = MoveId(104);
+    const EXPECTED_MOVE_LIGHT_SCREEN: MoveId = MoveId(113);
+    const EXPECTED_MOVE_PSYWAVE: MoveId = MoveId(149);
+    const EXPECTED_MOVE_HEAL_BELL: MoveId = MoveId(215);
+    const EXPECTED_MOVE_SAFEGUARD: MoveId = MoveId(219);
+    const EXPECTED_MOVE_SWEET_SCENT: MoveId = MoveId(230);
+    const EXPECTED_MOVE_SYNTHESIS: MoveId = MoveId(235);
+    const EXPECTED_MOVE_UPROAR: MoveId = MoveId(253);
+    const EXPECTED_MOVE_YAWN: MoveId = MoveId(281);
+    const EXPECTED_MOVE_ASTONISH: MoveId = MoveId(310);
+    const EXPECTED_PACKED_LEVEL_15_POISON_POWDER: u16 = 7_757;
+
+    #[test]
+    fn table_covers_every_species_identity() {
+        let learnsets = LevelUpLearnsets::new();
+        assert_eq!(SPECIES_COUNT, EXPECTED_SPECIES_COUNT);
+        assert_eq!(learnsets.len(), EXPECTED_SPECIES_COUNT);
+        assert_eq!(LevelUpLearnsets::LEN, EXPECTED_SPECIES_COUNT);
+        assert_eq!(learnsets.iter().count(), EXPECTED_SPECIES_COUNT);
+        assert!(!learnsets.is_empty());
+
+        for (index, species) in LEARNSET_SPECIES.into_iter().enumerate() {
+            assert_eq!(usize::from(species.index()), index);
+        }
+    }
+
+    #[test]
+    fn bulbasaur_learnset_matches_the_canonical_sequence() {
+        let expected = [
+            LevelUpMove::checked(1, EXPECTED_MOVE_TACKLE),
+            LevelUpMove::checked(4, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(7, EXPECTED_MOVE_LEECH_SEED),
+            LevelUpMove::checked(10, EXPECTED_MOVE_VINE_WHIP),
+            LevelUpMove::checked(15, EXPECTED_MOVE_POISON_POWDER),
+            LevelUpMove::checked(15, EXPECTED_MOVE_SLEEP_POWDER),
+            LevelUpMove::checked(20, EXPECTED_MOVE_RAZOR_LEAF),
+            LevelUpMove::checked(25, EXPECTED_MOVE_SWEET_SCENT),
+            LevelUpMove::checked(32, EXPECTED_MOVE_GROWTH),
+            LevelUpMove::checked(39, EXPECTED_MOVE_SYNTHESIS),
+            LevelUpMove::checked(46, EXPECTED_MOVE_SOLAR_BEAM),
+        ];
+        assert_eq!(
+            LevelUpLearnsets::new()
+                .learnset(EXPECTED_SPECIES_BULBASAUR)
+                .unwrap(),
+            expected,
+        );
+    }
+
+    #[test]
+    fn reserved_species_slot_shares_bulbasaurs_learnset() {
+        let learnsets = LevelUpLearnsets::new();
+        let reserved = learnsets.learnset(EXPECTED_SPECIES_NONE).unwrap();
+        let bulbasaur = learnsets.learnset(EXPECTED_SPECIES_BULBASAUR).unwrap();
+        assert!(std::ptr::eq(reserved, bulbasaur));
+        assert_eq!(reserved[0].move_id(), EXPECTED_MOVE_TACKLE);
+    }
+
+    #[test]
+    fn pikachu_learnset_preserves_equal_level_order() {
+        let expected = [
+            LevelUpMove::checked(1, EXPECTED_MOVE_THUNDER_SHOCK),
+            LevelUpMove::checked(1, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(6, EXPECTED_MOVE_TAIL_WHIP),
+            LevelUpMove::checked(8, EXPECTED_MOVE_THUNDER_WAVE),
+            LevelUpMove::checked(11, EXPECTED_MOVE_QUICK_ATTACK),
+            LevelUpMove::checked(15, EXPECTED_MOVE_DOUBLE_TEAM),
+            LevelUpMove::checked(20, EXPECTED_MOVE_SLAM),
+            LevelUpMove::checked(26, EXPECTED_MOVE_THUNDERBOLT),
+            LevelUpMove::checked(33, EXPECTED_MOVE_AGILITY),
+            LevelUpMove::checked(41, EXPECTED_MOVE_THUNDER),
+            LevelUpMove::checked(50, EXPECTED_MOVE_LIGHT_SCREEN),
+        ];
+        assert_eq!(
+            LevelUpLearnsets::new()
+                .learnset(EXPECTED_SPECIES_PIKACHU)
+                .unwrap(),
+            expected,
+        );
+    }
+
+    #[test]
+    fn chimecho_occupies_the_final_species_slot() {
+        let expected = [
+            LevelUpMove::checked(1, EXPECTED_MOVE_WRAP),
+            LevelUpMove::checked(6, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(9, EXPECTED_MOVE_ASTONISH),
+            LevelUpMove::checked(14, EXPECTED_MOVE_CONFUSION),
+            LevelUpMove::checked(17, EXPECTED_MOVE_TAKE_DOWN),
+            LevelUpMove::checked(22, EXPECTED_MOVE_UPROAR),
+            LevelUpMove::checked(25, EXPECTED_MOVE_YAWN),
+            LevelUpMove::checked(30, EXPECTED_MOVE_PSYWAVE),
+            LevelUpMove::checked(33, EXPECTED_MOVE_DOUBLE_EDGE),
+            LevelUpMove::checked(38, EXPECTED_MOVE_HEAL_BELL),
+            LevelUpMove::checked(41, EXPECTED_MOVE_SAFEGUARD),
+            LevelUpMove::checked(46, EXPECTED_MOVE_PSYCHIC),
+        ];
+        assert_eq!(
+            LevelUpLearnsets::new()
+                .learnset(EXPECTED_SPECIES_CHIMECHO)
+                .unwrap(),
+            expected,
+        );
+    }
+
+    #[test]
+    fn out_of_range_species_is_an_error() {
+        let learnsets = LevelUpLearnsets::new();
+        let bad = SpeciesId(LevelUpLearnsets::LEN_U16);
+        assert_eq!(learnsets.get(bad), None);
+        assert_eq!(
+            learnsets.learnset(bad),
+            Err(AssetError::UnknownSpecies(LevelUpLearnsets::LEN_U16)),
+        );
+        assert_eq!(
+            learnsets.learnset(SpeciesId(u16::MAX)),
+            Err(AssetError::UnknownSpecies(u16::MAX)),
+        );
+    }
+
+    #[test]
+    fn packed_encoding_preserves_every_entry() {
+        let poison_powder = LevelUpMove::checked(15, EXPECTED_MOVE_POISON_POWDER);
+        assert_eq!(
+            poison_powder.packed(),
+            EXPECTED_PACKED_LEVEL_15_POISON_POWDER
+        );
+        assert_eq!(
+            LevelUpMove::from_packed(EXPECTED_PACKED_LEVEL_15_POISON_POWDER),
+            Some(poison_powder),
+        );
+
+        for entry in LevelUpLearnsets::new().iter().flatten() {
+            let packed = entry.packed();
+            assert_ne!(packed, PACKED_END, "entry collides with the terminator");
+            assert!(
+                entry.level() <= MAX_PACKED_LEVEL,
+                "level {} exceeds the packed level field",
+                entry.level()
+            );
+            assert_eq!(LevelUpMove::from_packed(packed), Some(*entry));
+        }
+    }
+
+    #[test]
+    fn terminator_is_not_decoded_as_an_entry() {
+        assert_eq!(LevelUpMove::from_packed(PACKED_END), None);
+    }
+
+    #[test]
+    fn new_rejects_a_level_beyond_the_packed_width() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL + 1, EXPECTED_MOVE_TACKLE),
+            None,
+        );
+    }
+
+    #[test]
+    fn new_rejects_a_move_id_beyond_the_packed_width() {
+        assert_eq!(LevelUpMove::new(1, MoveId(MOVE_ID_MASK + 1)), None);
+    }
+
+    #[test]
+    fn new_rejects_the_combination_that_collides_with_the_terminator() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK)),
+            None,
+        );
+    }
+
+    #[test]
+    fn new_accepts_the_widest_non_colliding_combinations() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK - 1)),
+            Some(LevelUpMove::checked(
+                MAX_PACKED_LEVEL,
+                MoveId(MOVE_ID_MASK - 1)
+            )),
+        );
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL - 1, MoveId(MOVE_ID_MASK)),
+            Some(LevelUpMove::checked(
+                MAX_PACKED_LEVEL - 1,
+                MoveId(MOVE_ID_MASK)
+            )),
+        );
+    }
+
+    #[test]
+    fn packed_round_trips_every_constructible_entry() {
+        let max_level = LevelUpMove::checked(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK - 1));
+        let max_move = LevelUpMove::checked(MAX_PACKED_LEVEL - 1, MoveId(MOVE_ID_MASK));
+        assert_eq!(
+            [
+                LevelUpMove::from_packed(max_level.packed()),
+                LevelUpMove::from_packed(max_move.packed()),
+            ],
+            [Some(max_level), Some(max_move)],
+        );
+    }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every species' packed sequence, each closed by the packed
+    /// terminator, as little-endian bytes in table order.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        for learnset in LevelUpLearnsets::new().iter() {
+            for entry in learnset {
+                out.extend_from_slice(&entry.packed().to_le_bytes());
+            }
+            out.extend_from_slice(&PACKED_END.to_le_bytes());
+        }
+        out
+    }
+
+    /// The expected digest was computed from upstream
+    /// `src/data/pokemon/level_up_learnsets.h`'s per-species arrays and
+    /// `src/data/pokemon/level_up_learnset_pointers.h`'s `gLevelUpLearnsets`
+    /// mapping, packed and terminated the same way this module packs its own
+    /// table, and independently of it.
+    #[test]
+    fn every_species_sequence_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "a4b371bdcf5636ff",
+            "level-up learnset table diverges from the canonical sequences",
+        );
+    }
+
+    #[test]
+    fn learnsets_are_non_empty_and_level_ordered() {
+        let learnsets = LevelUpLearnsets::new();
+        for id in 0..LevelUpLearnsets::LEN_U16 {
+            let entries = learnsets.learnset(SpeciesId(id)).unwrap();
+            assert!(!entries.is_empty(), "species {id} has an empty learnset");
+            for pair in entries.windows(2) {
+                assert!(
+                    pair[0].level() <= pair[1].level(),
+                    "species {id} learnset not level-ordered: {} then {}",
+                    pair[0].level(),
+                    pair[1].level(),
+                );
+            }
+        }
+    }
+}

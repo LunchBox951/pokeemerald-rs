@@ -1,0 +1,122 @@
+//! CGB output must remain outside the DirectSound reverb ring.
+
+use super::test_support::*;
+use super::*;
+
+#[test]
+fn a_cgb_only_mix_never_feeds_the_directsound_reverb_ring() {
+    const REVERB_LEVEL: u8 = 100;
+    const FRAMES: usize = 4;
+
+    let mut mixer =
+        Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES).with_reverb_level(REVERB_LEVEL);
+    assert!(mixer.add_cgb_voice(cgb_keyed_voice(0, 60)));
+
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut heard_cgb = false;
+    for _ in 0..FRAMES {
+        mixer.mix_frame(&mut out);
+        heard_cgb |= out.iter().any(|&sample| sample != 0.0);
+    }
+
+    assert!(heard_cgb, "the CGB voice must actually be audible");
+    assert!(
+        !mixer.has_pending_reverb(),
+        "CGB output must not enter the DirectSound reverb ring",
+    );
+}
+
+#[test]
+fn a_cgb_voice_alongside_directsound_leaves_the_reverb_tap_directsound_only() {
+    const REVERB_LEVEL: u8 = 100;
+    const DIRECT_SAMPLE: i8 = 40;
+    const DIRECT_TRACK: usize = 0;
+    const CGB_TRACK: usize = 1;
+    const CGB_KEY: u8 = 60;
+    const MAX_SETTLE_FRAMES: usize = 32;
+
+    let mut combined =
+        Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES).with_reverb_level(REVERB_LEVEL);
+    let mut direct_only =
+        Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES).with_reverb_level(REVERB_LEVEL);
+    assert!(combined.add_voice(constant_voice(DIRECT_SAMPLE, DIRECT_TRACK)));
+    assert!(direct_only.add_voice(constant_voice(DIRECT_SAMPLE, DIRECT_TRACK)));
+    assert!(combined.add_cgb_voice(cgb_keyed_voice(CGB_TRACK, CGB_KEY)));
+
+    let mut combined_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut direct_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+
+    combined.mix_frame(&mut combined_out);
+    direct_only.mix_frame(&mut direct_out);
+    assert_ne!(
+        combined_out, direct_out,
+        "the CGB voice must audibly change the combined output"
+    );
+
+    combined.note_off_track(CGB_TRACK, CGB_KEY);
+
+    let mut settled = false;
+    for _ in 0..MAX_SETTLE_FRAMES {
+        combined.mix_frame(&mut combined_out);
+        direct_only.mix_frame(&mut direct_out);
+        if combined.is_idle() && direct_only.is_idle() {
+            settled = true;
+            break;
+        }
+    }
+    assert!(
+        settled,
+        "both mixers must fall silent within the settle window"
+    );
+
+    let ring_frames = crate::reverb::DELAY_SAMPLES.div_ceil(SAMPLES_PER_FRAME);
+    for offset in 0..ring_frames {
+        combined.mix_frame(&mut combined_out);
+        direct_only.mix_frame(&mut direct_out);
+        assert_eq!(
+            combined_out, direct_out,
+            "reverb tail must match a DirectSound-only mix at offset {offset}"
+        );
+    }
+}
+
+#[test]
+fn an_overflowing_directsound_mix_feeds_its_wrapped_bytes_into_the_reverb_tail() {
+    const REVERB_LEVEL: u8 = 100;
+    const VOICES: usize = 4;
+    // The short tap is one frame shorter than the ring, so frame 0's committed
+    // samples first return as wet audio six frames later.
+    const SHORT_TAP_FRAME: usize = 6;
+
+    let mut mixer =
+        Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES).with_reverb_level(REVERB_LEVEL);
+    for track in 0..VOICES {
+        assert!(mixer.add_voice(constant_voice(i8::MAX, track)));
+    }
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(i8::MAX) / SAMPLE_GAIN_DIVISOR;
+    let wrapped = byte_lane(4 * contribution);
+    let clipped = (4 * contribution).clamp(-128, 127);
+    assert_ne!(wrapped, clipped);
+
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    assert!((out[0] - wrapped as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE);
+    for _ in 1..=SHORT_TAP_FRAME {
+        mixer.mix_frame(&mut out);
+    }
+
+    let wet = |stored: i32| {
+        let shifted = (2 * stored * i32::from(REVERB_LEVEL)) >> 9;
+        shifted + i32::from(shifted & 0x80 != 0)
+    };
+    let expected = wet(wrapped);
+    assert_ne!(expected, wet(clipped));
+    assert!(
+        (out[0] - expected as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE,
+        "tail {} must come from the wrapped byte {wrapped} (expected {}), not clipped {clipped} ({})",
+        out[0] * OUTPUT_SCALE,
+        expected,
+        wet(clipped),
+    );
+}

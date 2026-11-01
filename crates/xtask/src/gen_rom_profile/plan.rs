@@ -1,0 +1,624 @@
+//! Owned mirror of `rom_import::Roots`, plus the per-root report.
+//!
+//! `Roots` is all `&'static` data, which a running generator cannot build.
+//! These types hold the same facts as owned strings and vectors;
+//! [`super::emit`] turns them into the `const` the profile module ships.
+
+use rom_import::Encoding;
+
+/// How a located root's address was settled, for the report and the `--map`
+/// cross-check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// Exactly one place in the ROM held the expected bytes.
+    UniqueSignature,
+    /// The bytes appeared more than once; a struct field or an adjacent,
+    /// already-unique root chose between them.
+    StructDerived,
+    /// The address came from a pointer inside an already-located struct,
+    /// never from a search.
+    PointerWalk,
+    /// Several addresses held the root's bytes, all identical, and nothing
+    /// in the ROM distinguishes them, so the choice is arbitrary.
+    ///
+    /// Sound only because the importer reads bytes: every candidate yields
+    /// the same pack entry. Never use it where the copies differ, or where a
+    /// table or an adjacency could decide.
+    ArbitraryAmongIdentical,
+}
+
+impl Resolution {
+    /// The word the report prints for this resolution.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::UniqueSignature => "unique",
+            Self::StructDerived => "struct",
+            Self::PointerWalk => "pointer",
+            Self::ArbitraryAmongIdentical => "identical",
+        }
+    }
+}
+
+/// What the `--map` cross-check asserts about the linker-map symbol at a
+/// root's address.
+///
+/// Exact where the symbol name follows from the pack id and upstream
+/// declares it global; only "some symbol
+/// starts here" where it does not (a map layout's symbol is generated at
+/// build time and is absent from the checkout); nothing where the address is
+/// deliberately inside another symbol or the symbol is `static` and so
+/// absent from the map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolExpectation {
+    /// The address is inside another symbol; nothing to assert.
+    Interior,
+    /// Some symbol must start here; its name is not derivable.
+    Unnamed,
+    /// A symbol with exactly this name must start here.
+    Exact(String),
+    /// Upstream declares the root `static`, so the symbol is local to its
+    /// translation unit and an ordinary linker map does not list it. The
+    /// name documents the root; nothing in a map can confirm it.
+    Local(String),
+    /// A symbol whose name contains every one of these fragments must start
+    /// here. For assets whose `static` and global spellings differ only in
+    /// prefix.
+    Contains(Vec<String>),
+}
+
+/// One line of the generator's report: a root, where it landed, and how.
+#[derive(Debug, Clone)]
+pub struct ReportLine {
+    /// The pack id, or the upstream symbol's role for a root with no pack
+    /// entry of its own (`tileset/general` names its `struct Tileset`).
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// The root's length in bytes, decompressed.
+    pub len: u32,
+    /// How the address was settled.
+    pub resolution: Resolution,
+    /// What a linker map should say about this address.
+    pub symbol: SymbolExpectation,
+    /// Context a report reader needs to interpret the line, such as how a
+    /// duplicate was resolved, what was counted or seeded, or which map
+    /// symbols the `--map` cross-check found.
+    pub note: Option<String>,
+}
+
+impl ReportLine {
+    /// A line for a root found at a unique byte signature, with no symbol
+    /// name derived.
+    pub fn unique(id: impl Into<String>, addr: u32, len: u32) -> Self {
+        Self {
+            id: id.into(),
+            addr,
+            len,
+            resolution: Resolution::UniqueSignature,
+            symbol: SymbolExpectation::Unnamed,
+            note: None,
+        }
+    }
+
+    /// Replace the resolution.
+    #[must_use]
+    pub const fn with(mut self, resolution: Resolution) -> Self {
+        self.resolution = resolution;
+        self
+    }
+
+    /// Set the symbol expectation directly.
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: SymbolExpectation) -> Self {
+        self.symbol = symbol;
+        self
+    }
+
+    /// Mark the address as interior to another symbol.
+    #[must_use]
+    pub fn interior(mut self) -> Self {
+        self.symbol = SymbolExpectation::Interior;
+        self
+    }
+
+    /// Require a linker map to name exactly this symbol at the address.
+    #[must_use]
+    pub fn symbol(mut self, name: impl Into<String>) -> Self {
+        self.symbol = SymbolExpectation::Exact(name.into());
+        self
+    }
+
+    /// Record the upstream name of a `static` root a linker map cannot list.
+    #[must_use]
+    pub fn local_symbol(mut self, name: impl Into<String>) -> Self {
+        self.symbol = SymbolExpectation::Local(name.into());
+        self
+    }
+
+    /// Require a linker map to name a symbol containing every fragment.
+    #[must_use]
+    pub fn symbol_contains<I, S>(mut self, fragments: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.symbol = SymbolExpectation::Contains(fragments.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Set the report note.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+}
+
+/// An image root, owned.
+#[derive(Debug, Clone)]
+pub struct ImagePlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// How the bytes are stored.
+    pub encoding: Encoding,
+    /// Bits per pixel as the ROM packs the tiles.
+    pub rom_bit_depth: u8,
+    /// Bits per pixel the pack entry records.
+    pub pack_bit_depth: u8,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// `gbagfx`'s `-mwidth`, in tiles.
+    pub metatile_width: u32,
+    /// `gbagfx`'s `-mheight`, in tiles.
+    pub metatile_height: u32,
+    /// How many 8x8 tiles the ROM stores.
+    pub tile_count: u32,
+}
+
+/// A palette root, owned.
+#[derive(Debug, Clone)]
+pub struct PalettePlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// How many colours to read.
+    pub color_count: u16,
+    /// How the ROM stores the colours.
+    pub encoding: Encoding,
+}
+
+/// A blob root, owned.
+#[derive(Debug, Clone)]
+pub struct BlobPlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// How the bytes are stored.
+    pub encoding: Encoding,
+    /// Length in bytes, after decompression.
+    pub len: u32,
+}
+
+/// A tileset root, owned.
+#[derive(Debug, Clone)]
+pub struct TilesetPlan {
+    /// The normalized pack name.
+    pub name: String,
+    /// Where the upstream struct itself sits.
+    pub struct_addr: u32,
+    /// The struct's `isCompressed` field.
+    pub is_compressed: bool,
+    /// The struct's `isSecondary` field.
+    pub is_secondary: bool,
+    /// The tile sheet the struct points at.
+    pub tiles: ImagePlan,
+    /// The palette banks this root owns.
+    pub palettes: Vec<PalettePlan>,
+    /// The metatile table.
+    pub metatiles: BlobPlan,
+    /// The metatile attribute table.
+    pub metatile_attributes: BlobPlan,
+    /// The struct's `callback` field.
+    pub callback: u32,
+    /// The animations this tileset drives.
+    pub anims: Vec<TileAnimPlan>,
+}
+
+/// A tileset animation, owned.
+#[derive(Debug, Clone)]
+pub struct TileAnimPlan {
+    /// The normalized pack name.
+    pub name: String,
+    /// The frames, in pack-id order.
+    pub frames: Vec<ImagePlan>,
+}
+
+/// The title screen's roots, owned.
+#[derive(Debug, Clone)]
+pub struct TitleScreenPlan {
+    /// Every image root in this domain.
+    pub images: Vec<ImagePlan>,
+    /// Every tilemap blob in this domain.
+    pub tilemaps: Vec<BlobPlan>,
+    /// The palette banks this root owns.
+    pub palettes: Vec<PalettePlan>,
+    /// `gTitleScreenBgPalettes`.
+    pub bg_palettes: u32,
+}
+
+/// The object-event sprite roots, owned.
+#[derive(Debug, Clone)]
+pub struct SpritePlan {
+    /// `sObjectEventSpritePalettes`.
+    pub palette_table: u32,
+    /// Every object-event sprite sheet.
+    pub sheets: Vec<ImagePlan>,
+    /// The palette banks this root owns.
+    pub palettes: Vec<PalettePlan>,
+}
+
+/// A map layout root, owned.
+#[derive(Debug, Clone)]
+pub struct MapLayoutPlan {
+    /// The normalized pack name.
+    pub name: String,
+    /// Where the upstream struct itself sits.
+    pub struct_addr: u32,
+    /// Width in metatiles.
+    pub width: u32,
+    /// Height in metatiles.
+    pub height: u32,
+    /// The `map.bin` grid.
+    pub map: BlobPlan,
+    /// The `border.bin` block.
+    pub border: BlobPlan,
+    /// The struct's `primaryTileset` field.
+    pub primary_tileset: u32,
+    /// The struct's `secondaryTileset` field.
+    pub secondary_tileset: u32,
+}
+
+/// A Latin glyph sheet root, owned.
+#[derive(Debug, Clone)]
+pub struct FontPlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// Length in bytes, after decompression.
+    pub len: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Bits per pixel.
+    pub bit_depth: u8,
+}
+
+/// The text-window roots, owned.
+#[derive(Debug, Clone)]
+pub struct TextWindowPlan {
+    /// Every image root in this domain.
+    pub images: Vec<ImagePlan>,
+    /// The palette banks this root owns.
+    pub palettes: Vec<PalettePlan>,
+    /// `sTextWindowPalettes`.
+    pub window_palettes: u32,
+}
+
+/// One song's roots, owned.
+#[derive(Debug, Clone)]
+pub struct SongPlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The `MUS_*` index into `gSongTable`.
+    pub index: u16,
+    /// The `SongHeader` the table entry points at.
+    pub header: u32,
+    /// The header's `trackCount`.
+    pub track_count: u8,
+    /// The voicegroup the header plays through.
+    pub voicegroup: u32,
+}
+
+/// One voicegroup's roots, owned.
+#[derive(Debug, Clone)]
+pub struct VoicegroupPlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The upstream symbol label, minus its prefix.
+    pub label: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// The declared `starting_note` bias.
+    pub starting_note: u8,
+    /// How many slots the upstream `.inc` declares.
+    pub declared_slots: u16,
+}
+
+/// One key-split table's roots, owned.
+#[derive(Debug, Clone)]
+pub struct KeysplitPlan {
+    /// The upstream symbol label, minus its prefix.
+    pub label: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// The declared `starting_note` bias.
+    pub starting_note: u8,
+    /// How many notes the table maps.
+    pub len: u16,
+}
+
+/// One sample's roots, owned.
+#[derive(Debug, Clone)]
+pub struct SamplePlan {
+    /// The pack id this root produces.
+    pub id: String,
+    /// The GBA bus address.
+    pub addr: u32,
+    /// The `WaveData` header length, `0` if none.
+    pub header_len: u32,
+    /// The PCM payload length in bytes.
+    pub data_len: u32,
+}
+
+/// The audio roots, owned.
+#[derive(Debug, Clone)]
+pub struct AudioPlan {
+    /// `gSongTable`.
+    pub song_table: u32,
+    /// Every located song. A `Vec` because the emitter and the runtime
+    /// importer iterate songs generically.
+    pub songs: Vec<SongPlan>,
+    /// Every voicegroup reached from that song.
+    pub voicegroups: Vec<VoicegroupPlan>,
+    /// Every key-split table those voicegroups use.
+    pub keysplits: Vec<KeysplitPlan>,
+    /// Every `DirectSound` sample.
+    pub direct_sound: Vec<SamplePlan>,
+    /// Every CGB programmable-wave table.
+    pub programmable_wave: Vec<SamplePlan>,
+}
+
+/// One special battle-message template's root, owned.
+#[derive(Debug, Clone)]
+pub struct SpecialMessagePlan {
+    /// The upstream symbol, as `SPECIAL_TEMPLATES` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the template's token stream.
+    pub addr: u32,
+}
+
+/// The battle-message roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattleMessagePlan {
+    /// `gBattleStringsTable`.
+    pub table: u32,
+    /// Every special template, in `SPECIAL_TEMPLATES` order.
+    pub specials: Vec<SpecialMessagePlan>,
+}
+
+/// One field message's root, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessageRootPlan {
+    /// The upstream symbol, as `FieldMessage::symbol` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the message's token stream.
+    pub addr: u32,
+}
+
+/// The field-message roots, owned.
+#[derive(Debug, Clone)]
+pub struct FieldMessagePlan {
+    /// Every field message, in `FieldMessage::ALL` order.
+    pub messages: Vec<FieldMessageRootPlan>,
+}
+
+/// One battle-animation program's root, owned.
+#[derive(Debug, Clone)]
+pub struct AnimProgramPlan {
+    /// The upstream label, as the catalog spells it.
+    pub symbol: String,
+    /// The GBA bus address of the program's first command.
+    pub addr: u32,
+    /// The bytes through the program's first terminator.
+    pub len: u16,
+}
+
+/// A sprite template or task function a script command names, owned.
+#[derive(Debug, Clone)]
+pub struct AnimSymbolPlan {
+    /// The upstream C identifier.
+    pub symbol: String,
+    /// The address the command operand holds.
+    pub addr: u32,
+}
+
+/// The battle-animation roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattleAnimationPlan {
+    /// The four selector tables, in `AnimationTable::ALL` order.
+    pub tables: [u32; 4],
+    /// Every program, in catalog order.
+    pub programs: Vec<AnimProgramPlan>,
+    /// Every `createsprite` template, by name.
+    pub templates: Vec<AnimSymbolPlan>,
+    /// Every task function, by name.
+    pub tasks: Vec<AnimSymbolPlan>,
+    /// The program each selector runs, as a position in `programs`.
+    pub selectors: Vec<u16>,
+}
+
+/// The ordinary-bag roots, owned.
+#[derive(Debug, Clone)]
+pub struct BagPlan {
+    /// Every `bag/image/*` and `bag/item-icon/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `bag/palette/*` and `bag/item-icon/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `bag/raw/*` root.
+    pub raws: Vec<BlobPlan>,
+}
+
+/// One species' battler roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerSpeciesPlan {
+    /// The species' `SPECIES_*` value.
+    pub species: u16,
+    /// The front image.
+    pub front: ImagePlan,
+    /// The back image.
+    pub back: ImagePlan,
+    /// The normal palette.
+    pub normal: PalettePlan,
+    /// The shiny palette.
+    pub shiny: PalettePlan,
+}
+
+/// The static battler art, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerPlan {
+    /// `gMonStillFrontPicTable`.
+    pub front_table: u32,
+    /// `gMonBackPicTable`.
+    pub back_table: u32,
+    /// `gMonPaletteTable`.
+    pub palette_table: u32,
+    /// `gMonShinyPaletteTable`.
+    pub shiny_palette_table: u32,
+    /// Every species with pack entries.
+    pub species: Vec<BattlerSpeciesPlan>,
+}
+
+/// The starter chooser's roots, owned.
+#[derive(Debug, Clone)]
+pub struct StarterChooserPlan {
+    /// Every `starter-chooser/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `starter-chooser/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `starter-chooser/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
+/// Birch's speech scene and the wall clock, owned.
+#[derive(Debug, Clone)]
+pub struct OpeningScenePlan {
+    /// Every `opening-scene/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `opening-scene/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `opening-scene/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
+/// The battle textbox, menu text palettes, health-box elements, and battle
+/// bar, owned.
+#[derive(Debug, Clone)]
+pub struct BattleInterfacePlan {
+    /// Every `battle-interface/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `battle-interface/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `battle-interface/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+    /// The thirteen `battle-interface/raw/healthbox_element/*` roots, in
+    /// `gHealthboxElementsGfxTable` order.
+    pub healthbox_elements: Vec<BlobPlan>,
+    /// `battle-interface/raw/battle_bar`.
+    pub battle_bar: BlobPlan,
+}
+
+/// Everything one generator run derived.
+#[derive(Debug, Clone)]
+pub struct ProfilePlan {
+    /// The bundled tilesets.
+    pub tilesets: Vec<TilesetPlan>,
+    /// The title screen.
+    pub title_screen: TitleScreenPlan,
+    /// Object-event sprites and palettes.
+    pub sprites: SpritePlan,
+    /// The bundled map layouts.
+    pub layouts: Vec<MapLayoutPlan>,
+    /// The Latin glyph sheets.
+    pub fonts: Vec<FontPlan>,
+    /// Text-window frames and palettes.
+    pub text_window: TextWindowPlan,
+    /// Interface palettes.
+    pub interface: Vec<PalettePlan>,
+    /// `MUS_TITLE` and everything it plays through.
+    pub audio: AudioPlan,
+    /// The battle-message token table.
+    pub battle_messages: BattleMessagePlan,
+    /// The field-message token table.
+    pub field_messages: FieldMessagePlan,
+    /// The battle-animation program catalog.
+    pub battle_anims: BattleAnimationPlan,
+    /// The ordinary bag's images, palettes, and tilemap.
+    pub bag: BagPlan,
+    /// The starter chooser's sheets, palettes, and background tilemaps.
+    pub starter_chooser: StarterChooserPlan,
+    /// Birch's speech scene and the wall clock.
+    pub opening_scene: OpeningScenePlan,
+    /// The battle textbox and menu text palettes.
+    pub battle_interface: BattleInterfacePlan,
+    /// The starters' static battler art.
+    pub battlers: BattlerPlan,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReportLine, Resolution, SymbolExpectation};
+
+    #[test]
+    fn a_report_line_records_how_its_address_was_settled() {
+        let line = ReportLine::unique("tileset/general/tiles", 0x0800_0010, 32);
+        assert_eq!(line.resolution, Resolution::UniqueSignature);
+        assert_eq!(line.symbol, SymbolExpectation::Unnamed);
+        assert!(line.note.is_none());
+
+        let derived = ReportLine::unique("sprite/palette/brendan", 0x0800_0020, 32)
+            .with(Resolution::StructDerived)
+            .interior()
+            .note("three identical banks");
+        assert_eq!(derived.resolution, Resolution::StructDerived);
+        assert_eq!(derived.symbol, SymbolExpectation::Interior);
+        assert_eq!(derived.note.as_deref(), Some("three identical banks"));
+    }
+
+    #[test]
+    fn a_report_line_carries_the_symbol_a_map_should_name() {
+        let exact = ReportLine::unique("x", 0x0800_0000, 4).symbol("gTileset_General");
+        assert_eq!(
+            exact.symbol,
+            SymbolExpectation::Exact("gTileset_General".to_owned())
+        );
+        let loose = ReportLine::unique("x", 0x0800_0000, 4).symbol_contains([
+            "TitleScreen",
+            "Rayquaza",
+            "Gfx",
+        ]);
+        assert_eq!(
+            loose.symbol,
+            SymbolExpectation::Contains(vec![
+                "TitleScreen".to_owned(),
+                "Rayquaza".to_owned(),
+                "Gfx".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn every_resolution_has_a_short_label() {
+        assert_eq!(Resolution::UniqueSignature.label(), "unique");
+        assert_eq!(Resolution::StructDerived.label(), "struct");
+        assert_eq!(Resolution::PointerWalk.label(), "pointer");
+        assert_eq!(Resolution::ArbitraryAmongIdentical.label(), "identical");
+    }
+}
