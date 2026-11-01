@@ -122,7 +122,7 @@ use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use rom_import::{ImportError, ImportedPack, OneLinePath};
+use rom_import::{ImportError, ImportedPack, OneLinePath, OneLineText};
 
 use created_dirs::{
     create_directories_pinned, open_shedding_pins, sync_created_directories,
@@ -181,7 +181,9 @@ impl fmt::Display for ImportOutcome {
 /// Concrete per-crate enum `(oop-boundaries)`; no `anyhow`. Every message
 /// is one line, because the binary prints it on one terminal row. The paths
 /// they quote come from `$POKEEMERALD_PACK` and from `--import-rom`, so they
-/// render through [`OneLinePath`] to keep that row intact.
+/// render through [`OneLinePath`] to keep that row intact; the nested causes
+/// render through [`OneLineText`], since an `io::Error` can carry any message
+/// its builder chose. `Error::source` still returns each cause whole.
 #[derive(Debug)]
 pub enum ImportRomError {
     /// No destination could be resolved: `$POKEEMERALD_PACK` is unset and
@@ -304,17 +306,27 @@ impl fmt::Display for ImportRomError {
                 pack_format::PACK_PATH_ENV
             ),
             Self::CreateDirFailed { path, source } => {
-                write!(f, "could not create `{}`: {source}", OneLinePath(path))
+                write!(
+                    f,
+                    "could not create `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )
             }
             Self::OpenDirFailed { path, source } => {
-                write!(f, "could not open `{}`: {source}", OneLinePath(path))
+                write!(
+                    f,
+                    "could not open `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )
             }
             Self::Import {
                 source,
                 temp_path,
                 temp_removed,
             } => {
-                write!(f, "{source}")?;
+                write!(f, "{}", OneLineText(source))?;
                 match temp_path {
                     Some(temp_path) if !*temp_removed => write!(
                         f,
@@ -352,8 +364,9 @@ impl fmt::Display for ImportRomError {
             } => {
                 write!(
                     f,
-                    "could not build the asset pack in `{}`: {source}",
-                    OneLinePath(temp_path)
+                    "could not build the asset pack in `{}`: {}",
+                    OneLinePath(temp_path),
+                    OneLineText(source)
                 )?;
                 if *temp_removed {
                     Ok(())
@@ -369,32 +382,43 @@ impl fmt::Display for ImportRomError {
                 pack_path,
                 source,
                 temp_removed,
-            } => {
-                write!(
-                    f,
-                    "could not publish the finished pack to `{}`: {source}",
-                    OneLinePath(pack_path)
-                )?;
-                if *temp_removed {
-                    write!(
-                        f,
-                        " (the temporary file `{}` was removed)",
-                        OneLinePath(temp_path)
-                    )
-                } else {
-                    // The pack itself is finished and synced, so this is not
-                    // just litter to apologize for -- it is the import's
-                    // whole product, and naming it is what lets the player
-                    // move it into place or delete it themselves.
-                    write!(
-                        f,
-                        " (the finished pack is still at `{}`; move it to the destination or \
-                         delete it yourself)",
-                        OneLinePath(temp_path)
-                    )
-                }
-            }
+            } => write_publish_failed(f, temp_path, pack_path, source, *temp_removed),
         }
+    }
+}
+
+/// The [`ImportRomError::PublishFailed`] message, split out of the `Display`
+/// impl so that `match` stays under the line limit.
+fn write_publish_failed(
+    f: &mut fmt::Formatter<'_>,
+    temp_path: &Path,
+    pack_path: &Path,
+    source: &io::Error,
+    temp_removed: bool,
+) -> fmt::Result {
+    write!(
+        f,
+        "could not publish the finished pack to `{}`: {}",
+        OneLinePath(pack_path),
+        OneLineText(source)
+    )?;
+    if temp_removed {
+        write!(
+            f,
+            " (the temporary file `{}` was removed)",
+            OneLinePath(temp_path)
+        )
+    } else {
+        // The pack itself is finished and synced, so this is not
+        // just litter to apologize for -- it is the import's
+        // whole product, and naming it is what lets the player
+        // move it into place or delete it themselves.
+        write!(
+            f,
+            " (the finished pack is still at `{}`; move it to the destination or \
+             delete it yourself)",
+            OneLinePath(temp_path)
+        )
     }
 }
 
@@ -529,6 +553,30 @@ fn import_to_with(
     import_to_with_hooks(rom_path, pack_path, import, |_| {})
 }
 
+/// The failure for a temporary file that can no longer become the pack:
+/// closes the handle, removes the file, and undoes the directories this run
+/// created. `temp_removed` is what the removal reported, so a file left
+/// behind is named rather than assumed gone.
+fn abandon_temp_file(
+    file: fs::File,
+    dest: &Dest,
+    dir: &Path,
+    temp_name: &OsStr,
+    created: &[created_dirs::CreatedDirectory],
+    source: io::Error,
+) -> ImportRomError {
+    // The handle is dropped before the removal because Windows refuses to
+    // unlink a file that is still open.
+    drop(file);
+    let temp_removed = dest.discard(temp_name);
+    undo_created_directories(created);
+    ImportRomError::TempFileFailed {
+        temp_path: dir.join(temp_name),
+        source,
+        temp_removed,
+    }
+}
+
 /// [`import_to_with`] with `before_dest` run once the destination's levels
 /// exist and before the destination is acquired: the window a test swaps
 /// the just-created directory in. Production passes a no-op.
@@ -633,6 +681,14 @@ fn import_to_with_hooks(
         }
     };
 
+    // The umask can have taken the owner's read bit, and the rename below
+    // would carry that mode onto the installed pack.
+    if let Err(source) = dest::restore_owner_access(&file) {
+        return Err(abandon_temp_file(
+            file, &dest, &dir, &temp_name, &created, source,
+        ));
+    }
+
     let pack = match import(&rom, rom_path) {
         Ok(pack) => pack,
         Err(source) => {
@@ -662,14 +718,9 @@ fn import_to_with_hooks(
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all())
     {
-        drop(file);
-        let temp_removed = dest.discard(&temp_name);
-        undo_created_directories(&created);
-        return Err(ImportRomError::TempFileFailed {
-            temp_path: dir.join(&temp_name),
-            source,
-            temp_removed,
-        });
+        return Err(abandon_temp_file(
+            file, &dest, &dir, &temp_name, &created, source,
+        ));
     }
     drop(file);
 

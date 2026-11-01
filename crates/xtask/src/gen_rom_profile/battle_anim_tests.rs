@@ -7,6 +7,8 @@
 //! fact: a missing or doubled table, a program whose bytes differ, an
 //! operand that disagrees with an earlier use, an unreachable program.
 
+use std::fmt::Write as _;
+
 use assets::{
     AnimCommand, AnimSymbol, AnimationSelector, AnimationTable, BattleAnimationCatalog,
     BattleAnimationProgram, EffectSpriteId, ProgramId,
@@ -212,7 +214,7 @@ fn a_matching_catalog_is_located() {
         .collect();
     assert_eq!(plan.selectors, expected);
 
-    assert_eq!(report.len(), 4);
+    assert_eq!(report.len(), 6);
     for (line, symbol) in report.iter().zip([
         "gBattleAnims_Moves",
         "gBattleAnims_StatusConditions",
@@ -220,6 +222,17 @@ fn a_matching_catalog_is_located() {
         "gBattleAnims_Special",
     ]) {
         assert_eq!(line.id, PACK_ID);
+        assert_eq!(line.resolution, Resolution::StructDerived);
+        assert_eq!(line.symbol, SymbolExpectation::Exact(symbol.to_owned()));
+    }
+    // The map records a function at its even address, without the Thumb bit
+    // the operand carries.
+    for (line, (symbol, addr)) in report[4..].iter().zip([
+        ("gTemplate", bus(TEMPLATE)),
+        ("AnimTask_Fixture", bus(TASK)),
+    ]) {
+        assert_eq!(line.id, PACK_ID);
+        assert_eq!(line.addr, addr);
         assert_eq!(line.resolution, Resolution::StructDerived);
         assert_eq!(line.symbol, SymbolExpectation::Exact(symbol.to_owned()));
     }
@@ -483,4 +496,58 @@ fn a_table_ending_at_the_rom_end_is_located() {
     }
     let (plan, _) = locate_in("ba-table-at-end", rom, pack(&catalog())).expect("located");
     assert_eq!(plan.tables[3], bus(end));
+}
+
+/// Cross-check `lines` against a map listing `symbols`, one per line.
+fn cross_check_symbols(
+    name: &str,
+    symbols: &[(String, u32)],
+    lines: &mut [ReportLine],
+) -> Result<(), GenRomProfileError> {
+    let path =
+        std::env::temp_dir().join(format!("pokeemerald-rs-{name}-{}.map", std::process::id()));
+    let mut map = String::new();
+    for (symbol, addr) in symbols {
+        let _ = writeln!(map, "{:15}0x{addr:016x}                {symbol}", "");
+    }
+    std::fs::write(&path, map).expect("write map");
+    let result = super::cross_check(Some(&path), lines);
+    let _ = std::fs::remove_file(&path);
+    result.map(|_| ())
+}
+
+#[test]
+fn a_map_naming_another_template_or_task_is_refused() {
+    let (_, report) = locate_in("ba-map-rename", full_rom(), pack(&catalog())).expect("located");
+    let map_of = |template: &str, task: &str| -> Vec<(String, u32)> {
+        let mut symbols: Vec<(String, u32)> = report[..4]
+            .iter()
+            .map(|line| match &line.symbol {
+                SymbolExpectation::Exact(name) => (name.clone(), line.addr),
+                other => panic!("a table line expects {other:?}"),
+            })
+            .collect();
+        symbols.push((template.to_owned(), bus(TEMPLATE)));
+        symbols.push((task.to_owned(), bus(TASK)));
+        symbols
+    };
+
+    let agreeing = map_of("gTemplate", "AnimTask_Fixture");
+    cross_check_symbols("ba-map-agrees", &agreeing, &mut report.clone())
+        .expect("the map names the bound template and task");
+
+    for (renamed, addr) in [
+        (
+            map_of("gOriginalTemplate", "AnimTask_Fixture"),
+            bus(TEMPLATE),
+        ),
+        (map_of("gTemplate", "AnimTask_Original"), bus(TASK)),
+    ] {
+        let err = cross_check_symbols("ba-map-renamed", &renamed, &mut report.clone()).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MapMismatch { id, generated, .. }
+                if id == PACK_ID && *generated == addr),
+            "{err}"
+        );
+    }
 }

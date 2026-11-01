@@ -1,9 +1,8 @@
 use super::{
     ensure_resolvable, is_stat_change_effect, resolve_stat_change_move, soundproof_block,
     stat_change_for_effect, ChangedStat, StatChangeDirection, StatChangeEffect,
-    StatChangeMagnitude, StatChangeOutcome, CLEAR_BODY, EFFECT_ACCURACY_DOWN, EFFECT_ATTACK_DOWN,
-    EFFECT_DEFENSE_DOWN, EFFECT_DEFENSE_DOWN_TWO, EFFECT_DEFENSE_UP, EFFECT_SPECIAL_ATTACK_UP,
-    EFFECT_SPEED_DOWN, HYPER_CUTTER, KEEN_EYE, SOUNDPROOF, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
+    StatChangeMagnitude, StatChangeOutcome, CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
+    HYPER_CUTTER, KEEN_EYE, SOUNDPROOF, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -65,44 +64,30 @@ const CORPHISH: SpeciesId = SpeciesId(326);
 /// `SPECIES_REMORAID`: Water, and Hustle in its primary ability slot.
 const REMORAID: SpeciesId = SpeciesId(223);
 
-const EFFECT_HIT: MoveEffect = MoveEffect(0);
-const EFFECT_SPEED_UP_AS_HIT: MoveEffect = MoveEffect(12);
-const EFFECT_SPECIAL_DEFENSE_UP_AS_HIT: MoveEffect = MoveEffect(14);
-const EFFECT_ACCURACY_UP_AS_HIT: MoveEffect = MoveEffect(15);
-const EFFECT_SPECIAL_ATTACK_DOWN_AS_HIT: MoveEffect = MoveEffect(21);
-const EFFECT_SPECIAL_DEFENSE_DOWN_AS_HIT: MoveEffect = MoveEffect(22);
-const EFFECT_ACCURACY_UP_TWO_AS_HIT: MoveEffect = MoveEffect(55);
-const EFFECT_EVASION_UP_TWO_AS_HIT: MoveEffect = MoveEffect(56);
-const EFFECT_SPECIAL_ATTACK_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(61);
-const EFFECT_ACCURACY_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(63);
-const EFFECT_EVASION_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(64);
-const EFFECT_MINIMIZE: MoveEffect = MoveEffect(108);
-const EFFECT_DEFENSE_CURL: MoveEffect = MoveEffect(156);
-
 const HIT_EFFECTS_WITH_STAT_NAMES: [MoveEffect; 10] = [
-    EFFECT_SPEED_UP_AS_HIT,
-    EFFECT_SPECIAL_DEFENSE_UP_AS_HIT,
-    EFFECT_ACCURACY_UP_AS_HIT,
-    EFFECT_SPECIAL_ATTACK_DOWN_AS_HIT,
-    EFFECT_SPECIAL_DEFENSE_DOWN_AS_HIT,
-    EFFECT_ACCURACY_UP_TWO_AS_HIT,
-    EFFECT_EVASION_UP_TWO_AS_HIT,
-    EFFECT_SPECIAL_ATTACK_DOWN_TWO_AS_HIT,
-    EFFECT_ACCURACY_DOWN_TWO_AS_HIT,
-    EFFECT_EVASION_DOWN_TWO_AS_HIT,
+    MoveEffect::SPEED_UP,
+    MoveEffect::SPECIAL_DEFENSE_UP,
+    MoveEffect::ACCURACY_UP,
+    MoveEffect::SPECIAL_ATTACK_DOWN,
+    MoveEffect::SPECIAL_DEFENSE_DOWN,
+    MoveEffect::ACCURACY_UP_2,
+    MoveEffect::EVASION_UP_2,
+    MoveEffect::SPECIAL_ATTACK_DOWN_2,
+    MoveEffect::ACCURACY_DOWN_2,
+    MoveEffect::EVASION_DOWN_2,
 ];
 
 #[test]
 fn the_table_covers_the_named_effects_and_nothing_outside_it() {
     assert!(is_stat_change_effect(EFFECT_ATTACK_DOWN));
     assert!(is_stat_change_effect(EFFECT_DEFENSE_DOWN));
-    assert!(is_stat_change_effect(EFFECT_SPEED_DOWN));
-    assert!(is_stat_change_effect(EFFECT_ACCURACY_DOWN));
-    assert!(is_stat_change_effect(EFFECT_DEFENSE_DOWN_TWO));
-    assert!(is_stat_change_effect(EFFECT_SPECIAL_ATTACK_UP));
-    assert!(is_stat_change_effect(EFFECT_DEFENSE_UP));
+    assert!(is_stat_change_effect(MoveEffect::SPEED_DOWN));
+    assert!(is_stat_change_effect(MoveEffect::ACCURACY_DOWN));
+    assert!(is_stat_change_effect(MoveEffect::DEFENSE_DOWN_2));
+    assert!(is_stat_change_effect(MoveEffect::SPECIAL_ATTACK_UP));
+    assert!(is_stat_change_effect(MoveEffect::DEFENSE_UP));
 
-    assert!(!is_stat_change_effect(EFFECT_HIT));
+    assert!(!is_stat_change_effect(MoveEffect::HIT));
     for effect in HIT_EFFECTS_WITH_STAT_NAMES {
         assert!(!is_stat_change_effect(effect));
         assert!(
@@ -110,8 +95,8 @@ fn the_table_covers_the_named_effects_and_nothing_outside_it() {
             "{effect:?} must remain assigned to ordinary hit resolution"
         );
     }
-    assert!(!is_stat_change_effect(EFFECT_MINIMIZE));
-    assert!(!is_stat_change_effect(EFFECT_DEFENSE_CURL));
+    assert!(!is_stat_change_effect(MoveEffect::MINIMIZE));
+    assert!(!is_stat_change_effect(MoveEffect::DEFENSE_CURL));
 }
 
 #[test]

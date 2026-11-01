@@ -1,7 +1,9 @@
 //! A Pokémon's owned battle state, stat calculation, HP, experience, and
 //! move slots.
 //!
-//! [`BattlePokemon`] does not retain held items. It carries primary status
+//! [`BattlePokemon`] carries its held item ([`BattlePokemon::held_item`]); a
+//! battle admits it only when the item's hold effect is none
+//! ([`crate::ensure_held_item_playable`]). It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
 //! see `calc_max_hp`.
@@ -11,6 +13,7 @@
 //! [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns level-up
 //! move decisions.
 
+use assets::items::ItemId;
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
@@ -341,6 +344,10 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// The held item, [`ItemId::NONE`] when empty. Part of the mon's identity,
+    /// so it survives fainting and write-back; which items a battle accepts is
+    /// decided by [`crate::battle::held_item`].
+    held_item: ItemId,
     types: [Type; 2],
     base_stats: BaseStats,
     experience: u32,
@@ -379,6 +386,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            held_item,
             types,
             base_stats,
             experience,
@@ -400,6 +408,7 @@ impl PartialEq for BattlePokemon {
             && *personality == other.personality
             && *ability_slot == other.ability_slot
             && *original_trainer_id == other.original_trainer_id
+            && *held_item == other.held_item
             && *types == other.types
             && *base_stats == other.base_stats
             && *experience == other.experience
@@ -506,6 +515,7 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            held_item: ItemId::NONE,
             types: base.types,
             base_stats: *base,
             experience,
@@ -640,6 +650,21 @@ impl BattlePokemon {
         self
     }
 
+    /// The item this Pokémon holds, [`ItemId::NONE`] when empty.
+    #[must_use]
+    pub const fn held_item(&self) -> ItemId {
+        self.held_item
+    }
+
+    /// Give this Pokémon `held_item` at the boundary that creates or restores
+    /// it, mirroring `MON_DATA_HELD_ITEM` written after `CreateMon`
+    /// (`battle_main.c:2035-2065`).
+    #[must_use]
+    pub const fn with_held_item(mut self, held_item: ItemId) -> Self {
+        self.held_item = held_item;
+        self
+    }
+
     /// Species types captured at construction.
     #[must_use]
     pub const fn types(&self) -> [Type; 2] {
@@ -744,9 +769,10 @@ impl BattlePokemon {
         self.status1
     }
 
-    /// Overwrites the primary status.
+    /// Overwrites the primary status. `Asleep { turns: 0 }` is stored as
+    /// [`Status1::Healthy`]: upstream's cleared sleep bits are a healthy battler.
     pub const fn set_status1(&mut self, status1: Status1) {
-        self.status1 = status1;
+        self.status1 = status1.normalised();
     }
 
     /// Resets stat stages and volatile conditions before returning this

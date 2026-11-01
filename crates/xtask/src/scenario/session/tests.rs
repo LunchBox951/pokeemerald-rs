@@ -735,3 +735,28 @@ fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
     assert!(!path.exists(), "the emptied scratch root is removed");
     assert_eq!(kept.unwrap(), b"keep me");
 }
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_failed_readable_open_restores_the_original_mode_and_propagates() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = private_base("chmod-open-fails");
+    let entry = base.join("entry");
+    std::fs::create_dir(&entry).unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let result = hold::restore_private_mode_with(&entry, |_| {
+        Err(std::io::Error::other("injected readable-open failure"))
+    });
+    let mode = std::fs::symlink_metadata(&entry)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    let _ = std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o700));
+    let _ = std::fs::remove_dir_all(&base);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "injected readable-open failure"
+    );
+    assert_eq!(mode, 0o300, "the widened mode must be put back");
+}

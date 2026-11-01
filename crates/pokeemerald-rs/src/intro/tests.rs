@@ -1,5 +1,6 @@
 use assets::fonts::{
-    FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT, SHEET_HEIGHT, SHEET_WIDTH,
+    FontId, FontImageRef, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources, GLYPH_COUNT,
+    SHEET_HEIGHT, SHEET_WIDTH,
 };
 use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
@@ -115,19 +116,23 @@ const SHADOW_GLYPH_COLOR: Rgb888 = Rgb888 {
     b: 160,
 };
 
-fn synthetic_sheet(pixels: &[u8]) -> OwnedFontGlyphSheet {
+/// Every font's sheet over the same `pixels`, each under its own [`FontId`].
+fn synthetic_sources(pixels: &[u8]) -> OwnedGlyphSources {
     let image = ImageRef {
         width: SHEET_WIDTH,
         height: SHEET_HEIGHT,
         bit_depth: FONT_BIT_DEPTH,
         pixels,
     };
-    OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap()
+    GlyphSources::try_from_fn(|font| {
+        OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+    })
+    .unwrap()
 }
 
 fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
     IntroScene::new(
-        synthetic_sheet(pixels),
+        synthetic_sources(pixels),
         transparent_message_box(),
         speed,
         NewGameOptions::DEFAULT,
@@ -357,7 +362,7 @@ fn compose_returns_native_dimensions_and_paints_the_first_revealed_glyph() {
 fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let pixels = transparent_glyph_sheet_pixels();
     let scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Mid,
         NewGameOptions::DEFAULT,
@@ -391,7 +396,7 @@ fn box_pixel(content: (i32, i32)) -> (usize, usize) {
 fn clear_paints_the_erased_span_with_the_windows_background() {
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
@@ -453,7 +458,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
 
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
@@ -500,10 +505,6 @@ fn clear_to_paints_only_up_to_its_target_column() {
 }
 
 const _: () = assert!(GLYPH_COUNT == EXPECTED_GLYPH_COUNT);
-
-fn write_pack(path: &std::path::Path, entries: Vec<PackEntry>) {
-    std::fs::write(path, crate::pack_test_support::pack_bytes(entries)).unwrap();
-}
 
 fn font_entry(fill_palette_index: u8) -> PackEntry {
     crate::pack_test_support::image_entry(
@@ -569,15 +570,35 @@ fn temp_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
-/// Owns a temporary pack path and removes it on drop, so a fallible load or
-/// a failed assertion that unwinds still cleans up the scratch file.
+/// Owns a temporary pack file: the path it exclusively claimed and the open
+/// handle that claim returned. Drop removes the path, so a fallible load or a
+/// failed assertion that unwinds still cleans up the scratch file. Cleanup is
+/// installed only once the claim succeeded, so a failed claim never removes
+/// an entry this guard does not own.
 struct TempPackGuard {
     path: std::path::PathBuf,
+    file: std::fs::File,
 }
 
 impl TempPackGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path }
+    /// Exclusively claims `path` (never following a planted symlink or
+    /// truncating an occupant) and writes `entries` through the owned handle.
+    fn create(path: std::path::PathBuf, entries: Vec<PackEntry>) -> Self {
+        let file = crate::pack_test_support::claim_scratch_exclusive(&path);
+        let mut guard = Self { path, file };
+        guard.regenerate(entries);
+        guard
+    }
+
+    /// Replaces the pack's bytes through the owned handle, never reopening
+    /// the shared pathname.
+    fn regenerate(&mut self, entries: Vec<PackEntry>) {
+        use std::io::{Seek as _, Write as _};
+        self.file.set_len(0).unwrap();
+        self.file.rewind().unwrap();
+        self.file
+            .write_all(&crate::pack_test_support::pack_bytes_with_fonts(entries))
+            .unwrap();
     }
 
     fn path(&self) -> &std::path::Path {
@@ -617,9 +638,8 @@ fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
 
 #[test]
 fn a_pack_missing_message_box_fails_to_build_a_scene() {
-    let temp_pack = TempPackGuard::new(temp_pack_path("no-message-box"));
-    write_pack(
-        temp_pack.path(),
+    let temp_pack = TempPackGuard::create(
+        temp_pack_path("no-message-box"),
         vec![font_entry(TRANSPARENT_PALETTE_INDEX)],
     );
     let pack = assets::pack::AssetPack::load(temp_pack.path()).unwrap();
@@ -645,10 +665,9 @@ fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
     const RAW_OUT_OF_RANGE: u8 = 5;
     const WINDOW_FRAME: u8 = 7;
 
-    let temp_pack = TempPackGuard::new(temp_pack_path("out-of-range-speed"));
     let mut entries = message_box_entries();
     entries.push(font_entry(TRANSPARENT_PALETTE_INDEX));
-    write_pack(temp_pack.path(), entries);
+    let temp_pack = TempPackGuard::create(temp_pack_path("out-of-range-speed"), entries);
     let pack = assets::pack::AssetPack::load(temp_pack.path()).unwrap();
 
     let scene = IntroScene::from_pack_with_options(
@@ -661,6 +680,7 @@ fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
     )
     .expect("the synthetic pack has both required entries");
 
+    crate::pack_test_support::assert_carries_every_font(&scene.printer);
     assert_eq!(
         scene.new_game_options(),
         NewGameOptions {
@@ -689,11 +709,9 @@ fn normalized_text_speed_only_repairs_values_above_fast() {
 
 #[test]
 fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
-    let temp_pack = TempPackGuard::new(temp_pack_path("regenerated"));
-
     let mut entries = message_box_entries();
     entries.push(font_entry(DARK_GREY_GLYPH_PALETTE_INDEX));
-    write_pack(temp_pack.path(), entries);
+    let mut temp_pack = TempPackGuard::create(temp_pack_path("regenerated"), entries);
 
     let mut first = load_scene_from_pack(temp_pack.path())
         .expect("the synthetic pack has both required entries");
@@ -706,7 +724,7 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
 
     let mut entries = message_box_entries();
     entries.push(font_entry(SHADOW_GLYPH_PALETTE_INDEX));
-    write_pack(temp_pack.path(), entries);
+    temp_pack.regenerate(entries);
 
     let mut second =
         load_scene_from_pack(temp_pack.path()).expect("the regenerated pack is still well-formed");
@@ -730,25 +748,100 @@ fn a_temp_pack_is_gone_after_a_filesystem_backed_test_body_unwinds() {
     // here fails this test outright instead of being swallowed as if it
     // were the deliberate panic below.
     let path = temp_pack_path("unwind-cleanup");
-    write_pack(&path, vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
+    let temp_pack =
+        TempPackGuard::create(path.clone(), vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
     assert!(
         path.is_file(),
         "the synthetic pack must reach the disk first"
     );
 
-    let result = std::panic::catch_unwind(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // The shape of every filesystem-backed intro test: guard the
         // already-written path, then run fallible loads and assertions.
         // This stands in for one of those assertions failing.
-        let _temp_pack = TempPackGuard::new(path.clone());
+        let _temp_pack = temp_pack;
         panic!("a filesystem-backed intro test fails one of its assertions");
-    });
+    }));
 
     assert!(result.is_err(), "the deliberate panic must be observed");
     assert!(
         !path.exists(),
         "a filesystem-backed intro test must not leave {} in the temp directory when its body unwinds",
         path.display()
+    );
+}
+
+/// The live tests' bare scratch names; each is also planted against below.
+const LIVE_SCRATCH_NAMES: [&str; 4] = [
+    "no-message-box",
+    "out-of-range-speed",
+    "regenerated",
+    "unwind-cleanup",
+];
+
+/// The probe-only path the planted-entry regression plants against for a live
+/// test's scratch `name`. The regression unlinks and replaces its target, so
+/// it must never share a path with a test running in parallel.
+fn planted_probe_path(name: &str) -> std::path::PathBuf {
+    temp_pack_path(&format!("planted-{name}"))
+}
+
+/// Every intro pack path is as predictable as its name and the process id, so
+/// a symlink or an occupied file planted there must be refused and left
+/// intact, never written through, truncated in place, or unlinked.
+#[test]
+fn the_intro_scratch_packs_never_write_through_a_planted_entry() {
+    for name in LIVE_SCRATCH_NAMES {
+        let path = planted_probe_path(name);
+        let entries = || vec![font_entry(TRANSPARENT_PALETTE_INDEX)];
+        let expected = crate::pack_test_support::pack_bytes_with_fonts(entries());
+        crate::pack_test_support::assert_scratch_claim_is_exclusive(&path, &expected, || {
+            TempPackGuard::create(path.clone(), entries())
+        });
+    }
+}
+
+/// The planted-entry regression replaces and removes only its own probe
+/// paths, so it cannot substitute or delete a live fixture another test holds
+/// under a bare scratch name while the two run in parallel.
+#[test]
+fn the_planted_entry_regression_never_targets_a_live_scratch_path() {
+    let live: Vec<_> = LIVE_SCRATCH_NAMES
+        .iter()
+        .map(|n| temp_pack_path(n))
+        .collect();
+    for name in LIVE_SCRATCH_NAMES {
+        let probe = planted_probe_path(name);
+        assert!(
+            !live.contains(&probe),
+            "the regression's probe path {} is a live test's scratch path",
+            probe.display()
+        );
+    }
+}
+
+/// Regeneration rewrites the pack through the handle the claim returned, so
+/// a symlink swapped in at the pathname after the claim receives nothing.
+#[cfg(unix)]
+#[test]
+fn regenerating_a_pack_writes_through_the_owned_handle_not_the_pathname() {
+    let path = temp_pack_path("regenerate-owned-handle");
+    let mut temp_pack =
+        TempPackGuard::create(path.clone(), vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
+
+    let victim = temp_pack_path("regenerate-owned-handle-victim");
+    crate::pack_test_support::write_scratch_exclusive(&victim, b"victim must survive");
+    std::fs::remove_file(&path).unwrap();
+    std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+    temp_pack.regenerate(vec![font_entry(SHADOW_GLYPH_PALETTE_INDEX)]);
+
+    let after = std::fs::read(&victim).unwrap();
+    drop(temp_pack);
+    let _ = std::fs::remove_file(&victim);
+    assert_eq!(
+        after, b"victim must survive",
+        "regeneration followed the pathname instead of the owned handle"
     );
 }
 
@@ -767,9 +860,10 @@ fn without_a_default_pack_repeated_loads_keep_reporting_missing() {
 fn derive_traversal_runs() -> Vec<TraversalRun> {
     let pixels = transparent_glyph_sheet_pixels();
     let pages = super::speech::pages();
-    let mut printer = Printer::new(
+    let mut printer = Printer::with_sources(
         pages[0].clone(),
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
+        FontId::Normal,
         TextSpeed::Mid,
         STANDARD_PRINTER_ORIGIN,
     )

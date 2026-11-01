@@ -18,6 +18,27 @@ use std::path::Path;
 /// (no `geteuid` among the approved `rustix` features).
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    restore_private_mode_with(path, |pinned_path| {
+        Ok(rustix::fs::open(
+            pinned_path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?)
+    })
+}
+
+/// [`restore_private_mode`] with the read-open of the widened directory
+/// injected, so a test can fail it. `open_readable` gets the `/proc/self/fd/N`
+/// path of the pinned inode. Once the mode is widened, every way out (a failed
+/// open, a failed emptiness read, a non-empty entry) puts the original mode
+/// back before returning.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn restore_private_mode_with(
+    path: &Path,
+    open_readable: impl FnOnce(&str) -> std::io::Result<std::os::fd::OwnedFd>,
+) -> std::io::Result<()> {
     use std::os::fd::AsRawFd as _;
     let pinned = rustix::fs::open(
         path,
@@ -50,16 +71,18 @@ pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
         )
     };
     chmod(rustix::fs::Mode::RWXU)?;
-    let readable = rustix::fs::open(
-        pinned_path.as_str(),
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )?;
-    if !is_empty(&readable)? {
-        chmod(rustix::fs::Mode::from_raw_mode(mode))?;
-        return Err(not_created_here());
+    let empty = open_readable(pinned_path.as_str()).and_then(is_empty);
+    match empty {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            chmod(rustix::fs::Mode::from_raw_mode(mode))?;
+            Err(not_created_here())
+        }
+        Err(error) => {
+            chmod(rustix::fs::Mode::from_raw_mode(mode))?;
+            Err(error)
+        }
     }
-    Ok(())
 }
 
 /// `O_SEARCH` on Apple targets, which have no `O_PATH`: search access to a

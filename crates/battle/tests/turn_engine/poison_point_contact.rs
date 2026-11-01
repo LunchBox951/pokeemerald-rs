@@ -4,17 +4,34 @@ use crate::poison_support::*;
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 
-/// `SPECIES_NIDORAN_F`: Poison Point, and slower than [`RATTATA`] at equal level.
+/// Poison Point holder, slower than [`RATTATA`] at equal level.
 const NIDORAN_F: u16 = 29;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
-/// Construction's turn-number draw, the turn-start draw, the enemy's move
-/// selection, then the faster battler's accuracy, crit (`1`: no crit), damage
-/// roll and discarded secondary-effect draw. The Poison Point roll follows.
-const FASTER_HITS: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
+const CONSTRUCTION_TURN_NUMBER: u16 = 0;
+const TURN_START: u16 = 0;
+const ENEMY_MOVE_SELECTION: u16 = 0;
+const ACCURACY_HITS: u16 = 0;
+const NO_CRIT: u16 = 1;
+const DAMAGE_ROLL: u16 = 0;
+const DISCARDED_SECONDARY_EFFECT: u16 = 0;
 
-/// The slower battler's accuracy, crit, damage roll and secondary-effect draw.
-const SLOWER_HITS: [u16; 4] = [0, 1, 0, 0];
+const FASTER_HITS: [u16; 7] = [
+    CONSTRUCTION_TURN_NUMBER,
+    TURN_START,
+    ENEMY_MOVE_SELECTION,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
+
+const SLOWER_HITS: [u16; 4] = [
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
 
 /// The Poison Point roll is `Random() % 3`: zero poisons.
 const POISON_POINT_TRIGGERS: u16 = 0;
@@ -195,15 +212,32 @@ fn an_already_poisoned_attacker_spends_the_roll_without_a_second_poison() {
 
 #[test]
 fn a_multi_hit_contact_move_rolls_poison_point_after_every_hit() {
+    const HIT_COUNT_TWO: u16 = 0;
+    const FIRST_HIT_POISON_POINT_ROLL: u16 = POISON_POINT_MISSES;
+    const SECOND_HIT_POISON_POINT_ROLL: u16 = POISON_POINT_TRIGGERS;
+    const DOUBLE_SLAP_EFFECT_CHANCE: u16 = 0;
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 60, vec![MoveId::DOUBLE_SLAP]);
     let enemy = nidoran(&dex, 40);
 
-    // Construction and turn-start draws, Double Slap's accuracy and hit count
-    // (two hits), then per hit crit, damage roll and Poison Point roll (the
-    // first misses, the second poisons), the trailing effect-chance draw, and
-    // the enemy's Tackle.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new([
+        CONSTRUCTION_TURN_NUMBER,
+        TURN_START,
+        ENEMY_MOVE_SELECTION,
+        ACCURACY_HITS,
+        HIT_COUNT_TWO,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        FIRST_HIT_POISON_POINT_ROLL,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        SECOND_HIT_POISON_POINT_ROLL,
+        DOUBLE_SLAP_EFFECT_CHANCE,
+        ACCURACY_HITS,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DISCARDED_SECONDARY_EFFECT,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -246,7 +280,7 @@ fn a_synchronize_attacker_reflects_poison_point_poison_onto_a_non_poison_holder(
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RALTS, 14, vec![TACKLE]);
     assert_eq!(player.ability(), AbilityId::SYNCHRONIZE);
-    // `SPECIES_SEADRA`: the Poison Point species that is not Poison-typed.
+    // Poison Point holder that is not Poison-typed.
     let enemy = max_iv_mon(&dex, SpeciesId::SEADRA.0, 5, vec![TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::POISON_POINT);
 

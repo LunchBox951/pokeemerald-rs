@@ -40,6 +40,12 @@
 //! No frame therefore exists with a fainted party and a controllable player,
 //! so neither driver screens for a fainted lead.
 //!
+//! Field poison is the third caller: when a four-step drain faints the last
+//! member with HP left, [`OverworldPhase::try_field_poison_white_out`] calls
+//! the same [`OverworldPhase::white_out`] from the step that drained it
+//! (`TryFieldPoisonWhiteOut`, `pokeemerald/src/field_poison.c:61-117`, then
+//! `EventScript_FieldPoison`, `pokeemerald/data/scripts/field_poison.inc:1-17`).
+//!
 //! The scripted Route 101 first battle never whites out. It calls
 //! [`OverworldPhase::heal_whole_party_and_reselect_lead`] directly, without
 //! the money loss or the heal-location warp.
@@ -91,58 +97,23 @@ impl OverworldPhase {
         let stored_count =
             usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
 
-        // The lead merges its live battler back first so the re-scan keeps
-        // its session state. A lead beyond a nonzero `stored_count` is not an
-        // occupied slot (`HealPlayerParty`, `script_pokemon_util.c:30-58`) and
-        // is merged without healing; a zero count still heals slot 0 so an
-        // unsaved new game keeps its starter.
-        if let Some(lead) = self.party_lead.as_mut() {
-            let slot = self.party_lead_slot;
-            if stored_count == 0 || slot < stored_count {
-                self.save1.player_party[slot].status = 0;
-                self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
-                match lead.heal(&dex) {
-                    Ok(()) => {
-                        self.lead_hp_hidden_by_load = crate::party::hp_hidden_by_load(
-                            &dex,
-                            &self.save1.player_party[slot],
-                            lead,
-                        );
-                        self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
-                            &dex,
-                            lead,
-                            &self.save1.player_party[slot],
-                            &mut self.lead_hp_hidden_by_load,
-                        );
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "{context}: couldn't fully heal the party lead's PP ({error}) -- HP \
-                             and status still cleared"
-                        );
-                    }
-                }
-            } else {
-                self.lead_hp_hidden_by_load =
-                    crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], lead);
-                self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
-                    &dex,
-                    lead,
-                    &self.save1.player_party[slot],
-                    &mut self.lead_hp_hidden_by_load,
-                );
-            }
+        // The owner heals the lead and merges it back first so the re-scan
+        // keeps its session state; a lead beyond a nonzero stored count is
+        // merged without healing, and a zero count still heals slot 0.
+        if let Err(error) = self.heal_whole_lead(&dex) {
+            eprintln!(
+                "{context}: couldn't fully heal the party lead's PP ({error}) -- HP and status \
+                 still cleared"
+            );
         }
 
         // Non-lead slots: HP and status live in plaintext record fields and
         // are restored even when the record cannot be decoded for PP.
-        for (slot, record) in self.save1.player_party[..stored_count]
-            .iter_mut()
-            .enumerate()
-        {
-            if self.party_lead.is_some() && slot == self.party_lead_slot {
+        for slot in 0..stored_count {
+            if self.owns_lead_slot(slot) {
                 continue;
             }
+            let record = &mut self.save1.player_party[slot];
             record.status = 0;
             record.hp = record.max_hp;
             match crate::party::from_save_pokemon(&dex, record) {
@@ -176,25 +147,7 @@ impl OverworldPhase {
         // An earlier fainted slot may now be the first usable one. Upstream's
         // `SetBattlePartyIds` scans every party slot, not only the stored
         // count (`pokeemerald/src/battle_controllers.c:591-606`).
-        if stored_count > 0 {
-            match crate::party::select_active_battler(&dex, &self.save1.player_party) {
-                Ok((slot, mon)) => {
-                    if slot != self.party_lead_slot || self.party_lead.is_none() {
-                        self.lead_hp_hidden_by_load = crate::party::hp_hidden_by_load(
-                            &dex,
-                            &self.save1.player_party[slot],
-                            &mon,
-                        );
-                        self.party_lead = Some(mon);
-                        self.party_lead_slot = slot;
-                        self.undecodable_lead_retained = false;
-                    }
-                }
-                Err(err) => {
-                    eprintln!("{context}: {err} -- keeping the previously selected slot");
-                }
-            }
-        }
+        self.reselect_lead_from_save(&dex, context);
     }
 }
 
@@ -286,8 +239,7 @@ mod tests {
         let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
         stored.status = STORED_STATUS;
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.party_lead = Some(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
         assert_ne!(
             phase.save1.player_party[0].status, 0,
             "setup: lead is statused"
@@ -316,8 +268,7 @@ mod tests {
         stored.max_hp += EV_HP_BONUS;
         stored.hp = 1;
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.party_lead = Some(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
 
         phase.white_out();
 
@@ -337,8 +288,8 @@ mod tests {
     /// must be measured against the same level floor that
     /// [`crate::party::merge_into_save_pokemon`] rebases against; otherwise
     /// the EV-derived HP gap vanishes from the next save. Driven through
-    /// [`OverworldPhase::white_out`] because the offset is written into
-    /// [`OverworldPhase::lead_hp_hidden_by_load`] before any merge runs.
+    /// [`OverworldPhase::white_out`] because the lead's
+    /// hidden-HP offset is re-measured before any merge runs.
     #[test]
     fn white_out_after_a_level_up_files_the_healed_lead_at_full_not_damaged() {
         let dex = battle::Dex::new();
@@ -374,14 +325,13 @@ mod tests {
         stored.hp = stored.max_hp;
 
         phase.save1.player_party_count = 1;
-        phase.save1.player_party[0] = stored;
-        phase.party_lead = Some(lead);
+        phase.set_backed_lead_for_test(0, stored, lead);
 
         // Raise the level as a won battle would, through the same
         // stats-preserving level-raise machinery, without a battle fixture.
         let level_13 = assets::experience_for_level(species.growth_rate, 13)
             .expect("level 13 is on every growth curve");
-        let leveled_lead = phase.party_lead.as_mut().expect("setup: a lead is present");
+        let leveled_lead = phase.lead_mut_for_test().expect("setup: a lead is present");
         leveled_lead.reconcile_saved_experience(level_13);
         assert_eq!(leveled_lead.level(), 13, "fixture sanity: the level moved");
         assert_eq!(
@@ -399,7 +349,7 @@ mod tests {
         save_from_the_start_menu(&mut phase, &mut slot);
         let saved = slot.load().block1.player_party[0];
 
-        let final_lead = phase.party_lead.as_ref().expect("still present");
+        let final_lead = phase.lead_for_test().expect("still present");
         let ev_aware_at_level_13 = battle::compute_stats_with_evs(
             final_lead.species(),
             species,

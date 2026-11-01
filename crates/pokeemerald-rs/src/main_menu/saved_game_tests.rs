@@ -178,3 +178,19 @@ fn checkout_pack_composes_a_distinct_non_blank_saved_game_menu() {
         "the two menu types must not render the same frame"
     );
 }
+
+#[test]
+fn the_frame_before_the_highlight_darkens_every_window_and_keeps_the_selection() {
+    let scene = load_synthetic_scene_of(MainMenuType::SavedGame);
+    let before = scene.compose_before_highlight();
+    let highlighted = scene.compose();
+
+    let darkened = Some(rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT));
+    for y in [10, 74, 106] {
+        assert_eq!(before.pixel(18, y), darkened, "window pixel at y={y}");
+    }
+    assert_eq!(highlighted.pixel(18, 10), Some(HEADER_TEXT_BG));
+    assert_eq!(before.pixel(5, 130), highlighted.pixel(5, 130));
+    assert_eq!(before.pixel(18, 74), highlighted.pixel(18, 74));
+    assert_eq!(scene.selected(), MainMenuItem::Continue);
+}
