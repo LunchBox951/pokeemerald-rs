@@ -778,6 +778,74 @@ mod tests {
     }
 
     #[test]
+    fn apply_damage_roll_maps_every_draw_residue_to_its_literal_percentage() {
+        // Upstream `ApplyRandomDmgMultiplier`
+        // (`pokeemerald/src/battle_script_commands.c:1639`) scales by
+        // `100 - (Random() % 16)` percent, so draws 0..=15 walk 100 down to 85.
+        let hundred: [u32; 16] = [
+            100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85,
+        ];
+        for (draw, expected) in (0_u16..).zip(hundred) {
+            let mut rng = CountingRng::new(draw);
+            assert_eq!(
+                apply_damage_roll(100, &mut rng),
+                expected,
+                "damage 100, draw {draw}"
+            );
+            assert_eq!(
+                rng.draws, 1,
+                "damage 100, draw {draw} must consume one draw"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_damage_roll_truncates_each_interior_residue_for_a_non_multiple_of_one_hundred() {
+        // 56 * (100 - n) / 100 truncated, worked by hand per residue.
+        let fifty_six: [u32; 16] = [
+            56, 55, 54, 54, 53, 53, 52, 52, 51, 50, 50, 49, 49, 48, 48, 47,
+        ];
+        for (draw, expected) in (0_u16..).zip(fifty_six) {
+            let mut rng = CountingRng::new(draw);
+            assert_eq!(
+                apply_damage_roll(56, &mut rng),
+                expected,
+                "damage 56, draw {draw}"
+            );
+            assert_eq!(rng.draws, 1, "damage 56, draw {draw} must consume one draw");
+        }
+    }
+
+    #[test]
+    fn apply_damage_roll_reduces_draws_with_upper_bits_modulo_sixteen() {
+        // (draw, damage, expected): each draw's residue is noted beside it.
+        let cases: [(u16, u32, u32); 10] = [
+            (16, 100, 100),     // 16 % 16 = 0
+            (17, 100, 99),      // 1
+            (31, 100, 85),      // 15
+            (0x0010, 56, 56),   // 0
+            (0x1234, 56, 53),   // 4
+            (0x8007, 100, 93),  // 7
+            (0xFFF0, 100, 100), // 0
+            (0xFFF8, 56, 51),   // 8
+            (0xFFFE, 100, 86),  // 14
+            (0xFFFF, 100, 85),  // 15
+        ];
+        for (draw, damage, expected) in cases {
+            let mut rng = CountingRng::new(draw);
+            assert_eq!(
+                apply_damage_roll(damage, &mut rng),
+                expected,
+                "damage {damage}, draw {draw:#06x}"
+            );
+            assert_eq!(
+                rng.draws, 1,
+                "damage {damage}, draw {draw:#06x} must consume one draw"
+            );
+        }
+    }
+
+    #[test]
     fn apply_damage_roll_floors_a_nonzero_damage_to_one() {
         assert_eq!(apply_damage_roll(1, &mut FixedRng(15)), 1);
     }
