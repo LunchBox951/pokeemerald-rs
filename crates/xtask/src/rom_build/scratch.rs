@@ -29,9 +29,15 @@ use super::RomBuildError;
 ///   an identity-checked, empty-only `remove_dir` by pathname (no parent
 ///   handle exists in `std`), so a swap in that last instant can cost an
 ///   empty replacement and never content.
-/// - Other Unix targets empty the directory by pathname right after the
-///   identity check, so a swap in that window can redirect the child removal
-///   to the replacement.
+/// - Other Unix targets have no path that names the held inode (macOS's
+///   `/dev/fd/<n>` does not resolve below a directory), so the children are
+///   removed by pathname. The identity is re-checked immediately before each
+///   top-level child is removed, and `remove_dir_all` works from descriptors
+///   below that child, so a swap can only redirect a single child removal
+///   (one name, resolved in the replacement) inside the few instructions
+///   between that check and its `unlink`/`rmdir`. Closing it needs
+///   `openat`/`unlinkat` on the held descriptor, which `std` lacks and which
+///   is the Cargo feature decision #2873 tracks.
 ///
 /// Windows holds the directory without delete sharing, so it cannot be
 /// renamed or replaced while held.
@@ -77,22 +83,31 @@ impl Scratch {
     pub(super) fn claim(path: PathBuf) -> std::io::Result<Self> {
         // A umask that strips owner bits (0o400 leaves 0o300) would make the
         // directory unopenable for the hold and fail the 0o700 check, so put
-        // back the mode the umask withheld before the hold is taken.
+        // back the mode the umask withheld before the hold is taken. A claim
+        // that is then refused puts the withheld mode back.
         #[cfg(unix)]
-        restore_private_mode(&path)?;
-        let hold = open_hold(&path)?;
-        let mut scratch = Self {
-            path,
-            hold: Some(hold),
-        };
-        let proven = scratch
-            .require_path(&scratch.path)
-            .and_then(|()| scratch.require_fresh());
-        if let Err(err) = proven {
-            scratch.hold = None;
-            return Err(err);
+        let restored = restore_private_mode(&path)?;
+        let proven = open_hold(&path).and_then(|hold| {
+            let mut scratch = Self {
+                path,
+                hold: Some(hold),
+            };
+            let shown = scratch
+                .require_path(&scratch.path)
+                .and_then(|()| scratch.require_fresh());
+            if shown.is_err() {
+                // Disarm cleanup: the directory was not shown to be ours.
+                scratch.hold = None;
+            }
+            shown.map(|()| scratch)
+        });
+        #[cfg(unix)]
+        if proven.is_err() {
+            if let Some(restored) = restored {
+                restored.undo();
+            }
         }
-        Ok(scratch)
+        proven
     }
 
     fn hold(&self) -> std::io::Result<&std::fs::File> {
@@ -208,6 +223,10 @@ impl Scratch {
         let dir = self.path.clone();
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
+            // Without a path to the held inode, shrink the swap window to this
+            // one child by proving the pathname still names the hold first.
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            self.require_path(&self.path)?;
             let child = dir.join(entry.file_name());
             if entry.file_type()?.is_dir() {
                 std::fs::remove_dir_all(child)?;
@@ -228,18 +247,54 @@ impl Drop for Scratch {
     }
 }
 
+/// A directory's mode before [`restore_private_mode`] raised it, with the pin
+/// that names that inode, so a refused claim can put the mode back on the
+/// directory it changed even if the path no longer names it.
+#[cfg(unix)]
+pub(super) struct ModeRestore {
+    pin: std::fs::File,
+    original: u32,
+}
+
+#[cfg(unix)]
+impl ModeRestore {
+    /// Best effort: a failure leaves the directory at 0o700, which only the
+    /// owner can open.
+    fn undo(&self) {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let via = format!("/proc/self/fd/{}", self.pin.as_raw_fd());
+        let _ = std::fs::set_permissions(via, std::fs::Permissions::from_mode(self.original));
+    }
+}
+
+#[cfg(unix)]
+fn restore_private_mode(path: &Path) -> std::io::Result<Option<ModeRestore>> {
+    restore_private_mode_with(path, || {})
+}
+
 /// Sets the directory at `path` to 0o700 if its mode differs, without ever
 /// following a symlink and only on a directory this build could have created.
 ///
 /// `mkdir(0o700)` can only yield a subset of 0o700 (plus an inherited setgid
 /// bit), so an entry with any other bit is left untouched and refused. Linux
-/// pins the entry with `O_PATH` (which needs no permission bits), proves the
-/// pinned inode is the directory at `path`, and changes the mode through
-/// `/proc/self/fd/<pin>`, which names that inode itself. Elsewhere there is no
+/// pins the entry with `O_PATH` (which needs no permission bits) and decides
+/// everything on the pinned inode: it must be a directory, its own mode must
+/// be one `mkdir` could have produced, and it must be the entry at `path`; the
+/// change then goes through `/proc/self/fd/<pin>`, which names that inode
+/// itself. So a different directory swapped in at `path` after the first look
+/// is refused on its own mode and never changed. Elsewhere there is no
 /// permission-free pin through `std`, so a directory the umask left without
 /// owner read or search is refused rather than restored by pathname.
+///
+/// Returns what [`ModeRestore::undo`] needs when the mode was changed.
+/// `after_first_look` runs between the pathname look and the pin, where a
+/// test places the swap.
 #[cfg(unix)]
-fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+pub(super) fn restore_private_mode_with(
+    path: &Path,
+    after_first_look: impl FnOnce(),
+) -> std::io::Result<Option<ModeRestore>> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     let found = std::fs::symlink_metadata(path)?;
@@ -248,7 +303,7 @@ fn restore_private_mode(path: &Path) -> std::io::Result<()> {
         return Err(not_fresh(path));
     }
     if mode & 0o700 == 0o700 {
-        return Ok(());
+        return Ok(None);
     }
     let Some(o_path) = O_PATH else {
         return Err(std::io::Error::other(format!(
@@ -256,17 +311,30 @@ fn restore_private_mode(path: &Path) -> std::io::Result<()> {
              owner read or search, and this platform cannot restore the mode safely"
         )));
     };
+    after_first_look();
     let pinned = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(o_path)
         .open(path)?;
     let held = pinned.metadata()?;
+    let original = held.mode() & 0o7777;
+    if !held.is_dir() || original & 0o5077 != 0 {
+        return Err(not_fresh(path));
+    }
     let again = std::fs::symlink_metadata(path)?;
-    if !held.is_dir() || !again.is_dir() || (held.dev(), held.ino()) != (again.dev(), again.ino()) {
+    if !again.is_dir() || (held.dev(), held.ino()) != (again.dev(), again.ino()) {
         return Err(not_the_held_directory(path));
     }
-    let via = format!("/proc/self/fd/{}", pinned.as_raw_fd());
-    std::fs::set_permissions(via, std::fs::Permissions::from_mode(0o700))
+    if original & 0o700 == 0o700 {
+        return Ok(None);
+    }
+    let restore = ModeRestore {
+        pin: pinned,
+        original,
+    };
+    let via = format!("/proc/self/fd/{}", restore.pin.as_raw_fd());
+    std::fs::set_permissions(via, std::fs::Permissions::from_mode(0o700))?;
+    Ok(Some(restore))
 }
 
 /// `O_PATH` on Linux for the architectures whose value is the generic one;

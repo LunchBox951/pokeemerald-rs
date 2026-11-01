@@ -730,7 +730,7 @@ fn a_build_whose_scratch_is_swapped_mid_make_fails_and_spares_the_replacement() 
     assert_eq!(
         kept,
         [b"keep me".to_vec()],
-        "the replacement survived the drop"
+        "the drop removed or altered the replacement"
     );
 }
 
@@ -783,5 +783,53 @@ fn scratch_is_created_under_an_owner_stripping_umask() {
     let leftover = fs::read_dir(&root).unwrap().count();
     let _ = fs::remove_dir_all(&root);
     assert_eq!(mode, Ok(0o700));
-    assert_eq!(leftover, 0, "dropping removed the scratch directory");
+    assert_eq!(leftover, 0, "dropping left the scratch directory behind");
+}
+
+/// The mode restore decides on the pinned inode: a populated 0o755 directory
+/// swapped in after the pathname look is refused and keeps its mode.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_replacement_racing_the_mode_restore_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = temp_dir("scratch-mode-race");
+    let path = root.join("candidate");
+    fs::create_dir(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o300)).unwrap();
+    let outcome = scratch::restore_private_mode_with(&path, || {
+        fs::rename(&path, root.join("aside")).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("keep.txt"), b"keep me").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    });
+    let mode = fs::symlink_metadata(&path).unwrap().permissions().mode() & 0o7777;
+    let kept = fs::read(path.join("keep.txt"));
+    let _ = fs::set_permissions(root.join("aside"), fs::Permissions::from_mode(0o700));
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        outcome.is_err(),
+        "a populated 0755 replacement was accepted"
+    );
+    assert_eq!(mode, 0o755, "the replacement's mode was changed");
+    assert_eq!(kept.unwrap(), b"keep me");
+}
+
+/// A claim refused after the restore puts the withheld mode back.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_refused_claim_gives_back_the_mode_it_raised() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = temp_dir("scratch-mode-undo");
+    let path = root.join("planted");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("keep.txt"), b"keep me").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o300)).unwrap();
+    let claimed = Scratch::claim(path.clone());
+    let mode = fs::symlink_metadata(&path).unwrap().permissions().mode() & 0o7777;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    let kept = fs::read(path.join("keep.txt"));
+    let _ = fs::remove_dir_all(&root);
+    assert!(claimed.is_err());
+    assert_eq!(mode, 0o300, "the refused directory kept the raised mode");
+    assert_eq!(kept.unwrap(), b"keep me");
 }
