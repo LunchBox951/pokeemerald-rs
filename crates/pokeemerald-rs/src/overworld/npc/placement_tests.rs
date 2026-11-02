@@ -318,7 +318,7 @@ fn draw_templates(
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     data: &EventData,
-) -> Vec<rendering::OamEntry> {
+) -> Vec<SheetSprite> {
     oam_entries(
         &ObjectEventCollection::from_templates(events),
         bindings,
@@ -399,7 +399,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
         let settled = draw_templates(events, &bindings, &player, &data);
 
         let (dx, dy) = direction.delta();
-        let step = |a: rendering::OamEntry, b: rendering::OamEntry| {
+        let step = |a: SheetSprite, b: SheetSprite| {
             (
                 i32::from(b.x()) - i32::from(a.x()),
                 i32::from(b.y()) - i32::from(a.y()),

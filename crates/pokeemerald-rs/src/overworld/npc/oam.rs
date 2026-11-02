@@ -3,8 +3,10 @@
 //! upstream's subpriority sort.
 //!
 //! [`elevated_oam_entries`] turns each visible, bound object event into a
-//! [`DepthSprite`], and [`order_sprites`] orders the player and those sprites
-//! as `SortSprites` hands them to the PPU (`sprite.c:413-419`). Bindings,
+//! [`DepthSprite`], and [`order_sprites`] orders the player, those sprites and
+//! any field-effect sprites as `SortSprites` hands them to the PPU
+//! (`sprite.c:413-419`). Every OBJ is a [`SheetSprite`] carrying the unmasked
+//! index of its frame in the combined sheet until OBJ VRAM staging. Bindings,
 //! sheet packing and palettes stay in the parent module.
 
 use std::collections::HashMap;
@@ -15,6 +17,7 @@ use engine::overworld::{object_event_is_visible, PlayerState};
 use rendering::{BitDepth, OamEntry};
 
 use super::super::avatar;
+use super::super::obj_vram::SheetSprite;
 use super::super::METATILE_PX;
 use super::{binding_key, SpriteBinding};
 
@@ -25,7 +28,7 @@ pub(super) const OAM_Y_MODULUS: i32 = 256;
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the nine-bit OAM x range"
 )]
-fn wrap_oam_x(x: i32) -> u16 {
+pub(in crate::overworld) fn wrap_oam_x(x: i32) -> u16 {
     x.rem_euclid(OAM_X_MODULUS) as u16
 }
 
@@ -33,7 +36,7 @@ fn wrap_oam_x(x: i32) -> u16 {
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the eight-bit OAM y range"
 )]
-fn wrap_oam_y(y: i32) -> u8 {
+pub(in crate::overworld) fn wrap_oam_y(y: i32) -> u8 {
     y.rem_euclid(OAM_Y_MODULUS) as u8
 }
 
@@ -79,29 +82,38 @@ const ELEVATION_TO_SUBPRIORITY: [u16; 16] = [
 
 /// Upstream's subpriority for an OBJ at `elevation` whose bottom edge is at
 /// screen row `bottom`:
-/// `sElevationToSubpriority[elevation] + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + 1`
-/// (`SetObjectSubpriorityByElevation`, `:7739-7745`, called with subpriority 1).
-pub(super) fn subpriority_from_bottom(bottom: i32, elevation: u8) -> u16 {
+/// `sElevationToSubpriority[elevation] + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + bias`
+/// (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7787`).
+/// Object events pass subpriority 1 (`:7739-7745`); field effects pass their
+/// own bias.
+pub(in crate::overworld) fn subpriority_from_bottom(bottom: i32, elevation: u8, bias: u16) -> u16 {
     let bottom_plus_bias = u16::try_from((bottom + 8).rem_euclid(OAM_Y_MODULUS)).unwrap_or(0);
     let base = ELEVATION_TO_SUBPRIORITY
         .get(usize::from(elevation))
         .copied()
         .unwrap_or(ELEVATION_TO_SUBPRIORITY[0]);
-    base + (16 - (bottom_plus_bias >> 4)) * 2 + 1
+    base + (16 - (bottom_plus_bias >> 4)) * 2 + bias
 }
 
 /// [`subpriority_from_bottom`] for a 16x32 `entry`.
 #[cfg(test)]
 pub(super) fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
-    subpriority_from_bottom(i32::from(entry.y()) + 32, elevation)
+    subpriority_from_bottom(
+        i32::from(entry.y()) + 32,
+        elevation,
+        OBJECT_EVENT_SUBPRIORITY,
+    )
 }
+
+/// The subpriority every object event passes `SetObjectSubpriorityByElevation`.
+const OBJECT_EVENT_SUBPRIORITY: u16 = 1;
 
 /// One object event's OBJs and the parent keys they sort by. A multi-OBJ
 /// object such as the truck sorts as one: upstream sorts the parent sprite
 /// and emits its subsprites in place (`sprite.c:361-368`, `:1742-1750`).
 #[derive(Debug, Clone)]
 pub(in crate::overworld) struct DepthSprite {
-    pub(super) entries: Vec<OamEntry>,
+    pub(super) entries: Vec<SheetSprite>,
     /// The parent's OBJ priority, from its elevation, not the subsprites'.
     pub(super) parent_priority: u8,
     /// The parent's wrapped top `y`, the final sort key.
@@ -112,20 +124,49 @@ pub(in crate::overworld) struct DepthSprite {
 
 impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
-    pub(in crate::overworld) fn single(entry: OamEntry, elevation: u8) -> Self {
+    pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
+        Self::with_subpriority(
+            entry,
+            subpriority_from_bottom(
+                i32::from(entry.y()) + 32,
+                elevation,
+                OBJECT_EVENT_SUBPRIORITY,
+            ),
+        )
+    }
+
+    /// A single-OBJ sprite whose subpriority is already known, such as a
+    /// field effect's, which competes beside the object events.
+    pub(in crate::overworld) fn with_subpriority(entry: SheetSprite, subpriority: u16) -> Self {
         Self {
             parent_priority: entry.priority(),
             parent_y: entry.y(),
-            subpriority: subpriority_from_bottom(i32::from(entry.y()) + 32, elevation),
+            subpriority,
             entries: vec![entry],
         }
+    }
+
+    /// The parent's on-screen left `x`: its first OBJ's, which for the truck
+    /// is the top row's left piece at the parent's origin.
+    pub(in crate::overworld) fn left(&self) -> i16 {
+        self.entries.first().map_or(0, |entry| entry.x())
+    }
+
+    /// The parent's wrapped OAM top `y`.
+    pub(in crate::overworld) const fn top(&self) -> u8 {
+        self.parent_y
+    }
+
+    /// The parent's subpriority.
+    pub(in crate::overworld) const fn parent_subpriority(&self) -> u16 {
+        self.subpriority
     }
 }
 
 /// Orders sprites as upstream emits OAM: ascending parent OBJ priority, then
 /// subpriority, then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`);
 /// ties keep input order and each sprite's OBJs stay together.
-pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<OamEntry> {
+pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
     let mut ordered: Vec<&DepthSprite> = sprites.iter().collect();
     ordered.sort_by_key(|sprite| {
         (
@@ -142,7 +183,7 @@ pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<OamEnt
 
 /// [`order_sprites`] for 16x32 OBJs given as `(entry, elevation)`.
 #[cfg(test)]
-pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
+pub(super) fn order_by_depth(entries: &[(SheetSprite, u8)]) -> Vec<SheetSprite> {
     let sprites: Vec<DepthSprite> = entries
         .iter()
         .map(|&(entry, elevation)| DepthSprite::single(entry, elevation))
@@ -158,7 +199,7 @@ pub(super) fn oam_entries(
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
-) -> Vec<OamEntry> {
+) -> Vec<SheetSprite> {
     let elevations: Vec<u8> = objects
         .iter()
         .map(|live| live.state().elevation())
@@ -174,22 +215,25 @@ pub(super) fn oam_entries(
 /// each at priority 2 whatever the elevation.
 const TRUCK_PIECE_PRIORITY: u8 = 2;
 
-pub(super) fn truck_entries(binding: SpriteBinding, (left, top): (i32, i32)) -> Vec<OamEntry> {
+pub(super) fn truck_entries(binding: SpriteBinding, (left, top): (i32, i32)) -> Vec<SheetSprite> {
     const ROWS: i32 = 6;
     const ROW_TILES: u16 = 6;
     let piece = |x: i32, y: i32, tile: u16, size: u8| {
-        OamEntry::new(
-            wrap_oam_x(x),
-            wrap_oam_y(y),
+        SheetSprite::new(
+            OamEntry::new(
+                wrap_oam_x(x),
+                wrap_oam_y(y),
+                tile,
+                binding.palette_bank,
+                BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Horizontal,
+                size,
+                TRUCK_PIECE_PRIORITY,
+                true,
+            ),
             tile,
-            binding.palette_bank,
-            BitDepth::Bpp4,
-            false,
-            false,
-            rendering::ObjShape::Horizontal,
-            size,
-            TRUCK_PIECE_PRIORITY,
-            true,
         )
     };
     (0..ROWS)
@@ -252,18 +296,21 @@ pub(in crate::overworld) fn elevated_oam_entries(
                 truck_entries(binding, origin)
             } else {
                 let (shape, size) = single_obj_shape(binding.width, binding.height);
-                vec![OamEntry::new(
-                    wrap_oam_x(origin.0),
-                    wrap_oam_y(origin.1),
+                vec![SheetSprite::new(
+                    OamEntry::new(
+                        wrap_oam_x(origin.0),
+                        wrap_oam_y(origin.1),
+                        tile_index,
+                        binding.palette_bank,
+                        BitDepth::Bpp4,
+                        h_flip,
+                        false,
+                        shape,
+                        size,
+                        parent_priority,
+                        true,
+                    ),
                     tile_index,
-                    binding.palette_bank,
-                    BitDepth::Bpp4,
-                    h_flip,
-                    false,
-                    shape,
-                    size,
-                    parent_priority,
-                    true,
                 )]
             };
             Some(DepthSprite {
@@ -273,6 +320,7 @@ pub(in crate::overworld) fn elevated_oam_entries(
                 subpriority: subpriority_from_bottom(
                     origin.1 + i32::from(binding.height),
                     elevation,
+                    OBJECT_EVENT_SUBPRIORITY,
                 ),
             })
         })

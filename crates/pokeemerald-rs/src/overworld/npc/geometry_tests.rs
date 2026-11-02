@@ -29,14 +29,14 @@ fn colocated_origins_share_the_tile_bottom_and_centre() {
 /// elevation plus twice `16 - ((bottom + 8) >> 4)`; at bottom 88 the row is 6.
 #[test]
 fn subpriority_follows_the_bottom_edge_and_elevation_base() {
-    assert_eq!(subpriority_from_bottom(88, 3), 115 + 2 * (16 - 6) + 1);
-    assert_eq!(subpriority_from_bottom(88, 2), 83 + 2 * (16 - 6) + 1);
-    assert_eq!(subpriority_from_bottom(88, 4), 83 + 2 * (16 - 6) + 1);
-    assert_eq!(subpriority_from_bottom(88, 3), 136);
+    assert_eq!(subpriority_from_bottom(88, 3, 1), 115 + 2 * (16 - 6) + 1);
+    assert_eq!(subpriority_from_bottom(88, 2, 1), 83 + 2 * (16 - 6) + 1);
+    assert_eq!(subpriority_from_bottom(88, 4, 1), 83 + 2 * (16 - 6) + 1);
+    assert_eq!(subpriority_from_bottom(88, 3, 1), 136);
     // The sum wraps at 256 like upstream's `& 0xFF`.
     assert_eq!(
-        subpriority_from_bottom(248, 3),
-        subpriority_from_bottom(248 - 256, 3)
+        subpriority_from_bottom(248, 3, 1),
+        subpriority_from_bottom(248 - 256, 3, 1)
     );
 }
 
@@ -103,25 +103,28 @@ fn a_truck_sorts_as_one_parent_and_never_flips_for_its_facing() {
     assert_eq!(drawn.len(), 1, "one parent");
     assert_eq!(drawn[0].entries.len(), 12);
     assert_eq!(drawn[0].parent_priority, 1, "elevation 4's OBJ priority");
-    assert_eq!(drawn[0].subpriority, subpriority_from_bottom(88, 4));
+    assert_eq!(drawn[0].subpriority, subpriority_from_bottom(88, 4, 1));
     assert!(
         drawn[0].entries.iter().all(|e| !e.h_flip()),
         "an inanimate object ignores its authored facing"
     );
 
     let mut sprites = vec![DepthSprite::single(
-        OamEntry::new(
-            112,
-            56,
+        SheetSprite::new(
+            OamEntry::new(
+                112,
+                56,
+                0,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Vertical,
+                2,
+                2,
+                true,
+            ),
             0,
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            rendering::ObjShape::Vertical,
-            2,
-            2,
-            true,
         ),
         3,
     )];

@@ -2,8 +2,11 @@
 //!
 //! [`rendering::SpriteLayer`] accepts one tileset and palette. Player walking
 //! frames occupy the first tile block; each distinct object graphic's frames
-//! follow ([`npc::resolve_bindings`]), then the player's running frames, with
-//! palette banks assigned by [`npc::build_combined_palette`].
+//! follow ([`npc::resolve_bindings`]), then the player's running frames, then
+//! the tall-grass effect's cells, with palette banks assigned by
+//! [`npc::build_combined_palette`]. This combined sheet is the scene's
+//! ROM-side image store; composing stages only the drawn frames into OBJ VRAM
+//! (`super::obj_vram`), so its size is not bound by the ten-bit OBJ tile field.
 
 use std::collections::HashMap;
 
@@ -12,10 +15,12 @@ use assets::LayoutGrid;
 use engine::event_data::EventData;
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
-use rendering::{BitDepth, OamEntry, Palette, Tileset};
+use rendering::{BitDepth, Palette, Tileset};
 
 use super::avatar::{self, PlayerCharacter};
+use super::grass::{self, DepthObject, TallGrassEffects};
 use super::npc::{self, SpriteBinding};
+use super::obj_vram::SheetSprite;
 use super::OverworldSceneError;
 
 #[derive(Debug)]
@@ -25,6 +30,9 @@ pub(super) struct SceneSprites {
     /// First tile of the player's running sheet, packed after every NPC sheet
     /// so NPC blocks keep their offsets from the walking block.
     run_base_tile: u16,
+    /// First tile of the tall-grass effect's cells, packed after the running
+    /// sheet; `None` when the pack carries no field-effect sheet.
+    grass_base_tile: Option<u16>,
     /// Template-seeded state for callers that own no live collection.
     seed_objects: ObjectEventCollection,
     /// The layout's cell elevations, which settle each object's elevation at
@@ -110,39 +118,70 @@ impl SceneSprites {
             "sprite/*/running",
             pack.sprite(player.run_sprite_path())?,
         )?);
-        let tiles = bytes.len() / BitDepth::Bpp4.tile_byte_len();
-        if tiles > npc::MAX_OBJ_TILES {
-            return Err(OverworldSceneError::SpriteTilesExceedObjSpace { tiles });
+        let grass = grass::load_resources(pack)?;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a scene contains only a small number of sprite sheets"
+        )]
+        let grass_base_tile = grass
+            .as_ref()
+            .map(|_| (bytes.len() / BitDepth::Bpp4.tile_byte_len()) as u16);
+        if let Some(grass) = &grass {
+            bytes.extend_from_slice(&grass.tile_bytes);
         }
         Ok(Self {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
             run_base_tile,
-            palette: npc::build_combined_palette(pack, player, palette_ref, &bindings)?,
+            grass_base_tile,
+            palette: npc::build_combined_palette(
+                pack,
+                player,
+                palette_ref,
+                &bindings,
+                grass.as_ref().map(|grass| grass.palette),
+            )?,
             seed_objects: ObjectEventCollection::from_templates(events.object_events),
             cell_elevations: CellElevations::from_grid(grid),
             bindings,
         })
     }
 
-    /// [`Self::live_entries`] over the template-seeded state.
-    #[must_use]
-    pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
-        self.live_entries(&self.seed_objects, player, event_data)
+    #[cfg(test)]
+    pub(super) const fn grass_base_tile(&self) -> Option<u16> {
+        self.grass_base_tile
     }
 
-    /// Lists the player first, then NPCs in `objects` order, then orders by OBJ
-    /// priority and y-derived subpriority
+    /// Whether the pack supplied the tall-grass effect's sheet and palette.
+    pub(super) const fn draws_tall_grass(&self) -> bool {
+        self.grass_base_tile.is_some()
+    }
+
+    /// [`Self::live_entries`] over the template-seeded state.
+    #[must_use]
+    pub(super) fn entries(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+        grass: &TallGrassEffects,
+    ) -> Vec<SheetSprite> {
+        self.live_entries(&self.seed_objects, player, event_data, grass)
+    }
+
+    /// Lists the player first, then NPCs in `objects` order, then the tall-grass
+    /// effects, and orders by OBJ priority and y-derived subpriority
     /// ([`npc::order_sprites`]); the player leads a tie in every sort key.
     /// `objects` supplies tile, facing, and elevation, the last settled by the
     /// layout cell it stands on; the scene's templates keep the graphics
-    /// bindings.
+    /// bindings. Each effect carries its own subpriority, set against the
+    /// object sprites it overlaps.
     #[must_use]
     pub(super) fn live_entries(
         &self,
         objects: &ObjectEventCollection,
         player: &PlayerState,
         event_data: &EventData,
-    ) -> Vec<OamEntry> {
+        grass: &TallGrassEffects,
+    ) -> Vec<SheetSprite> {
         let elevations: Vec<u8> = objects
             .iter()
             .map(|live| {
@@ -162,6 +201,24 @@ impl SceneSprites {
             player,
             event_data,
         ));
+        if let Some(first_tile) = self.grass_base_tile {
+            let depth_objects: Vec<DepthObject> = sprites
+                .iter()
+                .map(|sprite| DepthObject {
+                    left: i32::from(sprite.left()),
+                    top: signed_screen_y(sprite.top()),
+                    subpriority: sprite.parent_subpriority(),
+                })
+                .collect();
+            sprites.extend(
+                grass
+                    .oam_entries(player, first_tile, &depth_objects)
+                    .into_iter()
+                    .map(|(entry, subpriority)| {
+                        npc::DepthSprite::with_subpriority(entry, subpriority)
+                    }),
+            );
+        }
         npc::order_sprites(&sprites)
     }
 
@@ -176,6 +233,18 @@ impl SceneSprites {
     #[cfg(test)]
     pub(super) const fn bindings(&self) -> &HashMap<&'static str, SpriteBinding> {
         &self.bindings
+    }
+}
+
+/// An OAM `y` as a screen row, reading the wrapped rows just above the screen
+/// as negative.
+fn signed_screen_y(y: u8) -> i32 {
+    const SCREEN_BOTTOM: i32 = 192;
+    let y = i32::from(y);
+    if y > SCREEN_BOTTOM {
+        y - 256
+    } else {
+        y
     }
 }
 

@@ -36,6 +36,9 @@ use rendering::{Bgr555, Palette};
 use rendering::{BitDepth, OamEntry};
 
 use super::avatar::PlayerCharacter;
+use super::grass;
+#[cfg(test)]
+use super::obj_vram::SheetSprite;
 #[cfg(test)]
 use super::{avatar, METATILE_PX};
 use super::{fill_palette_bank, OverworldSceneError};
@@ -284,10 +287,6 @@ impl SpriteBinding {
     }
 }
 
-/// The OBJ tile budget one-dimensional mapping addresses (ten tile-index
-/// bits, `rendering::OamEntry`).
-pub(super) const MAX_OBJ_TILES: usize = 1024;
-
 /// The key a binding for `event` is stored and found under: its graphics id,
 /// except a berry tree, whose stage and species belong to the tree.
 fn binding_key(event: &ObjectEvent) -> &'static str {
@@ -322,9 +321,10 @@ struct WantedSheet {
 /// # Errors
 ///
 /// Returns an asset, sprite-dimension, pixel-count, or tile-alignment error
-/// when a resolved sheet cannot be loaded and packed, and
-/// [`OverworldSceneError::SpriteTilesExceedObjSpace`] when the scene's sheets
-/// would not fit the OBJ tile space.
+/// when a resolved sheet cannot be loaded and packed. The packed sheets are
+/// the scene's ROM-side image store, not OBJ VRAM: composing stages only the
+/// drawn frames (`super::obj_vram`), so their total is not bound by the
+/// ten-bit OBJ tile field.
 pub(super) fn resolve_bindings(
     pack: &AssetPack,
     player: PlayerCharacter,
@@ -360,14 +360,10 @@ pub(super) fn resolve_bindings(
     for WantedSheet { key, sheet, cells } in wanted {
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "the tile-space guard below rejects any scene past 1024 tiles"
+            reason = "a scene packs only the shown cells of a few dozen sheets"
         )]
         let base_tile = (sprite_bytes.len() / TILE_BYTES) as u16;
         sprite_bytes.extend(sheet.pack(pack, cells)?);
-        let tiles = sprite_bytes.len() / TILE_BYTES;
-        if tiles > MAX_OBJ_TILES {
-            return Err(OverworldSceneError::SpriteTilesExceedObjSpace { tiles });
-        }
         bindings.insert(
             key,
             SpriteBinding {
@@ -385,7 +381,8 @@ pub(super) fn resolve_bindings(
 
 /// Loads the player, four generic NPC, and other-protagonist palette banks,
 /// then each object palette ([`sheets::OBJECT_PALETTES`]) that some resolved
-/// binding draws with.
+/// binding draws with, and the tall-grass effect's bank when `grass_palette`
+/// is present.
 ///
 /// # Errors
 ///
@@ -395,9 +392,13 @@ pub(super) fn build_combined_palette(
     player: PlayerCharacter,
     player_bank0: PaletteRef<'_>,
     bindings: &HashMap<&'static str, SpriteBinding>,
+    grass_palette: Option<PaletteRef<'_>>,
 ) -> Result<Palette, OverworldSceneError> {
     let mut colors = [Bgr555::default(); Palette::LEN];
     fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
+    if let Some(grass) = grass_palette {
+        fill_palette_bank(&mut colors, usize::from(grass::GENERAL_1_BANK), grass);
+    }
     for tag in [
         NpcPaletteTag::Npc1,
         NpcPaletteTag::Npc2,
@@ -426,11 +427,13 @@ mod oam;
 use engine::overworld::PlayerState;
 #[cfg(test)]
 use oam::OAM_Y_MODULUS;
-pub(super) use oam::{elevated_oam_entries, order_sprites, DepthSprite};
+pub(super) use oam::{
+    elevated_oam_entries, order_sprites, subpriority_from_bottom, wrap_oam_x, wrap_oam_y,
+    DepthSprite,
+};
 #[cfg(test)]
 use oam::{
-    oam_entries, object_origin, object_screen_position, order_by_depth, subpriority,
-    subpriority_from_bottom, truck_entries,
+    oam_entries, object_origin, object_screen_position, order_by_depth, subpriority, truck_entries,
 };
 
 #[cfg(test)]

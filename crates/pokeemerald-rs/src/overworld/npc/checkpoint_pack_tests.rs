@@ -1,6 +1,7 @@
 //! The checkpoint maps' object graphics loaded from the checkout pack.
 
 use super::*;
+use crate::overworld::grass::TallGrassEffects;
 use crate::overworld::{load_room_from_source, OverworldScene};
 use crate::pack_source::PackSource;
 use assets::AssetPack;
@@ -70,7 +71,7 @@ fn every_checkpoint_scene_binds_and_draws_each_visible_object() {
                 let tiles = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
                 let drawn: Vec<_> = scene
                     .sprites
-                    .entries(&player, &data)
+                    .entries(&player, &data, &TallGrassEffects::new())
                     .into_iter()
                     .filter(|entry| {
                         tiles.contains(&entry.tile_index())
@@ -121,7 +122,7 @@ fn the_littleroot_truck_composes_as_twelve_objs_over_its_rectangle() {
     let truck_bank = 8;
     let truck: Vec<_> = scene
         .sprites
-        .entries(&player, &one_truck)
+        .entries(&player, &one_truck, &TallGrassEffects::new())
         .into_iter()
         .filter(|entry| entry.palette_bank() == truck_bank)
         .collect();
@@ -173,7 +174,7 @@ fn the_pichu_doll_settles_on_its_cells_elevation() {
     let player = PlayerState::new((3, 4), 3, Direction::South);
     let entry = scene
         .sprites
-        .entries(&player, &data)
+        .entries(&player, &data, &TallGrassEffects::new())
         .into_iter()
         .find(|entry| entry.tile_index() == binding.base_tile())
         .unwrap();

@@ -12885,6 +12885,20 @@
       "status": "pending"
     },
     "graphics/field_effects": {
+      "artifacts": {
+        "palettes/general_1.pal": {
+          "reason": "graphics/field_effects/palettes/general_1.pal (16 colours, gFieldEffectObjectPalette1, bound by FLDEFF_PAL_TAG_GENERAL_1, field_effect_objects.h:2,96) is extracted as field-effect/palette/general_1 by cargo xtask extract and read through AssetPack::field_effect_palette. Not covered: the ROM-import backend does not yet write this entry; gSpritePalette_GeneralFieldEffect1 is outside sObjectEventSpritePalettes, which the importer's sprite palette corroboration requires every palette to be in.",
+          "rust_target": "crates/xtask/src/extract/field_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "pics/tall_grass.png": {
+          "reason": "graphics/field_effects/pics/tall_grass.png (80x16, five 2x2-tile cells, object_event_graphics.h:312) is extracted as field-effect/image/tall_grass by cargo xtask extract and read through AssetPack::field_effect_image. Not covered: the ROM-import backend does not yet write this entry (no generator root or importer domain), so a ROM-imported pack draws no tall-grass effect; the entry is outside rom-import's equivalence COMPLETE_PREFIXES until it does.",
+          "rust_target": "crates/xtask/src/extract/field_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19785,7 +19799,7 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). No chooser rendering claimed.",
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). The chooser scene (crates/pokeemerald-rs/src/starter_chooser/graphics.rs) decodes these sheets and tilemaps and renders them.",
       "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
       "spec": "S-4",
       "status": "ported"
@@ -29186,6 +29200,14 @@
       "status": "pending"
     },
     "src/data/field_effects/field_effect_objects.h": {
+      "artifacts": {
+        "gFieldEffectObjectTemplate_TallGrass": {
+          "reason": "field_effect_objects.h:71-100: five 16x16 cells (sPicTable_TallGrass), animation commands showing cells 1, 2, 3, 4, 0 for ten frames each then ANIMCMD_END (sAnim_TallGrass), a 16x16 OBJ (gObjectEventBaseOam_16x16), and the FLDEFF_PAL_TAG_GENERAL_1 palette on scene bank 6, all in grass.rs. The UpdateTallGrassFieldEffect callback is tracked at src/field_effect_helpers.c#UpdateTallGrassFieldEffect.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29475,7 +29497,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source (with npc/sheets.rs object_sheet and initial_berry_sheet) is a bounded re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping and of each pointed-to struct's .width/.height/.paletteTag/.paletteSlot/.inanimate/.images/.anims fields (object_event_graphics_info.h, object_event_pic_tables.h, object_event_anims.h) for every graphics id the fixed object events of the checkpoint maps name. Modelled: the two protagonist sheets and both rival variants (reusing the matching protagonist's art, kept on its own palette bank for PALSLOT_NPC_SPECIAL), 26 standard nine-frame 16x32 people, the 16x16 ninja boy, item ball, Birch's bag, cuttable tree, moving box and two dolls, the 16x32 nurse and mystery-event deliveryman (4- and 3-cell sheets), the two 32x32 Vigoroth variants and Zigzagoon, the 48x48 truck, and Route 103's three berry trees at the BERRY_STAGE_BERRIES stage new_game.inc plants them at (resolved per event by trainer_sight_or_berry_tree_id; no berry state, growth, planting or watering). Each graphic shows its stationary frame for the object's live facing: the cell sAnimTable_Standard/_Nurse/_Inanimate/_CuttableTree/_BerryTree select for that facing, with the pic table's own cell remapping (Vigoroth cells 0 and 3, nurse and deliveryman cells 0-2); walking, bowing, cutting and growth animation are not run. Packing keeps only the sheet cells some facing of some event of the scene can show (sheets::Facing::reachable_cells: south, north and west for a directional sheet, its one cell for a fixed one), so a live turn such as faceplayer always lands on a packed frame, and Route 103's eleven people sheets fit the 1024-tile OBJ space. Upstream's single resident NPC_SPECIAL palette slot (the last special palette loaded wins) is not reproduced: moving box, truck, Vigoroth and Zigzagoon each get their own native bank. Not modelled: the OBJ_EVENT_GFX_VAR_1..VAR_B decoration slots and every non-rival OBJ_EVENT_GFX_VAR_0 value (GetObjectEventGraphicsInfo's VarGetObjectEventGraphicsId indirection, event_object_movement.c:1914-1931, is modelled for n == 0 narrowed to the two rival ids), every graphics id outside the checkpoint maps, and the rest of this 239-entry table's rows.",
+          "reason": "npc::resolve_sprite_source (with npc/sheets.rs object_sheet and initial_berry_sheet) is a bounded re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping and of each pointed-to struct's .width/.height/.paletteTag/.paletteSlot/.inanimate/.images/.anims fields (object_event_graphics_info.h, object_event_pic_tables.h, object_event_anims.h) for every graphics id the fixed object events of the checkpoint maps name. Modelled: the two protagonist sheets and both rival variants (reusing the matching protagonist's art, kept on its own palette bank for PALSLOT_NPC_SPECIAL), 26 standard nine-frame 16x32 people, the 16x16 ninja boy, item ball, Birch's bag, cuttable tree, moving box and two dolls, the 16x32 nurse and mystery-event deliveryman (4- and 3-cell sheets), the two 32x32 Vigoroth variants and Zigzagoon, the 48x48 truck, and Route 103's three berry trees at the BERRY_STAGE_BERRIES stage new_game.inc plants them at (resolved per event by trainer_sight_or_berry_tree_id; no berry state, growth, planting or watering). Each graphic shows its stationary frame for the object's live facing: the cell sAnimTable_Standard/_Nurse/_Inanimate/_CuttableTree/_BerryTree select for that facing, with the pic table's own cell remapping (Vigoroth cells 0 and 3, nurse and deliveryman cells 0-2); walking, bowing, cutting and growth animation are not run. Packing keeps only the sheet cells some facing of some event of the scene can show (sheets::Facing::reachable_cells: south, north and west for a directional sheet, its one cell for a fixed one), so a live turn such as faceplayer always lands on a packed frame. The packed sheets are the scene's ROM-side image store, not OBJ VRAM: composing stages only each frame's drawn sprites into OBJ VRAM (obj_vram::stage), so the ten-bit OBJ tile field bounds one frame's sprites, not the scene's sheets. Upstream's single resident NPC_SPECIAL palette slot (the last special palette loaded wins) is not reproduced: moving box, truck, Vigoroth and Zigzagoon each get their own native bank. Not modelled: the OBJ_EVENT_GFX_VAR_1..VAR_B decoration slots and every non-rival OBJ_EVENT_GFX_VAR_0 value (GetObjectEventGraphicsInfo's VarGetObjectEventGraphicsId indirection, event_object_movement.c:1914-1931, is modelled for n == 0 narrowed to the two rival ids), every graphics id outside the checkpoint maps, and the rest of this 239-entry table's rows.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -30283,8 +30305,14 @@
     },
     "src/event_object_movement.c": {
       "artifacts": {
+        "DoGroundEffects_OnBeginStep": {
+          "reason": "event_object_movement.c:8098-8116. OverworldPhase::step runs the player's begin-step pass for the tall-grass flag only, from the frame a step starts (StepOutcome::Advanced) and from the crossing step on the entered map (finish_crossing), after the step's own elevation update. Every other begin-step ground effect (long grass, puddles, ripples, sand, ash, shadows) and every non-player object event are unmodelled.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "DoGroundEffects_OnSpawn": {
-          "reason": "Only the elevation half of the spawn-frame ground-effect pass is modelled: sprites::CellElevations::settled gives an object its live elevation replaced by its own layout-grid cell's elevation unless that cell is ELEVATION_TRANSITION or ELEVATION_MULTI_LEVEL or lies off the grid (the ObjectEventUpdateElevation :7759-7771 pass DoGroundEffects_OnSpawn reaches on the spawn frame: :4931, gated by triggerGroundEffectsOnMove = TRUE from InitObjectEventStateFromTemplate :1301), so May's Pichu doll authored at elevation 4 on a cell of elevation 3 draws at priority 2. SceneSprites::live_entries applies it to each object's live tile on every compose. Stubbed: no other ground effect (grass, reflection, sand, water) is ported, and the pass is applied at render time rather than stored back onto the object. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp landings.",
+          "reason": "event_object_movement.c:8080-8096. Two halves of the spawn-frame ground-effect pass are modelled. Elevation (crates/pokeemerald-rs/src/overworld/sprites.rs): sprites::CellElevations::settled gives an object its live elevation replaced by its own layout-grid cell's elevation unless that cell is ELEVATION_TRANSITION or ELEVATION_MULTI_LEVEL or lies off the grid (the ObjectEventUpdateElevation :7759-7771 pass DoGroundEffects_OnSpawn reaches on the spawn frame: :4931, gated by triggerGroundEffectsOnMove = TRUE from InitObjectEventStateFromTemplate :1301), so May's Pichu doll authored at elevation 4 on a cell of elevation 3 draws at priority 2; SceneSprites::live_entries applies it to each object's live tile on every compose, at render time rather than stored back onto the object. Tall grass (crates/pokeemerald-rs/src/overworld/grass.rs): OverworldScene::seed_tall_grass_placement is the player's spawn-time pass for the tall-grass flag only, once per placement (triggerGroundEffectsOnMove is true for a fresh object, :1301, and after a return to the field, :1799-1802: a battle return re-arms it). Stubbed: every other spawn-time ground effect (long grass, ripples, sand, puddles, shadows, reflections) and every non-player object event's tall-grass effect are unmodelled; UpdateObjectEventElevationAndPriority is separately tracked. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp landings.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/sprites.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -30295,11 +30323,35 @@
           "spec": "I-3",
           "status": "stubbed"
         },
+        "GetGroundEffectFlags_TallGrassOnBeginStep": {
+          "reason": "event_object_movement.c:7456-7466: the flag is set exactly when MetatileBehavior_IsTallGrass holds for the object's current metatile behaviour, MB_TALL_GRASS alone and not long grass or any other encounter behaviour. engine::overworld::metatile_behavior::is_tall_grass is that predicate; OverworldScene::is_tall_grass_at reads it over the player's destination or placement tile, where the other flag getters of the same dispatch stay unmodelled.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetGroundEffectFlags_TallGrassOnSpawn": {
+          "reason": "event_object_movement.c:7456-7466: the flag is set exactly when MetatileBehavior_IsTallGrass holds for the object's current metatile behaviour, MB_TALL_GRASS alone and not long grass or any other encounter behaviour. engine::overworld::metatile_behavior::is_tall_grass is that predicate; OverworldScene::is_tall_grass_at reads it over the player's destination or placement tile, where the other flag getters of the same dispatch stay unmodelled.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetObjectEventIdByPosition": {
           "reason": "Position-plus-elevation-wildcard object-event scan rewritten as MapRuntime::object_events_at. With a bound ObjectEventCollection (MapRuntime::with_object_events) it delegates to ObjectEventCollection::object_events_at and compares each object's live position and elevation, returning the authored template as metadata; a bound collection never falls back to authored coordinates. Unbound runtimes (trainer sight) still scan authored coordinates. ObjectEventDoesElevationMatch's rule (either side's ELEVATION_TRANSITION is a wildcard) is the shared collision::elevations_compatible predicate. It returns an iterator over every match on the tile, not a single hit, because upstream only scans spawned object events (a set hide flag prevents the spawn) while this port scans every template: the hide-flag filter therefore runs inside the scan, in engine::overworld::object_event::visible_object_event_at. Both consumers, the facing lookup (facing_object_event) and PlayerState::step's COLLISION_OBJECT_EVENT check, go through that one composed search. Templates stack per tile with independent flags (the Birch lab's three starter balls at (6, 8)). Known narrowing: live elevation is the retained state elevation, which no writer updates from the ground (ObjectEventUpdateElevation, event_object_movement.c:1758-1770, :8089); trainer sight and cross-map objects are not migrated.",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "GroundEffect_SpawnOnTallGrass": {
+          "reason": "event_object_movement.c:7800-7811. TallGrassEffects::spawn_placement starts the effect already on its settled cell (SeekSpriteAnim(sprite, 4), field_effect_helpers.c:311-313) when the player is placed on tall grass: OverworldScene::seed_tall_grass_placement runs once per placement, from the first field frame after a new game, a continue, a warp landing (each builds a fresh scene), or a battle return (OverworldPhase::reinit_field_tileset_animations drops every effect first, as ResetSpriteData does, overworld.c:2134). Not modelled: object events other than the player spawning grass effects.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "GroundEffect_StepOnTallGrass": {
+          "reason": "event_object_movement.c:7813-7825. TallGrassEffects::spawn_step starts the FLDEFF_TALL_GRASS effect on the tile the player's begin-step entered (OverworldPhase::step, finish_crossing), with the player's updated previousElevation as sElevation and OBJ priority 2; the effect is not skipped to the end of its animation (gFieldEffectArguments[7] FALSE). Not modelled: any object event but the player starting the effect (NPC ground-effect dispatch), and disableCoveringGroundEffects, which only a jump or bike path sets.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "InitObjectEventStateFromTemplate": {
           "reason": "ObjectEventCollection::from_templates seeds one live ObjectEventState per authored template, in declaration order, reproducing this function's position/previousCoords/elevation/facing/movementType initialization (:1296-1321; the facing derivation itself was already transcribed as gInitialMovementTypeFacingDirections/initial_facing_direction, object_event.rs). Keyed lookup by local_id (LiveObjectEvent::template().local_id) models GetObjectEventIdByLocalId's linear scan (:1275-1285), and ObjectEventCollection::object_events_at models GetObjectEventIdByPosition/ObjectEventDoesElevationMatch's live-position scan (:2192-2215), which MapRuntime::object_events_at delegates to when a collection is bound. Not modelled: GetAvailableObjectEventId's slot reuse/dedup against (localId, mapNum, mapGroup) -- this collection is per-map so mapNum/mapGroup do not apply and every template gets exactly one persistent slot; the active flag, triggerGroundEffectsOnMove, dynamic graphics id, and sMovementTypeHasRange's zero-range-to-one clamp (all sprite/task-simulation concerns out of this engine-only slice's boundary); and the hide-flag/camera-radius spawn gate, which stays object_event.rs's query-time concern (visible_object_event_at/object_event_is_in_view) rather than an admission test this collection performs.",
@@ -30350,7 +30402,7 @@
           "status": "rewritten"
         },
         "SetObjectSubpriorityByElevation": {
-          "reason": "npc::oam::subpriority_from_bottom computes sElevationToSubpriority[elevation] (:7691-7693) + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + 1 from SetObjectSubpriorityByElevation (:7773-7779, via the :7739-7745 computation, called with subpriority 1) with bottom the sprite's rendered bottom edge for its own height (16, 32 or 48), and npc::oam::order_sprites sorts by ascending parent OBJ priority, then subpriority, then lower on-screen y (SortSprites, sprite.c:413-415), keeping a multi-OBJ sprite together and ties in player-then-template order; npc::oam::elevated_oam_entries builds the DepthSprite for each visible bound object from its live tile, facing and settled elevation, recomputed each compose. Stubbed: upstream's object-allocation order for exact ties is not reproduced.",
+          "reason": "npc::oam::subpriority_from_bottom computes sElevationToSubpriority[elevation] (:7691-7693) + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + subpriority from SetObjectSubpriorityByElevation (:7773-7779, via the :7739-7745 computation; object events pass subpriority 1, the tall-grass effect its own first-command bias) with bottom the sprite's rendered bottom edge for its own height (16, 32 or 48), and npc::oam::order_sprites sorts the player, the object events and the tall-grass effects, each with its own subpriority, by ascending parent OBJ priority, then subpriority, then lower on-screen y (SortSprites, sprite.c:413-415), keeping a multi-OBJ sprite together and ties in player-then-template-then-effect order; npc::oam::elevated_oam_entries builds the DepthSprite for each visible bound object from its live tile, facing and settled elevation, recomputed each compose. Stubbed: upstream's object-allocation order for exact ties is not reproduced.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc/oam.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -30589,6 +30641,26 @@
       "status": "pending"
     },
     "src/field_effect_helpers.c": {
+      "artifacts": {
+        "FldEff_TallGrass": {
+          "reason": "field_effect_helpers.c:291-314. TallGrassEffects::push creates the effect on its tile with the owner's previous elevation and OBJ priority 2, drawn as a 16x16 OBJ whose top-left sits one metatile below an object event's 16x32 top (SetSpritePosToOffsetMapCoords(+8, +8), centre to corner), palette bank 6; the settled variant seeks to command 4. The effect's identity is its tile alone: the owner is always the player, so sLocalId/sMapNum/sMapGroup need no encoding.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "UpdateGrassFieldEffectSubpriority": {
+          "reason": "field_effect_helpers.c:1662-1690. TallGrassEffect::subpriority is SetObjectSubpriorityByElevation (npc::subpriority_from_bottom) plus the overlap rule against the player's and every bound object-event sprite's depth, with upstream's strict bounds and first-match break. Not modelled: object events whose graphics the scene does not bind (they draw no sprite here); an object whose graphic is not 16x32 is compared with 16x32 bounds from its parent's top-left rather than with its own centre and height.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "UpdateTallGrassFieldEffect": {
+          "reason": "field_effect_helpers.c:316-355. TallGrassEffects::advance runs the callback ahead of the animation step as AnimateSprites does (sprite.c:308-320): remove when the tile is no longer MB_TALL_GRASS, or once the owner's current and previous tiles both left it and the animation had already ended; the first-command subpriority bias; on-screen culling as UpdateObjectEventSpriteInvisibility. Not modelled: the gCamera rebasing of sX/sY across a map-edge connection (:325-330), so an in-flight effect is dropped when the scene is rebuilt for a crossing, while the crossing step's own effect starts in the entered scene; and owners other than the player.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31972,6 +32044,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsTallGrass": {
+          "reason": "metatile_behavior.c:729-734: exactly MB_TALL_GRASS, as is_tall_grass, pinned over the whole u8 id space; long grass (MB_LONG_GRASS) is a separate behaviour and is not tall grass.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsTrainerHillTimer": {
           "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -33294,6 +33372,116 @@
       "status": "pending"
     },
     "src/starter_choose.c": {
+      "artifacts": {
+        "CB2_ChooseStarter": {
+          "reason": "starter_choose.c:374-463: StarterChooserScene::from_pack builds the chooser with Torchic selected: the bag and grass BGs at their priorities, the standard border and message palette, the ball/hand and circle sheets, the black fade-in (NormalPaletteFade::begin_in), the label window with darkening inside it and no effects outside, and the hand and three balls. Native owned resources replace the hardware register and VRAM reset sequence.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CB2_StarterChoose": {
+          "reason": "starter_choose.c:465-472: StarterChooserScene::step runs one task handler, then the sprite callbacks and animations, then the palette fade update, in upstream's order. A handler that installs its successor does not run it until the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "ClearStarterLabel": {
+          "reason": "starter_choose.c:606-615: clearing removes the label text and empties WIN0, so no darkening remains.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreatePokemonFrontSprite": {
+          "reason": "starter_choose.c:629-636: the preview is the species' normal front art as a 64x64 affine-normal OBJ at palette bank 14 and priority 0, drawn ahead of the circle. No Pokémon is created.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreateStarterPokemonLabel": {
+          "reason": "starter_choose.c:570-604: the label draws the Pokédex category plus POKéMON in the narrow font and the species name in the normal font, each centred in 104 pixels, in the palette's white and light-gray shadow on a transparent window, and sets WIN0 to the window grown by half a tile (the byte registers wrap, so Treecko's left edge is 252). The three category strings are constants because the pack carries no Pokédex payload.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/text.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "GetStarterPokemon": {
+          "reason": "starter_choose.c:350-356: StarterChoice::species_id maps the three chooser positions (Treecko, Torchic, Mudkip) to their species. The raw u16 ordinal API is not exposed, so upstream's clamp of values above 3 to Treecko and its out-of-range read at 3 have no equivalent.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "SpriteCB_Pokeball": {
+          "reason": "starter_choose.c:647-654 and the animation tables at :211-265: the selected ball plays its 128-frame sheet-frame loop, restarting only when its selection changes; the other balls hold sheet frame 0. Ball coordinates never move.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_SelectionHand": {
+          "reason": "starter_choose.c:638-645: the hand follows the selected ball's cursor position and floats by Sin(phase, 8) with the phase advancing 4 per frame, a 64-frame period that never resets across moves, previews or cancels.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_StarterPokemon": {
+          "reason": "starter_choose.c:656-667 and the affine tables at :267-282: the Pokémon and circle step toward (120, 64) by 4 horizontally and 2 vertically per frame from their creation frame, with the circle's and picture's affine scales ramping to 320/256 and 256/256 over 16 frames.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_AskConfirmStarter": {
+          "reason": "starter_choose.c:528-536: the confirmation text, the YES/NO menu with the cursor on YES and a normal-cry request for the selected species at pan zero are produced on their upstream frame. The cry is a typed StarterSoundRequest; nothing plays it yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_CreateStarterLabel": {
+          "reason": "starter_choose.c:623-627: the new label is drawn on its own input-free frame before the input handler runs again.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_DeclineStarter": {
+          "reason": "starter_choose.c:565-568: the decline frame only reinstalls the draw task, so the selection screen returns two frames after the cancel and accepts input on the third.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_HandleConfirmStarterInput": {
+          "reason": "starter_choose.c:538-563 with menu.c Menu_ProcessInputNoWrapClearOnChoose: A, B, Up and Down are polled in that priority with a nonwrapping cursor. YES returns the typed StarterChoice, and NO or B destroys the preview and returns to the selection after the Select requests upstream makes (two for A on NO). The write to gSpecialVar_Result and the return to the saved callback belong to the caller, which the ChooseStarter script binding does not yet supply (tracked by #1605); nothing plays the sounds yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_HandleStarterChooseInput": {
+          "reason": "starter_choose.c:484-516: a fresh A clears the label and creates the circle and Pokémon preview at the selected ball; otherwise a fresh Left or Right moves the selection without wrapping, each test guarded by its bound, so A outranks Left outranks Right. No sound plays, and the entry fade does not gate input.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_MoveStarterChooseCursor": {
+          "reason": "starter_choose.c:617-621: a moved selection clears the old label on its own input-free frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_StarterChoose": {
+          "reason": "starter_choose.c:474-482: DrawSelection opens the selected starter's label and the instruction window (PROF. BIRCH is in trouble!), then installs the input handler for the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_WaitForStarterSprite": {
+          "reason": "starter_choose.c:518-526: the confirmation is scheduled only once the circle's affine animation has ended and it sits at the preview target, which the task sees on the frame after the animation's last step.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "VblankCB_StarterChoose": {
+          "reason": "starter_choose.c:358-363: StarterChooserScene::compose publishes the current OAM, palettes and tiles as an owned frame on demand. The VBlank interrupt, OAM DMA and the sprite-copy and palette-transfer queues are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/graphics.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
