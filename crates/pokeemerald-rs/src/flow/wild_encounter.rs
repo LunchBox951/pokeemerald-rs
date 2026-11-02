@@ -46,6 +46,14 @@ use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
 
+/// Marks `lead` traded when its OT id differs from the save owner's -- the
+/// id half of `IsOtherTrainer` (`pokemon.c:6611-6620`); a lead the save
+/// boundary already classified traded by OT name stays so.
+pub(super) fn classify_traded_lead(lead: BattlePokemon, player_trainer_id: u32) -> BattlePokemon {
+    let traded = lead.is_traded_recipient() || lead.original_trainer_id() != player_trainer_id;
+    lead.with_traded_recipient(traded)
+}
+
 pub(super) struct SharedRng<'a>(&'a mut Rng);
 
 impl<'a> SharedRng<'a> {
@@ -195,6 +203,7 @@ pub(super) fn start_wild_battle_with_lead_effects(
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
     ensure_lead_can_battle(&player_lead)?;
+    let player_lead = classify_traded_lead(player_lead, player_trainer_id);
     let dex = Dex::new();
     let wild_moves = battle::initial_moveset(encounter.species, encounter.level);
     let wild_opponent = battle::build_wild_pokemon(
@@ -254,6 +263,8 @@ mod first_battle_recovery_tests;
 mod full_party_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod traded_lead_tests;
 #[cfg(test)]
 mod warp_precedence_tests;
 #[cfg(test)]
