@@ -410,6 +410,57 @@ mod tests {
         ));
     }
 
+    /// Runs one `accuracy_check` at `-1` accuracy stage with a fixed roll and
+    /// returns the outcome together with the number of RNG draws consumed.
+    fn check_at_minus_one_stage(base_accuracy: u8, ability: AbilityId, roll: u16) -> (bool, u32) {
+        // The roll is `draw % 100 + 1`, so draw `roll - 1` yields `roll`.
+        let mut rng = CountingRng {
+            value: roll - 1,
+            draws: 0,
+        };
+        let hit = accuracy_check(
+            base_accuracy,
+            MoveEffect::HIT,
+            ORDINARY_MOVE_TYPE,
+            ability,
+            StatStage::new(-1).unwrap(),
+            StatStage::NEUTRAL,
+            &mut rng,
+        );
+        (hit, rng.draws)
+    }
+
+    #[test]
+    fn compound_eyes_applies_to_the_truncated_stage_adjusted_threshold() {
+        // Upstream truncates the stage ratio first, then the ability:
+        // floor(70 * 75 / 100) = 52, floor(52 * 130 / 100) = 67.
+        // Ability-first gives floor(91 * 75 / 100) = 68 and a single fraction
+        // gives floor(70 * 75 * 130 / 10000) = 68, so roll 68 separates them.
+        assert_eq!(
+            check_at_minus_one_stage(70, AbilityId::COMPOUND_EYES, 67),
+            (true, 1)
+        );
+        assert_eq!(
+            check_at_minus_one_stage(70, AbilityId::COMPOUND_EYES, 68),
+            (false, 1)
+        );
+    }
+
+    #[test]
+    fn hustle_applies_to_the_truncated_stage_adjusted_threshold() {
+        // floor(55 * 75 / 100) = 41, then floor(41 * 80 / 100) = 32.
+        // Ability-first gives floor(44 * 75 / 100) = 33 and a single fraction
+        // gives floor(55 * 75 * 80 / 10000) = 33, so roll 33 separates them.
+        assert_eq!(
+            check_at_minus_one_stage(55, AbilityId::HUSTLE, 32),
+            (true, 1)
+        );
+        assert_eq!(
+            check_at_minus_one_stage(55, AbilityId::HUSTLE, 33),
+            (false, 1)
+        );
+    }
+
     #[test]
     fn hustle_does_not_affect_a_special_move() {
         let special_move_type = MoveType::Battle(Type::Water);
