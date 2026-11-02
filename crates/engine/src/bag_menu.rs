@@ -1317,6 +1317,220 @@ mod tests {
         );
     }
 
+    /// Sparse, unsorted TM/HM and berry pockets with distinct quantities. Every
+    /// sorted display position differs from its source slot, except where a
+    /// test removes an entry on purpose.
+    ///
+    /// TM/HM display order (slot): Focus Punch (6), Dragon Claw (9), Roar (3),
+    /// Cut (4). Berry display order (slot): Cheri (3), Pecha (5), Aspear (0).
+    fn sparse_sorted_bag() -> Bag {
+        let mut bag = Bag::default();
+        bag.tms_hms[3] = slot(ItemId::TM_ROAR, 4);
+        bag.tms_hms[4] = slot(ItemId::HM_CUT, 1);
+        bag.tms_hms[6] = slot(ItemId::TM_FOCUS_PUNCH, 3);
+        bag.tms_hms[9] = slot(ItemId::TM_DRAGON_CLAW, 2);
+        bag.berries[0] = slot(ItemId::ASPEAR_BERRY, 8);
+        bag.berries[3] = slot(ItemId::CHERI_BERRY, 5);
+        bag.berries[5] = slot(ItemId::PECHA_BERRY, 11);
+        bag
+    }
+
+    fn selection(
+        item: ItemId,
+        pocket: Pocket,
+        slot: usize,
+        list_position: usize,
+        quantity: u16,
+    ) -> BagSelection {
+        BagSelection {
+            item,
+            pocket,
+            slot,
+            list_position,
+            quantity,
+        }
+    }
+
+    #[test]
+    fn field_context_action_on_a_sorted_row_carries_its_source_slot() {
+        use BagMenuInput::{Confirm, Down, Right};
+        let bag = sparse_sorted_bag();
+        let before = bag.to_bytes(KEY);
+
+        // Roar is third in the sorted TM/HM list but sits in slot 3.
+        let mut menu = open(&bag, BagMenuMode::Field);
+        press(&mut menu, &[Right, Right, Down, Down]);
+        assert_eq!(menu.pocket(), Pocket::TmHm);
+        assert_eq!(menu.handle_input(Confirm), None);
+        assert_eq!(menu.context_actions().unwrap().0, [Use, Give, Cancel]);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: Use,
+                selection: selection(ItemId::TM_ROAR, Pocket::TmHm, 3, 2, 4),
+            })
+        );
+
+        // Dragon Claw is second in the sorted list but sits in slot 9.
+        let mut menu = open(&bag, BagMenuMode::Field);
+        press(&mut menu, &[Right, Right, Down]);
+        menu.handle_input(Confirm);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: Use,
+                selection: selection(ItemId::TM_DRAGON_CLAW, Pocket::TmHm, 9, 1, 2),
+            })
+        );
+
+        // Aspear is last in the sorted berry list but sits in slot 0.
+        let mut menu = open(&bag, BagMenuMode::Field);
+        press(&mut menu, &[Right, Right, Right, Down, Down]);
+        assert_eq!(menu.pocket(), Pocket::Berries);
+        assert_eq!(menu.handle_input(Confirm), None);
+        assert_eq!(
+            menu.context_actions().unwrap().0,
+            [CheckTag, Use, Give, Toss, Cancel]
+        );
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: CheckTag,
+                selection: selection(ItemId::ASPEAR_BERRY, Pocket::Berries, 0, 2, 8),
+            })
+        );
+
+        // Cheri is first in the sorted list but sits in slot 3.
+        let mut menu = open(&bag, BagMenuMode::Field);
+        press(&mut menu, &[Right, Right, Right]);
+        menu.handle_input(Confirm);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: CheckTag,
+                selection: selection(ItemId::CHERI_BERRY, Pocket::Berries, 3, 0, 5),
+            })
+        );
+
+        assert_eq!(bag.to_bytes(KEY), before);
+    }
+
+    #[test]
+    fn fixed_pocket_selects_each_sorted_row_with_its_source_slot() {
+        use BagMenuInput::{Confirm, Down};
+        let bag = sparse_sorted_bag();
+        let before = bag.to_bytes(KEY);
+        let cases = [
+            (
+                Pocket::TmHm,
+                vec![
+                    selection(ItemId::TM_FOCUS_PUNCH, Pocket::TmHm, 6, 0, 3),
+                    selection(ItemId::TM_DRAGON_CLAW, Pocket::TmHm, 9, 1, 2),
+                    selection(ItemId::TM_ROAR, Pocket::TmHm, 3, 2, 4),
+                    selection(ItemId::HM_CUT, Pocket::TmHm, 4, 3, 1),
+                ],
+            ),
+            (
+                Pocket::Berries,
+                vec![
+                    selection(ItemId::CHERI_BERRY, Pocket::Berries, 3, 0, 5),
+                    selection(ItemId::PECHA_BERRY, Pocket::Berries, 5, 1, 11),
+                    selection(ItemId::ASPEAR_BERRY, Pocket::Berries, 0, 2, 8),
+                ],
+            ),
+        ];
+        for (pocket, expected) in cases {
+            for (position, &want) in expected.iter().enumerate() {
+                let mut menu = open(&bag, BagMenuMode::FixedPocket(pocket));
+                for _ in 0..position {
+                    menu.handle_input(Down);
+                }
+                assert_eq!(
+                    menu.handle_input(Confirm),
+                    Some(BagMenuOutcome::Selected(want)),
+                    "{pocket:?} row {position}"
+                );
+            }
+        }
+        assert_eq!(bag.to_bytes(KEY), before);
+    }
+
+    #[test]
+    fn refresh_after_removing_an_earlier_sorted_row_selects_the_new_row() {
+        use BagMenuInput::{Confirm, Down, Right, Up};
+        let mut bag = sparse_sorted_bag();
+        let mut menu = open(&bag, BagMenuMode::Field);
+        press(&mut menu, &[Right, Right, Down, Down]);
+        menu.handle_input(Confirm);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: Use,
+                selection: selection(ItemId::TM_ROAR, Pocket::TmHm, 3, 2, 4),
+            })
+        );
+
+        // Focus Punch, the first displayed row, is used up. The cursor stays on
+        // display row 2, which is now Cut rather than the stale Roar.
+        bag.tms_hms[6] = ItemSlot::default();
+        let before = bag.to_bytes(KEY);
+        menu.refresh(&bag, None, false);
+        assert_eq!(
+            menu.stacks().iter().map(|s| s.slot).collect::<Vec<_>>(),
+            [9, 3, 4]
+        );
+        menu.handle_input(Confirm);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: Use,
+                selection: selection(ItemId::HM_CUT, Pocket::TmHm, 4, 2, 1),
+            })
+        );
+
+        // Roar moved up one display row but keeps slot 3.
+        menu.refresh(&bag, None, false);
+        menu.handle_input(Up);
+        menu.handle_input(Confirm);
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Action {
+                action: Use,
+                selection: selection(ItemId::TM_ROAR, Pocket::TmHm, 3, 1, 4),
+            })
+        );
+        assert_eq!(bag.to_bytes(KEY), before);
+    }
+
+    #[test]
+    fn fixed_pocket_refresh_after_removing_an_earlier_berry_selects_the_new_row() {
+        use BagMenuInput::{Confirm, Down};
+        let mut bag = sparse_sorted_bag();
+        let mut menu = open(&bag, BagMenuMode::FixedPocket(Pocket::Berries));
+        menu.handle_input(Down);
+
+        // Cheri, the first displayed row, is used up while the cursor rests on
+        // display row 1. That row is now Aspear in slot 0, not the stale Pecha.
+        bag.berries[3] = ItemSlot::default();
+        let before = bag.to_bytes(KEY);
+        menu.refresh(&bag, None, false);
+        assert_eq!(
+            menu.stacks().iter().map(|s| s.slot).collect::<Vec<_>>(),
+            [5, 0]
+        );
+        assert_eq!(
+            menu.handle_input(Confirm),
+            Some(BagMenuOutcome::Selected(selection(
+                ItemId::ASPEAR_BERRY,
+                Pocket::Berries,
+                0,
+                1,
+                8
+            )))
+        );
+        assert_eq!(bag.to_bytes(KEY), before);
+    }
+
     #[test]
     fn every_pocket_selects_its_own_first_stack() {
         let bag = sample_bag();
