@@ -66,7 +66,7 @@
 //! - `title/{image,palette,raw}/<name>`
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
 //! - `layout/<name>/{map,border}`
-//! - `font/<name>/glyphs`
+//! - `font/<name>/glyphs` and `font/keypad_icons`
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
