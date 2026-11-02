@@ -3,7 +3,10 @@
 //! [`rendering::SpriteLayer`] accepts one tileset and palette. Player walking
 //! frames occupy the first tile block; distinct NPC sheets follow, then the
 //! player's running frames, then the tall-grass effect's cells, with palette
-//! banks assigned by [`npc::build_combined_palette`].
+//! banks assigned by [`npc::build_combined_palette`]. This combined sheet is
+//! the scene's ROM-side image store; composing stages only the drawn frames
+//! into OBJ VRAM (`super::obj_vram`), so its size is not bound by the ten-bit
+//! OBJ tile field.
 
 use std::collections::HashMap;
 

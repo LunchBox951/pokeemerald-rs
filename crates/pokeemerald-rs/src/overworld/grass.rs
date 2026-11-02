@@ -21,6 +21,8 @@
 
 use assets::pack::{AssetPack, PaletteRef};
 use assets::{ImageRef, PackError};
+#[cfg(test)]
+use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
 use engine::overworld::{PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
@@ -409,6 +411,21 @@ impl OverworldScene {
     #[cfg(test)]
     pub(crate) fn tall_grass_first_tile(&self) -> Option<u16> {
         self.sprites.grass_base_tile()
+    }
+
+    /// The OBJ VRAM one composed frame stages for these entries: the tile
+    /// count it occupies and the entries dropped for exceeding the limit.
+    #[cfg(test)]
+    pub(crate) fn staged_obj_vram(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> (usize, usize) {
+        let staged = super::obj_vram::stage(
+            &self.sprite_entries(player, event_data),
+            self.sprites.tiles(),
+        );
+        (staged.tiles.len(), staged.dropped)
     }
 }
 

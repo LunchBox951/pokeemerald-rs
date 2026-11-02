@@ -327,28 +327,76 @@ fn a_pack_without_the_field_effect_sheet_draws_no_grass() {
 }
 
 /// The `OBJ` tile-number field is ten bits wide.
-const OBJ_TILE_LIMIT: u16 = 1024;
+const OBJ_TILE_LIMIT: usize = 1024;
 
+fn checkpoint_scene(
+    map: &'static str,
+    gender: engine::save::PlayerGender,
+) -> (
+    crate::overworld::OverworldScene,
+    engine::event_data::EventData,
+) {
+    let map = MapId(map);
+    let event_data = super::connections::map_entry_event_data(
+        &engine::event_data::EventData::new(),
+        map,
+        gender,
+    );
+    let scene = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        map,
+        crate::overworld::PlayerCharacter::from(gender),
+        &event_data,
+    )
+    .expect("run `cargo xtask extract` first");
+    (scene, event_data)
+}
+
+/// Route 103 resolves twelve NPC sheets beside the player's walking and
+/// running sheets, so its combined sheet already exceeds the OBJ tile field
+/// before the effect's cells; composing stages only the drawn frames.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn every_checkpoint_scene_of_the_real_pack_fits_the_effect_cells_in_obj_tile_space() {
+fn every_checkpoint_scene_of_the_real_pack_stages_its_sprites_in_obj_tile_space() {
+    use engine::save::PlayerGender;
     for map in [
         "MAP_LITTLEROOT_TOWN",
         "MAP_ROUTE101",
         "MAP_OLDALE_TOWN",
         "MAP_ROUTE103",
     ] {
-        let scene = crate::overworld::load_room_from_source(
-            &crate::pack_source::PackSource::Repo,
-            MapId(map),
-            crate::overworld::PlayerCharacter::Brendan,
-            &engine::event_data::EventData::new(),
-        )
-        .expect("run `cargo xtask extract` first");
+        for gender in [PlayerGender::Male, PlayerGender::Female] {
+            let (scene, event_data) = checkpoint_scene(map, gender);
+            assert!(
+                scene.tall_grass_first_tile().is_some(),
+                "the pack has the sheet"
+            );
+            let player = PlayerState::new((8, 8), GROUND, Direction::South);
+            let (staged, dropped) = scene.staged_obj_vram(&player, &event_data);
+            assert_eq!(dropped, 0, "{map} {gender:?}: {staged} staged tiles");
+            assert!(staged <= OBJ_TILE_LIMIT, "{map} {gender:?}: {staged}");
+        }
+    }
+}
+
+/// On Route 103 the effect's cells sit past tile 1024 of the combined sheet;
+/// every rustle frame must still stage inside the OBJ tile field.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn route_103_grass_rustle_frames_stage_inside_the_obj_tile_field() {
+    use engine::save::PlayerGender;
+    for gender in [PlayerGender::Male, PlayerGender::Female] {
+        let (scene, event_data) = checkpoint_scene("MAP_ROUTE103", gender);
         let first = scene
             .tall_grass_first_tile()
             .expect("the pack has the sheet");
-        assert!(first + 5 * CELL_TILES <= OBJ_TILE_LIMIT, "{map}: {first}");
+        assert!(
+            usize::from(first) + 5 * usize::from(CELL_TILES) > OBJ_TILE_LIMIT,
+            "{gender:?}: premise, the combined sheet overflows at {first}"
+        );
+        let player = PlayerState::new((8, 8), GROUND, Direction::South);
+        let (staged, dropped) = scene.staged_obj_vram(&player, &event_data);
+        assert_eq!(dropped, 0, "{gender:?}: {staged} staged tiles");
     }
 }
 

@@ -81,6 +81,7 @@ pub(crate) mod dialog;
 mod grass;
 mod npc;
 pub(crate) mod npc_scripts;
+mod obj_vram;
 pub(crate) mod oldale_town_npc_reposition;
 mod sprites;
 mod tileset_anims;
@@ -698,10 +699,18 @@ impl OverworldScene {
             ),
         ];
 
+        // Upstream copies only each sprite's current frame into OBJ VRAM, so
+        // the ten-bit tile field bounds the frame's drawn sprites, not the
+        // map's resolved sheets (`obj_vram`).
+        let staged = obj_vram::stage(sprite_entries, self.sprites.tiles());
+        debug_assert_eq!(
+            staged.dropped, 0,
+            "a checkpoint frame's sprites fit in OBJ VRAM"
+        );
         let sprites = SpriteLayer::new(
-            sprite_entries,
-            self.sprites.tiles(),
-            self.sprites.tiles(),
+            &staged.entries,
+            &staged.tiles,
+            &staged.tiles,
             self.sprites.palette(),
         )
         .with_hblank_free_interval(true);
