@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.85.0] - 2026-10-31
+## [0.0.86.0] - 2026-11-02
 
 - Walking through tall grass now shows the grass rustling effect under and around the player.
+
+## [0.0.85.0] - 2026-10-31
+
+- General improvements in preparation for choosing your starter from Birch's bag: moving the hand between the three Poké Balls, previewing Treecko, Torchic or Mudkip, and confirming with YES or NO.
 
 ## [0.0.84.0] - 2026-10-30
 
@@ -402,7 +406,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...dev
+[0.0.86.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/356953c4e5f81486e29332ddc619f92197be714c...dev
+[0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...356953c4e5f81486e29332ddc619f92197be714c
 [0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...f8b898c347008d4fe0b0de110644b684c52e4808
 [0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5f95606fc87e5a6ed148063bbb1ff44d2f8c234a...86a3bf584936f2e61d6b7f04590526afb7fced4a
 [0.0.82.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/91908af79c336519262ccf09e582f2e474451261...5f95606fc87e5a6ed148063bbb1ff44d2f8c234a
