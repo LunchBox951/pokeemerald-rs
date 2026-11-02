@@ -2,12 +2,14 @@
 
 use engine::bag_menu::{BagContextGrid, BagMenuRow, BROWSE_ORDER, POCKET_COUNT};
 use engine::text::render::RevealedGlyph;
-use rendering::{Framebuffer, Rgb888};
+use rendering::{Framebuffer, PaletteStage, Rgb888};
+
+use crate::palette_overlay::stage_overlay;
 
 use super::chrome::width_of;
 use super::labels;
 use super::swap::ItemSwap;
-use super::{BagScreen, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
+use super::{BagScreen, BagScreenResult, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
 /// The list window's content rectangle, in pixels (`sDefaultBagWindows`,
 /// `item_menu.c:393-402`: 15x16 tiles at tile (14, 2)).
@@ -111,29 +113,61 @@ const SWAP_LINE_BODY_ROW: usize = 16;
 
 impl BagScreen {
     /// Composites the screen over `base`, whose pixels show wherever the
-    /// screen's graphics are transparent. A closed screen draws nothing.
-    pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
-        if self.done.is_some() {
-            return base;
-        }
-        self.chrome.draw_background(&mut base);
+    /// screen's graphics are transparent, under `palette`. A closed screen
+    /// still draws: it is the source of the fade to black that follows the
+    /// close (`Task_FadeAndCloseBagMenu`, `item_menu.c:1074-1099`).
+    ///
+    /// Each group of drawing is staged by the bank it lives in upstream:
+    /// the tilemap, text and windows are BG; the bag, item picture, pocket
+    /// ball, swap line and scroll arrows are sprites (`item_menu_icons.c`).
+    /// `base` is taken as already staged.
+    pub(crate) fn compose_over(
+        &self,
+        mut base: Framebuffer,
+        palette: PaletteStage<'_>,
+    ) -> Framebuffer {
+        let bg = |base: &mut Framebuffer, draw: &dyn Fn(&mut Framebuffer)| {
+            stage_overlay(base, palette.bg, draw);
+        };
+        let obj = |base: &mut Framebuffer, draw: &dyn Fn(&mut Framebuffer)| {
+            stage_overlay(base, palette.obj, draw);
+        };
+        bg(&mut base, &|fb| self.chrome.draw_background(fb));
         if let Some(switch) = self.switch {
-            self.draw_switching(&mut base, switch);
+            self.stage_switching(&mut base, switch, palette);
             return base;
         }
         let current = self.pocket_index();
-        self.chrome
-            .draw_bag(&mut base, BAG_ORIGIN, BAG_FRAMES[current]);
-        self.draw_pocket_indicators(&mut base, current);
-        self.draw_pocket_names(&mut base, (current, None), 0);
-        self.draw_list(&mut base);
-        self.draw_selection(&mut base);
-        if let Some(grid) = self.menu.context_grid() {
-            self.draw_context(&mut base, &grid);
-        }
-        self.draw_swap_line(&mut base);
-        self.draw_scroll_arrows(&mut base);
+        obj(&mut base, &|fb| {
+            self.chrome.draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current]);
+        });
+        bg(&mut base, &|fb| {
+            self.draw_pocket_indicators(fb, current);
+            self.draw_pocket_names(fb, (current, None), 0);
+            self.draw_list(fb);
+        });
+        obj(&mut base, &|fb| self.draw_selection_icon(fb));
+        bg(&mut base, &|fb| {
+            self.draw_selection_text(fb);
+            if let Some(grid) = self.menu.context_grid() {
+                self.draw_context(fb, &grid);
+            }
+        });
+        obj(&mut base, &|fb| {
+            self.draw_swap_line(fb);
+            self.draw_scroll_arrows(fb);
+        });
         base
+    }
+
+    /// Whether the screen is closed by a choice made on the list, which
+    /// grays the cursor and destroys the scroll arrows before the fade
+    /// (`item_menu.c:1260-1268`).
+    pub(super) const fn chose_to_close(&self) -> bool {
+        matches!(
+            self.done,
+            Some(BagScreenResult::Item(_) | BagScreenResult::Ball(_))
+        )
     }
 
     pub(super) fn pocket_index(&self) -> usize {
@@ -147,26 +181,35 @@ impl BagScreen {
     /// the bag bobbing, the ball turning, and the names sliding across. The
     /// engine is still on the pocket being left, so the destination is
     /// worked out from it.
-    fn draw_switching(&self, fb: &mut Framebuffer, switch: PocketSwitch) {
+    fn stage_switching(
+        &self,
+        base: &mut Framebuffer,
+        switch: PocketSwitch,
+        palette: PaletteStage<'_>,
+    ) {
         let current = self.pocket_index();
         let destination = match switch.direction {
             SwitchDirection::Left => (current + POCKET_COUNT - 1) % POCKET_COUNT,
             SwitchDirection::Right => (current + 1) % POCKET_COUNT,
         };
-        self.draw_list_wipe(fb, switch.ticks);
-        self.draw_switching_bag(fb, switch.ticks, destination);
-        self.draw_pocket_indicators(fb, destination);
-        let slid = i32::from(switch.ticks.min(SWITCH_WIPE_TICKS) / 2);
-        match switch.direction {
-            SwitchDirection::Right => {
-                self.draw_pocket_names(fb, (current, Some(destination)), slid * NAME_TILE);
+        stage_overlay(base, palette.bg, |fb| self.draw_list_wipe(fb, switch.ticks));
+        stage_overlay(base, palette.obj, |fb| {
+            self.draw_switching_bag(fb, switch.ticks, destination);
+        });
+        stage_overlay(base, palette.bg, |fb| {
+            self.draw_pocket_indicators(fb, destination);
+            let slid = i32::from(switch.ticks.min(SWITCH_WIPE_TICKS) / 2);
+            match switch.direction {
+                SwitchDirection::Right => {
+                    self.draw_pocket_names(fb, (current, Some(destination)), slid * NAME_TILE);
+                }
+                SwitchDirection::Left => {
+                    let offset = (NAME_SLIDE_TILES - slid) * NAME_TILE;
+                    self.draw_pocket_names(fb, (destination, Some(current)), offset);
+                }
             }
-            SwitchDirection::Left => {
-                let offset = (NAME_SLIDE_TILES - slid) * NAME_TILE;
-                self.draw_pocket_names(fb, (destination, Some(current)), offset);
-            }
-        }
-        self.draw_rotating_ball(fb, switch);
+        });
+        stage_overlay(base, palette.obj, |fb| self.draw_rotating_ball(fb, switch));
     }
 
     fn draw_list_wipe(&self, fb: &mut Framebuffer, ticks: u8) {
@@ -267,7 +310,7 @@ impl BagScreen {
         }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
         let arrow = self.chrome.normal_text(SELECTOR_ARROW);
-        let cursor_colors = if self.menu.context_grid().is_some() {
+        let cursor_colors = if self.menu.context_grid().is_some() || self.chose_to_close() {
             self.chrome.gray_cursor_colors()
         } else {
             colors
@@ -345,9 +388,26 @@ impl BagScreen {
         }
     }
 
-    /// The icon and description of the highlighted row: the close row's
-    /// arrow and return text when the cursor is on it.
-    fn draw_selection(&self, fb: &mut Framebuffer) {
+    /// The item picture of the highlighted row, or of the picked-up item
+    /// while swapping: the close row's arrow when the cursor is on it.
+    fn draw_selection_icon(&self, fb: &mut Framebuffer) {
+        let item = self
+            .swap()
+            .map(|swap| swap.item)
+            .or_else(|| self.highlighted_item());
+        if let Some(icon) = self.chrome.icon(item) {
+            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
+        }
+    }
+
+    fn highlighted_item(&self) -> Option<assets::items::ItemId> {
+        let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
+        self.menu.stacks().get(position).map(|stack| stack.item)
+    }
+
+    /// The description of the highlighted row: the return text when the
+    /// cursor is on the close row.
+    fn draw_selection_text(&self, fb: &mut Framebuffer) {
         if let Some(swap) = self.swap() {
             // The icon and description stay on the picked-up item, which
             // `BagMenu_MoveCursorCallback` does not update while swapping
@@ -355,14 +415,10 @@ impl BagScreen {
             let name = assets::items::ItemDisplayTable::new()
                 .get(swap.item)
                 .map_or("?", |data| data.name);
-            self.draw_icon_and_description(fb, Some(swap.item), &labels::move_prompt(name));
+            self.draw_description(fb, &labels::move_prompt(name));
             return;
         }
-        let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
-        let item = self.menu.stacks().get(position).map(|stack| stack.item);
-        if let Some(icon) = self.chrome.icon(item) {
-            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
-        }
+        let item = self.highlighted_item();
         if self.menu.context_grid().is_some() && self.menu.pocket() == assets::items::Pocket::TmHm {
             // The TM/HM pocket swaps the description window for its move data
             // (`item_menu.c:1642-1648`).
@@ -371,7 +427,7 @@ impl BagScreen {
             }
             return;
         }
-        let description = if self.menu.context_grid().is_some() {
+        let description = if self.menu.context_grid().is_some() || self.closed_from_context {
             // `OpenContextMenu` swaps the description for this
             // (`item_menu.c:1651-1655`).
             let table = assets::items::ItemDisplayTable::new();
@@ -387,18 +443,10 @@ selected.",
                 labels::description,
             )
         };
-        self.draw_icon_and_description(fb, item, &description);
+        self.draw_description(fb, &description);
     }
 
-    fn draw_icon_and_description(
-        &self,
-        fb: &mut Framebuffer,
-        item: Option<assets::items::ItemId>,
-        description: &str,
-    ) {
-        if let Some(icon) = self.chrome.icon(item) {
-            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
-        }
+    fn draw_description(&self, fb: &mut Framebuffer, description: &str) {
         let text = self.chrome.normal_text(description);
         draw_glyphs(
             fb,
