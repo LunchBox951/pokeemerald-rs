@@ -294,6 +294,13 @@ impl<H: OutputHost> Transport<H> {
             }
             if result.is_ok() {
                 live.playing = want;
+                if want {
+                    // This stream applied the start `want` read, so it is no
+                    // missed playback when the stream is later retired. Read
+                    // after `want`, which saw that start's count; a later
+                    // start finds this stream already playing.
+                    self.seen_starts = self.shared.starts.load(Ordering::Acquire);
+                }
             } else if want || lost {
                 // A failed `play` of a started stream means nothing queued
                 // since the start was drained, even when a `stop` landed
@@ -446,6 +453,9 @@ impl<H: OutputHost> Transport<H> {
         // A built stream is paused, so only a started transport plays it.
         if playing {
             stream.play().map_err(|_| TransportFailure::ConnectFailed)?;
+            // A start that landed after the intent read is applied by this
+            // stream too; only a first attach can get here with one.
+            self.seen_starts = self.shared.starts.load(Ordering::Acquire);
         }
         let done = self.finished(now);
         self.shared

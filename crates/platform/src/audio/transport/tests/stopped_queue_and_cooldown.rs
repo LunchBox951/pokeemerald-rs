@@ -253,3 +253,32 @@ fn a_start_and_stop_that_land_after_a_paused_stream_dies_discard_history_through
         "history queued while started is discarded; the stopped queue is kept"
     );
 }
+
+#[test]
+fn a_start_applied_to_an_attached_stream_keeps_the_queue_across_a_refused_pause() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.no_hw_pause = true;
+    });
+    let mut rig = rig(&w, 4);
+    // Attached while stopped, then started through `start`, which the
+    // attached stream applies with a successful `play`.
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(20));
+    assert_eq!(with(&w).plays, 1);
+
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    // `stop`: the pause is refused, so the worker rebuilds a paused stream.
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(40));
+    rig.transport.step(MS(140));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(rig.events(), []);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 4,
+        "a start the attached stream applied is no missed playback"
+    );
+}

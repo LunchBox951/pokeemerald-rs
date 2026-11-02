@@ -23,8 +23,10 @@ struct Callbacks {
     error: Box<dyn FnMut(cpal::Error) + Send>,
 }
 
-// A fake host world: independent failure switches, not a state machine.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a fake host world: independent failure switches, not a state machine"
+)]
 #[derive(Default)]
 struct World {
     default: Option<String>,
