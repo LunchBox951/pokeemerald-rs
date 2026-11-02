@@ -33,6 +33,8 @@
 //! - the static battler art of Treecko, Torchic, and Mudkip: front and back
 //!   images with normal and shiny palettes;
 //! - the Brendan and May trainer front pictures with their palettes;
+//! - the Brendan and May trainer battlers: front picture, four-frame back
+//!   sheet and the palette both share;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -48,8 +50,10 @@
 //!   templates `BufferStringBattle` selects); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
-//! - the battle-animation catalog (`data/battle_anim_scripts.s`); and
-//! - the sheet and palette of every battle-effect sprite a catalog program loads.
+//! - the battle-animation catalog (`data/battle_anim_scripts.s`);
+//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
+//! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
+//!   sheet.
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -67,6 +71,7 @@
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
+//! - `evolution-scene/{image,palette,raw}/<name>`
 //! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `battle-interface/{image,palette,raw}/<name>` and
@@ -78,6 +83,7 @@
 //! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `poke-ball/{image,palette}/<name>`
 //! - `field-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `battle-anim/catalog`
@@ -99,6 +105,7 @@ mod bundled_inventory_tests;
 mod checkpoint_maps_tests;
 pub(crate) mod cry;
 mod error;
+mod evolution_scene;
 mod field_message;
 mod fonts;
 pub mod inflate;
@@ -110,6 +117,8 @@ pub(crate) mod midi;
 mod naming_screen;
 mod opening_scene;
 pub mod png;
+pub(crate) mod poke_ball;
+mod pokedex;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
@@ -119,6 +128,7 @@ mod text_source;
 mod text_window;
 mod tilesets;
 mod title;
+mod trainer_battler;
 mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
@@ -187,12 +197,14 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
     trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
+    trainer_battler::extract_trainer_battlers(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     opening_scene::extract_opening_scene(&upstream, &mut writer)?;
+    evolution_scene::extract_evolution_scene(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
@@ -208,6 +220,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
+    poke_ball::extract_poke_ball(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
