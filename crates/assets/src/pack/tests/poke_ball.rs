@@ -1,7 +1,7 @@
 use super::super::{AssetPack, PackError};
 use super::shared::{
-    image_meta, pack_bytes, write_pack, Entry, IMAGE_KIND_TAG, INDEXED_8_BIT, PALETTE_KIND_TAG,
-    RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
+    image_meta, pack_bytes, write_pack, Entry, PackFixture, IMAGE_KIND_TAG, INDEXED_8_BIT,
+    PALETTE_KIND_TAG, RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
 };
 
 const SHEET: &str = "poke-ball/image/poke";
@@ -49,14 +49,14 @@ fn without(id: &str) -> Vec<Entry> {
     entries().into_iter().filter(|e| e.id != id).collect()
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, PackFixture) {
     let path = write_pack(name, &pack_bytes(entries));
     (AssetPack::load(&path).unwrap(), path)
 }
 
 #[test]
 fn the_sheet_palette_and_open_sheet_resolve_together() {
-    let (pack, path) = load("poke-ball-all", entries());
+    let (pack, _pack_file) = load("poke-ball-all", entries());
     let handle = pack.poke_ball().unwrap();
     assert_eq!(
         (handle.sheet.image.width, handle.sheet.image.height),
@@ -73,18 +73,16 @@ fn the_sheet_palette_and_open_sheet_resolve_together() {
     );
     assert_eq!(handle.open_sheet.bit_depth, 4);
     assert!(handle.open_sheet.pixels.iter().all(|&p| p == OPEN_PIXEL));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn each_missing_constituent_is_named_when_the_ball_is_requested() {
     for id in [SHEET, PALETTE, OPEN] {
-        let (pack, path) = load("poke-ball-missing", without(id));
+        let (pack, _pack_file) = load("poke-ball-missing", without(id));
         assert!(
             matches!(pack.poke_ball().unwrap_err(), PackError::UnknownAsset(missing) if missing == id),
             "{id}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -97,12 +95,11 @@ fn a_wrong_kind_constituent_is_named() {
             meta: vec![],
             payload: vec![0; 4],
         };
-        let (pack, path) = load("poke-ball-wrong-kind", replaced(id, raw));
+        let (pack, _pack_file) = load("poke-ball-wrong-kind", replaced(id, raw));
         assert!(
             matches!(pack.poke_ball().unwrap_err(), PackError::WrongKind { id: wrong, .. } if wrong == id),
             "{id}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -119,7 +116,7 @@ fn malformed_constituents_are_rejected_on_read() {
         (PALETTE, palette(32)),
     ];
     for (index, (id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("poke-ball-bad-{index}"), replaced(id, entry));
+        let (pack, _pack_file) = load(&format!("poke-ball-bad-{index}"), replaced(id, entry));
         assert!(
             matches!(
                 pack.poke_ball().unwrap_err(),
@@ -127,6 +124,5 @@ fn malformed_constituents_are_rejected_on_read() {
             ),
             "case {index}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
