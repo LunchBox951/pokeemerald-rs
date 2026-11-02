@@ -73,7 +73,8 @@ struct Variant {
 /// cannot list it), or `None` for a global root.
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
-/// `list_menu.c:290`, `text_window.c:10-28`, `text.c:117`.
+/// `list_menu.c:290`, `text_window.c:10-28`, `text.c:117`, `evolution_scene.c:71`,
+/// `evolution_graphics.c:42`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         return super::text_window::is_static_frame(stem)
@@ -88,6 +89,8 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
         "font/keypad_icons" => Some("sKeypadIconTiles".to_owned()),
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "evolution-scene/image/bg" => Some("sBgAnim_Gfx".to_owned()),
+        "evolution-scene/image/evo_sparkle" => Some("sEvoSparkle_Gfx".to_owned()),
         "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
         _ => None,
     }
@@ -127,6 +130,8 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
     match id {
+        "poke-ball/image/poke" => return vec!["gBallGfx_Poke".to_owned()],
+        "poke-ball/image/open" => return vec!["gOpenPokeballGfx".to_owned()],
         "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
         "battle-interface/image/healthbox_singles_player" => {
             return vec!["gHealthboxSinglesPlayerGfx".to_owned()];

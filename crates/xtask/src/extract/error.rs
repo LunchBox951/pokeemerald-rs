@@ -181,9 +181,23 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Poké Ball source differs from its upstream graphic's shape.
+    PokeBallAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An opening-scene source (Birch's speech scene or the wall clock) differs
     /// from its upstream graphic's shape.
     OpeningSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// An evolution-scene source differs from its upstream graphic's shape.
+    EvolutionSceneAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -196,7 +210,7 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
-    /// A trainer front picture source differs from its upstream graphic's shape.
+    /// A trainer picture source (front or back) differs from its upstream graphic's shape.
     TrainerPicAssetMismatch {
         /// Source path.
         path: PathBuf,
@@ -476,8 +490,14 @@ impl fmt::Display for ExtractError {
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
             }
+            Self::PokeBallAssetMismatch { path, detail } => {
+                write!(f, "poke-ball asset `{}` {detail}", path.display())
+            }
             Self::OpeningSceneAssetMismatch { path, detail } => {
                 write!(f, "opening-scene asset `{}` {detail}", path.display())
+            }
+            Self::EvolutionSceneAssetMismatch { path, detail } => {
+                write!(f, "evolution-scene asset `{}` {detail}", path.display())
             }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())
