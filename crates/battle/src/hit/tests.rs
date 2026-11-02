@@ -1400,9 +1400,7 @@ fn thick_fat_halves_raw_special_attack_before_stage_scaling_in_the_raw_damage_in
             attacker_pinch_boost: false,
         })
     };
-    // Correct order: halve the raw stat, then let the damage formula apply +1.
     let halve_then_scale = base_with_attack(raw_special_attack / 2, StatStage::new(1).unwrap());
-    // Reversed order: scale by +1 first, then halve; the formula sees neutral.
     let scale_then_halve = base_with_attack(
         StatStage::new(1).unwrap().apply(raw_special_attack) / 2,
         StatStage::NEUTRAL,
