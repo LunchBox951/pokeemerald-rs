@@ -52,6 +52,8 @@ mod rough_skin_contact;
 mod shed_skin;
 #[path = "turn_engine/sleep.rs"]
 mod sleep;
+#[path = "turn_engine/speed_boost.rs"]
+mod speed_boost;
 #[path = "turn_engine/speed_down_hit.rs"]
 mod speed_down_hit;
 #[path = "turn_engine/stat_changes.rs"]
