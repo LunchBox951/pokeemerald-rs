@@ -809,28 +809,6 @@ fn field_message_differences(
     differences
 }
 
-/// One difference per `ids` entry that `imported` or `checkout` lacks.
-fn missing_from_either(
-    ids: impl IntoIterator<Item = String>,
-    (imported, checkout): (
-        &BTreeMap<String, DirectoryEntry>,
-        &BTreeMap<String, DirectoryEntry>,
-    ),
-) -> Vec<String> {
-    let mut differences = Vec::new();
-    for id in ids {
-        for (what, entries) in [
-            ("the ROM backend", imported),
-            ("the checkout pack", checkout),
-        ] {
-            if !entries.contains_key(&id) {
-                differences.push(format!("{id}: {what} wrote no such entry"));
-            }
-        }
-    }
-    differences
-}
-
 /// Parse a pack's directory into an id-keyed map.
 fn index(bytes: &[u8], what: &str) -> BTreeMap<String, DirectoryEntry> {
     parse_directory(bytes)
