@@ -449,12 +449,18 @@ fn a_sheet_of_the_wrong_shape_is_rejected_without_a_partial_family() {
 
 #[test]
 fn a_palette_that_is_not_whole_banks_is_rejected() {
-    for colors in [3, 17] {
-        let fixture = Fixture::new("bank-png");
-        fixture.write("beta.png", &png(4, 8, 8, colors, GREEN, |_, _| 2));
-        let (_, detail) = mismatch_detail(fixture.rejected(&[3, 11]));
-        assert!(detail.contains(&format!("{colors} colours")), "{detail}");
-    }
+    let fixture = Fixture::new("bank-png");
+    fixture.write("beta.png", &png(4, 8, 8, 3, GREEN, |_, _| 2));
+    let (_, detail) = mismatch_detail(fixture.rejected(&[3, 11]));
+    assert!(detail.contains("3 colours"), "{detail}");
+
+    // A 4-bit image cannot carry 17 entries, so the 17-colour palette comes
+    // from an 8-bit palette-only PNG.
+    let mut fixture = Fixture::new("bank-png-wide");
+    fixture.write("wide.png", &png(8, 8, 8, 17, GREEN, |_, _| 2));
+    fixture.declarations[1] = pal_declaration("AlphaPal", &format!("{SPRITES}/wide.png"));
+    let (_, detail) = mismatch_detail(fixture.rejected(&[3]));
+    assert!(detail.contains("17 colours"), "{detail}");
     let mut fixture = Fixture::new("bank-jasc");
     fixture.declarations[1] = pal_declaration("AlphaPal", &format!("{SPRITES}/alpha.pal"));
     std::fs::write(fixture.path("alpha.pal"), jasc(17, RED)).unwrap();
