@@ -66,40 +66,7 @@ impl AssetPack {
     }
 
     fn battle_textbox_image(&self) -> Result<ImageRef<'_>, PackError> {
-        let id = format!("{IMAGE_PREFIX}/textbox");
-        let image = self.image(&id)?;
-        let fault = |detail: String| PackError::MalformedBattleInterfaceAsset {
-            id: id.clone(),
-            detail,
-        };
-        if image.bit_depth != TEXTBOX_BIT_DEPTH {
-            return Err(fault(format!(
-                "is {}-bit: expected {TEXTBOX_BIT_DEPTH}-bit",
-                image.bit_depth
-            )));
-        }
-        if image.width != TEXTBOX_SIZE || image.height != TEXTBOX_SIZE {
-            return Err(fault(format!(
-                "is {}x{}: expected {TEXTBOX_SIZE}x{TEXTBOX_SIZE}",
-                image.width, image.height
-            )));
-        }
-        if image.pixels.len() != (TEXTBOX_SIZE * TEXTBOX_SIZE) as usize {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
-        {
-            return Err(fault(format!(
-                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
-            )));
-        }
-        Ok(image)
+        self.battle_interface_bank_image("textbox", TEXTBOX_SIZE, TEXTBOX_SIZE)
     }
 
     fn battle_interface_palette(
