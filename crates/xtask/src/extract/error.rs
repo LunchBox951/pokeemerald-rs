@@ -185,6 +185,13 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An evolution-scene source differs from its upstream graphic's shape.
+    EvolutionSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler source differs from its upstream graphic's shape.
     BattlerAssetMismatch {
         /// Source path.
@@ -466,6 +473,9 @@ impl fmt::Display for ExtractError {
             }
             Self::OpeningSceneAssetMismatch { path, detail } => {
                 write!(f, "opening-scene asset `{}` {detail}", path.display())
+            }
+            Self::EvolutionSceneAssetMismatch { path, detail } => {
+                write!(f, "evolution-scene asset `{}` {detail}", path.display())
             }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())

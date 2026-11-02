@@ -6,8 +6,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan,
-    ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    EvolutionScenePlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 use super::plan::{TrainerBattlerPlan, TrainerFrontPlan};
 
@@ -73,11 +73,10 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
-    OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot,
+    MapLayoutRoot, OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot,
+    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -138,6 +137,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     bag_roots(&mut out, &plan.bag);
     starter_chooser_roots(&mut out, &plan.starter_chooser);
     opening_scene_roots(&mut out, &plan.opening_scene);
+    evolution_scene_roots(&mut out, &plan.evolution_scene);
     battle_interface_roots(&mut out, &plan.battle_interface);
 
     battler_roots(&mut out, &plan.battlers);
@@ -222,6 +222,14 @@ fn graphics_fields(
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
     let _ = writeln!(out, "        ],");
+}
+
+fn evolution_scene_roots(out: &mut String, scene: &EvolutionScenePlan) {
+    graphics_family(
+        out,
+        ("evolution_scene", "EvolutionSceneRoots"),
+        (&scene.images, &scene.palettes, &scene.tilemaps),
+    );
 }
 
 fn trainer_front_roots(out: &mut String, trainer_front: &TrainerFrontPlan) {
@@ -852,8 +860,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
-        BattlerPlan, BlobPlan, FieldMessagePlan, ImagePlan, OpeningScenePlan, PalettePlan,
-        ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
+        BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, OpeningScenePlan,
+        PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
         TrainerBattlerPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
@@ -943,6 +951,55 @@ mod bag_field_tests {
                 len: 1280,
             }],
         }
+    }
+
+    fn evolution_plan() -> EvolutionScenePlan {
+        EvolutionScenePlan {
+            images: vec![ImagePlan {
+                id: "evolution-scene/image/bg".to_owned(),
+                addr: 0x0818_0000,
+                encoding: Encoding::Lz77,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 128,
+                height: 112,
+                metatile_width: 8,
+                metatile_height: 8,
+                tile_count: 224,
+            }],
+            palettes: vec![PalettePlan {
+                id: "evolution-scene/palette/bg_anim_intro".to_owned(),
+                addr: 0x0819_0000,
+                color_count: 256,
+                encoding: Encoding::Raw,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "evolution-scene/raw/bg_inner".to_owned(),
+                addr: 0x081A_0000,
+                encoding: Encoding::Lz77,
+                len: 2048,
+            }],
+        }
+    }
+
+    fn assert_evolution_roots(module: &str) {
+        assert!(
+            module.contains("    evolution_scene: EvolutionSceneRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"evolution-scene/image/bg\", addr: GbaPtr::at(0x0818_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"evolution-scene/palette/bg_anim_intro\", addr: GbaPtr::at(0x0819_0000), color_count: 256, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"evolution-scene/raw/bg_inner\", addr: GbaPtr::at(0x081A_0000), encoding: Encoding::Lz77, len: 2048 }"),
+            "{module}"
+        );
+        assert!(!module.contains("EvolutionSceneRoots::NONE"), "{module}");
     }
 
     fn interface_plan() -> BattleInterfacePlan {
@@ -1143,12 +1200,14 @@ mod bag_field_tests {
             bag: bag_plan(),
             starter_chooser: chooser_plan(),
             opening_scene: scene_plan(),
+            evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
             battle_interface: interface_plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
+        assert_evolution_roots(&module);
         assert!(
             module.contains("    poke_ball: PokeBallRoots {"),
             "{module}"
