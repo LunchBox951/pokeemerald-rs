@@ -45,8 +45,9 @@ const CONFUSION_SELF_HIT_POWER: u8 = 40;
 /// Whether the events one move produced mark `MOVE_RESULT_NO_EFFECT`, the
 /// flag that turns the target's landed-move record into `MOVE_UNAVAILABLE`
 /// (`battle_script_commands.c:4419`-`:4433`). A miss, a type immunity,
-/// Levitate, Wonder Guard, an absorbed or healed-through move, an explicit
-/// failure and a capped primary stat change set it; a blocked status that
+/// Levitate, Wonder Guard, a move an absorbing ability healed through or made
+/// useless, an explicit failure and a capped primary stat change set it
+/// (`data/battle_scripts_1.s:4088`, `:4098`); a blocked status that
 /// leaves `gMoveResultFlags` alone (Limber, Own Tempo, an already-applied
 /// status, Flash Fire) does not.
 fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
@@ -58,6 +59,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
                 | BattleEvent::AbilityHealed { .. }
+                | BattleEvent::AbsorbMadeMoveUseless { .. }
                 | BattleEvent::ButItFailed { .. }
                 | BattleEvent::StatWontGoHigher { .. }
                 | BattleEvent::StatWontGoLower { .. }

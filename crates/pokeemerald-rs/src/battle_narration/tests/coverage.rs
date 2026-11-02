@@ -129,6 +129,9 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             damage: 1,
         },
         BattleEvent::ParalyzedByAttackerSynchronize { by_player, move_id },
+        BattleEvent::AsleepByEffectSpore { by_player, move_id },
+        BattleEvent::PoisonedByEffectSpore { by_player, move_id },
+        BattleEvent::ParalyzedByEffectSpore { by_player, move_id },
         BattleEvent::PoisonedByPoisonPoint { by_player, move_id },
         BattleEvent::PoisonedByAttackerSynchronize { by_player, move_id },
         BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, move_id },
@@ -138,6 +141,10 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
         BattleEvent::AlreadyConfused { by_player, move_id },
         BattleEvent::OwnTempoProtected { by_player, move_id },
         BattleEvent::HurtByPoison {
+            by_player,
+            damage: 1,
+        },
+        BattleEvent::HurtByBurn {
             by_player,
             damage: 1,
         },
@@ -186,6 +193,83 @@ fn party_events() -> Vec<BattleEvent> {
     ]
 }
 
+/// How many variants `BattleEvent` has.
+const VARIANTS: usize = 66;
+
+/// A variant's position in `BattleEvent`. The match has no wildcard, so a new
+/// variant stops this file compiling until it is listed here and in the
+/// fixture above.
+const fn variant(event: &BattleEvent) -> usize {
+    match event {
+        BattleEvent::RunAttempt { .. } => 0,
+        BattleEvent::Missed { .. } => 1,
+        BattleEvent::FailedNoPp { .. } => 2,
+        BattleEvent::FastAsleep { .. } => 3,
+        BattleEvent::WokeUp { .. } => 4,
+        BattleEvent::SnappedOutOfConfusion { .. } => 5,
+        BattleEvent::Confused { .. } => 6,
+        BattleEvent::ConfusionSelfHit { .. } => 7,
+        BattleEvent::FullyParalyzed { .. } => 8,
+        BattleEvent::NoEffect { .. } => 9,
+        BattleEvent::LevitateBlocked { .. } => 10,
+        BattleEvent::WonderGuardBlocked { .. } => 11,
+        BattleEvent::AbilityHealed { .. } => 12,
+        BattleEvent::FlashFireAbsorbed { .. } => 13,
+        BattleEvent::Hit { .. } => 14,
+        BattleEvent::Recoil { .. } => 15,
+        BattleEvent::Fainted { .. } => 16,
+        BattleEvent::Drained { .. } => 17,
+        BattleEvent::LiquidOoze { .. } => 18,
+        BattleEvent::MultiHit { .. } => 19,
+        BattleEvent::NothingHappened { .. } => 20,
+        BattleEvent::GettingPumped { .. } => 21,
+        BattleEvent::ButItFailed { .. } => 22,
+        BattleEvent::ChargingPower { .. } => 23,
+        BattleEvent::WildFled => 24,
+        BattleEvent::StatFell { .. } => 25,
+        BattleEvent::StatWontGoLower { .. } => 26,
+        BattleEvent::StatLossPrevented { .. } => 27,
+        BattleEvent::SoundproofProtected { .. } => 28,
+        BattleEvent::StatRose { .. } => 29,
+        BattleEvent::StatWontGoHigher { .. } => 30,
+        BattleEvent::Paralyzed { .. } => 31,
+        BattleEvent::AlreadyParalyzed { .. } => 32,
+        BattleEvent::LimberProtected { .. } => 33,
+        BattleEvent::SynchronizeLimberProtected { .. } => 34,
+        BattleEvent::ParalyzedBySynchronize { .. } => 35,
+        BattleEvent::Poisoned { .. } => 36,
+        BattleEvent::PoisonedBySynchronize { .. } => 37,
+        BattleEvent::ParalyzedByStatic { .. } => 38,
+        BattleEvent::RoughSkinDamage { .. } => 39,
+        BattleEvent::ParalyzedByAttackerSynchronize { .. } => 40,
+        BattleEvent::AsleepByEffectSpore { .. } => 41,
+        BattleEvent::PoisonedByEffectSpore { .. } => 42,
+        BattleEvent::ParalyzedByEffectSpore { .. } => 43,
+        BattleEvent::PoisonedByPoisonPoint { .. } => 44,
+        BattleEvent::PoisonedByAttackerSynchronize { .. } => 45,
+        BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { .. } => 46,
+        BattleEvent::SynchronizeImmunityProtected { .. } => 47,
+        BattleEvent::SynchronizePoisonOrSteelTypeProtected { .. } => 48,
+        BattleEvent::ConfusionInflicted { .. } => 49,
+        BattleEvent::AlreadyConfused { .. } => 50,
+        BattleEvent::OwnTempoProtected { .. } => 51,
+        BattleEvent::HurtByPoison { .. } => 52,
+        BattleEvent::HurtByBurn { .. } => 53,
+        BattleEvent::ShedSkinCured { .. } => 54,
+        BattleEvent::TrainerSentOut { .. } => 55,
+        BattleEvent::PlayerSentOut { .. } => 56,
+        BattleEvent::ExpGained(..) => 57,
+        BattleEvent::MoveLearnPrompt { .. } => 58,
+        BattleEvent::MoveReplaced { .. } => 59,
+        BattleEvent::MoveLearnDeclined { .. } => 60,
+        BattleEvent::MoneyGained(..) => 61,
+        BattleEvent::Ended(..) => 62,
+        BattleEvent::UsedMove { .. } => 63,
+        BattleEvent::TypeEffectiveness { .. } => 64,
+        BattleEvent::AbsorbMadeMoveUseless { .. } => 65,
+    }
+}
+
 #[test]
 fn every_event_variant_maps_to_at_least_the_requests_upstream_prints() {
     let mut narrator = narrator(BattleKind::Trainer);
@@ -207,6 +291,8 @@ fn the_fixture_list_names_each_variant_once() {
     let kinds: std::collections::HashSet<_> = events.iter().map(std::mem::discriminant).collect();
 
     assert_eq!(kinds.len(), events.len());
+    let listed: std::collections::BTreeSet<_> = events.iter().map(variant).collect();
+    assert_eq!(listed, (0..VARIANTS).collect(), "every variant is listed");
     assert_eq!(
         narrator(BattleKind::Wild)
             .requests(&AssetNames, &events[0])

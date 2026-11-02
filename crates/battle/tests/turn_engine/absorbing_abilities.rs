@@ -4,6 +4,7 @@
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::MoveId;
+use battle::battle::{BattlerSide, LastLandedMove};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
@@ -148,6 +149,37 @@ fn an_absorbing_target_at_full_hp_reports_the_ability_made_the_move_useless_and_
     assert_eq!(battle.enemy().current_hp(), max_hp);
     assert_eq!(battle.player().moves()[0].pp, pp - 1);
     rng.assert_exhausted();
+}
+
+/// `BattleScript_MonMadeMoveUseless` sets `MOVE_RESULT_DOESNT_AFFECT_FOE`
+/// (`data/battle_scripts_1.s:4093`-`:4099`), so `MOVEEND_UPDATE_LAST_MOVES`
+/// records `MOVE_UNAVAILABLE` on the absorbing target
+/// (`battle_script_commands.c:4419`-`:4433`).
+#[test]
+fn a_move_made_useless_by_a_full_hp_absorber_does_not_land_on_it() {
+    let dex = Dex::new();
+    let vaporeon = max_iv_mon(&dex, VAPOREON, 5, vec![SWORDS_DANCE]);
+    let jolteon = max_iv_mon(&dex, JOLTEON, 5, vec![SWORDS_DANCE]);
+
+    let (water, water_events, water_rng) =
+        run_wild_turn(MUDKIP, WATER_GUN, vaporeon, &[ACCURACY_HIT]);
+    let (volt, volt_events, volt_rng) = run_wild_turn(RATTATA, SHOCK_WAVE, jolteon, &[]);
+
+    for (battle, events) in [(&water, &water_events), (&volt, &volt_events)] {
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, BattleEvent::AbsorbMadeMoveUseless { .. })),
+            "{events:?}"
+        );
+        assert_eq!(
+            battle.battler_state(BattlerSide::Enemy).last_landed_move(),
+            LastLandedMove::Unavailable,
+            "{events:?}"
+        );
+    }
+    water_rng.assert_exhausted();
+    volt_rng.assert_exhausted();
 }
 
 #[test]

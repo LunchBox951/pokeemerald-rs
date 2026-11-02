@@ -25,6 +25,10 @@ const SLOTS: &[(u16, &str)] = &[
     (30, "{B_PLAYER_NAME} got ¥{B_BUFF1}\nfor winning!\\p"),
     (31, "{B_PLAYER_NAME} is out of\nusable POKéMON!\\p"),
     (32, "{B_PLAYER_NAME} whited out!"),
+    (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
+    (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
+    (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
+    (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
     (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
@@ -257,6 +261,61 @@ fn a_status_passed_on_by_an_ability_names_its_holder_and_its_victim() {
             "Wild RATTATA's STATIC\nparalyzed TORCHIC!",
             "TORCHIC's SYNCHRONIZE\nparalyzed Wild RATTATA!",
             "TORCHIC's LIMBER\nprevents Wild RATTATA's SYNCHRONIZE from working!"
+        ]
+    );
+}
+
+/// `ABILITY_EFFECT_SPORE` statuses the attacker through `SetMoveEffect`'s
+/// by-ability strings (`src/battle_util.c:2782`-`:2804`,
+/// `src/battle_script_commands.c:2491`-`:2499`), with the holder as the
+/// scripting battler.
+#[test]
+fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("PARAS", Some(AbilityId::EFFECT_SPORE));
+    let mut narrator = Narrator::new(scene);
+    let (by_player, move_id) = (true, MoveId::TACKLE);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::AsleepByEffectSpore { by_player, move_id },
+                BattleEvent::PoisonedByEffectSpore { by_player, move_id },
+                BattleEvent::ParalyzedByEffectSpore { by_player, move_id },
+            ]
+        )),
+        [
+            "Wild PARAS's EFFECT SPORE\nmade TORCHIC sleep!",
+            "Wild PARAS's EFFECT SPORE\npoisoned TORCHIC!",
+            "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!",
+        ]
+    );
+}
+
+/// `BattleScript_BurnTurnDmg` and `BattleScript_PoisonTurnDmg` name the
+/// battler taking the tick as the attacker (`data/battle_scripts_1.s:3736`-`:3753`).
+#[test]
+fn end_turn_poison_and_burn_name_the_battler_they_hurt() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::HurtByBurn {
+                    by_player: true,
+                    damage: 1,
+                },
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    damage: 1,
+                },
+            ]
+        )),
+        [
+            "TORCHIC is hurt\nby its burn!",
+            "Wild RATTATA is hurt\nby poison!"
         ]
     );
 }

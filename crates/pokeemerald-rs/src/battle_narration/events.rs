@@ -176,6 +176,11 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             context.attacker = Some(Side::user(by_player));
             table(id::PKMNHURTBYPOISON, context)
         }
+        BattleEvent::HurtByBurn { by_player, .. } => {
+            let mut context = base;
+            context.attacker = Some(Side::user(by_player));
+            table(id::PKMNHURTBYBURN, context)
+        }
         BattleEvent::Hit {
             is_critical: true, ..
         } => table(id::CRITICALHIT, base),
@@ -360,6 +365,30 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             base,
             Side::user(by_player),
             AbilityId::POISON_POINT,
+            Holder::Target,
+        ),
+        // `ABILITY_EFFECT_SPORE` sets `HITMARKER_STATUS_ABILITY_EFFECT`, so
+        // `SetMoveEffect` picks each status table's by-ability string
+        // (`src/battle_util.c:2782`-`:2804`, `src/battle_script_commands.c:2491`-`:2499`).
+        BattleEvent::AsleepByEffectSpore { by_player, .. } => reflected(
+            id::PKMNMADESLEEP,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
+            Holder::Target,
+        ),
+        BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
+            id::PKMNPOISONEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
+            Holder::Target,
+        ),
+        BattleEvent::ParalyzedByEffectSpore { by_player, .. } => reflected(
+            id::PKMNWASPARALYZEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
             Holder::Target,
         ),
         BattleEvent::ParalyzedByAttackerSynchronize { by_player, .. } => reflected(
