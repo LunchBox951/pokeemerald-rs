@@ -11,17 +11,10 @@ use engine::text::{decode, Token};
 
 use crate::party::TakeHeldItem;
 
-/// `struct BoxPokemon::nickname`'s byte offset in the record
-/// (`pokeemerald/include/pokemon.h:198-200`: `personality` and `otId` precede it).
-const NICKNAME_OFFSET: usize = 8;
-
 /// `GetMonNickname` (`pokeemerald/src/pokemon.c`): the record's nickname as
 /// message tokens, without its terminator. An undecodable name is empty.
 pub(super) fn nickname_tokens(record: &engine::save::Pokemon) -> Vec<Token> {
-    let bytes = record.box_data.to_bytes();
-    let mut tokens =
-        decode(&bytes[NICKNAME_OFFSET..NICKNAME_OFFSET + engine::save::BOX_NICKNAME_LEN])
-            .unwrap_or_default();
+    let mut tokens = decode(&record.box_data.nickname()).unwrap_or_default();
     if tokens.last() == Some(&Token::End) {
         tokens.pop();
     }
