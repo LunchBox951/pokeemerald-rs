@@ -53,7 +53,7 @@ use assets::{
 };
 use rendering::{
     compose_frame_with_effects, BgLayer, BgSlot, Bgr555, BitDepth, FrameEffects, Framebuffer,
-    Palette, RenderError, SpriteLayer, Tileset,
+    Palette, PaletteStage, RenderError, SpriteLayer, Tileset,
 };
 
 /// Selects the player avatar assets used to build an overworld scene.
@@ -564,12 +564,32 @@ impl OverworldScene {
     /// validates those bytes, and tile animation only patches existing byte ranges.
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
+        self.compose_staged(player, event_data, tick, PaletteStage::default())
+    }
+
+    /// [`Self::compose`] with `palette` applied to the BG and OBJ palette
+    /// colours before composition, as upstream's palette fade blends the
+    /// palette RAM the hardware samples (`pokeemerald/src/palette.c:407-509`).
+    /// The default stage is the identity.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::compose`].
+    #[must_use]
+    pub fn compose_staged(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+        tick: u32,
+        palette: PaletteStage<'_>,
+    ) -> Framebuffer {
         let player_first_oam_entries = self.sprites.entries(player, event_data);
-        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
+        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
     }
 
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
-    /// tile, facing, and elevation instead of the scene's authored templates.
+    /// tile, facing, and elevation instead of the scene's authored templates,
+    /// under `palette` as [`Self::compose_staged`] applies it.
     /// `objects` must be seeded from this scene's map events.
     #[must_use]
     pub fn compose_live(
@@ -578,16 +598,22 @@ impl OverworldScene {
         event_data: &EventData,
         tick: u32,
         objects: &engine::overworld::object_event::ObjectEventCollection,
+        palette: PaletteStage<'_>,
     ) -> Framebuffer {
         let player_first_oam_entries = self.sprites.live_entries(objects, player, event_data);
-        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
+        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
     }
 
     /// [`Self::compose`] with every sprite layer empty: only the three
     /// background layers, no player avatar or object-event sprite.
     #[must_use]
     pub fn compose_map_only_frame(&self, player: &PlayerState, tick: u32) -> Box<platform::Frame> {
-        crate::frame::to_platform_frame(&self.compose_with_sprite_entries(player, tick, &[]))
+        crate::frame::to_platform_frame(&self.compose_with_sprite_entries(
+            player,
+            tick,
+            &[],
+            PaletteStage::default(),
+        ))
     }
 
     fn compose_with_sprite_entries(
@@ -595,6 +621,7 @@ impl OverworldScene {
         player: &PlayerState,
         tick: u32,
         sprite_entries: &[rendering::OamEntry],
+        palette: PaletteStage<'_>,
     ) -> Framebuffer {
         let viewport::FrameViewport {
             bottom,
@@ -658,6 +685,7 @@ impl OverworldScene {
         // The GBA backdrop is BG palette colour 0 wherever every enabled layer is transparent.
         let effects = FrameEffects {
             backdrop: self.world_palette.color(0).to_rgb888(),
+            palette,
             ..FrameEffects::default()
         };
         compose_frame_with_effects(&sprites, &background_slots, &effects)
