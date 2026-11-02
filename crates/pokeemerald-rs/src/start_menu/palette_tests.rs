@@ -209,8 +209,8 @@ mod staged {
     /// its Yes/No prompt.
     fn menus(label: &str) -> (StartMenu, StartMenu) {
         let path = synthetic_pack_path(label);
-        let _guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
-        let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
+        let guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
+        let pack = AssetPack::load(guard.path()).expect("the fixture pack is well-formed");
         let build = || {
             let chrome = StartMenuChrome::from_pack(&pack, CHOSEN_FRAME)
                 .expect("the fixture pack has frame 5");
