@@ -24,12 +24,12 @@ pub use keyboard::{
 };
 use platform::input::{ButtonState, Buttons};
 
+use crate::key_repeat::KeyRepeat;
+
 /// `PLAYER_NAME_LENGTH`.
 const PLAYER_NAME_LENGTH: usize = 7;
 /// `gKeyRepeatStartDelay` while the naming screen runs.
 const REPEAT_START_DELAY: u8 = 16;
-/// `gKeyRepeatContinueDelay`.
-const REPEAT_CONTINUE_DELAY: u8 = 5;
 const BUTTON_COLUMN_MIDDLE_ROW: u8 = BUTTON_BACK;
 /// `sKeyRowToButtonRow`.
 const KEY_ROW_TO_BUTTON_ROW: [u8; KEY_ROWS as usize] =
@@ -115,33 +115,6 @@ enum KeyEvent {
     Start,
 }
 
-/// `ReadKeys`' repeat counter, kept per screen because the platform input
-/// carries only held and fresh buttons.
-#[derive(Debug)]
-struct KeyRepeat {
-    counter: u8,
-    previous_held: Buttons,
-}
-
-impl KeyRepeat {
-    /// `gMain.newAndRepeatedKeys` for this frame.
-    fn advance(&mut self, buttons: ButtonState) -> Buttons {
-        let held = buttons.held();
-        let mut repeated = buttons.newly_pressed();
-        if held != Buttons::NONE && held == self.previous_held {
-            self.counter -= 1;
-            if self.counter == 0 {
-                repeated = held;
-                self.counter = REPEAT_CONTINUE_DELAY;
-            }
-        } else {
-            self.counter = REPEAT_START_DELAY;
-        }
-        self.previous_held = held;
-        repeated
-    }
-}
-
 /// One step forward or backward around a cycle of `len` cells.
 fn step_wrapping(value: u8, len: u8, forward: bool) -> u8 {
     if forward {
@@ -217,10 +190,7 @@ impl NamingScreenModel {
             destination: config.destination,
             pending: None,
             confirmed: None,
-            repeat: KeyRepeat {
-                counter: REPEAT_START_DELAY,
-                previous_held: Buttons::NONE,
-            },
+            repeat: KeyRepeat::new(REPEAT_START_DELAY),
         }
     }
 
