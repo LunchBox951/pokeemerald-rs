@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.85.0] - 2026-10-31
 
-- Choosing your starter now opens Birch's bag: move the hand between the three Poké Balls, preview Treecko, Torchic or Mudkip, and confirm with YES or NO as in the original game.
+- General improvements in preparation for choosing your starter from Birch's bag: moving the hand between the three Poké Balls, previewing Treecko, Torchic or Mudkip, and confirming with YES or NO.
 
 ## [0.0.84.0] - 2026-10-30
 

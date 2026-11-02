@@ -111,16 +111,15 @@ fn cancelling_a_preview_returns_to_the_selection_and_can_choose_another() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn the_real_frames_render_every_stage_without_a_blank_screen() {
-    let mut run = Run::new();
     let mut seen = Vec::new();
     for choice in StarterChoice::ALL {
+        let mut run = Run::new();
         run.select(choice);
+        assert_eq!(run.scene.selected(), choice);
         seen.push(run.scene.compose().pixels().to_vec());
         run.tap(Buttons::A);
         run.idle(24);
         seen.push(run.scene.compose().pixels().to_vec());
-        run.tap(Buttons::B);
-        run.idle(3);
     }
     for (index, pixels) in seen.iter().enumerate() {
         let first = pixels[0];

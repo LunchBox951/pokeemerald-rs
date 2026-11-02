@@ -271,8 +271,11 @@ impl Driver {
     /// Presses A on the selection and runs until the YES/NO menu accepts input.
     pub(super) fn open_confirmation(&mut self) {
         self.tap(Buttons::A);
+        let mut frames = 0;
         while self.chooser.phase != crate::starter_chooser::StarterChooserPhase::ConfirmInput {
             self.frame(Buttons::NONE);
+            frames += 1;
+            assert!(frames < 60, "the confirmation never opened");
         }
     }
 }

@@ -213,6 +213,7 @@ fn previewing_again_after_a_cancel_asks_again_with_the_cursor_on_yes() {
     driver.idle(3);
     driver.tap(Buttons::A);
     let mut cries = 0;
+    let mut frames = 0;
     while driver.chooser.phase != StarterChooserPhase::ConfirmInput {
         let result = driver.frame(Buttons::NONE);
         cries += result
@@ -220,6 +221,8 @@ fn previewing_again_after_a_cancel_asks_again_with_the_cursor_on_yes() {
             .iter()
             .filter(|sound| matches!(sound, StarterSoundRequest::Cry { .. }))
             .count();
+        frames += 1;
+        assert!(frames < 100, "the confirmation never opened");
     }
     assert_eq!(cries, 1);
     assert_eq!(driver.chooser.menu, Some(ConfirmRow::Yes));
