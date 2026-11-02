@@ -185,7 +185,7 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
-    /// A trainer front picture source differs from its upstream graphic's shape.
+    /// A trainer picture source (front or back) differs from its upstream graphic's shape.
     TrainerPicAssetMismatch {
         /// Source path.
         path: PathBuf,

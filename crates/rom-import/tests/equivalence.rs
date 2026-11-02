@@ -71,6 +71,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "font/",
     "text-window/",
     "audio/",
+    "trainer-pic/",
+    "trainer/",
     "battle-message/",
     "field-message/",
     "battle-anim/",
@@ -224,6 +226,27 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
+/// The Birch-speech portraits: the front image and palette of Brendan and of
+/// May. Named by id so portraits both backends drop together still fail.
+const TRAINER_PORTRAIT_IDS: [&str; 4] = [
+    "trainer-pic/brendan/front",
+    "trainer-pic/brendan/palette",
+    "trainer-pic/may/front",
+    "trainer-pic/may/palette",
+];
+
+/// The Brendan and May trainer battlers: the front image, back sheet and
+/// shared palette of each. Named by id so entries both backends drop together
+/// still fail.
+const TRAINER_BATTLER_IDS: [&str; 6] = [
+    "trainer/brendan/front",
+    "trainer/brendan/back",
+    "trainer/brendan/palette",
+    "trainer/may/front",
+    "trainer/may/back",
+    "trainer/may/palette",
+];
+
 /// `field-message/table` as both backends must write it: schema header, then
 /// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
 /// through `charmap.txt`.
@@ -331,16 +354,12 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     // Named by id so a payload both backends drop together still fails.
-    for id in checkpoint_payload_ids() {
-        for (what, ids) in [
-            ("the ROM backend", &imported),
-            ("the checkout pack", &checkout),
-        ] {
-            if !ids.contains_key(&id) {
-                differences.push(format!("{id}: {what} wrote no such entry"));
-            }
-        }
-    }
+    let pinned: Vec<String> = checkpoint_payload_ids()
+        .into_iter()
+        .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
+        .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
+        .collect();
+    differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
     differences.extend(field_message_differences(
         (&rom_bytes, &imported),
@@ -593,6 +612,26 @@ fn rom_path() -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(value))
+}
+
+/// One difference per id either backend's pack lacks.
+fn missing_from_either(
+    ids: &[String],
+    imported: &BTreeMap<String, DirectoryEntry>,
+    checkout: &BTreeMap<String, DirectoryEntry>,
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for id in ids {
+        for (what, entries) in [
+            ("the ROM backend", imported),
+            ("the checkout pack", checkout),
+        ] {
+            if !entries.contains_key(id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
+        }
+    }
+    differences
 }
 
 /// The `field-message/table` pin applied to each backend's pack, given as
