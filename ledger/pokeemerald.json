@@ -32113,7 +32113,7 @@
           "status": "stubbed"
         },
         "TryTakeMonItem": {
-          "reason": "TryTakeMonItem (party_menu.c:1813-1825) is modelled by party::take_held_item: no item returns NotHolding, a failed Bag::add_item returns BagFull and changes nothing, otherwise the bag gains one and the battler's item is cleared; it has no mail branch upstream and none in the port's take itself. The result is not written to the save here; the lead hook merges it (merge_into_save_pokemon). Only the lead is reachable; GiveItemToMon is not modelled.",
+          "reason": "TryTakeMonItem (party_menu.c:1813-1825) is modelled by party::take_held_item: no item returns NotHolding, a failed Bag::add_item returns BagFull and changes nothing, otherwise the bag gains one and the battler's item is cleared. Upstream's function has no mail branch because the menu never offers TAKE ITEM to a mail holder (SetPartyMonFieldSelectionActions, party_menu.c:2631-2634, offers CursorCb_TakeMail instead); the port has no such menu gating, so take_held_item itself refuses a mail holder untouched as TakeHeldItem::HoldsMail (ItemIsMail, mail_data.c:185) rather than take mail without clearing its record. The result is not written to the save here; the lead hook merges it (merge_into_save_pokemon). Only the lead is reachable; GiveItemToMon is not modelled.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "S-6",
           "status": "stubbed"
