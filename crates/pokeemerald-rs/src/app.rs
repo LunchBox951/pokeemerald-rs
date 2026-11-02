@@ -298,9 +298,14 @@ pub struct App {
     /// section) -- `None` for a headless `App` (module docs), whose
     /// [`BootScene`] frame never changes.
     scene: Option<AppScene>,
-    /// This session's save medium (I-6, issues #214/#232): read by the
-    /// `Title` -> `MainMenu` transition, written by the field start menu's
-    /// `SAVE` action. Owned here, at the one place with a whole-session
+    /// This session's save medium (I-6, issues #214/#232): read once at
+    /// boot by [`compose_title_scene`], before the title's first frame,
+    /// into the [`crate::flow::AnimatedTitle`]'s retained `SavedGame` (as
+    /// upstream's copyright screen reads it ahead of the title,
+    /// `pokeemerald/src/intro.c:1147-1156`) -- the `Title` -> `MainMenu`
+    /// transition hands that same `SavedGame` on rather than reading again
+    /// -- and written by the field start menu's `SAVE` action. Owned here,
+    /// at the one place with a whole-session
     /// lifetime, and passed down `(oop-boundaries)` -- upstream's
     /// equivalent is flash plus the `gSaveCounter`/`gLastWrittenSector`
     /// globals.
@@ -361,8 +366,15 @@ pub(crate) enum TitleAudio {
 /// takes an already-loaded scene, for tests that need their own reference
 /// copy to compare ticks against) never hand-write this twice
 /// `(oop-boundaries)`.
-fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
-    let (init, frame) = TitleInit::new(scene, None);
+///
+/// The boot load of `save_slot` runs here, before the title's first frame, as
+/// upstream's copyright screen reads the save ahead of the title; the title
+/// carries it ([`TitleInit::boot`]).
+fn compose_title_scene(
+    scene: title::TitleScene,
+    save_slot: &mut SaveSlot,
+) -> (Box<Frame>, AppScene) {
+    let (init, frame) = TitleInit::boot(scene, save_slot);
     (frame, AppScene::TitleInit(Box::new(init)))
 }
 
@@ -425,14 +437,11 @@ impl App {
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
         // missing.
-        let loaded = compose_title_scene(load_title()?);
+        let title = load_title()?;
         let platform = open_platform()?;
-        Ok(Self::assemble(
-            platform,
-            loaded,
-            open_save_slot()?,
-            pack_source,
-        ))
+        let mut save_slot = open_save_slot()?;
+        let loaded = compose_title_scene(title, &mut save_slot);
+        Ok(Self::assemble(platform, loaded, save_slot, pack_source))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -658,10 +667,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
+        let mut save_slot = SaveSlot::disabled();
         Self::assemble(
             Platform::new_headless(),
-            compose_title_scene(scene),
-            SaveSlot::disabled(),
+            compose_title_scene(scene, &mut save_slot),
+            save_slot,
             crate::pack_source::PackSource::Runtime,
         )
     }
