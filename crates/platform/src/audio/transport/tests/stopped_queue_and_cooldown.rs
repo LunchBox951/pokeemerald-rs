@@ -282,3 +282,34 @@ fn a_start_applied_to_an_attached_stream_keeps_the_queue_across_a_refused_pause(
         "a start the attached stream applied is no missed playback"
     );
 }
+
+#[test]
+fn a_coalesced_restart_of_a_playing_stream_keeps_the_queue_across_a_refused_pause() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.no_hw_pause = true;
+    });
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(20));
+    assert_eq!(with(&w).plays, 1);
+
+    // `stop` then `start` between polls: the stream never stopped playing.
+    rig.shared.set_running(false, &rig.producer);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(40));
+
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(60));
+    rig.transport.step(MS(160));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(rig.events(), []);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 4,
+        "a restart of a stream that kept playing is no missed playback"
+    );
+}

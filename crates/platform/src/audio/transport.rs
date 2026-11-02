@@ -318,6 +318,12 @@ impl<H: OutputHost> Transport<H> {
                 self.detach();
                 self.next_attempt = self.finished(now);
             }
+        } else if want {
+            // Already playing: a start `want` saw, even one coalesced with a
+            // `stop` since the last poll, was applied by this stream, so it
+            // is no missed playback when the stream is later retired. A loss
+            // of this playing stream still latches the queue as history.
+            self.seen_starts = self.shared.starts.load(Ordering::Acquire);
         }
     }
 
