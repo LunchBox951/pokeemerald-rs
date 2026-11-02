@@ -63,6 +63,8 @@ What transition mode checks:
 9. Require a new or updated dated CHANGELOG.md entry with patch-note bullets
    for a FINAL, MAJOR, or MINOR bump. PATCH bumps and cumulative comparisons
    do not require changelog updates.
+10. Reject a CHANGELOG.md compare link that still ends at ``dev`` on any entry
+    but the newest, so the previous range freezes when the next entry lands.
 
 Exit status: ``0`` on success (prints a clear OK line), non-zero with a clear
 message on any rejection or read/parse error.
@@ -97,6 +99,7 @@ You can exercise these by writing a VERSION file and running, e.g.::
 from __future__ import annotations
 
 import argparse
+import html
 import os
 import re
 import subprocess
@@ -624,6 +627,47 @@ def check_changelog(
         )
 
 
+_MD_ESCAPE_OR_ENTITY = re.compile(
+    r"\\([!-/:-@\[-`{-~])|(&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);)"
+)
+
+
+def _link_range_end(target: str) -> str:
+    # Markdown renders a destination after resolving backslash escapes and
+    # character references, so `dev\#files` is a `dev` endpoint with a fragment.
+    resolved = _MD_ESCAPE_OR_ENTITY.sub(
+        lambda m: m[1] if m[1] else html.unescape(m[2]), target
+    )
+    return re.split(r"[?#]", resolved, maxsplit=1)[0].rstrip("/")
+
+
+def check_changelog_links(notes: Optional[str]) -> None:
+    text = changelog_text(notes or "")
+    headings = re.findall(r"^## \[([^\]]+)\]", text, flags=re.MULTILINE)
+    if not headings:
+        return
+    newest = headings[0]
+    links = re.findall(
+        r"^ {0,3}\[([^\]]+)\]:[ \t]*(?:\n[ \t]*)?<?([^\s>]+)", text, flags=re.MULTILINE
+    )
+    # An inline heading link, `## [ver](dest "title")`, is not a reference
+    # definition but renders the same compare range.
+    links += [
+        (label, angle or bare)
+        for label, angle, bare in re.findall(
+            r"^## \[([^\]]+)\]\([ \t]*(?:<([^>\n]*)>|((?:\\.|[^\s)\\])+))",
+            text, flags=re.MULTILINE,
+        )
+    ]
+    for label, target in links:
+        if label != newest and _link_range_end(target).endswith("...dev"):
+            raise VersionError(
+                f"CHANGELOG.md link [{label}] still ends at dev; end it at the "
+                f"commit that starts the range of the entry after it "
+                f"(newest is {newest})"
+            )
+
+
 def check_cumulative(
     base: Version, head: Version, *, require_bump: bool = False
 ) -> None:
@@ -727,6 +771,7 @@ def main(argv: Optional[list] = None) -> int:
             check_cumulative(
                 base_version, head_version, require_bump=args.require_bump
             )
+            check_changelog_links(read_ref_file(args.head, "CHANGELOG.md", root))
         else:
             base_version = read_base_version(args.base, root)
             marker_head = read_ref_file(args.head, args.final_gate_marker, root)
@@ -751,6 +796,7 @@ def main(argv: Optional[list] = None) -> int:
                 git_show_file(args.base, "CHANGELOG.md", root),
                 read_ref_file(args.head, "CHANGELOG.md", root),
             )
+            check_changelog_links(read_ref_file(args.head, "CHANGELOG.md", root))
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)
         return 1
