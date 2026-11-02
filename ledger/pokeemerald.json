@@ -32258,13 +32258,13 @@
           "reason": "pokemon.c:6602-6626. Modelled by party::is_traded_record: a differing OT id is traded; an equal id is traded only when the record's OT name differs from the owner's up to the record's own terminator. Decided at the save boundary where the owner's id and name are visible; the result feeds BattlePokemon::with_traded_recipient for the Cmd_getexp traded-recipient bonus.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "S-6",
-          "status": "ported"
+          "status": "rewritten"
         },
         "IsTradedMon": {
           "reason": "pokemon.c:6602-6626. Modelled by party::is_traded_record: a differing OT id is traded; an equal id is traded only when the record's OT name differs from the owner's up to the record's own terminator. Decided at the save boundary where the owner's id and name are visible; the result feeds BattlePokemon::with_traded_recipient for the Cmd_getexp traded-recipient bonus.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "S-6",
-          "status": "ported"
+          "status": "rewritten"
         },
         "ModifyStatByNature": {
           "reason": "pokemon.c:5878. Full x1.10/x0.90 favoured/disfavoured scaling re-implemented (Nature::modify_stat), including the HP/accuracy/evasion no-op guard. Always uses u32 (the #ifdef BUGFIX build's arithmetic); unobservable for every real Gen-3 base stat (closest is Shuckle at 230, well under the ~596 threshold where the two builds would diverge).",
