@@ -55,10 +55,13 @@ const MAX_STATUS_LINE: u64 = 8192;
 const MAX_GIT_STDERR: u64 = 64 * 1024;
 
 /// A hardened git invocation in `cwd`, with an empty environment beside
-/// `PATH` and no host or system configuration.
+/// `PATH` and no host or system configuration. Optional locks are off, so
+/// read-only commands such as `git status` never refresh or rewrite the
+/// reference checkout's index.
 fn git_command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     command
+        .arg("--no-optional-locks")
         .args(HARDENED)
         .arg("core.checkStat=default")
         .arg("-C")
