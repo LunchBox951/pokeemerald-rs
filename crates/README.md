@@ -25,7 +25,7 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 | Developer-side upstream parsing, scenarios, snapshots, and E2E commands | [`xtask`](xtask/src/main.rs) |
 | The asset-pack container format: schema, writer, and reader shared by `xtask`'s extractor, `rom-import`, and `assets`'s reads | [`pack-format`](pack-format/src/lib.rs) |
 | Policy C ROM import: read a player's own cartridge image straight into the shared pack format | [`rom-import`](rom-import/src/lib.rs) |
-| Windows handle identity and handle-bound delete, shared by `rom-import`, `engine`, and `xtask`; empty off Windows | [`win-fs`](win-fs/src/lib.rs) |
+| Windows handle identity and handle-bound delete, shared by `rom-import`, `engine`, and `xtask` (and `pokeemerald-rs`'s test fixtures); empty off Windows | [`win-fs`](win-fs/src/lib.rs) |
 | Headless GBA-like pixel composition | [`rendering`](rendering/src/lib.rs) |
 | M4A sequencing, voices, mixing, and reverb | [`audio`](audio/src/lib.rs) |
 | Window, input, pacing, pixel presentation, and OS audio transport | [`platform`](platform/src/lib.rs) |
