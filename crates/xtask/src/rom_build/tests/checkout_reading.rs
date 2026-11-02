@@ -13,15 +13,27 @@ struct TrackingAlloc;
 // SAFETY: every call forwards unchanged to the system allocator, which upholds
 // the `GlobalAlloc` contract; the added thread-local counter never allocates.
 unsafe impl std::alloc::GlobalAlloc for TrackingAlloc {
+    /// # Safety
+    ///
+    /// Caller upholds `GlobalAlloc::alloc`: `layout` has non-zero size.
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         MAX_ALLOC.with(|m| m.set(m.get().max(layout.size())));
         // SAFETY: same layout the caller passed, caller's contract applies.
         unsafe { std::alloc::System.alloc(layout) }
     }
+    /// # Safety
+    ///
+    /// Caller upholds `GlobalAlloc::dealloc`: `ptr` was allocated by this
+    /// allocator with the same `layout`.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         // SAFETY: `ptr`/`layout` come from a matching `alloc` above.
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
+    /// # Safety
+    ///
+    /// Caller upholds `GlobalAlloc::realloc`: `ptr` was allocated by this
+    /// allocator with `layout`, and `new` is non-zero and does not overflow
+    /// `isize` when rounded up to the alignment.
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new: usize) -> *mut u8 {
         MAX_ALLOC.with(|m| m.set(m.get().max(new)));
         // SAFETY: `ptr`/`layout` come from a matching `alloc`; `new` is the caller's.
