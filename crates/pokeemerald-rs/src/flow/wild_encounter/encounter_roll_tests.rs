@@ -710,14 +710,16 @@ fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
     assert_eq!(phase.wild_lead_refusal, None);
     let lead = phase.lead_for_test().cloned().expect("the lead stays home");
     assert_eq!(lead.held_item(), ItemId::NONE);
-    let encounter = WildEncounter {
-        slot: 0,
-        species: WURMPLE,
-        level: 2,
-    };
-    let mut rng = Rng::new(ENCOUNTER_SEED);
-    start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
-        .expect("the lead holds nothing the battle refuses");
+
+    // The same grass walk the refused lead blocked now rolls and starts the
+    // battle with that lead.
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    walk_east_and_land(&mut phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(
+        phase.is_wild_battle_active(),
+        "the grass roll must start a battle once the item is gone"
+    );
 }
 
 #[test]
