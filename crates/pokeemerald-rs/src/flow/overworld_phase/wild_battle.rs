@@ -130,7 +130,10 @@ impl OverworldPhase {
             player_trainer_id,
             &mut self.rng,
         ) {
-            Ok(battle) => self.active_battle = Some(ActiveBattle::Wild(battle)),
+            Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
+                self.active_battle = Some(ActiveBattle::Wild(battle));
+            }
             Err(error) => {
                 eprintln!("wild encounter: can't start a battle ({error:?})");
                 self.restore_lead_battler(lead);

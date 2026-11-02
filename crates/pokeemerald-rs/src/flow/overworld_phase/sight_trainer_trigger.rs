@@ -484,6 +484,7 @@ impl OverworldPhase {
         // screened").
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 let trainer = ObjectEventState::from_template(object);
                 let walk_tiles = approach_walk_tiles(trainer.position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(

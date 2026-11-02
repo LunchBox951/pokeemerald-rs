@@ -64,6 +64,13 @@ pub enum BattleError {
     /// reported by the pre-turn and constructor screens before any draw.
     UnportedAbilityInteraction(AbilityId),
 
+    /// A traded Pokémon above its obedience limit would disobey in a way the
+    /// engine does not model. A nap or a random alternate move is reported
+    /// after the obedience draws were consumed; a traded Mew or Deoxys is
+    /// reported before the first obedience draw, because upstream's
+    /// fateful-encounter check needs record data the port does not carry.
+    UnportedDisobedience,
+
     /// A participant holds an item whose in-battle effect no pipeline models,
     /// reported by the pre-turn and constructor screens before any draw.
     UnsupportedHeldItem(ItemId),
@@ -169,6 +176,7 @@ impl fmt::Display for BattleError {
                 "move `{}` produced an unsupported secondary effect",
                 id.0
             ),
+            Self::UnportedDisobedience => write!(f, "unmodelled disobedience outcome"),
             Self::UnportedAbilityInteraction(id) => write!(
                 f,
                 "ability `{}` alters this battle in an unmodelled way",
