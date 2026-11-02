@@ -273,6 +273,27 @@ impl TitleScene {
         })
     }
 
+    /// A pack-less scene of empty layers, for scene-flow tests that only need
+    /// a title to step through (it composes a single backdrop colour).
+    #[cfg(test)]
+    pub(crate) fn blank() -> Self {
+        let tiles = |depth| Tileset::decode(depth, &[]).expect("an empty tileset is valid");
+        let map = || Tilemap::new(0, 0, Vec::new()).expect("a zero-area map is valid");
+        let palette = || Palette::new([rendering::Bgr555::default(); Palette::LEN]);
+        Self {
+            rayquaza_tiles: tiles(BitDepth::Bpp4),
+            clouds_tiles: tiles(BitDepth::Bpp4),
+            logo_tiles: tiles(BitDepth::Bpp8),
+            palette: palette(),
+            rayquaza_map: map(),
+            clouds_map: map(),
+            logo_map: AffineTilemap::new(0, 0, Vec::new()).expect("a zero-area map is valid"),
+            sprite_tiles_4bpp: tiles(BitDepth::Bpp4),
+            sprite_tiles_8bpp: tiles(BitDepth::Bpp8),
+            sprite_palette: palette(),
+        }
+    }
+
     /// Composes a deterministic title framebuffer for an idle-frame index.
     #[must_use]
     pub fn compose(&self, frame: u32) -> Framebuffer {

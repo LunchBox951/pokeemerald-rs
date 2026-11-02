@@ -205,7 +205,7 @@ fn border_colour_counts(phase: crate::flow::overworld_phase::OverworldPhase) -> 
     let menu = phase
         .start_menu()
         .expect("a START press must open the field start menu against the fixture pack");
-    let fb = menu.compose_over(Framebuffer::new());
+    let fb = menu.compose_over(Framebuffer::new(), rendering::PaletteStage::default());
     let green = Bgr555::from_channels(0, 31, 0).to_rgb888();
     let red = Bgr555::from_channels(31, 0, 0).to_rgb888();
     let mut greens = 0;
