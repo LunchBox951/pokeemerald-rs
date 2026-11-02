@@ -10,6 +10,14 @@ const WINDOW_TEXT_ID: &str = "battle-interface/palette/window_text";
 const PP_TEXT_ID: &str = "battle-interface/palette/pp_text";
 const TILEMAP_ID: &str = "battle-interface/raw/textbox_map";
 
+const EXPECTED_TEXTBOX_SIZE: u32 = 128;
+const EXPECTED_BANK_COLORS: u16 = 16;
+const EXPECTED_TEXTBOX_PALETTE_BANKS: u16 = 2;
+const EXPECTED_TEXTBOX_PALETTE_COLORS: u16 = EXPECTED_TEXTBOX_PALETTE_BANKS * EXPECTED_BANK_COLORS;
+const EXPECTED_TILEMAP_BYTES: usize = 4096;
+const SHORT_PP_PALETTE_COLORS: u16 = 2;
+const PALETTE_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
+
 fn image(width: u32, height: u32, depth: u8, pixel: u8) -> Entry {
     Entry {
         id: IMAGE_ID,
@@ -19,9 +27,9 @@ fn image(width: u32, height: u32, depth: u8, pixel: u8) -> Entry {
     }
 }
 
-fn palette(id: &'static str, colors: u16, first: u16) -> Entry {
-    let mut payload = vec![0u8; usize::from(colors) * 2];
-    payload[..2].copy_from_slice(&first.to_le_bytes());
+fn palette(id: &'static str, colors: u16, first_color: u16) -> Entry {
+    let mut payload = vec![0u8; usize::from(colors) * PALETTE_ENTRY_BYTES];
+    payload[..PALETTE_ENTRY_BYTES].copy_from_slice(&first_color.to_le_bytes());
     Entry {
         id,
         kind_tag: PALETTE_KIND_TAG,
@@ -39,13 +47,21 @@ fn tilemap(len: usize) -> Entry {
     }
 }
 
+fn last_bank_pixel() -> u8 {
+    u8::try_from(EXPECTED_BANK_COLORS - 1).unwrap()
+}
+
+fn textbox_image(depth: u8, pixel: u8) -> Entry {
+    image(EXPECTED_TEXTBOX_SIZE, EXPECTED_TEXTBOX_SIZE, depth, pixel)
+}
+
 fn fixture_entries() -> Vec<Entry> {
     vec![
-        image(128, 128, TEXT_WINDOW_BIT_DEPTH, 15),
-        palette(TEXTBOX_PALETTE_ID, 32, 0x0101),
-        tilemap(4096),
-        palette(WINDOW_TEXT_ID, 16, 0x0202),
-        palette(PP_TEXT_ID, 16, 0x0303),
+        textbox_image(TEXT_WINDOW_BIT_DEPTH, last_bank_pixel()),
+        palette(TEXTBOX_PALETTE_ID, EXPECTED_TEXTBOX_PALETTE_COLORS, 0x0101),
+        tilemap(EXPECTED_TILEMAP_BYTES),
+        palette(WINDOW_TEXT_ID, EXPECTED_BANK_COLORS, 0x0202),
+        palette(PP_TEXT_ID, EXPECTED_BANK_COLORS, 0x0303),
     ]
 }
 
@@ -70,14 +86,20 @@ fn battle_interface_bundles_the_textbox_and_text_palettes() {
     let handle = pack.battle_interface().unwrap();
     assert_eq!(
         (handle.textbox.image.width, handle.textbox.image.height),
-        (128, 128)
+        (EXPECTED_TEXTBOX_SIZE, EXPECTED_TEXTBOX_SIZE)
     );
-    assert_eq!(handle.textbox.palette.color_count, 32);
+    assert_eq!(
+        handle.textbox.palette.color_count,
+        EXPECTED_TEXTBOX_PALETTE_COLORS
+    );
     assert_eq!(handle.textbox.palette.color(0), Some(0x0101));
-    assert_eq!(handle.textbox.tilemap, vec![0x5A; 4096].as_slice());
-    assert_eq!(handle.window_text_palette.color_count, 16);
+    assert_eq!(
+        handle.textbox.tilemap,
+        vec![0x5A; EXPECTED_TILEMAP_BYTES].as_slice()
+    );
+    assert_eq!(handle.window_text_palette.color_count, EXPECTED_BANK_COLORS);
     assert_eq!(handle.window_text_palette.color(0), Some(0x0202));
-    assert_eq!(handle.pp_text_palette.color_count, 16);
+    assert_eq!(handle.pp_text_palette.color_count, EXPECTED_BANK_COLORS);
     assert_eq!(handle.pp_text_palette.color(0), Some(0x0303));
 
     let _ = std::fs::remove_file(path);
@@ -119,46 +141,78 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
 #[test]
 fn malformed_entries_are_rejected_on_read() {
     let cases = [
-        // Wrong image geometry.
-        (IMAGE_ID, image(64, 64, TEXT_WINDOW_BIT_DEPTH, 0)),
-        // Wrong bit depth.
-        (IMAGE_ID, image(128, 128, INDEXED_8_BIT, 0)),
-        // Wrong textbox palette colour count: only one bank, not the composed pair.
-        (TEXTBOX_PALETTE_ID, palette(TEXTBOX_PALETTE_ID, 16, 0)),
-        // Wrong text palette colour counts.
-        (WINDOW_TEXT_ID, palette(WINDOW_TEXT_ID, 32, 0)),
-        (PP_TEXT_ID, palette(PP_TEXT_ID, 2, 0)),
-        // Short and long tilemaps.
-        (TILEMAP_ID, tilemap(4095)),
-        (TILEMAP_ID, tilemap(4097)),
+        (
+            "half-size textbox image",
+            IMAGE_ID,
+            image(
+                EXPECTED_TEXTBOX_SIZE / 2,
+                EXPECTED_TEXTBOX_SIZE / 2,
+                TEXT_WINDOW_BIT_DEPTH,
+                0,
+            ),
+        ),
+        (
+            "8-bit textbox image",
+            IMAGE_ID,
+            textbox_image(INDEXED_8_BIT, 0),
+        ),
+        (
+            "single-bank textbox palette",
+            TEXTBOX_PALETTE_ID,
+            palette(TEXTBOX_PALETTE_ID, EXPECTED_BANK_COLORS, 0),
+        ),
+        (
+            "two-bank window-text palette",
+            WINDOW_TEXT_ID,
+            palette(WINDOW_TEXT_ID, EXPECTED_TEXTBOX_PALETTE_COLORS, 0),
+        ),
+        (
+            "two-colour PP-text palette",
+            PP_TEXT_ID,
+            palette(PP_TEXT_ID, SHORT_PP_PALETTE_COLORS, 0),
+        ),
+        (
+            "tilemap one byte short",
+            TILEMAP_ID,
+            tilemap(EXPECTED_TILEMAP_BYTES - 1),
+        ),
+        (
+            "tilemap one byte long",
+            TILEMAP_ID,
+            tilemap(EXPECTED_TILEMAP_BYTES + 1),
+        ),
     ];
-    for (n, (id, entry)) in cases.into_iter().enumerate() {
+    for (n, (case, id, entry)) in cases.into_iter().enumerate() {
         let (pack, path) = load(&format!("battle-interface-malformed-{n}"), replaced(entry));
         assert!(
             matches!(
                 pack.battle_interface().unwrap_err(),
                 PackError::MalformedBattleInterfaceAsset { id: bad, .. } if bad == id
             ),
-            "wrong error for malformed case {n} (`{id}`)"
+            "wrong error for malformed case {n} ({case}, `{id}`)"
         );
         let _ = std::fs::remove_file(path);
     }
 }
 
 #[test]
-fn a_pixel_outside_one_bank_is_rejected() {
-    // A 4bpp tile selects within one 16-colour bank; the tilemap picks the bank.
-    for pixel in [16, 31, 32] {
+fn textbox_pixels_must_be_bank_local_even_with_two_palette_banks() {
+    for pixel in [
+        EXPECTED_BANK_COLORS,
+        EXPECTED_TEXTBOX_PALETTE_COLORS - 1,
+        EXPECTED_TEXTBOX_PALETTE_COLORS,
+    ] {
+        let pixel = u8::try_from(pixel).unwrap();
         let (pack, path) = load(
             "battle-interface-pixel",
-            replaced(image(128, 128, TEXT_WINDOW_BIT_DEPTH, pixel)),
+            replaced(textbox_image(TEXT_WINDOW_BIT_DEPTH, pixel)),
         );
         assert!(
             matches!(
                 pack.battle_interface().unwrap_err(),
                 PackError::MalformedBattleInterfaceAsset { id, .. } if id == IMAGE_ID
             ),
-            "pixel {pixel}"
+            "pixel {pixel} must be rejected outside one palette bank"
         );
         let _ = std::fs::remove_file(path);
     }
