@@ -16,7 +16,7 @@ const BATTLER_PICTURE_PIXELS: usize = 64 * 64;
 const BATTLER_BIT_DEPTH: u8 = 4;
 const BATTLER_PALETTE_COLORS: u16 = 1 << BATTLER_BIT_DEPTH;
 
-/// Static image orientation, independent of palette selection.
+/// Which side of a battler an image shows, for species and trainers alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattlerDirection {
     /// `gMonStillFrontPicTable` entry (`src/data/pokemon_graphics/still_front_pic_table.h:1`).
