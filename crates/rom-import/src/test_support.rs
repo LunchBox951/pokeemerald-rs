@@ -152,11 +152,6 @@ impl TempDir {
         ((reached.dev(), reached.ino()) == (held.dev(), held.ino())).then_some(through)
     }
 
-    #[cfg(all(unix, not(target_os = "linux")))]
-    fn pinned_dir(&self) -> Option<PathBuf> {
-        None
-    }
-
     /// Removes the recorded entries and the directory, if the name still
     /// reaches the claim. `between_check_and_removal` runs after the first
     /// check and before any removal, so a test can land a swap in exactly
@@ -168,7 +163,10 @@ impl TempDir {
         }
         between_check_and_removal();
         let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
+        #[cfg(target_os = "linux")]
         let pinned = self.pinned_dir();
+        #[cfg(not(target_os = "linux"))]
+        let pinned: Option<PathBuf> = None;
         for name in entries {
             let entry = match &pinned {
                 Some(dir) => dir.join(name),
