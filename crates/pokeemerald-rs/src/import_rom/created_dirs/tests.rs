@@ -32,6 +32,21 @@ fn entry_names(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
+/// Writes `keep` into the level captured in the quarantine `held`, as a
+/// writer that fills the level after rollback moved it there would.
+#[cfg(unix)]
+fn write_into_capture(held: std::os::fd::BorrowedFd<'_>) {
+    use std::io::Write as _;
+    let keep = rustix::fs::openat(
+        held,
+        format!("{}/keep", super::take_back::QUARANTINE_ENTRY),
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    fs::File::from(keep).write_all(b"x").unwrap();
+}
+
 #[cfg(unix)]
 const ROLLBACK_STDERR_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_STDERR_CHILD";
 
