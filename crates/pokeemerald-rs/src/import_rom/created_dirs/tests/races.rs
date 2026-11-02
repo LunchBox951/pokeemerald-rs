@@ -310,7 +310,7 @@ fn a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_ther
                 .unwrap();
                 fs::create_dir(&level).unwrap();
                 for n in 0..16 {
-                    fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+                    fs::create_dir(dir.join(format!("new.restored-{n}"))).unwrap();
                 }
             }
         },
