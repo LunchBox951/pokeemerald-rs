@@ -693,7 +693,7 @@ fn declining_a_move_asks_stop_learning_before_did_not_learn() {
             move_id: MoveId::EMBER,
         }],
     );
-    let templates: Vec<TemplateId> = requests.iter().map(|r| r.template.clone()).collect();
+    let templates: Vec<TemplateId> = requests.iter().map(|r| r.template).collect();
     // STRINGID_STOPLEARNINGMOVE = 20, STRINGID_DIDNOTLEARNMOVE = 21.
     assert_eq!(templates, [TemplateId::Table(20), TemplateId::Table(21)]);
 }
