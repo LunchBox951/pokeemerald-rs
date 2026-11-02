@@ -42,12 +42,15 @@ mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
+mod poke_ball;
 mod search;
 mod sprites;
 mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
+mod trainer_battlers;
+mod trainer_front;
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
@@ -158,6 +161,10 @@ fn locate_profile(
     lines: &mut Vec<ReportLine>,
 ) -> Result<ProfilePlan, GenRomProfileError> {
     inventory::preflight(ctx.pack, &ctx.bag_ids)?;
+    // The battlers repeat the portraits' ROM art under their own ids, so they
+    // are located from the portraits' plan rather than searched for again.
+    let trainer_front = trainer_front::locate(ctx, lines)?;
+    let trainer_battlers = trainer_battlers::locate(ctx, &trainer_front, lines)?;
     Ok(ProfilePlan {
         tilesets: tilesets::locate(ctx, lines)?,
         title_screen: title::locate(ctx, lines)?,
@@ -176,6 +183,9 @@ fn locate_profile(
         evolution_scene: evolution_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
+        poke_ball: poke_ball::locate(ctx, lines)?,
+        trainer_front,
+        trainer_battlers,
     })
 }
 

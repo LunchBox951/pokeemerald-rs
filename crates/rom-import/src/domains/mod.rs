@@ -35,12 +35,15 @@ pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
 pub(crate) mod opening_scene;
+pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
+pub(crate) mod trainer_battlers;
+pub(crate) mod trainer_front;
 
 use pack_format::{raw_entry, EntryKind, PackEntry, PackWriter};
 
@@ -76,6 +79,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     evolution_scene::write,
     battle_interface::write,
     battlers::write,
+    poke_ball::write,
+    trainer_front::write,
+    trainer_battlers::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.

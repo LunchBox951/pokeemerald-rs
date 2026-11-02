@@ -89,6 +89,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Poké Ball entry differs from the upstream graphic's shape.
+    MalformedPokeBallAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler entry differs from the upstream graphic's shape.
     MalformedBattlerAsset {
         /// Asset id.
@@ -107,6 +114,15 @@ pub enum PackError {
     },
     /// The pack carries no trainer picture for this identity.
     UnsupportedTrainerPic(TrainerPicId),
+    /// A trainer battler entry differs from the upstream graphic's shape.
+    MalformedTrainerBattlerAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The pack carries no battler art for this trainer.
+    UnsupportedTrainerBattler(TrainerPicId),
     /// An opening-scene entry (Birch's speech scene or the wall clock) differs
     /// from the upstream graphic's shape.
     MalformedOpeningSceneAsset {
@@ -280,6 +296,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedPokeBallAsset { id, detail } => {
+                write!(f, "asset pack: poke-ball entry `{id}` {detail}")
+            }
             Self::MalformedBattlerAsset { id, detail } => {
                 write!(f, "asset pack: battler entry `{id}` {detail}")
             }
@@ -295,6 +314,14 @@ impl fmt::Display for PackError {
                 f,
                 "asset pack: no trainer picture for index {}",
                 pic.index()
+            ),
+            Self::MalformedTrainerBattlerAsset { id, detail } => {
+                write!(f, "asset pack: trainer battler entry `{id}` {detail}")
+            }
+            Self::UnsupportedTrainerBattler(trainer) => write!(
+                f,
+                "asset pack: no trainer battler art for trainer picture {}",
+                trainer.index()
             ),
             Self::MalformedOpeningSceneAsset { id, detail } => {
                 write!(f, "asset pack: opening-scene entry `{id}` {detail}")
@@ -372,10 +399,13 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedPokeBallAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
             | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedTrainerBattlerAsset { .. }
+            | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedEvolutionSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }

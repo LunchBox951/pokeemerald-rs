@@ -71,6 +71,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "font/",
     "text-window/",
     "audio/",
+    "trainer-pic/",
+    "trainer/",
     "battle-message/",
     "field-message/",
     "battle-anim/",
@@ -78,6 +80,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "starter-chooser/",
     "opening-scene/",
     "evolution-scene/",
+    "poke-ball/",
 ];
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
@@ -237,6 +240,27 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/raw/bg_outer",
 ];
 
+/// The Birch-speech portraits: the front image and palette of Brendan and of
+/// May. Named by id so portraits both backends drop together still fail.
+const TRAINER_PORTRAIT_IDS: [&str; 4] = [
+    "trainer-pic/brendan/front",
+    "trainer-pic/brendan/palette",
+    "trainer-pic/may/front",
+    "trainer-pic/may/palette",
+];
+
+/// The Brendan and May trainer battlers: the front image, back sheet and
+/// shared palette of each. Named by id so entries both backends drop together
+/// still fail.
+const TRAINER_BATTLER_IDS: [&str; 6] = [
+    "trainer/brendan/front",
+    "trainer/brendan/back",
+    "trainer/brendan/palette",
+    "trainer/may/front",
+    "trainer/may/back",
+    "trainer/may/palette",
+];
+
 /// `field-message/table` as both backends must write it: schema header, then
 /// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
 /// through `charmap.txt`.
@@ -252,27 +276,6 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
 /// reason that survives review, not a convenient way to make this test
 /// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
-
-/// Each id in `named` that either pack lacks, so a payload both backends drop
-/// together still fails.
-fn missing_named_ids(
-    imported: &BTreeMap<String, DirectoryEntry>,
-    checkout: &BTreeMap<String, DirectoryEntry>,
-    named: impl IntoIterator<Item = String>,
-) -> Vec<String> {
-    let mut missing = Vec::new();
-    for id in named {
-        for (what, ids) in [
-            ("the ROM backend", imported),
-            ("the checkout pack", checkout),
-        ] {
-            if !ids.contains_key(&id) {
-                missing.push(format!("{id}: {what} wrote no such entry"));
-            }
-        }
-    }
-    missing
-}
 
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
@@ -365,13 +368,13 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     // Named by id so a payload both backends drop together still fails.
-    differences.extend(missing_named_ids(
-        &imported,
-        &checkout,
-        checkpoint_payload_ids()
-            .into_iter()
-            .chain(EVOLUTION_SCENE_IDS.map(str::to_owned)),
-    ));
+    let pinned: Vec<String> = checkpoint_payload_ids()
+        .into_iter()
+        .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
+        .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
+        .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
+        .collect();
+    differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
     differences.extend(field_message_differences(
         (&rom_bytes, &imported),
@@ -460,6 +463,59 @@ fn the_evolution_scene_record_is_equal_through_both_backends() {
         (b.width, b.height, b.bit_depth, b.pixels)
     );
     eprintln!("evolution-scene record equal through both backends");
+}
+
+/// The Poké Ball resolves through the typed handle from both packs, and the two
+/// handles are equal. The handle requires each of its three constituents, so
+/// a constituent both backends drop together still fails here.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-poke-ball-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = assets::AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = assets::AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let from_rom = imported.poke_ball().expect("the imported pack's Poké Ball");
+    let from_checkout = checkout.poke_ball().expect("the checkout pack's Poké Ball");
+    let _ = std::fs::remove_file(imported_path);
+
+    assert_eq!(
+        (from_rom.sheet.image.width, from_rom.sheet.image.height),
+        (16, 48)
+    );
+    assert_eq!(from_rom.sheet.palette.color_count, 16);
+    assert_eq!(
+        (from_rom.open_sheet.width, from_rom.open_sheet.height),
+        (16, 16)
+    );
+    assert_eq!(
+        from_rom.sheet.image.pixels,
+        from_checkout.sheet.image.pixels
+    );
+    assert!(from_rom
+        .sheet
+        .palette
+        .colors()
+        .eq(from_checkout.sheet.palette.colors()));
+    assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
 }
 
 /// A cry table payload naming `samples` in order.
@@ -692,6 +748,26 @@ fn rom_path() -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(value))
+}
+
+/// One difference per id either backend's pack lacks.
+fn missing_from_either(
+    ids: &[String],
+    imported: &BTreeMap<String, DirectoryEntry>,
+    checkout: &BTreeMap<String, DirectoryEntry>,
+) -> Vec<String> {
+    let mut differences = Vec::new();
+    for id in ids {
+        for (what, entries) in [
+            ("the ROM backend", imported),
+            ("the checkout pack", checkout),
+        ] {
+            if !entries.contains_key(id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
+        }
+    }
+    differences
 }
 
 /// The `field-message/table` pin applied to each backend's pack, given as
