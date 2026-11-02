@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.85.0] - 2026-10-31
 
-- Button icons now appear in dialogue and the opening speech where the text names a button.
+- Button icons now appear in dialogue and the opening speech where the text names a button. The asset pack format changed, so the game asks you to import your ROM again once.
 
 ## [0.0.84.0] - 2026-10-30
 
