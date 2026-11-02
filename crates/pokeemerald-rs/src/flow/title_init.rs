@@ -36,9 +36,9 @@
 use platform::Frame;
 use rendering::{NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
 
-use super::{AnimatedTitle, AppScene};
+use super::{boot_save, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
-use crate::game_save::SavedGame;
+use crate::game_save::{SaveSlot, SavedGame};
 use crate::title::TitleScene;
 
 /// The frame whose state begins the fade (`title_screen.c:631`).
@@ -112,19 +112,11 @@ impl TitleFade {
 }
 
 impl TitleInit {
-    /// The initializer for `scene`, with S0 still to run, and the white frame
-    /// presented until it does: the boot's construction (`retained_save`
-    /// `None`) or the menu's B hand-off (the live session save).
-    pub(crate) fn new(
-        scene: TitleScene,
-        retained_save: Option<Box<SavedGame>>,
-    ) -> (Self, Box<Frame>) {
-        let title = Box::new(AnimatedTitle {
-            scene,
-            tick: 0,
-            presented: false,
-            retained_save,
-        });
+    /// The initializer for `scene` carrying `saved`, with S0 still to run, and
+    /// the white frame presented until it does: the boot's construction
+    /// ([`TitleInit::boot`]) or the menu's B hand-off (the live session save).
+    pub(crate) fn new(scene: TitleScene, saved: SavedGame) -> (Self, Box<Frame>) {
+        let title = Box::new(AnimatedTitle::new(scene, saved));
         let init = Self {
             title,
             step: 0,
@@ -133,7 +125,14 @@ impl TitleInit {
         (init, white_frame())
     }
 
-    /// The retained session save's `optionsButtonMode`.
+    /// The initializer for the boot title, after the boot load of `save_slot`
+    /// ([`boot_save`]): upstream reads the save during the copyright screen,
+    /// ahead of the title (`pokeemerald/src/intro.c:1147-1159`).
+    pub(crate) fn boot(scene: TitleScene, save_slot: &mut SaveSlot) -> (Self, Box<Frame>) {
+        Self::new(scene, boot_save(save_slot))
+    }
+
+    /// The carried save's `optionsButtonMode`.
     pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
         self.title.button_mode()
     }
