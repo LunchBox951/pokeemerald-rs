@@ -640,7 +640,11 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
 
     // Controls, built independently over the same entries `compose` draws
     // from: confirm this arrangement straddles both budgets' cutoffs.
-    let sprite_entries = scene.sprite_entries(&player, &event_data);
+    let sprite_entries: Vec<rendering::OamEntry> = scene
+        .sprite_entries(&player, &event_data)
+        .into_iter()
+        .map(super::SheetSprite::oam)
+        .collect();
     let normal_budget = rendering::SpriteLayer::new(
         &sprite_entries,
         scene.sprites.tiles(),
@@ -2205,9 +2209,10 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
         // player, so a row inside the shared 16px band lies inside both.
         let x = usize::from(super::avatar::PLAYER_OBJ_X) + 8;
         let y = usize::from(super::avatar::PLAYER_OBJ_Y) + if npc_dy > 0 { 24 } else { 8 };
-        let color_at = |e: &[rendering::OamEntry]| {
+        let color_at = |e: &[super::SheetSprite]| {
+            let e: Vec<rendering::OamEntry> = e.iter().map(|e| e.oam()).collect();
             rendering::SpriteLayer::new(
-                e,
+                &e,
                 scene.sprites.tiles(),
                 scene.sprites.tiles(),
                 scene.sprites.palette(),

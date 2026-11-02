@@ -27,6 +27,7 @@ use engine::overworld::metatile_behavior::is_tall_grass;
 use engine::overworld::{PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
+use super::obj_vram::SheetSprite;
 use super::{
     avatar, npc, pack_4bpp_region, viewport, OverworldScene, OverworldSceneError, METATILE_PX,
 };
@@ -273,7 +274,7 @@ impl TallGrassEffects {
         player: &PlayerState,
         first_tile: u16,
         objects: &[DepthObject],
-    ) -> Vec<(OamEntry, u16)> {
+    ) -> Vec<(SheetSprite, u16)> {
         let player_tile = player.position();
         let (lag_x, lag_y) = viewport::camera_lag_px(player);
         self.effects
@@ -291,18 +292,22 @@ impl TallGrassEffects {
                 if !on_screen(left, top) {
                     return None;
                 }
-                let entry = OamEntry::new(
-                    npc::wrap_oam_x(left),
-                    npc::wrap_oam_y(top),
-                    first_tile + effect.animation.image() * FRAME_TILES,
-                    GENERAL_1_BANK,
-                    BitDepth::Bpp4,
-                    false,
-                    false,
-                    OBJ_SHAPE,
-                    OBJ_SIZE,
-                    OBJ_PRIORITY,
-                    true,
+                let sheet_tile = first_tile + effect.animation.image() * FRAME_TILES;
+                let entry = SheetSprite::new(
+                    OamEntry::new(
+                        npc::wrap_oam_x(left),
+                        npc::wrap_oam_y(top),
+                        sheet_tile,
+                        GENERAL_1_BANK,
+                        BitDepth::Bpp4,
+                        false,
+                        false,
+                        OBJ_SHAPE,
+                        OBJ_SIZE,
+                        OBJ_PRIORITY,
+                        true,
+                    ),
+                    sheet_tile,
                 );
                 Some((entry, effect.subpriority(left, top, objects)))
             })
@@ -420,12 +425,17 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         event_data: &EventData,
-    ) -> (usize, usize) {
-        let staged = super::obj_vram::stage(
+    ) -> super::obj_vram::StagedObjVram {
+        super::obj_vram::stage(
             &self.sprite_entries(player, event_data),
             self.sprites.tiles(),
-        );
-        (staged.tiles.len(), staged.dropped)
+        )
+    }
+
+    /// The combined sheet every [`SheetSprite`] indexes.
+    #[cfg(test)]
+    pub(crate) const fn sheet_tiles(&self) -> &rendering::Tileset {
+        self.sprites.tiles()
     }
 }
 

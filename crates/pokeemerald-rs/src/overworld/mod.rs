@@ -82,6 +82,7 @@ mod grass;
 mod npc;
 pub(crate) mod npc_scripts;
 mod obj_vram;
+pub(crate) use obj_vram::SheetSprite;
 pub(crate) mod oldale_town_npc_reposition;
 mod sprites;
 mod tileset_anims;
@@ -606,7 +607,7 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         event_data: &EventData,
-    ) -> Vec<rendering::OamEntry> {
+    ) -> Vec<SheetSprite> {
         self.sprites.entries(player, event_data, &self.grass)
     }
 
@@ -645,7 +646,7 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         tick: u32,
-        sprite_entries: &[rendering::OamEntry],
+        sprite_entries: &[SheetSprite],
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
         let viewport::FrameViewport {
@@ -764,7 +765,7 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         event_data: &EventData,
-    ) -> (Vec<rendering::OamEntry>, (u16, u16)) {
+    ) -> (Vec<SheetSprite>, (u16, u16)) {
         let viewport = self.frame_viewport(player);
         let player_first_oam_entries = self.sprite_entries(player, event_data);
         let background_scroll = (viewport.scroll_x, viewport.scroll_y);

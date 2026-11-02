@@ -14,11 +14,12 @@ use assets::pack::AssetPack;
 use engine::event_data::EventData;
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
-use rendering::{BitDepth, OamEntry, Palette, Tileset};
+use rendering::{BitDepth, Palette, Tileset};
 
 use super::avatar::{self, PlayerCharacter};
 use super::grass::{self, DepthObject, TallGrassEffects};
 use super::npc::{self, SpriteBinding};
+use super::obj_vram::SheetSprite;
 use super::OverworldSceneError;
 
 #[derive(Debug)]
@@ -100,7 +101,7 @@ impl SceneSprites {
         player: &PlayerState,
         event_data: &EventData,
         grass: &TallGrassEffects,
-    ) -> Vec<OamEntry> {
+    ) -> Vec<SheetSprite> {
         self.live_entries(&self.seed_objects, player, event_data, grass)
     }
 
@@ -116,7 +117,7 @@ impl SceneSprites {
         player: &PlayerState,
         event_data: &EventData,
         grass: &TallGrassEffects,
-    ) -> Vec<OamEntry> {
+    ) -> Vec<SheetSprite> {
         let mut elevated = vec![(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
@@ -127,9 +128,9 @@ impl SceneSprites {
             player,
             event_data,
         ));
-        let mut entries: Vec<(OamEntry, u16)> = elevated
+        let mut entries: Vec<(SheetSprite, u16)> = elevated
             .iter()
-            .map(|&(entry, elevation)| (entry, npc::subpriority(entry, elevation)))
+            .map(|&(entry, elevation)| (entry, npc::subpriority(entry.oam(), elevation)))
             .collect();
         if let Some(first_tile) = self.grass_base_tile {
             let depth_objects: Vec<DepthObject> = entries

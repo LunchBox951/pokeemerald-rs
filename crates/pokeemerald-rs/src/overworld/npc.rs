@@ -28,6 +28,7 @@ use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 
 use super::avatar::{self, PlayerCharacter};
 use super::grass;
+use super::obj_vram::SheetSprite;
 use super::{fill_palette_bank, OverworldSceneError, METATILE_PX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,10 +391,10 @@ pub(super) fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
 /// Orders pairs as upstream emits OAM: ascending OBJ priority, then subpriority,
 /// then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`); ties keep input order.
 #[cfg(test)]
-pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
-    let keyed: Vec<(OamEntry, u16)> = entries
+pub(super) fn order_by_depth(entries: &[(SheetSprite, u8)]) -> Vec<SheetSprite> {
+    let keyed: Vec<(SheetSprite, u16)> = entries
         .iter()
-        .map(|&(entry, elevation)| (entry, subpriority(entry, elevation)))
+        .map(|&(entry, elevation)| (entry, subpriority(entry.oam(), elevation)))
         .collect();
     order_by_subpriority(&keyed)
 }
@@ -401,7 +402,7 @@ pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
 /// Orders entries of known subpriority, which lets an effect sprite compete
 /// beside object-event sprites; [`order_by_depth`] derives the subpriority of
 /// object-event entries from their elevation.
-pub(super) fn order_by_subpriority(entries: &[(OamEntry, u16)]) -> Vec<OamEntry> {
+pub(super) fn order_by_subpriority(entries: &[(SheetSprite, u16)]) -> Vec<SheetSprite> {
     let mut ordered = entries.to_vec();
     ordered.sort_by_key(|&(entry, subpriority)| {
         (entry.priority(), subpriority, std::cmp::Reverse(entry.y()))
@@ -417,7 +418,7 @@ pub(super) fn oam_entries(
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
-) -> Vec<OamEntry> {
+) -> Vec<SheetSprite> {
     elevated_oam_entries(objects, bindings, player, event_data)
         .into_iter()
         .map(|(entry, _)| entry)
@@ -437,7 +438,7 @@ pub(super) fn elevated_oam_entries(
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
-) -> Vec<(OamEntry, u8)> {
+) -> Vec<(SheetSprite, u8)> {
     let player_pos = player.position();
     let camera_lag = super::viewport::camera_lag_px(player);
     objects
@@ -454,18 +455,21 @@ pub(super) fn elevated_oam_entries(
             let (frame, h_flip) = avatar::stand_frame_for(state.facing());
             let tile_index = binding.base_tile + frame * avatar::FRAME_TILES;
             let (x, y) = object_screen_position(state.position(), player_pos, camera_lag);
-            let entry = OamEntry::new(
-                x,
-                y,
+            let entry = SheetSprite::new(
+                OamEntry::new(
+                    x,
+                    y,
+                    tile_index,
+                    binding.palette_bank,
+                    BitDepth::Bpp4,
+                    h_flip,
+                    false,
+                    avatar::PLAYER_OBJ_SHAPE,
+                    avatar::PLAYER_OBJ_SIZE,
+                    avatar::priority_for_elevation(state.elevation()),
+                    true,
+                ),
                 tile_index,
-                binding.palette_bank,
-                BitDepth::Bpp4,
-                h_flip,
-                false,
-                avatar::PLAYER_OBJ_SHAPE,
-                avatar::PLAYER_OBJ_SIZE,
-                avatar::priority_for_elevation(state.elevation()),
-                true,
             );
             (entry, state.elevation())
         })

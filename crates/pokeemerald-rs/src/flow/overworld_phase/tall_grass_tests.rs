@@ -49,6 +49,7 @@ fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
         .sprite_entries(&phase.player, &phase.save1.event_data)
         .into_iter()
         .filter(|entry| entry.palette_bank() == GENERAL_1_BANK)
+        .map(crate::overworld::SheetSprite::oam)
         .collect()
 }
 
@@ -329,9 +330,11 @@ fn a_pack_without_the_field_effect_sheet_draws_no_grass() {
 /// The `OBJ` tile-number field is ten bits wide.
 const OBJ_TILE_LIMIT: usize = 1024;
 
+/// Loads `map` as the game enters it: `map_entry_event_data` seeds the
+/// rival of the opposite gender, so every sheet the map resolves is packed.
 fn checkpoint_scene(
     map: &'static str,
-    gender: engine::save::PlayerGender,
+    protagonist: engine::save::PlayerGender,
 ) -> (
     crate::overworld::OverworldScene,
     engine::event_data::EventData,
@@ -340,12 +343,12 @@ fn checkpoint_scene(
     let event_data = super::connections::map_entry_event_data(
         &engine::event_data::EventData::new(),
         map,
-        gender,
+        protagonist,
     );
     let scene = crate::overworld::load_room_from_source(
         &crate::pack_source::PackSource::Repo,
         map,
-        crate::overworld::PlayerCharacter::from(gender),
+        crate::overworld::PlayerCharacter::from(protagonist),
         &event_data,
     )
     .expect("run `cargo xtask extract` first");
@@ -365,38 +368,94 @@ fn every_checkpoint_scene_of_the_real_pack_stages_its_sprites_in_obj_tile_space(
         "MAP_OLDALE_TOWN",
         "MAP_ROUTE103",
     ] {
-        for gender in [PlayerGender::Male, PlayerGender::Female] {
-            let (scene, event_data) = checkpoint_scene(map, gender);
+        for protagonist in [PlayerGender::Male, PlayerGender::Female] {
+            let (scene, event_data) = checkpoint_scene(map, protagonist);
             assert!(
                 scene.tall_grass_first_tile().is_some(),
                 "the pack has the sheet"
             );
             let player = PlayerState::new((8, 8), GROUND, Direction::South);
-            let (staged, dropped) = scene.staged_obj_vram(&player, &event_data);
-            assert_eq!(dropped, 0, "{map} {gender:?}: {staged} staged tiles");
-            assert!(staged <= OBJ_TILE_LIMIT, "{map} {gender:?}: {staged}");
+            let staged = scene.staged_obj_vram(&player, &event_data);
+            let character = crate::overworld::PlayerCharacter::from(protagonist);
+            assert_eq!(
+                staged.dropped,
+                0,
+                "{map} {character:?}: {} staged tiles",
+                staged.tiles.len()
+            );
+            assert!(
+                staged.tiles.len() <= OBJ_TILE_LIMIT,
+                "{map} {character:?}: {}",
+                staged.tiles.len()
+            );
         }
     }
 }
 
-/// On Route 103 the effect's cells sit past tile 1024 of the combined sheet;
-/// every rustle frame must still stage inside the OBJ tile field.
+/// On Route 103 the effect's cells sit past tile 1024 of the combined sheet,
+/// where `OamEntry` would wrap the index to the player's sheet. Every rustle
+/// image a step plays must stage its own cells, pixel for pixel.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn route_103_grass_rustle_frames_stage_inside_the_obj_tile_field() {
+fn route_103_grass_rustle_frames_stage_their_own_cells() {
     use engine::save::PlayerGender;
-    for gender in [PlayerGender::Male, PlayerGender::Female] {
-        let (scene, event_data) = checkpoint_scene("MAP_ROUTE103", gender);
+    const ROUTE_103: MapId = MapId("MAP_ROUTE103");
+    for protagonist in [PlayerGender::Male, PlayerGender::Female] {
+        let character = crate::overworld::PlayerCharacter::from(protagonist);
+        let (scene, _) = checkpoint_scene("MAP_ROUTE103", protagonist);
         let first = scene
             .tall_grass_first_tile()
             .expect("the pack has the sheet");
         assert!(
             usize::from(first) + 5 * usize::from(CELL_TILES) > OBJ_TILE_LIMIT,
-            "{gender:?}: premise, the combined sheet overflows at {first}"
+            "{character:?}: premise, the combined sheet overflows at {first}"
         );
-        let player = PlayerState::new((8, 8), GROUND, Direction::South);
-        let (staged, dropped) = scene.staged_obj_vram(&player, &event_data);
-        assert_eq!(dropped, 0, "{gender:?}: {staged} staged tiles");
+        let grass = {
+            let runtime = scene.runtime();
+            (0..64)
+                .flat_map(|y| (0..64).map(move |x| (x, y)))
+                .find(|&(x, y)| {
+                    runtime.metatile_behavior(x, y) == Some(MB_TALL_GRASS)
+                        && runtime.metatile_behavior(x + 1, y) == Some(MB_TALL_GRASS)
+                })
+                .expect("Route 103 has two tall-grass tiles side by side")
+        };
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ROUTE_103,
+            PlayerState::new(grass, GROUND, Direction::East),
+            None,
+        );
+        walk_east(&mut phase);
+        let mut images_seen = std::collections::BTreeSet::new();
+        for _ in 0..48 {
+            idle(&mut phase, 1);
+            let event_data = &phase.save1.event_data;
+            let staged = phase.scene.staged_obj_vram(&phase.player, event_data);
+            assert_eq!(staged.dropped, 0, "{character:?}: a sprite was dropped");
+            let sheet = phase.scene.sheet_tiles();
+            let entries = phase.scene.sprite_entries(&phase.player, event_data);
+            assert_eq!(staged.entries.len(), entries.len(), "staging keeps order");
+            for (entry, staged_entry) in entries
+                .iter()
+                .zip(&staged.entries)
+                .filter(|(entry, _)| entry.palette_bank() == GENERAL_1_BANK)
+            {
+                let image = (entry.tile_index() - first) / CELL_TILES;
+                images_seen.insert(image);
+                for cell in 0..CELL_TILES {
+                    assert_eq!(
+                        staged.tiles.tile(staged_entry.tile_index() + cell),
+                        sheet.tile(entry.tile_index() + cell),
+                        "{character:?}: image {image} cell {cell} must stage the grass cell"
+                    );
+                }
+            }
+        }
+        assert!(
+            images_seen.contains(&4),
+            "{character:?}: the step must play the rustle image past the OBJ limit"
+        );
     }
 }
 
