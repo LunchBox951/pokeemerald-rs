@@ -1,13 +1,30 @@
-//! Extended control codes that move the cursor, erase, or resolve to a glyph.
+//! Extended control codes for font selection, cursor moves, erasures, and glyphs.
 //!
 //! [`Printer::tick`] hands each `EXT_CTRL_CODE` token it does not handle
 //! itself (`PAUSE`, `PAUSE_UNTIL_PRESS`) to [`Printer::apply_extended_control`],
-//! which applies the cursor, `CLEAR`, `CLEAR_TO`, and `FILL_WINDOW` effects and
-//! reports the [`ControlOutcome`] the frame continues with.
+//! which applies the `FONT`, cursor, `CLEAR`, `CLEAR_TO`, and `FILL_WINDOW`
+//! effects and reports the [`ControlOutcome`] the frame continues with.
 
-use assets::fonts::GlyphSource;
+use assets::fonts::{FontId, GlyphSource};
 
 use super::{ext_ctrl, ClearedSpan, Printer, EXTRA_SYMBOL_PAGE_START};
+
+/// Maps an upstream `FONT_*` id (`pokeemerald/include/text.h:10-21`) to the
+/// source whose glyphs upstream draws with it (`text.c:1123-1141`).
+///
+/// The three `FONT_SHORT_COPY_*` ids dispatch to `DecompressGlyph_Short`, so
+/// they select [`FontId::Short`]. `FONT_BRAILLE` (6), `FONT_BOLD` (9) and any
+/// other id have no modelled source, so they map to `None`.
+const fn font_for_upstream_id(raw: u8) -> Option<FontId> {
+    match raw {
+        0 => Some(FontId::Small),
+        1 => Some(FontId::Normal),
+        2..=5 => Some(FontId::Short),
+        7 => Some(FontId::Narrow),
+        8 => Some(FontId::SmallNarrow),
+        _ => None,
+    }
+}
 
 /// What handling one extended control code leaves for the frame to do.
 ///
@@ -50,6 +67,15 @@ impl<S: GlyphSource> Printer<S> {
             ext_ctrl::SHIFT_DOWN => {
                 if let Some(&offset) = arguments.first() {
                     self.cursor.1 = self.origin.1.saturating_add(i32::from(offset));
+                }
+            }
+            // `text.c:1007-1010`: changes only the font later glyphs draw
+            // from, then repeats. The line and scroll metrics keep the
+            // template font, and the clear height waits for the next glyph
+            // (see `tick_handle_char`).
+            ext_ctrl::FONT => {
+                if let Some(&raw) = arguments.first() {
+                    self.active_font = font_for_upstream_id(raw);
                 }
             }
             // `text.c:1063-1072`: the argument is the width to erase from the

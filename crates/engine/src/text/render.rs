@@ -8,17 +8,25 @@
 //!
 //! # Deliberately out of scope
 //!
-//! Formatting, audio, and window-buffer controls are consumed without applying
-//! effects. Placeholders and dynamic tokens are skipped because this renderer
-//! has no expansion context. A keypad icon is not skipped: it advances the
-//! cursor by the icon's width and is reported through
+//! Colour, audio, and the other formatting controls are consumed without
+//! applying effects. Placeholders and dynamic tokens are skipped because this
+//! renderer has no expansion context. A keypad icon is not skipped: it advances
+//! the cursor by the icon's width and is reported through
 //! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
-//! no icon bitmaps. `CLEAR`,
-//! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
-//! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
-//! `FILL_WINDOW`'s whole-window equivalent through
-//! [`Printer::cleared_window`], both for the caller to erase. Which colour
-//! that erase uses stays out of scope with the rest of formatting.
+//! no icon bitmaps. `FONT`, `CLEAR`, `CLEAR_TO`, and `FILL_WINDOW` are the
+//! exceptions among the controls that would otherwise be no-ops:
+//!
+//! - `FONT` changes the glyph source the following glyphs render from, mid
+//!   string, as reported by [`Printer::active_font`]. A font with no modelled
+//!   source (Braille, Bold, or an unknown id) skips glyphs until a later
+//!   `FONT` selects a modelled one. The template line and scroll metrics stay
+//!   on the font the printer was built with.
+//! - `CLEAR`/`CLEAR_TO` move the cursor, and their geometry is reported as a
+//!   [`ClearedSpan`] for the caller to erase.
+//! - `FILL_WINDOW` resets the cursor and reports its whole-window equivalent
+//!   through [`Printer::cleared_window`], also for the caller to erase.
+//!
+//! Which colour an erase uses stays out of scope with the rest of formatting.
 
 use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
@@ -29,6 +37,7 @@ mod ext_ctrl {
     pub const SHIFT_RIGHT: u8 = super::super::EXT_CTRL_CODE_SHIFT_RIGHT;
     pub const SHIFT_DOWN: u8 = super::super::EXT_CTRL_CODE_SHIFT_DOWN;
     pub const SKIP: u8 = super::super::EXT_CTRL_CODE_SKIP;
+    pub const FONT: u8 = super::super::EXT_CTRL_CODE_FONT;
     pub const CLEAR: u8 = super::super::EXT_CTRL_CODE_CLEAR;
     pub const CLEAR_TO: u8 = super::super::EXT_CTRL_CODE_CLEAR_TO;
     pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
@@ -39,6 +48,9 @@ mod ext_ctrl {
 mod control;
 mod keypad_icon;
 mod speed;
+
+#[cfg(test)]
+mod font_control_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 pub use speed::TextSpeed;
@@ -227,8 +239,9 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
 /// The printer owns its glyph source and emits blit and layout events rather
 /// than writing a pixel buffer. [`Printer::new`] carries that one source;
 /// [`Printer::with_sources`] also carries the other modelled Latin sources,
-/// retrievable through [`Printer::source`], so a later `FONT` control can
-/// select one. Text always renders from the initial source until then.
+/// retrievable through [`Printer::source`]. A `FONT` control selects the source
+/// the next glyph renders from ([`Printer::active_font`]); text renders from
+/// the initial source until one does.
 #[derive(Debug)]
 pub struct Printer<S> {
     tokens: Vec<Token>,
@@ -237,6 +250,9 @@ pub struct Printer<S> {
     /// The modelled sources other than `glyphs`, in [`FontId::ALL`] order.
     /// Empty for a printer built by [`Printer::new`].
     alternate_glyphs: Vec<S>,
+    /// The font the next glyph renders from: `glyphs`' font until a `FONT`
+    /// control changes it, and `None` after one names an unmodelled font.
+    active_font: Option<FontId>,
     speed: TextSpeed,
     reveal_delay_frames_remaining: u8,
     origin: PixelPos,
@@ -257,6 +273,7 @@ impl<S: GlyphSource> Printer<S> {
     /// A/B speed-up is disabled until [`Self::with_ab_speed_up_print`] is used.
     #[must_use]
     pub fn new(tokens: Vec<Token>, glyphs: S, speed: TextSpeed, origin: PixelPos) -> Self {
+        let glyphs_font = glyphs.font();
         Self {
             tokens,
             next_token_index: 0,
@@ -267,6 +284,7 @@ impl<S: GlyphSource> Printer<S> {
             keypad_icon: None,
             glyphs,
             alternate_glyphs: Vec::new(),
+            active_font: Some(glyphs_font),
             speed,
             reveal_delay_frames_remaining: 0,
             origin,
@@ -280,8 +298,8 @@ impl<S: GlyphSource> Printer<S> {
     /// Creates a printer at the window-local `origin` that renders from
     /// `initial`'s source and also carries every other modelled source.
     ///
-    /// Behaves exactly as [`Self::new`] over `initial`'s source: nothing
-    /// selects an alternate source yet.
+    /// Renders exactly as [`Self::new`] over `initial`'s source until a
+    /// `FONT` control selects another carried source.
     #[must_use]
     pub fn with_sources(
         tokens: Vec<Token>,
@@ -297,10 +315,27 @@ impl<S: GlyphSource> Printer<S> {
         }
     }
 
-    /// The font the printer currently renders from.
+    /// The font the printer was built with. It fixes the template line and
+    /// scroll metrics and is what [`Self::restart`] returns to; a `FONT`
+    /// control does not change it (upstream leaves `printerTemplate.fontId`
+    /// intact, `pokeemerald/src/text.c:969-970`, `:1181-1185`). See
+    /// [`Self::active_font`] for the font glyphs render from.
     #[must_use]
     pub fn selected_font(&self) -> FontId {
         self.glyphs.font()
+    }
+
+    /// The font the next glyph renders from, as set by the stream's latest
+    /// `FONT` control (`subStruct->fontId`, `text.c:1007-1010`).
+    ///
+    /// `None` after a `FONT` control named a font with no modelled source
+    /// (Braille, Bold, or an unknown id): glyphs are then skipped until a
+    /// later control selects a modelled font. `Some(font)` names the
+    /// selection only; a [`Self::new`] printer renders nothing for a font
+    /// other than its own, as [`Self::source`] reports.
+    #[must_use]
+    pub const fn active_font(&self) -> Option<FontId> {
+        self.active_font
     }
 
     /// The source this printer carries for `font`, or `None` if it was built
@@ -394,6 +429,8 @@ impl<S: GlyphSource> Printer<S> {
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
+        self.active_font = Some(self.glyphs.font());
+        self.clear_height = clear_span_height(self.glyphs.font());
     }
 
     /// Advance the printer by exactly one frame.
@@ -537,9 +574,20 @@ impl<S: GlyphSource> Printer<S> {
             let Some(glyph_id) = glyph_id else {
                 continue;
             };
-            let Some(glyph) = self.glyphs.glyph(glyph_id) else {
+            // Upstream dispatches on the stream's current font id
+            // (`text.c:1123-1141`); a font with no carried source draws
+            // nothing rather than falling back to another font's glyph.
+            let Some(font) = self.active_font else {
                 continue;
             };
+            let Some(glyph) = self.source(font).and_then(|source| source.glyph(glyph_id)) else {
+                continue;
+            };
+            // `ClearTextSpan` erases `gCurGlyph.height` rows
+            // (`text.c:649-674`), which the latest `DecompressGlyph_*` set, so
+            // the clear height follows the font of the latest glyph rather
+            // than the latest `FONT` control.
+            self.clear_height = clear_span_height(font);
 
             let placement = RevealedGlyph {
                 x: self.cursor.0,

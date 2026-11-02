@@ -61,40 +61,8 @@ fn a_printer_over_an_owned_sheet_outlives_the_pack_bytes_it_came_from() {
     assert_eq!(g.glyph.advance_width, NORMAL_A_ADVANCE_WIDTH);
 }
 
-/// Per-font pixel pairs, each distinct within the 2-bit depth, so a
-/// glyph's first two pixels name its source.
-fn fill_for(font: FontId) -> (u8, u8) {
-    match font {
-        FontId::Small => (1, 0),
-        FontId::Normal => (2, 0),
-        FontId::Short => (3, 0),
-        FontId::Narrow => (0, 1),
-        FontId::SmallNarrow => (1, 1),
-    }
-}
-
-/// A sheet alternating `fill_for(font)` across each row, so every glyph
-/// starts with that pair.
-fn multi_font_pixels(font: FontId) -> Vec<u8> {
-    let (even, odd) = fill_for(font);
-    (0..SHEET_WIDTH * SHEET_HEIGHT)
-        .map(|index| if index % 2 == 0 { even } else { odd })
-        .collect()
-}
-
 fn multi_font_printer(initial: FontId) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
-    let sources = GlyphSources::try_from_fn(|font| {
-        let pixels = multi_font_pixels(font);
-        Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
-    })
-    .unwrap();
-    Printer::with_sources(
-        decode_tokens(&[ENCODED_A, crate::text::EOS]),
-        sources,
-        initial,
-        TextSpeed::Instant,
-        (0, 0),
-    )
+    multi_font_printer_over(initial, &[ENCODED_A, crate::text::EOS])
 }
 
 #[test]

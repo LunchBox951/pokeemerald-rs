@@ -41,3 +41,42 @@ pub(super) const fn press_a() -> PrinterInput {
         b_held: false,
     }
 }
+
+/// Per-font pixel pairs, each distinct within the 2-bit depth, so a
+/// glyph's first two pixels name its source.
+pub(super) fn fill_for(font: FontId) -> (u8, u8) {
+    match font {
+        FontId::Small => (1, 0),
+        FontId::Normal => (2, 0),
+        FontId::Short => (3, 0),
+        FontId::Narrow => (0, 1),
+        FontId::SmallNarrow => (1, 1),
+    }
+}
+
+/// A sheet alternating `fill_for(font)` across each row, so every glyph
+/// starts with that pair.
+pub(super) fn multi_font_pixels(font: FontId) -> Vec<u8> {
+    let (even, odd) = fill_for(font);
+    (0..SHEET_WIDTH * SHEET_HEIGHT)
+        .map(|index| if index % 2 == 0 { even } else { odd })
+        .collect()
+}
+
+pub(super) fn multi_font_printer_over(
+    initial: FontId,
+    bytes: &[u8],
+) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
+    let sources = GlyphSources::try_from_fn(|font| {
+        let pixels = multi_font_pixels(font);
+        Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
+    })
+    .unwrap();
+    Printer::with_sources(
+        decode_tokens(bytes),
+        sources,
+        initial,
+        TextSpeed::Instant,
+        (0, 0),
+    )
+}
