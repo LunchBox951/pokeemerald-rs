@@ -86,6 +86,9 @@ pub(super) fn requests(
     if let Some(requests) = status_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = end_turn_and_spore_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = stat_results(narrator, event) {
         return Ok(requests);
     }
@@ -171,16 +174,6 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             id::PKMNCHARGINGPOWER,
             base.user_vs_target(Side::user(by_player)),
         ),
-        BattleEvent::HurtByPoison { by_player, .. } => {
-            let mut context = base;
-            context.attacker = Some(Side::user(by_player));
-            table(id::PKMNHURTBYPOISON, context)
-        }
-        BattleEvent::HurtByBurn { by_player, .. } => {
-            let mut context = base;
-            context.attacker = Some(Side::user(by_player));
-            table(id::PKMNHURTBYBURN, context)
-        }
         BattleEvent::Hit {
             is_critical: true, ..
         } => table(id::CRITICALHIT, base),
@@ -367,30 +360,6 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             AbilityId::POISON_POINT,
             Holder::Target,
         ),
-        // `ABILITY_EFFECT_SPORE` sets `HITMARKER_STATUS_ABILITY_EFFECT`, so
-        // `SetMoveEffect` picks each status table's by-ability string
-        // (`src/battle_util.c:2782`-`:2804`, `src/battle_script_commands.c:2491`-`:2499`).
-        BattleEvent::AsleepByEffectSpore { by_player, .. } => reflected(
-            id::PKMNMADESLEEP,
-            base,
-            Side::user(by_player),
-            AbilityId::EFFECT_SPORE,
-            Holder::Target,
-        ),
-        BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
-            id::PKMNPOISONEDBY,
-            base,
-            Side::user(by_player),
-            AbilityId::EFFECT_SPORE,
-            Holder::Target,
-        ),
-        BattleEvent::ParalyzedByEffectSpore { by_player, .. } => reflected(
-            id::PKMNWASPARALYZEDBY,
-            base,
-            Side::user(by_player),
-            AbilityId::EFFECT_SPORE,
-            Holder::Target,
-        ),
         BattleEvent::ParalyzedByAttackerSynchronize { by_player, .. } => reflected(
             id::PKMNWASPARALYZEDBY,
             base,
@@ -425,6 +394,54 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
         BattleEvent::SynchronizeImmunityProtected { by_player, .. } => {
             blocked_reflection(base, Side::user(by_player), AbilityId::IMMUNITY)
         }
+        _ => return None,
+    };
+    Some(vec![request])
+}
+
+/// End-turn residual damage, which names the battler hurt as the attacker
+/// (`data/battle_scripts_1.s:3736`-`:3753`), and Effect Spore's statuses.
+/// `ABILITY_EFFECT_SPORE` sets `HITMARKER_STATUS_ABILITY_EFFECT`, so
+/// `SetMoveEffect` picks each status table's by-ability string with the holder
+/// as the scripting battler (`src/battle_util.c:2782`-`:2804`,
+/// `src/battle_script_commands.c:2491`-`:2499`).
+fn end_turn_and_spore_results(
+    narrator: &Narrator,
+    event: &BattleEvent,
+) -> Option<Vec<NarrationRequest>> {
+    let base = narrator.context();
+    let request = match *event {
+        BattleEvent::HurtByPoison { by_player, .. } => {
+            let mut context = base;
+            context.attacker = Some(Side::user(by_player));
+            table(id::PKMNHURTBYPOISON, context)
+        }
+        BattleEvent::HurtByBurn { by_player, .. } => {
+            let mut context = base;
+            context.attacker = Some(Side::user(by_player));
+            table(id::PKMNHURTBYBURN, context)
+        }
+        BattleEvent::AsleepByEffectSpore { by_player, .. } => reflected(
+            id::PKMNMADESLEEP,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
+            Holder::Target,
+        ),
+        BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
+            id::PKMNPOISONEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
+            Holder::Target,
+        ),
+        BattleEvent::ParalyzedByEffectSpore { by_player, .. } => reflected(
+            id::PKMNWASPARALYZEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::EFFECT_SPORE,
+            Holder::Target,
+        ),
         _ => return None,
     };
     Some(vec![request])
