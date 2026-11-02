@@ -10,10 +10,11 @@
 //! [`crate::overworld::NpcDialog`] does. [`crate::flow::overworld_phase`]'s
 //! `start_menu` module owns the gate that decides when [`open`] may run.
 
+use crate::palette_overlay::stage_overlay;
 use assets::pack::PackError;
 use engine::text::render::RevealedGlyph;
 use platform::{ButtonState, Buttons};
-use rendering::Framebuffer;
+use rendering::{Framebuffer, PaletteStage};
 
 mod chrome;
 mod save_dialog;
@@ -225,8 +226,20 @@ impl StartMenu {
     }
 
     /// Composites the menu, and whatever the SAVE flow has open, over an
-    /// already-composed overworld frame.
-    pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
+    /// already-composed overworld frame. Every window is BG, so `palette`'s
+    /// BG transform maps the pixels the menu paints and `base` stays as given.
+    pub(crate) fn compose_over(
+        &self,
+        mut base: Framebuffer,
+        palette: PaletteStage<'_>,
+    ) -> Framebuffer {
+        stage_overlay(&mut base, palette.bg, |fb| {
+            *fb = self.paint_over(std::mem::take(fb));
+        });
+        base
+    }
+
+    fn paint_over(&self, mut base: Framebuffer) -> Framebuffer {
         // The item window is removed only once its replacement save message
         // exists, never a frame earlier
         // (`pokeemerald/src/start_menu.c:978-993`).
