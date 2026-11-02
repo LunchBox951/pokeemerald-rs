@@ -408,10 +408,11 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let missing: &'static std::path::Path =
         Box::leak(std::path::PathBuf::from("/nonexistent/birch/menu.pack").into_boxed_path());
+    let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
-        crate::app::compose_title_scene(title_scene),
-        SaveSlot::disabled(),
+        crate::app::compose_title_scene(title_scene, &mut save_slot),
+        save_slot,
         crate::pack_source::PackSource::Test(missing),
     );
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
@@ -464,10 +465,11 @@ fn main_menu_b_restarts_the_title_music_on_the_returning_title() {
     use crate::flow::AppScene;
 
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
+    let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
-        crate::app::compose_title_scene(title_scene),
-        SaveSlot::disabled(),
+        crate::app::compose_title_scene(title_scene, &mut save_slot),
+        save_slot,
         crate::pack_source::PackSource::Repo,
     );
     app.title_audio = crate::app::TitleAudio::Null;
@@ -543,10 +545,11 @@ fn the_title_music_restarts_on_the_fifth_initializer_frame() {
     let pack = assets::AssetPack::load(&path).expect("the synthetic pack loads");
     let title = crate::title::TitleScene::from_pack(&pack).expect("the synthetic title decodes");
     let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
-        crate::app::compose_title_scene(title),
-        SaveSlot::disabled(),
+        crate::app::compose_title_scene(title, &mut save_slot),
+        save_slot,
         crate::pack_source::PackSource::Test(leaked),
     );
     app.title_audio = crate::app::TitleAudio::Null;
