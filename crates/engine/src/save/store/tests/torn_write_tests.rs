@@ -413,3 +413,50 @@ fn a_sixth_sector_torn_before_its_footer_still_reads_error() {
     store.corrupt_byte(1, 5, 0);
     assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
 }
+
+/// A sixth sector torn after its erase reads Error, as upstream does
+/// (`pokeemerald/src/save.c:529-546`).
+#[test]
+fn a_sixth_sector_torn_after_its_erase_still_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 5, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}
+
+/// An erased tail sector spends the one-outlier budget exactly as a
+/// checksum-failing one does, wherever it falls in the tail.
+#[test]
+fn a_torn_rotation_zero_write_stays_refused_with_one_erased_tail_sector() {
+    for predecessor_rotation in 1..NUM_SECTORS_PER_SLOT {
+        for written in 5..NUM_SECTORS_PER_SLOT_U16 {
+            for position in usize::from(SECTOR_ID_PKMN_STORAGE_START)..NUM_SECTORS_PER_SLOT {
+                let mut store = SaveStore::new();
+                write_full_slot_rotated(&mut store, 1, predecessor_rotation, 12);
+                tear_rotation_zero_write(&mut store, 1, written, 14);
+                store.write_physical(1, position, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+                let must_refuse = written >= 6 || predecessor_rotation == 12;
+                if must_refuse {
+                    assert_eq!(
+                        store.scan_slot(1).integrity,
+                        SlotIntegrity::Error,
+                        "predecessor {predecessor_rotation}, torn after {written}, \
+                         position {position} erased"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A pure five-sector slot has a blank tail, which is no torn write: with no
+/// signed tail sector to tear against, it stays intact.
+#[test]
+fn a_blank_tail_with_no_signed_tail_sector_stays_a_legacy_head() {
+    let mut store = SaveStore::new();
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    let scan = store.scan_slot(1);
+    assert_eq!(scan.integrity, SlotIntegrity::Ok);
+    assert!(scan.legacy);
+}

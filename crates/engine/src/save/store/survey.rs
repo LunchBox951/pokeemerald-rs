@@ -156,10 +156,17 @@ impl SlotSurvey {
 
     /// Folds the sector at physical position `i` into the survey.
     pub(super) fn observe(&mut self, i: usize, sector: &Sector) {
+        let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
         if sector.signature() != SECTOR_SIGNATURE {
+            // Upstream skips an unsigned sector, leaving its id missing
+            // (`pokeemerald/src/save.c:529-546`).
+            if in_tail {
+                self.tail_unusable_count += 1;
+                self.tail_unusable_at_first_tail_position =
+                    i == usize::from(SECTOR_ID_PKMN_STORAGE_START);
+            }
             return;
         }
-        let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
         if in_tail {
             self.tail_signature_seen = true;
         }

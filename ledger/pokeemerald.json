@@ -32672,7 +32672,7 @@
           "status": "rewritten"
         },
         "GetSaveValidStatus": {
-          "reason": "Per-slot signature and checksum scan over all 14 positions plus the OK/Empty/Corrupt/Error table and wraparound counter comparison, as SlotSurvey::observe and SlotSurvey::verdict per slot and survey::resolve across slots. Beyond upstream, a slot holding ids 0-4 under one counter (the former five-sector format) is intact and migrates to 14 sectors on the next save.",
+          "reason": "Per-slot signature and checksum scan over all 14 positions plus the OK/Empty/Corrupt/Error table and wraparound counter comparison, as SlotSurvey::observe and SlotSurvey::verdict per slot and survey::resolve across slots. Beyond upstream, a slot holding ids 0-4 under one counter (the former five-sector format) is intact and migrates to 14 sectors on the next save. An erased or never-written sector at a tail position (5-13) is an unusable position like a signed one failing its checksum, so a write torn after its erase reads Error as upstream's missing validSectorFlags bit does (:529-546, :543-546); upstream also skips such a sector without reading its id (:529), which is why a five-sector slot's blank tail, with no signed tail sector, stays intact.",
           "rust_target": "crates/engine/src/save/store/survey.rs",
           "spec": "S-5",
           "status": "rewritten"
