@@ -280,7 +280,16 @@ impl OverworldPhase {
             )
         };
         let (mut reserves, unplayable_member_remains) = self.wild_reserve_owners(&dex);
-        let player_reserves = reserves.iter_mut().map(LoadedLead::take_battler).collect();
+        // Each reserve is classified against the save owner like the lead (`IsTradedMon`,
+        // `pokeemerald/src/pokemon.c:6602-6626`), so its `Cmd_getexp` award is boosted too.
+        let player_reserves = reserves
+            .iter_mut()
+            .map(|owner| {
+                let record = *owner.record();
+                let battler = owner.take_battler();
+                self.classified_against_record(Some(&record), battler)
+            })
+            .collect();
         // The start consumes its copies; the lent original returns on rejection.
         match wild_encounter::start_wild_battle_with_lead_effects(
             lead.clone(),

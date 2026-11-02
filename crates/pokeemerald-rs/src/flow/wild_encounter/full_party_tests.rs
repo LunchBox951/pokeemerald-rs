@@ -353,3 +353,70 @@ fn a_species_none_reserve_with_a_stale_has_species_does_not_prevent_white_out() 
 
     assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
 }
+
+/// The save owner of [`traded_reserve_award`]'s phase.
+const OWNER_ID: u32 = 0x1234_5678;
+const OWNER_NAME: [u8; 7] = *b"RUSTY\xFF\xFF";
+const OTHER_NAME: [u8; 7] = *b"OTHER\xFF\xFF";
+
+/// The award a level-50 Treecko reserve, saved with `reserve_ot_name` under the owner's
+/// OT id, earns for knocking out the seeded Wurmple after the domestic frail lead faints.
+fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
+    let lead = frail_shuckle().with_original_trainer_id(OWNER_ID);
+    let reserve = healthy_treecko(0).with_original_trainer_id(OWNER_ID);
+    let mut lead_record = saved(&lead);
+    lead_record.box_data.set_ot_name(OWNER_NAME);
+    let mut reserve_record = saved(&reserve);
+    reserve_record.box_data.set_ot_name(reserve_ot_name);
+    let mut phase = phase_with_party(&[lead_record, reserve_record], 0, lead);
+    phase.save2.player_trainer_id = OWNER_ID.to_le_bytes();
+    phase.save2.player_name = *b"RUSTY\xFF\0\0";
+
+    walk_into_the_battle(&mut phase);
+    loop {
+        phase.step(held(Buttons::RIGHT));
+        let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
+            panic!("the lead's faint must not end the battle");
+        };
+        if wild.battle.player().species() == assets::SpeciesId(TREECKO) {
+            break;
+        }
+    }
+    let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_mut() else {
+        unreachable!("checked above");
+    };
+    let traded = wild.battle.player().is_traded_recipient();
+    for _ in 0..20 {
+        let events = wild
+            .battle
+            .take_turn(
+                battle::PlayerAction::UseMove(0),
+                &mut crate::flow::wild_encounter::SharedRng::new(&mut phase.rng),
+            )
+            .expect("turn");
+        if let Some(exp) = events.iter().find_map(|event| match event {
+            battle::BattleEvent::ExpGained(exp) => Some(*exp),
+            _ => None,
+        }) {
+            return (traded, exp);
+        }
+    }
+    panic!("the Wurmple never fainted");
+}
+
+/// A saved reserve is classified against the save owner like the lead (`IsTradedMon`,
+/// `pokeemerald/src/pokemon.c:6602-6626`), so one traded under the owner's id but another
+/// OT name earns `Cmd_getexp`'s 150% award (`src/battle_script_commands.c:3381-3390`)
+/// when it replaces the fainted lead.
+#[test]
+fn a_traded_reserve_that_replaces_the_fainted_lead_earns_the_traded_award() {
+    let (domestic_flagged, domestic) = traded_reserve_award(OWNER_NAME);
+    let (traded_flagged, traded) = traded_reserve_award(OTHER_NAME);
+    assert!(domestic > 0);
+    assert_eq!(traded, domestic * 150 / 100);
+    assert!(!domestic_flagged, "the owner's own reserve is not traded");
+    assert!(
+        traded_flagged,
+        "the other OT's reserve is a traded recipient"
+    );
+}
