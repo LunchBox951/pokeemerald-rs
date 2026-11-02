@@ -73,6 +73,13 @@ fn through_proc(held: &Held) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}/", held.as_raw_fd()))
 }
 
+/// Whether cleanup can reach the pinned directory through `/proc/self/fd`,
+/// the handle-relative backend; `false` selects the path-based fallback.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn handle_relative(held: &Held) -> bool {
+    std::fs::read_dir(through_proc(held)).is_ok()
+}
+
 /// Whether the pinned directory holds nothing. Linux reads it through the
 /// handle; elsewhere it reads `path` and requires `path` to still be the
 /// pinned directory afterwards.
@@ -212,6 +219,12 @@ impl Fixture {
             }
             return;
         }
+        self.remove_by_path_with(held, before_remove);
+    }
+
+    /// The path-based fallback: the identity is re-checked immediately
+    /// before `remove_dir_all(root)`, with `before_remove` run in between.
+    fn remove_by_path_with(&self, held: &Held, before_remove: impl FnOnce()) {
         if is_held_at(held, &self.root) {
             before_remove();
             let _ = std::fs::remove_dir_all(&self.root);
@@ -303,11 +316,7 @@ fn a_root_replaced_during_cleanup_is_not_deleted() {
     let base = Fixture::claim("race-base");
     // Without a readable `/proc` cleanup falls back to the documented
     // path-based removal, which this race would rightly defeat.
-    if base
-        .held
-        .as_ref()
-        .is_none_or(|held| std::fs::read_dir(through_proc(held)).is_err())
-    {
+    if !base.held.as_ref().is_some_and(handle_relative) {
         return;
     }
     for attempt in 0..2000 {
@@ -357,6 +366,13 @@ fn a_root_replaced_during_cleanup_is_not_deleted() {
 #[test]
 fn a_tree_swapped_in_after_the_identity_check_survives() {
     let base = Fixture::claim("late-swap-base");
+    // Only the handle-relative backend closes this window; without a
+    // readable `/proc` cleanup takes the documented path-based fallback,
+    // which a swap after its check defeats. That fallback's own guard is
+    // checked by `the_path_fallback_refuses_a_root_replaced_before_its_check`.
+    if !base.held.as_ref().is_some_and(handle_relative) {
+        return;
+    }
     let fixture = Fixture::claim_in(&base.root, || "root".to_owned());
     std::fs::write(fixture.root.join("owned"), b"x").unwrap();
     let root = fixture.root.clone();
@@ -365,6 +381,30 @@ fn a_tree_swapped_in_after_the_identity_check_survives() {
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("sentinel"), b"keep").unwrap();
     });
+    assert_eq!(std::fs::read(root.join("sentinel")).unwrap(), b"keep");
+}
+
+/// The path-based fallback, driven directly so it runs whether or not
+/// `/proc` is readable: a root replaced before its identity check is left
+/// alone, and the root it still owns is removed.
+#[test]
+fn the_path_fallback_refuses_a_root_replaced_before_its_check() {
+    let base = Fixture::claim("fallback-base");
+    let owned = Fixture::claim_in(&base.root, || "owned".to_owned());
+    std::fs::write(owned.root.join("owned"), b"x").unwrap();
+    if let Some(held) = &owned.held {
+        owned.remove_by_path_with(held, || {});
+        assert!(!owned.root.exists(), "the fallback removes its own root");
+    }
+
+    let fixture = Fixture::claim_in(&base.root, || "root".to_owned());
+    let root = fixture.root.clone();
+    std::fs::rename(&root, base.root.join("moved")).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("sentinel"), b"keep").unwrap();
+    if let Some(held) = &fixture.held {
+        fixture.remove_by_path_with(held, || {});
+    }
     assert_eq!(std::fs::read(root.join("sentinel")).unwrap(), b"keep");
 }
 
