@@ -749,7 +749,7 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, BattleEvent::ExpGained(_))),
+            .any(|event| matches!(event, BattleEvent::ExpGained { .. })),
         "the knockout still pays experience: {events:?}"
     );
     assert_eq!(

@@ -149,14 +149,18 @@ fn party(
                 context,
             }])
         }
-        BattleEvent::ExpGained(amount) => {
+        BattleEvent::ExpGained { amount, boosted } => {
+            // `Cmd_getexp` buffers " a boosted" for a traded recipient's award
+            // and an empty string otherwise (`src/battle_script_commands.c:3381`-`:3397`).
+            let gained = if boosted {
+                id::ABOOSTED
+            } else {
+                id::EMPTYSTRING4
+            };
             let context = narrator
                 .context()
                 .with_buffer(0, mon_nick(&player_nick))
-                .with_buffer(
-                    1,
-                    BattleBuffer::Program(vec![BufferOp::String(id::EMPTYSTRING3)]),
-                )
+                .with_buffer(1, BattleBuffer::Program(vec![BufferOp::String(gained)]))
                 .with_buffer(
                     2,
                     BattleBuffer::Program(vec![BufferOp::Number {
@@ -200,7 +204,13 @@ fn party(
                 .context()
                 .with_buffer(0, mon_nick(&player_nick))
                 .with_buffer(1, BattleBuffer::Program(vec![BufferOp::Move(move_id)]));
-            Ok(vec![table(id::DIDNOTLEARNMOVE, context)])
+            // `BattleScript_AskToLearnMove` asks STOPLEARNINGMOVE after a "no"
+            // and prints DIDNOTLEARNMOVE once that is confirmed, both reading
+            // the move from buffer 2 (`data/battle_scripts_1.s:3172`-`:3176`).
+            Ok(vec![
+                table(id::STOPLEARNINGMOVE, context.clone()),
+                table(id::DIDNOTLEARNMOVE, context),
+            ])
         }
         _ => Err(NarrationError::UnmappedEvent),
     }

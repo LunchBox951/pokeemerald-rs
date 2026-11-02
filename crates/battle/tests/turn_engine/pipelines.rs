@@ -561,7 +561,10 @@ fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
                 hits: 2,
             },
             BattleEvent::Fainted { by_player: false },
-            BattleEvent::ExpGained(47),
+            BattleEvent::ExpGained {
+                amount: 47,
+                boosted: false,
+            },
             BattleEvent::Ended(BattleOutcome::PlayerWon)
         ],
         "{events:?}"

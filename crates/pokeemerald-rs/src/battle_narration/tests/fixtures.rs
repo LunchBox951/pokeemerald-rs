@@ -53,7 +53,7 @@ const SELECTORS: &[(&str, u8)] = &[
     ("B_ATK_NAME_WITH_PREFIX_MON1", 0x0D),
 ];
 
-/// Encodes `{NAME}` as `FD selector`, a newline as `FE`, and `\p` as `FA`.
+/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, a newline as `FE`, and `\p` as `FA`.
 pub(super) fn template(source: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut chars = source.chars().peekable();
@@ -61,6 +61,14 @@ pub(super) fn template(source: &str) -> Vec<u8> {
         match c {
             '{' => {
                 let name: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                if let Some(frames) = name.strip_prefix("PAUSE ") {
+                    out.extend([
+                        0xFC,
+                        0x08,
+                        frames.parse().expect("PAUSE takes a frame count"),
+                    ]);
+                    continue;
+                }
                 let selector = SELECTORS
                     .iter()
                     .find(|(known, _)| *known == name)

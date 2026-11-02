@@ -191,7 +191,7 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+            .any(|e| matches!(e, BattleEvent::ExpGained { .. })),
         "a MAX_LEVEL player gains no exp and sees no exp event: {events:?}"
     );
     assert_eq!(
@@ -697,7 +697,7 @@ fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+            .any(|e| matches!(e, BattleEvent::ExpGained { .. })),
         "a zero-HP recipient is skipped before the exp string: {events:?}"
     );
     assert_eq!(

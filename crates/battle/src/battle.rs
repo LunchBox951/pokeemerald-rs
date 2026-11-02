@@ -1253,7 +1253,8 @@ impl Battle {
         };
         // A traded recipient's award takes one more truncating 150% after the
         // trainer multiplier (`src/battle_script_commands.c:3378`-`:3390`).
-        if self.player.is_traded_recipient() {
+        let boosted = self.player.is_traded_recipient();
+        if boosted {
             exp = exp * 150 / 100;
         }
         // `MonGainEVs` runs ahead of the exp and level-up sequence, so a
@@ -1261,7 +1262,10 @@ impl Battle {
         // (`src/battle_script_commands.c:3420`).
         self.player.gain_evs(defeated.ev_yield);
         let pending = self.player.apply_experience(&self.dex, exp)?;
-        events.push(BattleEvent::ExpGained(exp));
+        events.push(BattleEvent::ExpGained {
+            amount: exp,
+            boosted,
+        });
         if let Some(prompt) = pending {
             events.push(BattleEvent::MoveLearnPrompt {
                 move_id: prompt.move_id(),
@@ -1658,7 +1662,7 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
+                .filter(|e| matches!(e, BattleEvent::ExpGained { .. }))
                 .count(),
             1,
             "experience should be awarded exactly once: {events:?}"

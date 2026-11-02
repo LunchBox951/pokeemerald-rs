@@ -170,7 +170,10 @@ fn party_events() -> Vec<BattleEvent> {
             species: RATTATA,
             reserves_remaining: 1,
         },
-        BattleEvent::ExpGained(10),
+        BattleEvent::ExpGained {
+            amount: 10,
+            boosted: false,
+        },
         BattleEvent::MoveLearnPrompt { move_id },
         BattleEvent::MoveReplaced {
             learned: move_id,
@@ -258,7 +261,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::ShedSkinCured { .. } => 54,
         BattleEvent::TrainerSentOut { .. } => 55,
         BattleEvent::PlayerSentOut { .. } => 56,
-        BattleEvent::ExpGained(..) => 57,
+        BattleEvent::ExpGained { .. } => 57,
         BattleEvent::MoveLearnPrompt { .. } => 58,
         BattleEvent::MoveReplaced { .. } => 59,
         BattleEvent::MoveLearnDeclined { .. } => 60,

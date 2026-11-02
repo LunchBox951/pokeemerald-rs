@@ -18,6 +18,7 @@ const SLOTS: &[(u16, &str)] = &[
     (17, "But, {B_BUFF1} can't learn\nmore than four moves.\\p"),
     (18, "Delete a move to make\nroom for {B_BUFF2}?"),
     (19, "{B_BUFF1} forgot\n{B_BUFF2}.\\p"),
+    (20, "{PAUSE 32}Stop learning\n{B_BUFF2}?"),
     (21, "{B_BUFF1} did not learn\n{B_BUFF2}.\\p"),
     (23, "{B_ATK_NAME_WITH_PREFIX}'s\nattack missed!"),
     (28, "{B_ATK_NAME_WITH_PREFIX}\nfainted!\\p"),
@@ -46,8 +47,9 @@ const SLOTS: &[(u16, &str)] = &[
     (223, "Got away safely!\\p"),
     (224, "Wild {B_BUFF1} fled!"),
     (226, "Can't escape!\\p"),
-    (304, ""),
     (327, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade {B_CURRENT_MOVE} useless!"),
+    (329, ""),
+    (330, " a boosted"),
     (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
@@ -369,7 +371,10 @@ fn the_players_replacement_wording_follows_the_health_scale() {
 fn experience_and_move_learning_print_in_upstream_order() {
     let mut narrator = narrator(BattleKind::Wild);
     let events = [
-        BattleEvent::ExpGained(1234),
+        BattleEvent::ExpGained {
+            amount: 1234,
+            boosted: false,
+        },
         BattleEvent::MoveLearnPrompt {
             move_id: MoveId::EMBER,
         },
@@ -394,6 +399,8 @@ fn experience_and_move_learning_print_in_upstream_order() {
             "TORCHIC forgot\nSCRATCH.{SCROLL}",
             "And...{SCROLL}",
             "TORCHIC learned\nEMBER!{SCROLL}",
+            // `decode_to_string` spells `{PAUSE 32}` as its control code.
+            "{CTRL:0x08}Stop learning\nEMBER?",
             "TORCHIC did not learn\nEMBER.{SCROLL}",
         ]
     );
@@ -675,4 +682,37 @@ fn opponent_health_maps_to_upstreams_hp_thresholds() {
     assert_eq!(scale(9, 100), 3);
     assert_eq!(scale(1, 1000), 3);
     assert_eq!(scale(0, 100), 0);
+}
+
+#[test]
+fn declining_a_move_asks_stop_learning_before_did_not_learn() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let requests = narrate(
+        &mut narrator,
+        &[BattleEvent::MoveLearnDeclined {
+            move_id: MoveId::EMBER,
+        }],
+    );
+    let templates: Vec<TemplateId> = requests.iter().map(|r| r.template.clone()).collect();
+    // STRINGID_STOPLEARNINGMOVE = 20, STRINGID_DIDNOTLEARNMOVE = 21.
+    assert_eq!(templates, [TemplateId::Table(20), TemplateId::Table(21)]);
+}
+
+/// `Cmd_getexp` buffers `STRINGID_ABOOSTED` for a traded recipient's award and
+/// `STRINGID_EMPTYSTRING4` otherwise (`src/battle_script_commands.c:3381`-`:3397`).
+#[test]
+fn a_boosted_award_reads_gained_a_boosted() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let award = |boosted| BattleEvent::ExpGained {
+        amount: 69,
+        boosted,
+    };
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[award(false), award(true)])),
+        [
+            "TORCHIC gained\n69 EXP. Points!{SCROLL}",
+            "TORCHIC gained a boosted\n69 EXP. Points!{SCROLL}",
+        ]
+    );
 }

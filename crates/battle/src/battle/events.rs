@@ -623,7 +623,14 @@ pub enum BattleEvent {
     /// Application begins before this event. If the award pauses at a
     /// move-learning decision, a following [`BattleEvent::MoveLearnPrompt`]
     /// identifies it; the unconsumed remainder is applied when learning resumes.
-    ExpGained(u32),
+    ExpGained {
+        /// The award after every multiplier, as `Cmd_getexp` prints it.
+        amount: u32,
+        /// Whether the traded-recipient 150% applied, which selects
+        /// `STRINGID_ABOOSTED` over `STRINGID_EMPTYSTRING4` for the message's
+        /// second buffer (`src/battle_script_commands.c:3381`-`:3397`).
+        boosted: bool,
+    },
     /// Move learning paused experience application and faint resolution.
     ///
     /// This follows [`BattleEvent::ExpGained`] or a previous move-learning answer
