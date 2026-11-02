@@ -18,79 +18,136 @@ use super::{
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
 
-/// What names one directory on disk, so a later check can tell it from a
-/// different directory that took the same path. On Unix this is the device
-/// and inode. Elsewhere `std` offers no stable identity, so the value carries
-/// nothing and [`ScratchRoot`] never treats a path as still its own there.
-#[cfg(unix)]
-type Identity = (u64, u64);
-#[cfg(not(unix))]
-#[derive(Clone, Copy)]
-struct Identity;
-
-/// The identity of the real directory at `path`, or `None` when nothing is
-/// there, a symlink is, or it is not a directory. Reads the link itself, never
-/// what it points at.
-fn directory_identity(path: &Path) -> Option<Identity> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.is_dir() {
-        return None;
-    }
+/// A scratch directory this fixture created, held open from the moment it was
+/// claimed and removed with its contents when dropped.
+///
+/// The name is claimed with `create_dir` (mode 0700 on Unix), which fails if
+/// anything already occupies it, and the new directory is opened straight
+/// away. The open handle, not the pathname, is what names the claim from then
+/// on: an open directory's inode cannot be reused, so comparing the handle's
+/// device and inode with the entry at the path tells the claimed directory
+/// from anything that later took the same name. The path derefs to `&Path`.
+///
+/// On Linux the drop deletes the contents through the handle's
+/// `/proc/self/fd` entry, so no deletion re-resolves the pathname and a tree
+/// swapped in at the path is never entered. Only the emptied root is then
+/// removed by path, with `remove_dir`, which refuses a populated directory or
+/// a symlink. Residuals:
+/// * Linux: a swap landing between the last identity check and that `rmdir`
+///   can remove an *empty* directory this fixture did not create; nothing
+///   with contents is lost.
+/// * Other Unix, and Linux without `/proc`: `std` has no handle-relative
+///   removal, so the identity is re-checked immediately before
+///   `remove_dir_all(path)`, and a populated swap landing in that instant is
+///   deleted. Closing it needs `openat`-style removal, a dependency decision.
+/// * Off Unix the drop removes nothing. `std` has no stable way to read a
+///   directory's identity there (`std::os::windows::fs::MetadataExt::file_index`
+///   is unstable), so the drop cannot tell the claimed directory from one that
+///   replaced it, and recursively deleting an unowned tree is worse than a
+///   leaked scratch directory. The claimed directory stays in the temp
+///   directory for the OS or the user to clear.
+///
+/// Once claimed, the root can be renamed or replaced only by its own user (or
+/// root): `/tmp` is sticky, and the macOS and Windows temporary directories
+/// are per-user.
+struct ScratchRoot {
+    path: PathBuf,
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        Some((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        Some(Identity)
+    held: std::fs::File,
+}
+
+/// Whether `path` is, right now, a real directory (not a symlink to one) that
+/// is the very object `held` has open.
+#[cfg(unix)]
+fn is_held_at(held: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (held.metadata(), std::fs::symlink_metadata(path)) {
+        (Ok(pinned), Ok(found)) => {
+            found.is_dir() && (pinned.dev(), pinned.ino()) == (found.dev(), found.ino())
+        }
+        _ => false,
     }
 }
 
-/// A scratch directory this fixture created, removed with its contents when
-/// dropped, but only while the path still names the directory it created.
-///
-/// The name is claimed with `create_dir`, which fails if anything already
-/// occupies it. The directory's identity is recorded at that moment, and the
-/// drop re-reads it: a path another process has since emptied and refilled,
-/// or replaced with a symlink, is left alone. So a fixture never deletes a
-/// directory it did not create. The path derefs to `&Path`.
-///
-/// Off Unix the drop removes nothing. `std` has no stable way to read a
-/// directory's identity there (`std::os::windows::fs::MetadataExt::file_index`
-/// is unstable), so the drop cannot tell the claimed directory from one that
-/// replaced it, and recursively deleting an unowned tree is worse than a
-/// leaked scratch directory. The claimed directory stays in the temp
-/// directory for the OS or the user to clear.
-struct ScratchRoot {
-    path: PathBuf,
-    identity: Identity,
+/// The `/proc/self/fd` entry of the directory `held` has open, with a
+/// trailing slash so the kernel follows the descriptor link to that inode
+/// itself rather than to whatever the fixture's pathname now names.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn through_proc(held: &std::fs::File) -> PathBuf {
+    use std::os::fd::AsRawFd as _;
+    PathBuf::from(format!("/proc/self/fd/{}/", held.as_raw_fd()))
+}
+
+/// Deletes the contents of the directory `held` has open through its
+/// `/proc/self/fd` entry. `None` means `/proc` could not be read and nothing
+/// was touched; `Some` carries the outcome of the deletions.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn clear_through_handle(held: &std::fs::File) -> Option<std::io::Result<()>> {
+    let through_proc = through_proc(held);
+    let entries = std::fs::read_dir(&through_proc).ok()?;
+    Some(entries.into_iter().try_for_each(|entry| {
+        let entry = entry?;
+        let child = through_proc.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            // `remove_dir_all` does not follow a symlink at `child` and walks
+            // the subtree by descriptor, so it stays inside the held tree.
+            std::fs::remove_dir_all(&child)
+        } else {
+            std::fs::remove_file(&child)
+        }
+    }))
 }
 
 impl ScratchRoot {
-    /// Creates `path` as a new directory, failing if the name is taken.
+    /// Creates `path` as a new directory, failing if the name is taken, and
+    /// opens it as the guard's handle. A directory that is not the empty one
+    /// just created by the time it is opened is refused, and nothing is
+    /// removed for it: the path may by then name someone else's tree.
     fn claim_at(path: PathBuf) -> std::io::Result<Self> {
-        std::fs::create_dir(&path)?;
-        let identity = directory_identity(&path).ok_or_else(|| {
-            std::io::Error::other(format!(
-                "{} is not the directory just created",
-                path.display()
-            ))
-        })?;
-        Ok(Self { path, identity })
-    }
-
-    /// Whether the entry at the path is still the directory this guard created.
-    /// Always `false` off Unix, where that cannot be established.
-    fn still_claimed(&self) -> bool {
         #[cfg(unix)]
         {
-            directory_identity(&self.path) == Some(self.identity)
+            use std::os::unix::fs::DirBuilderExt as _;
+            std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+            let held = std::fs::File::open(&path)?;
+            let empty = std::fs::read_dir(&path)?.next().is_none();
+            if !(empty && is_held_at(&held, &path)) {
+                return Err(std::io::Error::other(format!(
+                    "{} is not the directory just created",
+                    path.display()
+                )));
+            }
+            Ok(Self { path, held })
         }
         #[cfg(not(unix))]
         {
-            let _ = self.identity;
-            false
+            std::fs::create_dir(&path)?;
+            Ok(Self { path })
+        }
+    }
+
+    /// The drop's cleanup, with `before_remove` run after the last identity
+    /// check and immediately before the removal that follows it, where a test
+    /// lands a swap deterministically. See [`ScratchRoot`] for what each
+    /// platform does and what it leaves open.
+    fn remove_with(&self, before_remove: impl FnOnce()) {
+        #[cfg(unix)]
+        {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if let Some(cleared) = clear_through_handle(&self.held) {
+                if cleared.is_ok() && is_held_at(&self.held, &self.path) {
+                    before_remove();
+                    let _ = std::fs::remove_dir(&self.path);
+                }
+                return;
+            }
+            if is_held_at(&self.held, &self.path) {
+                before_remove();
+                let _ = std::fs::remove_dir_all(&self.path);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            drop(before_remove);
         }
     }
 }
@@ -105,9 +162,7 @@ impl std::ops::Deref for ScratchRoot {
 
 impl Drop for ScratchRoot {
     fn drop(&mut self) {
-        if self.still_claimed() {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
+        self.remove_with(|| {});
     }
 }
 
@@ -980,6 +1035,45 @@ fn fixture_cleanup_deletes_only_the_directory_it_claimed() {
     assert!(
         survived,
         "cleanup deleted a directory the fixture did not create"
+    );
+}
+
+/// A swap that lands after cleanup's last identity check, immediately before
+/// the removal, must not cost the replacement its contents either: the
+/// removal goes through the held directory, not a second lookup of the path.
+/// Linux only, where the cleanup reaches the held directory through
+/// `/proc/self/fd`; elsewhere this window is the documented residual.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn fixture_cleanup_deletes_only_the_directory_it_claimed_when_swapped_after_the_check() {
+    assert!(
+        std::path::Path::new("/proc/self/fd").is_dir(),
+        "this test needs /proc to reach the handle-relative cleanup"
+    );
+    let home = claim_scratch_root("pack-format-late-swap");
+    let path = home.to_path_buf();
+    std::fs::write(path.join("mine"), b"the fixture's file").expect("the fixture's file writes");
+    let aside = path.with_extension("aside");
+    let sentinel = path.join("someone-elses-file");
+
+    home.remove_with(|| {
+        std::fs::rename(&path, &aside).expect("the claimed root moves aside");
+        std::fs::create_dir(&path).expect("the replacement directory");
+        std::fs::write(&sentinel, b"keep me").expect("the replacement's file writes");
+    });
+    let survived = sentinel.exists();
+    let claimed_cleared = std::fs::read_dir(&aside).map(|mut entries| entries.next().is_none());
+    drop(home);
+
+    let _ = std::fs::remove_dir_all(&aside);
+    let _ = std::fs::remove_dir_all(&path);
+    assert!(
+        survived,
+        "cleanup deleted a directory the fixture did not create"
+    );
+    assert!(
+        claimed_cleared.expect("the claimed root is still aside"),
+        "cleanup left the claimed directory's own contents behind"
     );
 }
 
