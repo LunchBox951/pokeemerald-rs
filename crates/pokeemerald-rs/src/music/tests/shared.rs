@@ -44,35 +44,7 @@ pub(super) fn sustained_song(tracks: usize) -> Song {
     Song::new(voices, vec![track; tracks], 150)
 }
 
-pub(super) struct TempPackGuard {
-    path: std::path::PathBuf,
-}
-
-impl TempPackGuard {
-    /// Exclusively claims `path` (never following a planted symlink or
-    /// truncating an occupant) and writes `bytes` through the claimed handle.
-    /// Cleanup is installed only once the claim succeeded, so a failed claim
-    /// never removes an entry this guard does not own; a write panic after it
-    /// still cleans up.
-    fn claim(path: std::path::PathBuf, bytes: &[u8]) -> Self {
-        use std::io::Write as _;
-        let mut file = crate::pack_test_support::claim_scratch_exclusive(&path);
-        let guard = Self { path };
-        file.write_all(bytes)
-            .expect("scratch pack must be writable");
-        guard
-    }
-
-    pub(super) fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-impl Drop for TempPackGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
+pub(super) use crate::pack_test_support::ScratchClaim as TempPackGuard;
 
 pub(super) fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> TempPackGuard {
     const PACK_MAGIC: &[u8; 8] = b"PKMRPACK";
@@ -109,7 +81,7 @@ pub(super) fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> TempPa
         bytes.extend_from_slice(payload);
     }
 
-    TempPackGuard::claim(scratch_pack_path(test_name), &bytes)
+    TempPackGuard::claim_with(scratch_pack_path(test_name), &bytes)
 }
 
 fn scratch_pack_path(test_name: &str) -> std::path::PathBuf {
