@@ -129,9 +129,9 @@ pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
     FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
-    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};

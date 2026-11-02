@@ -29,6 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod poke_ball;
+
+pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -659,6 +663,8 @@ pub struct Roots {
     pub battle_interface: BattleInterfaceRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -708,6 +714,7 @@ impl Roots {
         opening_scene: OpeningSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
         battlers: BattlerRoots::NONE,
+        poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -736,6 +743,12 @@ impl Roots {
                     .species
                     .iter()
                     .flat_map(|battler| [&battler.front, &battler.back]),
+            )
+            .chain(
+                self.poke_ball
+                    .poke_ball
+                    .iter()
+                    .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
@@ -767,6 +780,7 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
+            .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers

@@ -126,6 +126,8 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
     match id {
+        "poke-ball/image/poke" => return vec!["gBallGfx_Poke".to_owned()],
+        "poke-ball/image/open" => return vec!["gOpenPokeballGfx".to_owned()],
         "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
         "battle-interface/image/healthbox_singles_player" => {
             return vec!["gHealthboxSinglesPlayerGfx".to_owned()];

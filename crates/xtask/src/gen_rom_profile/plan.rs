@@ -518,6 +518,21 @@ pub struct OpeningScenePlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The Poké Ball's roots, owned.
+#[derive(Debug, Clone)]
+pub struct PokeBallPlan {
+    /// `gBallSpriteSheets`.
+    pub sheet_table: u32,
+    /// `gBallSpritePalettes`.
+    pub palette_table: u32,
+    /// The closed-ball sheet.
+    pub sheet: ImagePlan,
+    /// The Poké Ball palette.
+    pub palette: PalettePlan,
+    /// The opened-ball sheet.
+    pub open_sheet: ImagePlan,
+}
+
 /// One trainer front picture's roots, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPicPlan {
@@ -616,6 +631,8 @@ pub struct ProfilePlan {
     pub battle_interface: BattleInterfacePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.
