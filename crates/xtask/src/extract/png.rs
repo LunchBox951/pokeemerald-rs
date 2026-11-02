@@ -68,6 +68,9 @@ pub enum PngError {
         /// The `IHDR` bit depth.
         bit_depth: u8,
     },
+    /// The image's colour type may not carry a `PLTE` chunk (PNG 1.2 §4.1.2:
+    /// it must not appear for colour types 0 and 4).
+    PaletteForbiddenForColorType(u8),
     /// A critical chunk appears out of the order, or more often than, PNG
     /// allows, or `IEND` carries data.
     MalformedChunkStructure([u8; 4]),
@@ -114,6 +117,10 @@ impl fmt::Display for PngError {
             Self::TooManyPaletteEntries(count) => write!(
                 f,
                 "PNG PLTE chunk declares {count} entries: the format allows at most 256"
+            ),
+            Self::PaletteForbiddenForColorType(color_type) => write!(
+                f,
+                "PNG has a PLTE chunk, which colour type {color_type} images must not carry"
             ),
             Self::PaletteExceedsBitDepth { count, bit_depth } => write!(
                 f,
@@ -461,7 +468,7 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
         }
     }
     let palette = match chunks.iter().find(|chunk| chunk.kind == PLTE) {
-        Some(chunk) => parse_plte(chunk.data)?,
+        Some(chunk) => header.parse_palette(chunk.data)?,
         None => Vec::new(),
     };
 
@@ -472,6 +479,19 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
         pixels,
         palette,
     })
+}
+
+impl Header {
+    /// Parses a `PLTE` chunk's data for this header: PNG 1.2 §4.1.2 forbids
+    /// `PLTE` outside indexed images (colour types 0 and 4), §11.2.3 fixes the
+    /// length. The `2^bit_depth` limit (§4.1.2) is `decode_palette`'s alone:
+    /// libpng accepts an over-long palette, and upstream ships one.
+    fn parse_palette(&self, data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
+        if self.color_type != INDEXED_COLOR_TYPE {
+            return Err(PngError::PaletteForbiddenForColorType(self.color_type));
+        }
+        parse_plte(data)
+    }
 }
 
 fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
@@ -639,9 +659,9 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .find(|chunk| chunk.kind == PLTE)
         .ok_or(PngError::MissingOrBadPalette)?;
 
-    let entries = parse_plte(plte.data)?;
-    // An indexed image of bit depth `d` can address `2^d` palette slots; the
-    // PNG specification forbids a longer `PLTE`.
+    let entries = header.parse_palette(plte.data)?;
+    // An indexed image of bit depth `d` can address `2^d` palette slots; PNG
+    // 1.2 §4.1.2 forbids a longer `PLTE`.
     if entries.len() > 1usize << header.bit_depth {
         return Err(PngError::PaletteExceedsBitDepth {
             count: entries.len(),
@@ -1433,6 +1453,38 @@ pub(crate) mod tests {
                 bit_depth: 1
             }
         );
+    }
+
+    #[test]
+    fn decode_rejects_plte_on_a_grayscale_image() {
+        // PNG 1.2 §4.1.2: PLTE must not appear for colour types 0 and 4.
+        let raw = [super::FILTER_NONE, 0];
+        let png = png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            super::FOUR_BIT_DEPTH,
+            1,
+            1,
+            &raw,
+            Some(&[0, 0, 0]),
+        );
+        assert_eq!(
+            decode(&png).unwrap_err(),
+            PngError::PaletteForbiddenForColorType(super::GRAYSCALE_COLOR_TYPE)
+        );
+        assert!(
+            decode(&grayscale_png_from_raw(super::FOUR_BIT_DEPTH, 1, 1, &raw)).is_ok(),
+            "a grayscale image without PLTE still decodes"
+        );
+    }
+
+    #[test]
+    fn decode_returns_an_over_long_indexed_plte_for_the_caller_to_count() {
+        // Upstream's `birch_speech/shadow.png` is 4-bit with 32 entries and
+        // libpng accepts it, so `decode` must too; extractors check the count.
+        let raw = [super::FILTER_NONE, 0];
+        let plte: Vec<u8> = (0..32u8).flat_map(|i| [i, 0, 0]).collect();
+        let png = indexed_png_from_raw_with_plte(super::FOUR_BIT_DEPTH, 1, 1, &raw, &plte);
+        assert_eq!(decode(&png).unwrap().palette.len(), 32);
     }
 
     #[test]
