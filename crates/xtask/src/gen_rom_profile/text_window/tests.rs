@@ -279,23 +279,42 @@ impl OwnedMap {
 
     /// Remove the map only if it is still `file`; a replacement stays.
     ///
-    /// The entry moves into a fresh unguessable directory, so the rename cannot
+    /// Nothing moves unless the map path still names the fixture's own file,
+    /// so a replacement (a directory included) keeps its pathname. That entry
+    /// then moves into a fresh unguessable directory, so the rename cannot
     /// replace a planted name and the identity check and unlink act on what
     /// moved. std has no `unlinkat`/`renameat2`, so a same-user process that
     /// races inside the 0700 directory during these few calls is not excluded.
     #[cfg(unix)]
     fn remove_owned_map(&self, file: &File) {
-        use std::os::unix::fs::MetadataExt as _;
+        let Ok(created) = file.metadata() else {
+            return;
+        };
+        let is_ours = |entry: &std::fs::Metadata| {
+            use std::os::unix::fs::MetadataExt as _;
+            entry.file_type().is_file()
+                && (created.dev(), created.ino()) == (entry.dev(), entry.ino())
+        };
+        match std::fs::symlink_metadata(&self.path) {
+            Ok(current) if is_ours(&current) => {}
+            _ => return,
+        }
         let Some(aside_dir) = self.claim_aside_dir() else {
             return;
         };
         let aside = aside_dir.join("map");
         if std::fs::rename(&self.path, &aside).is_ok() {
-            if let (Ok(created), Ok(moved)) = (file.metadata(), std::fs::symlink_metadata(&aside)) {
-                let ours = (created.dev(), created.ino()) == (moved.dev(), moved.ino());
-                // Only the fixture's own file, or a replacement already back at
-                // the map path, may lose its aside name.
-                if ours || std::fs::hard_link(&aside, &self.path).is_ok() {
+            if let Ok(moved) = std::fs::symlink_metadata(&aside) {
+                if is_ours(&moved) {
+                    let _ = std::fs::remove_file(&aside);
+                } else if moved.file_type().is_dir() {
+                    // A directory swapped in during the race goes back by
+                    // rename, which cannot replace a non-directory or a
+                    // non-empty directory now at the map path.
+                    let _ = std::fs::rename(&aside, &self.path);
+                } else if std::fs::hard_link(&aside, &self.path).is_ok() {
+                    // Only a non-directory already back at the map path may
+                    // lose its aside name.
                     let _ = std::fs::remove_file(&aside);
                 }
             }
@@ -592,6 +611,30 @@ fn cleanup_spares_an_entry_that_replaced_the_map() {
     std::fs::remove_file(&path).expect("remove replacement");
     std::fs::remove_dir(&dir).expect("remove directory");
     assert_eq!(spared.expect("replacement survives cleanup"), "replacement");
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_directory_that_replaced_the_map_at_its_path() {
+    let fixture = private_base("tw-replaced-dir");
+    let (dir, path) = (fixture.dir.clone(), fixture.path.clone());
+    std::fs::remove_file(&path).expect("unlink the fixture's map");
+    std::fs::create_dir(&path).expect("plant replacement directory");
+    let sentinel = path.join("sentinel");
+    std::fs::write(&sentinel, "precious").expect("plant sentinel");
+    drop(fixture);
+
+    let spared = std::fs::read_to_string(&sentinel);
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .expect("the directory holds the replacement")
+        .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+        .filter(|name| name != "pokeemerald.map")
+        .collect();
+    let _ = std::fs::remove_file(&sentinel);
+    let _ = std::fs::remove_dir(&path);
+    assert_eq!(spared.expect("sentinel stays at the map path"), "precious");
+    assert!(leftovers.is_empty(), "cleanup left {leftovers:?} behind");
+    std::fs::remove_dir(&dir).expect("the directory holds nothing else");
 }
 
 #[cfg(unix)]
