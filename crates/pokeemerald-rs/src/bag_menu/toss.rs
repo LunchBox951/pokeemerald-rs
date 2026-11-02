@@ -35,9 +35,6 @@ const CURSOR: &str = "▶";
 /// (`constants/items.h:455-456`).
 const ITEM_DIGITS: usize = 2;
 const BERRY_DIGITS: usize = 3;
-/// `gKeyRepeatStartDelay` and `gKeyRepeatContinueDelay` (`main.c:240-241`).
-const REPEAT_START_DELAY: u8 = 40;
-const REPEAT_CONTINUE_DELAY: u8 = 5;
 
 /// Where the prompt has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,42 +53,6 @@ pub(super) enum TossStage {
 pub(super) struct ItemToss {
     pub(super) selection: BagSelection,
     pub(super) stage: TossStage,
-}
-
-/// `gMain.newAndRepeatedKeys` (`ReadKeys`, `main.c:249-275`), kept per screen
-/// because the platform input carries only held and fresh buttons.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct KeyRepeat {
-    counter: u8,
-    previous_held: Buttons,
-}
-
-impl Default for KeyRepeat {
-    fn default() -> Self {
-        Self {
-            counter: REPEAT_START_DELAY,
-            previous_held: Buttons::NONE,
-        }
-    }
-}
-
-impl KeyRepeat {
-    /// The fresh presses plus, on a repeat frame, everything held.
-    pub(super) fn advance(&mut self, buttons: ButtonState) -> Buttons {
-        let held = buttons.held();
-        let mut repeated = buttons.newly_pressed();
-        if held != Buttons::NONE && held == self.previous_held {
-            self.counter = self.counter.saturating_sub(1);
-            if self.counter == 0 {
-                repeated = held;
-                self.counter = REPEAT_CONTINUE_DELAY;
-            }
-        } else {
-            self.counter = REPEAT_START_DELAY;
-        }
-        self.previous_held = held;
-        repeated
-    }
 }
 
 /// The one direction `AdjustQuantityAccordingToDPadInput` reads: the repeated
@@ -200,12 +161,17 @@ impl BagScreen {
     /// presses; the count reads the repeating D-pad, and an A or B on the same
     /// frame is heard only if the count did not change
     /// (`Task_ChooseHowManyToToss`, `item_menu.c:1848-1869`).
-    pub(super) fn advance_toss(&mut self, toss: ItemToss, buttons: ButtonState) -> BagScreenTick {
+    pub(super) fn advance_toss(
+        &mut self,
+        toss: ItemToss,
+        buttons: ButtonState,
+        repeated: Buttons,
+    ) -> BagScreenTick {
         let pressed = |button| buttons.is_newly_pressed(button);
         let stage = match toss.stage {
             TossStage::Quantity { count } => {
                 let max = toss.selection.quantity;
-                let stepped = direction_of(self.repeated)
+                let stepped = direction_of(repeated)
                     .map(|input| adjust_quantity(count, max, input))
                     .filter(|&next| next != count);
                 if let Some(next) = stepped {

@@ -215,6 +215,25 @@ fn a_held_direction_repeats_after_forty_frames_then_every_five() {
 }
 
 #[test]
+fn held_l_in_l_equals_a_mode_suppresses_the_toss_count_repeat() {
+    for (l_equals_a, count) in [(false, 5), (true, 2)] {
+        let mut screen = open_screen(BagScreenMode::Field, &potions(99));
+        choose_toss(&mut screen);
+        let mut raw = ButtonState::new();
+        for _ in 0..51 {
+            raw.update(Buttons::L | Buttons::UP);
+            let buttons = if l_equals_a {
+                raw.with_l_equals_a()
+            } else {
+                raw
+            };
+            assert_eq!(screen.tick(buttons), BagScreenTick::Open);
+        }
+        assert_eq!(stage(&screen), Some(TossStage::Quantity { count }));
+    }
+}
+
+#[test]
 fn a_held_a_does_not_run_through_the_stages() {
     let mut screen = quantity_screen();
     let mut buttons = ButtonState::new();
