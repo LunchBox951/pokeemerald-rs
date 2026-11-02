@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.87.0] - 2026-11-02
 
-- People and objects in the checkpoint rooms are now drawn with their own graphics and sizes, including the moving truck, boxes, dolls and Vigoroth, and they overlap the player and each other in the original order. Characters keep the correct pose when they turn to face you.
+- People and objects around Littleroot, Oldale and the early routes are now drawn with their own graphics and sizes, indoors and out: the moving truck, boxes, dolls, Vigoroth, item balls, Birch's bag, the Zigzagoon and Route 103's berry trees. They overlap the player and each other in the original order, and characters keep the correct pose when they turn to face you.
 
 ## [0.0.86.0] - 2026-11-02
 
