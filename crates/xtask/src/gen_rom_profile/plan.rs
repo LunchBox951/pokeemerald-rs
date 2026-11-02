@@ -518,6 +518,32 @@ pub struct OpeningScenePlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The evolution scene's background and sparkle sprite, owned.
+#[derive(Debug, Clone)]
+pub struct EvolutionScenePlan {
+    /// Every `evolution-scene/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `evolution-scene/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `evolution-scene/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
+/// The Poké Ball's roots, owned.
+#[derive(Debug, Clone)]
+pub struct PokeBallPlan {
+    /// `gBallSpriteSheets`.
+    pub sheet_table: u32,
+    /// `gBallSpritePalettes`.
+    pub palette_table: u32,
+    /// The closed-ball sheet.
+    pub sheet: ImagePlan,
+    /// The Poké Ball palette.
+    pub palette: PalettePlan,
+    /// The opened-ball sheet.
+    pub open_sheet: ImagePlan,
+}
+
 /// One trainer front picture's roots, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPicPlan {
@@ -612,10 +638,14 @@ pub struct ProfilePlan {
     pub starter_chooser: StarterChooserPlan,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningScenePlan,
+    /// The evolution scene's background and sparkle sprite.
+    pub evolution_scene: EvolutionScenePlan,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfacePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.

@@ -89,6 +89,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Poké Ball entry differs from the upstream graphic's shape.
+    MalformedPokeBallAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler entry differs from the upstream graphic's shape.
     MalformedBattlerAsset {
         /// Asset id.
@@ -119,6 +126,13 @@ pub enum PackError {
     /// An opening-scene entry (Birch's speech scene or the wall clock) differs
     /// from the upstream graphic's shape.
     MalformedOpeningSceneAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// An evolution-scene entry differs from the upstream graphic's shape.
+    MalformedEvolutionSceneAsset {
         /// Asset id.
         id: String,
         /// What differs from the expected shape.
@@ -282,6 +296,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedPokeBallAsset { id, detail } => {
+                write!(f, "asset pack: poke-ball entry `{id}` {detail}")
+            }
             Self::MalformedBattlerAsset { id, detail } => {
                 write!(f, "asset pack: battler entry `{id}` {detail}")
             }
@@ -308,6 +325,9 @@ impl fmt::Display for PackError {
             ),
             Self::MalformedOpeningSceneAsset { id, detail } => {
                 write!(f, "asset pack: opening-scene entry `{id}` {detail}")
+            }
+            Self::MalformedEvolutionSceneAsset { id, detail } => {
+                write!(f, "asset pack: evolution-scene entry `{id}` {detail}")
             }
             Self::MalformedPokedexGraphic { id, detail } => {
                 write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
@@ -379,6 +399,7 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedPokeBallAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
@@ -386,6 +407,7 @@ impl std::error::Error for PackError {
             | Self::MalformedTrainerBattlerAsset { .. }
             | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }
+            | Self::MalformedEvolutionSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }

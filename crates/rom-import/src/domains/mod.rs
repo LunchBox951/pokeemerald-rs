@@ -29,11 +29,13 @@ pub(crate) mod battle_anim;
 pub(crate) mod battle_interface;
 pub(crate) mod battle_messages;
 pub(crate) mod battlers;
+pub(crate) mod evolution_scene;
 pub(crate) mod field_messages;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
 pub(crate) mod opening_scene;
+pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
@@ -74,8 +76,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     bag::write,
     starter_choose::write,
     opening_scene::write,
+    evolution_scene::write,
     battle_interface::write,
     battlers::write,
+    poke_ball::write,
     trainer_front::write,
     trainer_battlers::write,
 ];

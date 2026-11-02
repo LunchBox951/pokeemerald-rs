@@ -3,9 +3,10 @@
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
-    opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
+    layout_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_PALETTE_IDS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -162,6 +163,50 @@ pub fn require_opening_scene(pack: &PackSource) -> Result<(), GenRomProfileError
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every evolution-scene image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `evolution-scene/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_evolution_scene(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = evolution_scene_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("evolution-scene/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's evolution-scene inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the Poké Ball's sheet, palette,
+/// and opened-ball sheet are all present, and with [`GenRomProfileError::StructMismatch`] for a
+/// pack `poke-ball/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_poke_ball(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = poke_ball_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("poke-ball/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's poke-ball inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
 /// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
 /// the enemy shadow, and the two ball palettes are present, and with
@@ -256,6 +301,8 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_bag(pack, bag_ids)?;
     require_starter_chooser(pack)?;
     require_opening_scene(pack)?;
+    require_evolution_scene(pack)?;
+    require_poke_ball(pack)?;
     require_battle_interface(pack)?;
     require_trainer_front(pack)?;
     require_trainer_battlers(pack)

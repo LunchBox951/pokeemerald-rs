@@ -128,6 +128,7 @@ pub mod frame;
 mod game_save;
 pub mod import_rom;
 pub mod intro;
+mod key_repeat;
 pub mod main_menu;
 pub mod music;
 pub mod naming;

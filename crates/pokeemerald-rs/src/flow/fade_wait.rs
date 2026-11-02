@@ -15,8 +15,8 @@ use super::{
     TitleInit,
 };
 use crate::frame::to_platform_frame;
-use crate::game_save::SaveSlot;
 use crate::main_menu::{MainMenuItem, MainMenuScene};
+use engine::save::ButtonMode;
 
 /// [`AppScene::TitleFadeWait`]'s state: the title retained for its
 /// unfaded-recovery frame ([`advance_title_fade_wait`]'s own doc comment)
@@ -33,7 +33,7 @@ pub(crate) struct TitleFadeWait {
 
 impl TitleFadeWait {
     /// The retained title's button mode ([`AnimatedTitle::button_mode`]).
-    pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
+    pub(super) fn button_mode(&self) -> ButtonMode {
         self.title.button_mode()
     }
 }
@@ -168,21 +168,21 @@ pub(super) fn advance_title(
 /// ([`MainMenuFadeIn::from_title`]).
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
-    save_slot: &mut SaveSlot,
     pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
-        if let Some(result) =
-            title_to_main_menu(pack_source, save_slot, &mut wait.title.retained_save)
-        {
-            return result;
-        }
-        let frame = to_platform_frame(&wait.title.scene.compose_split_with_palette(
-            wait.background_tick,
-            wait.title.tick,
-            rendering::PaletteStage::default(),
-        ));
-        return (AppScene::Title(wait.title), frame);
+        let background_tick = wait.background_tick;
+        return match title_to_main_menu(pack_source, wait.title) {
+            Ok(result) => result,
+            Err(title) => {
+                let frame = to_platform_frame(&title.scene.compose_split_with_palette(
+                    background_tick,
+                    title.tick,
+                    rendering::PaletteStage::default(),
+                ));
+                (AppScene::Title(title), frame)
+            }
+        };
     }
     wait.fade.update();
     let frame = faded_title_frame(&wait.title, wait.background_tick, &wait.fade);
@@ -302,7 +302,7 @@ fn main_menu_to_title(
         Ok(scene) => {
             // The session save travels with the title (`AnimatedTitle`'s
             // field docs).
-            let (init, frame) = TitleInit::new(scene, Some(Box::new(state.saved)));
+            let (init, frame) = TitleInit::new(scene, state.saved);
             (AppScene::TitleInit(Box::new(init)), frame)
         }
         Err(err) => {

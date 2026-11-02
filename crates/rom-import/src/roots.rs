@@ -29,6 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod poke_ball;
+
+pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -481,6 +485,22 @@ pub struct OpeningSceneRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
+/// The evolution scene's animated background and sparkle sprite
+/// (`graphics/evolution_scene`, `graphics/misc/evo_sparkle.png`).
+///
+/// The two images, three palettes, and two tilemaps under the
+/// `evolution-scene/` pack ids the checkout extractor emits. The images and
+/// tilemaps are stored compressed; the palettes are raw `.gbapal` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvolutionSceneRoots {
+    /// Every `evolution-scene/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `evolution-scene/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `evolution-scene/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// The battle textbox, menu text, and singles health-box graphics
 /// (`graphics/battle_interface`).
 ///
@@ -655,10 +675,14 @@ pub struct Roots {
     pub starter_chooser: StarterChooserRoots,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningSceneRoots,
+    /// The evolution scene's background and sparkle sprite.
+    pub evolution_scene: EvolutionSceneRoots,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfaceRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -706,8 +730,10 @@ impl Roots {
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
+        evolution_scene: EvolutionSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
         battlers: BattlerRoots::NONE,
+        poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -730,12 +756,19 @@ impl Roots {
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
+            .chain(self.evolution_scene.images.iter())
             .chain(self.battle_interface.images.iter())
             .chain(
                 self.battlers
                     .species
                     .iter()
                     .flat_map(|battler| [&battler.front, &battler.back]),
+            )
+            .chain(
+                self.poke_ball
+                    .poke_ball
+                    .iter()
+                    .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
@@ -760,6 +793,7 @@ impl Roots {
             .chain(self.bag.palettes.iter())
             .chain(self.starter_chooser.palettes.iter())
             .chain(self.opening_scene.palettes.iter())
+            .chain(self.evolution_scene.palettes.iter())
             .chain(self.battle_interface.palettes.iter())
             .chain(
                 self.battlers
@@ -767,6 +801,7 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
+            .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers
@@ -817,6 +852,15 @@ impl StarterChooserRoots {
 
 impl OpeningSceneRoots {
     /// No opening-scene roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl EvolutionSceneRoots {
+    /// No evolution-scene roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
         images: &[],
         palettes: &[],

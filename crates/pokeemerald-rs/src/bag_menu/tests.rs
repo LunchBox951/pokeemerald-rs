@@ -590,6 +590,130 @@ fn simultaneous_down_and_a_in_a_single_row_context_confirms() {
     ));
 }
 
+/// A bag whose item list has four stacks, so the cursor has rows to repeat
+/// through before the close row.
+fn four_item_bag() -> Bag {
+    let mut bag = Bag::default();
+    for item in [
+        ItemId::POTION,
+        ItemId::SUPER_POTION,
+        ItemId::HYPER_POTION,
+        ItemId::ANTIDOTE,
+    ] {
+        assert!(bag.add_item(item, 1));
+    }
+    bag
+}
+
+/// Feeds `held` for each of `frames` frames, returning the frames on which the
+/// item list's cursor row changed.
+fn frames_that_moved(screen: &mut BagScreen, held: Buttons, frames: u32) -> Vec<u32> {
+    let mut state = ButtonState::new();
+    let mut moved = Vec::new();
+    let mut row = screen.positions().cursor[0];
+    for frame in 0..frames {
+        state.update(held);
+        screen.tick(state);
+        let now = screen.positions().cursor[0];
+        if now != row {
+            moved.push(frame);
+            row = now;
+        }
+    }
+    moved
+}
+
+#[test]
+fn a_held_down_repeats_after_forty_frames_then_every_five() {
+    // `gKeyRepeatStartDelay = 40`, `gKeyRepeatContinueDelay = 5`
+    // (`main.c:240-241`): the press moves, then frames 40, 45, 50.
+    let mut screen = open_screen(BagScreenMode::Field, &four_item_bag());
+    assert_eq!(
+        frames_that_moved(&mut screen, Buttons::DOWN, 55),
+        [0, 40, 45, 50]
+    );
+    assert_eq!(screen.positions().cursor[0], 4);
+}
+
+#[test]
+fn a_held_up_repeats_on_the_same_cadence() {
+    let mut request = BagScreenRequest::new(BagScreenMode::Field);
+    request.positions.cursor[0] = 4;
+    let mut screen = open_with(request, &four_item_bag());
+    assert_eq!(
+        frames_that_moved(&mut screen, Buttons::UP, 51),
+        [0, 40, 45, 50]
+    );
+    assert_eq!(screen.positions().cursor[0], 0);
+}
+
+#[test]
+fn a_single_tap_moves_exactly_one_row() {
+    let mut screen = open_screen(BagScreenMode::Field, &four_item_bag());
+    let mut state = ButtonState::new();
+    state.update(Buttons::DOWN);
+    screen.tick(state);
+    for _ in 0..60 {
+        state.update(Buttons::NONE);
+        screen.tick(state);
+    }
+    assert_eq!(screen.positions().cursor[0], 1);
+}
+
+#[test]
+fn releasing_and_pressing_again_restarts_the_repeat_delay() {
+    let mut screen = open_screen(BagScreenMode::Field, &four_item_bag());
+    let mut state = ButtonState::new();
+    for _ in 0..39 {
+        state.update(Buttons::DOWN);
+        screen.tick(state);
+    }
+    assert_eq!(screen.positions().cursor[0], 1, "no repeat before frame 40");
+    state.update(Buttons::NONE);
+    screen.tick(state);
+    // The fresh press moves one row; the old count no longer applies.
+    assert_eq!(
+        frames_that_moved(&mut screen, Buttons::DOWN, 40),
+        [0],
+        "frames 1..40 of the new hold do not repeat"
+    );
+}
+
+#[test]
+fn a_held_down_does_not_repeat_inside_a_choice_window() {
+    // A berry's six-cell choice window has room for a repeat to move twice:
+    // Down goes 0 -> 2 -> 4 if it repeats, but it reads `JOY_NEW`
+    // (`item_menu.c:1717`).
+    let mut request = BagScreenRequest::new(BagScreenMode::Field);
+    request.positions.pocket = Pocket::Berries;
+    let mut screen = open_with(request, &sample_bag());
+    screen.tick(press(Buttons::A));
+    let mut state = ButtonState::new();
+    for _ in 0..56 {
+        state.update(Buttons::DOWN);
+        screen.tick(state);
+    }
+    let grid = screen.menu.context_grid().expect("the choices stay open");
+    assert_eq!(grid.cursor, 2, "only the fresh press moved the choice");
+}
+
+#[test]
+fn a_held_down_repeats_while_swapping_items() {
+    // The swap task reads the list menu's `JOY_REPEAT(DPAD_DOWN)`
+    // (`item_menu.c:1461`, `list_menu.c:411`).
+    let mut screen = open_screen(BagScreenMode::Field, &four_item_bag());
+    screen.tick(press(Buttons::SELECT));
+    let mut state = ButtonState::new();
+    state.update(Buttons::NONE);
+    screen.tick(state);
+    assert!(screen.swap().is_some(), "the swap is under way");
+    assert_eq!(
+        frames_that_moved(&mut screen, Buttons::DOWN, 46),
+        [0, 40, 45]
+    );
+    assert!(screen.swap().is_some(), "the swap is still under way");
+}
+
 mod move_data;
 mod palette;
 mod scroll;

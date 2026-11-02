@@ -29,6 +29,7 @@ mod battle_messages;
 mod battlers;
 mod emit;
 mod error;
+mod evolution_scene;
 mod field_messages;
 mod fonts;
 mod images;
@@ -41,6 +42,7 @@ mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
+mod poke_ball;
 mod search;
 mod sprites;
 mod starter_chooser;
@@ -178,8 +180,10 @@ fn locate_profile(
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
         opening_scene: opening_scene::locate(ctx, lines)?,
+        evolution_scene: evolution_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
+        poke_ball: poke_ball::locate(ctx, lines)?,
         trainer_front,
         trainer_battlers,
     })
