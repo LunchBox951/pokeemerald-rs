@@ -262,6 +262,20 @@ pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
     synthetic_dialog_at_speed(tokens, TextSpeed::Mid)
 }
 
+/// [`synthetic_dialog`] whose message-box frame draws opaque `color`
+/// tiles, where the plain fixture's frame draws nothing.
+#[cfg(test)]
+pub(crate) fn synthetic_dialog_with_frame_color(
+    tokens: Vec<Token>,
+    color: rendering::Rgb888,
+) -> NpcDialog {
+    const OPAQUE_INDEX: u8 = 1;
+    let mut dialog = synthetic_dialog(tokens);
+    dialog.frame.pixels.fill(OPAQUE_INDEX);
+    dialog.frame.palette[usize::from(OPAQUE_INDEX)] = color;
+    dialog
+}
+
 /// [`synthetic_dialog`], but at a caller-chosen [`TextSpeed`].
 ///
 /// Only used within this module's own tests, which need [`TextSpeed::Instant`]
