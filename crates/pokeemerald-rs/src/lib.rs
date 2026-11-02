@@ -135,6 +135,7 @@ pub mod naming;
 pub mod new_game;
 mod options;
 pub mod overworld;
+mod pack_readiness;
 mod pack_source;
 mod palette_overlay;
 mod party;
@@ -150,6 +151,7 @@ pub use flow::first_battle::{
     FIRST_BATTLE_OPPONENT_SPECIES,
 };
 pub use import_rom::{import_rom, ImportOutcome, ImportRomError};
+pub use pack_readiness::load_ready_pack;
 pub use platform::Buttons as AppButtons;
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a

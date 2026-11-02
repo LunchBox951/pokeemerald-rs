@@ -20,6 +20,7 @@ mod opening_scene;
 mod paletted_image;
 mod poke_ball;
 mod pokedex_graphics;
+mod readiness;
 mod starter_chooser;
 mod text_tokens;
 mod trainer_battler;
@@ -56,6 +57,7 @@ pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
+pub use readiness::{ConsumerConstraint, PackProblem, PackReadinessError, RequiredAsset};
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 
 pub use trainer_battler::TrainerBattlerHandle;
