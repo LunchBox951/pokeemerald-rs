@@ -29,7 +29,7 @@ fn mom(x: i16, y: i16, movement: MovementType) -> ObjectEvent {
     object("OBJ_EVENT_GFX_MOM", x, y, movement)
 }
 
-fn draw(objects: &ObjectEventCollection, player: &PlayerState) -> Vec<OamEntry> {
+fn draw(objects: &ObjectEventCollection, player: &PlayerState) -> Vec<SheetSprite> {
     oam_entries(objects, &bindings(), player, &EventData::new())
 }
 

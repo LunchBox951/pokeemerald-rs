@@ -640,7 +640,11 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
 
     // Controls, built independently over the same entries `compose` draws
     // from: confirm this arrangement straddles both budgets' cutoffs.
-    let sprite_entries = scene.sprites.entries(&player, &event_data);
+    let sprite_entries: Vec<rendering::OamEntry> = scene
+        .sprite_entries(&player, &event_data)
+        .into_iter()
+        .map(super::SheetSprite::oam)
+        .collect();
     let normal_budget = rendering::SpriteLayer::new(
         &sprite_entries,
         scene.sprites.tiles(),
@@ -1205,7 +1209,7 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
-    let entries = scene.sprites.entries(&player, &data);
+    let entries = scene.sprite_entries(&player, &data);
     assert_eq!(
         entries.len(),
         2,
@@ -1482,7 +1486,7 @@ fn assert_background_npc_draws_an_oam_entry(
         event.elevation,
         Direction::South,
     );
-    let entries = scene.sprites.entries(&player, data);
+    let entries = scene.sprite_entries(&player, data);
 
     let block = super::avatar::FRAME_BLOCK_TILES;
     let drawn: Vec<_> = entries
@@ -1693,7 +1697,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
 
     // (0, 7): ordinary floor south of the bed, elevation 3.
     let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
-    let floor_entries = scene.sprites.entries(&on_the_floor, &data);
+    let floor_entries = scene.sprite_entries(&on_the_floor, &data);
     assert_eq!(
         floor_entries[0].priority(),
         super::avatar::PLAYER_OBJ_PRIORITY,
@@ -1704,7 +1708,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     // data from `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
     // the same tile the collision-side test above checks.
     let on_the_bed_edge = PlayerState::new((0, 5), 4, Direction::North);
-    let bed_entries = scene.sprites.entries(&on_the_bed_edge, &data);
+    let bed_entries = scene.sprite_entries(&on_the_bed_edge, &data);
     assert_eq!(
         bed_entries[0].priority(),
         1,
@@ -1733,7 +1737,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
         (0, 4),
         "precondition: the wildcard tile drifts the two elevation fields apart"
     );
-    let drifted_entries = scene.sprites.entries(&walker, &data);
+    let drifted_entries = scene.sprite_entries(&walker, &data);
     assert_eq!(
         drifted_entries[0].priority(),
         1,
@@ -2193,9 +2197,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             3,
             Direction::South,
         );
-        let entries = scene
-            .sprites
-            .entries(&player, &engine::event_data::EventData::new());
+        let entries = scene.sprite_entries(&player, &engine::event_data::EventData::new());
         assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0].priority(),
@@ -2207,9 +2209,10 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
         // player, so a row inside the shared 16px band lies inside both.
         let x = usize::from(super::avatar::PLAYER_OBJ_X) + 8;
         let y = usize::from(super::avatar::PLAYER_OBJ_Y) + if npc_dy > 0 { 24 } else { 8 };
-        let color_at = |e: &[rendering::OamEntry]| {
+        let color_at = |e: &[super::SheetSprite]| {
+            let e: Vec<rendering::OamEntry> = e.iter().map(|e| e.oam()).collect();
             rendering::SpriteLayer::new(
-                e,
+                &e,
                 scene.sprites.tiles(),
                 scene.sprites.tiles(),
                 scene.sprites.palette(),

@@ -874,15 +874,20 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
-    /// Restart the tileset animation cadence on return to the field.
+    /// Restart the field's animations on return to the field.
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
     /// `InitTilesetAnimations` (`src/overworld.c:523-530`,
-    /// `src/tileset_anims.c:600-616`), zeroing both animation counters.
-    /// The battle drivers call this when the battle slot empties; a loss's
-    /// `white_out` warp has already zeroed `tick`.
+    /// `src/tileset_anims.c:600-616`), zeroing both animation counters, and
+    /// `ResumeMap`'s `ResetSpriteData` (`:2134`) destroys every field-effect
+    /// sprite, after which the player's respawn places a settled tall-grass
+    /// effect again (`ResetObjectEventFldEffData`,
+    /// `event_object_movement.c:1799-1802`). The battle drivers call this when
+    /// the battle slot empties; a loss's `white_out` warp has already zeroed
+    /// `tick` and rebuilt the scene.
     pub(super) fn reinit_field_tileset_animations(&mut self) {
         self.tick = 0;
+        self.scene.reset_field_effects();
     }
 
     /// Play one frame of whichever battle currently owns the overworld
@@ -1019,6 +1024,8 @@ mod running_tests;
 mod sight_trainer_tests;
 #[cfg(test)]
 mod step_tests;
+#[cfg(test)]
+mod tall_grass_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

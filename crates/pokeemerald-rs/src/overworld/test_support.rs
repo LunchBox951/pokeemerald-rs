@@ -560,6 +560,21 @@ pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
     height: u16,
     specials: &[((u16, u16), u8, u8)],
 ) -> super::OverworldScene {
+    synthetic_scene_result(
+        write_synthetic_pack(special_tile_entries_at_elevations(width, height, specials)),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack with elevated special tiles should decode cleanly")
+}
+
+/// The pack entries behind [`synthetic_scene_with_special_tiles_at_elevations`].
+fn special_tile_entries_at_elevations(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+) -> Vec<Entry> {
     let behaviors: Vec<((u16, u16), u8)> = specials
         .iter()
         .map(|&(pos, behavior, _)| (pos, behavior))
@@ -582,13 +597,59 @@ pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
         let idx = (usize::from(sy) * usize::from(width) + usize::from(sx)) * 2;
         grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
     }
+    entries
+}
+
+/// The palette index each cell of the synthetic tall-grass sheet is filled
+/// with, so a composed pixel names the cell it came from.
+pub(crate) const TALL_GRASS_CELL_PIXELS: [u8; 5] = [11, 12, 13, 14, 15];
+
+/// The colour [`TALL_GRASS_CELL_PIXELS`]' index takes in the synthetic
+/// `field-effect/palette/general_1`, one distinct colour per cell.
+pub(crate) const TALL_GRASS_CELL_COLORS: [u16; 5] = [0x03E0, 0x03FF, 0x7FE0, 0x7C1F, 0x7FFF];
+
+/// The synthetic tall-grass sheet and palette entries.
+fn tall_grass_entries() -> [Entry; 2] {
+    let row: Vec<u8> = TALL_GRASS_CELL_PIXELS
+        .iter()
+        .flat_map(|&pixel| [pixel; 16])
+        .collect();
+    let image = Entry {
+        id: "field-effect/image/tall_grass".into(),
+        kind_tag: IMAGE_KIND_TAG,
+        meta: image_meta(80, 16, 8),
+        payload: row.repeat(16),
+    };
+    let mut palette = vec![0u8; usize::from(SPRITE_PALETTE_COLOR_COUNT) * 2];
+    for (pixel, color) in TALL_GRASS_CELL_PIXELS.iter().zip(TALL_GRASS_CELL_COLORS) {
+        let at = usize::from(*pixel) * 2;
+        palette[at..at + 2].copy_from_slice(&color.to_le_bytes());
+    }
+    let palette = Entry {
+        id: "field-effect/palette/general_1".into(),
+        kind_tag: PALETTE_KIND_TAG,
+        meta: SPRITE_PALETTE_COLOR_COUNT.to_le_bytes().to_vec(),
+        payload: palette,
+    };
+    [image, palette]
+}
+
+/// [`synthetic_scene_with_special_tiles_at_elevations`] over a pack that also
+/// carries the tall-grass field-effect sheet and palette.
+pub(crate) fn synthetic_scene_with_tall_grass_sprites(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+) -> super::OverworldScene {
+    let mut entries = special_tile_entries_at_elevations(width, height, specials);
+    entries.extend(tall_grass_entries());
     synthetic_scene_result(
         write_synthetic_pack(entries),
         "gTileset_General",
         width,
         height,
     )
-    .expect("synthetic pack with elevated special tiles should decode cleanly")
+    .expect("synthetic pack with the tall-grass sheet should decode cleanly")
 }
 
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
@@ -728,6 +789,17 @@ pub(crate) fn write_route101_oldale_layout_pack(
     oldale_specials: &[((u16, u16), u8)],
     sprite_paths: &[&str],
 ) {
+    write_route101_oldale_layout_pack_with(path, oldale_specials, sprite_paths, false);
+}
+
+/// [`write_route101_oldale_layout_pack`], and the tall-grass sheet and palette
+/// too when `with_tall_grass`.
+pub(crate) fn write_route101_oldale_layout_pack_with(
+    path: &std::path::Path,
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+    with_tall_grass: bool,
+) {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -759,6 +831,9 @@ pub(crate) fn write_route101_oldale_layout_pack(
             meta: image_meta(144, 32, 8),
             payload: vec![3u8; 144 * 32],
         });
+    }
+    if with_tall_grass {
+        entries.extend(tall_grass_entries());
     }
     write_scratch_exclusive(path, write_synthetic_pack(entries));
 }
