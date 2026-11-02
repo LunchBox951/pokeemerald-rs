@@ -267,7 +267,18 @@ impl OwnedScratchDir {
     }
 }
 
-impl Drop for OwnedScratchDir {
+/// The two points in [`OwnedScratchDir::release_with`] where another
+/// process can change what stands at the public name, exposed so a test can
+/// act there deterministically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseStage {
+    /// The public name held the claim and is about to be moved aside.
+    Checked,
+    /// The move caught a foreign entry, which is about to be moved back.
+    CaughtForeign,
+}
+
+impl OwnedScratchDir {
     /// Removes the claim only once it stands at a name nobody else knows.
     ///
     /// Checking the public name and then deleting it are two operations, and
@@ -275,11 +286,14 @@ impl Drop for OwnedScratchDir {
     /// the public name is first moved, atomically, to a private sibling
     /// name, and the ownership check and the removal both act on that
     /// private name. A foreign entry caught by the move fails the check and
-    /// is moved back, never deleted.
-    fn drop(&mut self) {
+    /// is never deleted: it is moved back if the public name frees up, and
+    /// otherwise left intact at [`Self::release_path`]: whatever has since
+    /// taken the public name keeps it, so cleanup cannot assume it frees up.
+    fn release_with(&self, mut at: impl FnMut(ReleaseStage)) {
         if !self.is_ours(&self.path) {
             return;
         }
+        at(ReleaseStage::Checked);
         let aside = self.release_path();
         if std::fs::rename(&self.path, &aside).is_err() {
             return;
@@ -288,15 +302,72 @@ impl Drop for OwnedScratchDir {
             drop(std::fs::remove_dir_all(&aside));
             return;
         }
-        // The move caught a replacement. Put it back; a contender that keeps
-        // the public name busy only delays this, so keep trying while it does.
-        for _ in 0..10_000 {
+        at(ReleaseStage::CaughtForeign);
+        // A contender holding the public name busy only for a moment delays
+        // the move back; one that keeps it occupied leaves the foreign
+        // entry where it is, whole, rather than anywhere it could be lost.
+        for _ in 0..1_000 {
             if std::fs::rename(&aside, &self.path).is_ok() {
                 return;
             }
             std::thread::yield_now();
         }
     }
+}
+
+impl Drop for OwnedScratchDir {
+    fn drop(&mut self) {
+        self.release_with(|_| {});
+    }
+}
+
+/// A foreign directory caught by cleanup while the public name stays
+/// occupied is left whole at the private name, never deleted or lost: here
+/// the claim itself is restored to the public name in between, so the move
+/// back can never succeed.
+#[test]
+fn a_scratch_claim_keeps_a_caught_foreign_directory_when_its_path_stays_occupied() {
+    let parent = OwnedScratchDir::new("claim-occupied-restore-parent");
+    let claim = OwnedScratchDir::claim_in(&parent.path, |a| format!("claimed-{a}"));
+    let path = claim.path.clone();
+    let aside = parent.path.join("aside");
+    let foreign = parent.path.join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    std::fs::write(foreign.join("keep"), b"foreign").unwrap();
+
+    let mut stages = Vec::new();
+    claim.release_with(|stage| {
+        stages.push(stage);
+        match stage {
+            ReleaseStage::Checked => {
+                std::fs::rename(&path, &aside).unwrap();
+                std::fs::rename(&foreign, &path).unwrap();
+            }
+            ReleaseStage::CaughtForeign => std::fs::rename(&aside, &path).unwrap(),
+        }
+    });
+
+    assert_eq!(
+        stages,
+        [ReleaseStage::Checked, ReleaseStage::CaughtForeign],
+        "both windows must be exercised, or this proves nothing"
+    );
+    assert_eq!(
+        std::fs::read(claim.release_path().join("keep")).unwrap(),
+        b"foreign",
+        "the caught foreign directory must stay whole at the private name"
+    );
+    assert!(
+        claim.is_ours(&path),
+        "the claim restored to the public name is not the caught directory, so it stays"
+    );
+    let release = claim.release_path();
+    drop(claim);
+    assert_eq!(
+        std::fs::read(release.join("keep")).unwrap(),
+        b"foreign",
+        "a later drop must not displace the foreign directory at the private name"
+    );
 }
 
 /// A claim never takes over an occupied candidate: it moves to the next name
@@ -1395,12 +1466,13 @@ fn a_scratch_claim_never_deletes_a_directory_swapped_in_during_cleanup() {
                 }
             })
         };
+        let release = claim.release_path();
         std::thread::sleep(std::time::Duration::from_micros(200));
         drop(claim);
         stop.store(true, Ordering::Relaxed);
         swapper.join().unwrap();
 
-        let survived = [&path, &aside, &foreign]
+        let survived = [&path, &aside, &foreign, &release]
             .iter()
             .any(|p| std::fs::read(p.join("keep")).is_ok());
         let listing: Vec<_> = std::fs::read_dir(&parent.path)
@@ -1411,7 +1483,7 @@ fn a_scratch_claim_never_deletes_a_directory_swapped_in_during_cleanup() {
             survived,
             "round {round}: cleanup deleted the swapped-in foreign directory; listing {listing:?}"
         );
-        for p in [&path, &aside, &foreign] {
+        for p in [&path, &aside, &foreign, &release] {
             let _ = std::fs::remove_dir_all(p);
         }
     }
