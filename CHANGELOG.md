@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.87.0] - 2026-11-02
+
+- People and objects around Littleroot, Oldale and the early routes are now drawn with their own graphics and sizes, indoors and out: the moving truck, boxes, dolls, Vigoroth, item balls, Birch's bag, the Zigzagoon and Route 103's berry trees. They overlap the player and each other in the original order, and characters keep the correct pose when they turn to face you.
+
 ## [0.0.86.0] - 2026-11-02
 
 - Walking through tall grass now shows the grass rustling effect under and around the player.
@@ -406,7 +410,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.86.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/356953c4e5f81486e29332ddc619f92197be714c...dev
+[0.0.87.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/93654e4a9ec194b71d1e7bbd261a8853976567f6...dev
+[0.0.86.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/356953c4e5f81486e29332ddc619f92197be714c...93654e4a9ec194b71d1e7bbd261a8853976567f6
 [0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...356953c4e5f81486e29332ddc619f92197be714c
 [0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...f8b898c347008d4fe0b0de110644b684c52e4808
 [0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5f95606fc87e5a6ed148063bbb1ff44d2f8c234a...86a3bf584936f2e61d6b7f04590526afb7fced4a

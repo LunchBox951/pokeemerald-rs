@@ -2,5 +2,6 @@
 //! arrow-warp triggers, and door transitions.
 
 mod arrow;
+mod checkpoint;
 mod door;
 mod ordinary;

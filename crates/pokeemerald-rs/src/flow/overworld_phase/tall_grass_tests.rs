@@ -355,9 +355,9 @@ fn checkpoint_scene(
     (scene, event_data)
 }
 
-/// Route 103 resolves twelve NPC sheets beside the player's walking and
-/// running sheets, so its combined sheet already exceeds the OBJ tile field
-/// before the effect's cells; composing stages only the drawn frames.
+/// Every checkpoint scene, with the opposite-gender rival resolved, stages one
+/// composed frame's sprites into the OBJ tile field with nothing dropped;
+/// composing stages only the drawn frames, not the scene's combined sheet.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn every_checkpoint_scene_of_the_real_pack_stages_its_sprites_in_obj_tile_space() {
@@ -392,9 +392,11 @@ fn every_checkpoint_scene_of_the_real_pack_stages_its_sprites_in_obj_tile_space(
     }
 }
 
-/// On Route 103 the effect's cells sit past tile 1024 of the combined sheet,
-/// where `OamEntry` would wrap the index to the player's sheet. Every rustle
-/// image a step plays must stage its own cells, pixel for pixel.
+/// Every rustle image a Route 103 step plays must stage its own cells, pixel
+/// for pixel, beside the route's people. Packing only the shown cells keeps
+/// this sheet under the ten-bit OBJ tile field, so the copy from an unmasked
+/// index past tile 1024 is pinned by `obj_vram`'s
+/// `stage_copies_from_the_unmasked_sheet_index`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn route_103_grass_rustle_frames_stage_their_own_cells() {
@@ -406,10 +408,6 @@ fn route_103_grass_rustle_frames_stage_their_own_cells() {
         let first = scene
             .tall_grass_first_tile()
             .expect("the pack has the sheet");
-        assert!(
-            usize::from(first) + 5 * usize::from(CELL_TILES) > OBJ_TILE_LIMIT,
-            "{character:?}: premise, the combined sheet overflows at {first}"
-        );
         let grass = {
             let runtime = scene.runtime();
             (0..64)
@@ -452,9 +450,10 @@ fn route_103_grass_rustle_frames_stage_their_own_cells() {
                 }
             }
         }
-        assert!(
-            images_seen.contains(&4),
-            "{character:?}: the step must play the rustle image past the OBJ limit"
+        assert_eq!(
+            images_seen,
+            (0..5).collect(),
+            "{character:?}: the step must play every rustle image"
         );
     }
 }

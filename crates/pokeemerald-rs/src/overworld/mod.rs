@@ -463,7 +463,10 @@ impl OverworldScene {
     /// map has no events. Otherwise returns an error when a tileset symbol is
     /// unsupported, a required pack
     /// entry is missing, or the tile, animation, layout-grid, border, or
-    /// sprite-sheet bytes fail to decode. An unbundled connected map is
+    /// sprite-sheet bytes fail to decode. Object frames are packed per scene,
+    /// only the sheet cells an object event shows, into the combined sheet
+    /// that composing stages drawn frames from, and each object's draw elevation
+    /// comes from its cell in the layout grid. An unbundled connected map is
     /// omitted; present but malformed connection data returns an error.
     /// Metatile definitions and metatile attributes are copied unchecked, so a
     /// truncated or undecodable entry leaves the cells that use it blank
@@ -513,11 +516,11 @@ impl OverworldScene {
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
         let border_bytes = pack.layout_border(&layout_name)?.to_vec();
-        let _ = layout.grid(&grid_bytes)?;
+        let grid = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
         let connections = resolve_connections(pack, header)?;
-        let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events, &grid, event_data)?;
 
         Ok(Self {
             map_id: header.id,

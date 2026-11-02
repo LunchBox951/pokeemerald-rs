@@ -12,13 +12,7 @@ const BASE_TILE: u16 = 32;
 const TILE_PX: i32 = 16;
 
 fn bindings() -> HashMap<&'static str, SpriteBinding> {
-    HashMap::from([(
-        "OBJ_EVENT_GFX_MOM",
-        SpriteBinding {
-            base_tile: BASE_TILE,
-            palette_bank: 4,
-        },
-    )])
+    HashMap::from([("OBJ_EVENT_GFX_MOM", SpriteBinding::people(BASE_TILE, 4))])
 }
 
 fn collection(events: Vec<ObjectEvent>) -> ObjectEventCollection {

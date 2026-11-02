@@ -180,8 +180,9 @@ struct TallGrassEffect {
     on_first_command: bool,
 }
 
-/// A 16x32 object sprite an effect's depth is compared against
-/// (`UpdateGrassFieldEffectSubpriority`, `field_effect_helpers.c:1662-1690`).
+/// An object sprite an effect's depth is compared against
+/// (`UpdateGrassFieldEffectSubpriority`, `field_effect_helpers.c:1662-1690`),
+/// with 16x32 bounds from its parent's top-left whatever its graphic's size.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DepthObject {
     /// Screen x of the object's left edge.
