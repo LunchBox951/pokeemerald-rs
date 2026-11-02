@@ -36,7 +36,8 @@ use crate::game_save::{SaveFileStatus, SaveSlot, StoreOutcome};
 use crate::party;
 use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome};
 
-use super::OverworldPhase;
+use super::{take_item_message, OverworldPhase};
+use crate::overworld::NpcDialog;
 
 impl OverworldPhase {
     /// Drives an already-open start menu for one frame; returns whether the
@@ -76,16 +77,8 @@ impl OverworldPhase {
             StartMenuOutcome::Open => self.start_menu = Some(menu),
             StartMenuOutcome::Closed => {}
             // The menu is dropped first, so the take runs with field control
-            // already back.
-            StartMenuOutcome::TakeItem => match self.take_lead_held_item() {
-                Some(party::TakeHeldItem::Took(_)) => {}
-                // Upstream tells the player (`gText_PkmnNotHolding`,
-                // `gText_BagFullCouldNotRemoveItem`); the party menu that
-                // draws those is not built, so the refusal is logged and
-                // the lead keeps its item.
-                Some(refused) => eprintln!("take item refused: {refused:?}"),
-                None => eprintln!("take item: there is no lead to take from"),
-            },
+            // already back; the message box then takes it again.
+            StartMenuOutcome::TakeItem => self.show_take_item_outcome(),
         }
         true
     }
@@ -153,9 +146,12 @@ impl OverworldPhase {
     }
 
     /// Test-only: opens a pack-free menu at the retained cursor. Only the
-    /// chrome differs from [`Self::build_start_menu`]'s real menu.
+    /// chrome differs from [`Self::build_start_menu`]'s real menu. It also
+    /// makes the field message boxes this menu leads to pack-free
+    /// ([`Self::show_field_message`]).
     #[cfg(test)]
     pub(in crate::flow) fn open_synthetic_start_menu(&mut self) {
+        self.synthetic_start_menu = super::SyntheticStartMenu::Builds;
         self.start_menu = Some(crate::start_menu::synthetic_start_menu_at(
             self.start_menu_cursor,
         ));
@@ -167,9 +163,8 @@ impl OverworldPhase {
     /// lead's held item into the bag ([`party::take_held_item`]) and, only
     /// when it moved, merges the lead into its saved slot so the save
     /// reflects the change. A refused take (nothing held, or a full bag)
-    /// writes nothing; the caller owns the message each outcome selects
-    /// (`gText_PkmnNotHolding`, `gText_BagFullCouldNotRemoveItem`, and
-    /// `DisplayTookHeldItemMessage`).
+    /// writes nothing; [`Self::show_take_item_outcome`] shows the message each
+    /// outcome selects.
     ///
     /// This is how an imported lead whose item `battle` does not model
     /// (`lead_screen::ensure_lead_can_battle`) becomes able to
@@ -183,6 +178,37 @@ impl OverworldPhase {
             self.flush_lead_to_save();
         }
         Some(outcome)
+    }
+
+    /// Runs the TAKE entry and puts what `CursorCb_TakeItem` tells the player
+    /// in the field message box, which holds field input until it is dismissed.
+    /// The texts and the cases without an upstream text are
+    /// [`take_item_message`]'s.
+    fn show_take_item_outcome(&mut self) {
+        let outcome = self.take_lead_held_item();
+        let nickname = self
+            .lead
+            .as_ref()
+            .map(|lead| take_item_message::nickname_tokens(lead.record()))
+            .unwrap_or_default();
+        self.show_field_message(take_item_message::take_item_message(outcome, nickname));
+    }
+
+    /// Opens `tokens` in the field message box (`ShowFieldMessage`), at the
+    /// saved text speed. A box that cannot be built is logged and the field
+    /// carries on without it.
+    fn show_field_message(&mut self, tokens: Vec<Token>) {
+        #[cfg(test)]
+        if matches!(self.synthetic_start_menu, super::SyntheticStartMenu::Builds) {
+            self.dialog =
+                Some(crate::overworld::dialog::synthetic_dialog(tokens).with_waitbuttonpress());
+            return;
+        }
+        let text_speed = self.field_dialog_text_speed();
+        match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
+            Ok(dialog) => self.dialog = Some(dialog),
+            Err(err) => eprintln!("field message: {err} -- staying in the overworld"),
+        }
     }
 
     /// `CopyPartyAndObjectsToSave` (`src/load_save.c`): mirrors the live party

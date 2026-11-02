@@ -650,4 +650,58 @@ mod take_lead_held_item {
             ItemId::ORAN_BERRY
         );
     }
+
+    /// A refused TAKE must leave the reason on screen (`gText_BagFullCouldNotRemoveItem`,
+    /// `party_menu.c:3288-3290`): the field must not be handed straight back.
+    #[test]
+    fn a_full_bag_take_shows_the_player_why() {
+        let temp = TempSave::new("menu-take-item-bag-full-msg");
+        let mut save_slot = temp.slot();
+        let mut phase = phase_leading_with_oran_berry();
+        phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+        phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
+
+        phase.open_synthetic_start_menu();
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+        let message_on_screen = phase.start_menu().is_some()
+            || !phase.start_menu_may_open(pressed(Buttons::START), false);
+        assert!(
+            message_on_screen,
+            "the refusal closed the menu with nothing shown and the field free"
+        );
+    }
+
+    /// A successful TAKE reports it (`DisplayTookHeldItemMessage`) and the
+    /// field comes back once the player dismisses the box.
+    #[test]
+    fn a_successful_take_shows_the_message_and_dismissing_it_frees_the_field() {
+        let temp = TempSave::new("menu-take-item-msg");
+        let mut save_slot = temp.slot();
+        let mut phase = phase_leading_with_oran_berry();
+
+        phase.open_synthetic_start_menu();
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+        assert_eq!(berry_total(&phase), 1, "the take happened");
+        assert!(phase.start_menu().is_none(), "the menu is closed");
+        assert!(
+            !phase.start_menu_may_open(pressed(Buttons::START), false),
+            "the open message holds START off"
+        );
+
+        // Printing takes frames; each fresh A then advances the box.
+        for _ in 0..600 {
+            if phase.start_menu_may_open(pressed(Buttons::START), false) {
+                break;
+            }
+            phase.step(pressed(Buttons::A));
+        }
+        assert!(
+            phase.start_menu_may_open(pressed(Buttons::START), false),
+            "A dismisses the message and the field is free again"
+        );
+    }
 }

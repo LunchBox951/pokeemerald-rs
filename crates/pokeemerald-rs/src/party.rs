@@ -27,7 +27,8 @@
 //! It moves the item into the bag with `AddBagItem` and clears the battler's
 //! item, so a lead [`flow::lead_screen`](crate::flow) refuses for holding an
 //! item with a battle effect can be made to battle. A full bag refuses the
-//! take and the lead keeps the item. Giving an item to a Pokemon
+//! take and the lead keeps the item; the start menu's TAKE entry shows each
+//! outcome's message in the field message box. Giving an item to a Pokemon
 //! (`GiveItemToMon`, `:1785-1811`) and the party menu's presentation are not
 //! modelled.
 //!
