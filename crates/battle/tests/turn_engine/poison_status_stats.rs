@@ -3,15 +3,15 @@
 
 use crate::common::{max_iv_mon_with_personality, SECONDARY_ABILITY_PERSONALITY};
 use crate::poison_support::*;
-use assets::AbilityId;
+use assets::{AbilityId, SpeciesId};
 use battle::{Battle, BattleEvent, Dex, PlayerAction, Status1};
 
 /// `SPECIES_MAKUHITA`: Fighting-type, Guts in ability slot 1 (Thick Fat is
 /// slot 0), slower than [`MILOTIC`].
-const MAKUHITA: u16 = 335;
+const MAKUHITA: SpeciesId = SpeciesId::MAKUHITA;
 /// `SPECIES_MILOTIC`: Water-type, Marvel Scale in its only ability slot,
 /// faster than [`MAKUHITA`].
-const MILOTIC: u16 = 329;
+const MILOTIC: SpeciesId = SpeciesId::MILOTIC;
 
 /// A damage roll draw producing the maximum 100% roll
 /// (`damage::apply_damage_roll`'s `roll_reduction = draw % 16`).

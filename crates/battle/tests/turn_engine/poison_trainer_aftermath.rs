@@ -2,7 +2,7 @@
 //! reward payout, trainer defeat, and level-up prompts.
 
 use crate::poison_support::*;
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
@@ -156,8 +156,8 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
 }
 
 /// `SPECIES_TORCHIC`: its level-16 learnset entry is Peck.
-const TORCHIC: u16 = 280;
-const TREECKO: u16 = 277;
+const TORCHIC: SpeciesId = SpeciesId::TORCHIC;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
 const SCRATCH: MoveId = MoveId::SCRATCH;
 const POUND: MoveId = MoveId::POUND;
 /// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
@@ -171,7 +171,7 @@ const PECK: MoveId = MoveId::PECK;
 #[test]
 fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping_it() {
     let dex = Dex::new();
-    let growth_rate = dex.species(assets::SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let growth_rate = dex.species(TORCHIC).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
@@ -218,7 +218,7 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
         vec![
             BattleEvent::MoveLearnDeclined { move_id: PECK },
             BattleEvent::TrainerSentOut {
-                species: assets::SpeciesId(TREECKO),
+                species: TREECKO,
                 bench_remaining: 0,
             },
             BattleEvent::HurtByPoison {

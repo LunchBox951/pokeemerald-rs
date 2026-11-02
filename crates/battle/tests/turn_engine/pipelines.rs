@@ -10,7 +10,7 @@
 //! catches an under-drawing pipeline too.
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{
     Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
     Volatiles,
@@ -31,13 +31,13 @@ const SHOCK_WAVE: MoveId = MoveId::SHOCK_WAVE;
 
 /// Grass/Poison; Overgrow occupies ability slot 0, the slot every
 /// [`max_iv_mon`] (even personality) call selects.
-const BULBASAUR: u16 = 1;
-const SQUIRTLE: u16 = 7;
-const RATTATA: u16 = 19;
+const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
+const SQUIRTLE: SpeciesId = SpeciesId::SQUIRTLE;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// Clear Body occupies ability slot 0 and Liquid Ooze slot 1, so these
 /// tests pass [`LIQUID_OOZE_PERSONALITY`] to field Liquid Ooze instead.
-const TENTACOOL: u16 = 72;
-const MACHOP: u16 = 66;
+const TENTACOOL: SpeciesId = SpeciesId::TENTACOOL;
+const MACHOP: SpeciesId = SpeciesId::MACHOP;
 
 /// `CreateBoxMon` selects a two-ability species' ability slot as
 /// `personality & 1`; every Liquid Ooze test passes this odd value to

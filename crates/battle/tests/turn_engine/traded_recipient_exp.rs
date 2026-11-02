@@ -6,10 +6,10 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
-const TREECKO: u16 = 277;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 const DOMESTIC_WILD_AWARD: u32 = 46;
 const TRADED_WILD_AWARD: u32 = 69;

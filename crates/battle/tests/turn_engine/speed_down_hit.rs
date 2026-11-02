@@ -5,7 +5,7 @@
 //! `pokeemerald/src/battle_script_commands.c:2666-2683,6987-7037`).
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{
     Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
 };
@@ -14,12 +14,12 @@ const CONSTRICT: MoveId = MoveId::CONSTRICT;
 const TACKLE: MoveId = MoveId::TACKLE;
 
 /// `SPECIES_RATTATA`, outspeeding every level-5 enemy below.
-const RATTATA: u16 = 19;
-const ZIGZAGOON: u16 = 288;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
 /// Clear Body in its first ability slot.
-const TENTACOOL: u16 = 72;
+const TENTACOOL: SpeciesId = SpeciesId::TENTACOOL;
 /// Shield Dust in its only ability slot.
-const WURMPLE: u16 = 290;
+const WURMPLE: SpeciesId = SpeciesId::WURMPLE;
 
 /// The setup draws, then Constrict's accuracy, no-crit and damage draws.
 const BEFORE_CHANCE: [u16; 6] = [0, 0, 0, 0, 1, 0];
@@ -37,7 +37,7 @@ fn script_with(chance: u16) -> SequenceRng {
     )
 }
 
-fn constrict_turn(enemy_species: u16, chance: u16) -> (Battle, Vec<BattleEvent>) {
+fn constrict_turn(enemy_species: SpeciesId, chance: u16) -> (Battle, Vec<BattleEvent>) {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 10, vec![CONSTRICT]);
     let enemy = max_iv_mon(&dex, enemy_species, 5, vec![TACKLE]);
@@ -114,7 +114,7 @@ fn clear_body_and_shield_dust_stop_the_drop_without_a_message() {
 
         assert!(
             stat_fell_events(&events).is_empty(),
-            "species {species}: a secondary is silent where a stat-lowering move would announce: {events:?}"
+            "species {species:?}: a secondary is silent where a stat-lowering move would announce: {events:?}"
         );
         assert_eq!(battle.enemy().stages(), StatStages::default());
     }

@@ -1,6 +1,6 @@
-//! Dependent crates must reach canonical move and item ids by named constant.
+//! Dependent crates must reach canonical move, item, and species ids by named constant.
 
-use assets::{items::ItemId, MoveId};
+use assets::{items::ItemId, MoveId, SpeciesId};
 use battle::damage::STRUGGLE;
 
 #[test]
@@ -16,4 +16,9 @@ fn item_id_oran_berry_is_reachable_outside_assets() {
 #[test]
 fn battle_struggle_is_the_canonical_move_identity() {
     assert_eq!(STRUGGLE, MoveId::STRUGGLE);
+}
+
+#[test]
+fn species_id_treecko_is_reachable_outside_assets() {
+    assert_eq!(SpeciesId::TREECKO, SpeciesId(277));
 }

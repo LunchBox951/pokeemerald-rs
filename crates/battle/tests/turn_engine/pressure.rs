@@ -3,20 +3,20 @@
 //! battler with Pressure (`:1224`-`:1225`); the subtraction saturates at zero.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, Dex, PlayerAction};
 
 const SCRATCH: MoveId = MoveId::SCRATCH;
 /// Targets its user, so it never receives Pressure's extra cost.
 const SWORDS_DANCE: MoveId = MoveId::SWORDS_DANCE;
 
-const RATTATA: u16 = 19;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// Ghost, so Scratch has no effect and only the PP spend is observable.
-const DUSCLOPS: u16 = 362;
+const DUSCLOPS: SpeciesId = SpeciesId::DUSCLOPS;
 /// Faster than Dusclops. With Pressure on both sides, an implementation that
 /// checks the opposing battler without exempting self-targeting moves would
 /// double Swords Dance's cost; a one-sided fixture would miss that bug.
-const ABSOL: u16 = 376;
+const ABSOL: SpeciesId = SpeciesId::ABSOL;
 
 /// `Battle::new`: the initial random-turn number
 /// (`battle_main.c:3140`). One draw.
