@@ -156,7 +156,7 @@
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
 //! them. [`ability::burn_halves_damage`] feeds the hit pipeline's,
 //! the trainer AI estimate's and the forced-replacement selector's
-//! `attacker_burned` input (the confusion self-hit still passes `false`): a burned attacker's physical damage halves unless
+//! `attacker_burned` input, as does the confusion self-hit's: a burned attacker's physical damage halves unless
 //! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and
 //! `Battle::residual_effects` deals the burn tick after poison's
 //! ([`status1::burn_residual_damage`]). A burned participant with Water Veil
