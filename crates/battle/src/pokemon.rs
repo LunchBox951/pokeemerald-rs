@@ -897,10 +897,17 @@ impl BattlePokemon {
         self
     }
 
-    /// Reconciles saved experience without teaching crossed-level moves.
+    /// Raises experience and level without teaching crossed-level moves.
     ///
     /// Experience is clamped between the current value and the level-100
     /// threshold. The level can rise to match it but never decreases.
+    ///
+    /// Test support only (`test-support` feature): no production path calls
+    /// it. Load adopts a saved total verbatim through
+    /// [`BattlePokemon::with_saved_experience`], and an award levels the mon
+    /// through [`BattlePokemon::apply_experience`]; tests use this to level a
+    /// mon without a battle fixture.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn reconcile_saved_experience(&mut self, total: u32) {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
@@ -913,8 +920,8 @@ impl BattlePokemon {
     /// returning `Some((old_level, new_level))` when at least one threshold
     /// was crossed. Shared by the in-battle award
     /// ([`BattlePokemon::apply_experience`], which then teaches the crossed
-    /// learnset moves) and [`BattlePokemon::reconcile_saved_experience`],
-    /// which must not.
+    /// learnset moves) and the test-only `reconcile_saved_experience`, which
+    /// must not.
     ///
     /// This is `CalculateMonStats` as `Cmd_getexp` runs it after the KO's EV
     /// award (`src/pokemon.c:2823-2895`,
