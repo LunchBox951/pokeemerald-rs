@@ -396,6 +396,15 @@ impl PlayerState {
         self.forced_input_tile_center
     }
 
+    /// Marks this frame as a completed stationary turn's `T_TILE_CENTER` on a
+    /// forced-movement input tile, which closes `FieldGetPlayerInput`'s button
+    /// block like a forced landing's does. The next [`Self::tick`] clears it,
+    /// so the turn's earlier `T_NOT_MOVING` frames and every later one admit
+    /// input.
+    pub const fn suppress_field_input_for_forced_turn(&mut self) {
+        self.forced_input_tile_center = true;
+    }
+
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
