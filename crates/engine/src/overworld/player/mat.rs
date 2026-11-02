@@ -3,7 +3,11 @@
 //! A standing mat tile dispatches `ForcedMovement_MatJump` or
 //! `ForcedMovement_MatSpin` ahead of the keypad (`field_player_avatar.c:555-565`),
 //! which hand off to `DoPlayerMatJump` and `DoPlayerMatSpin` (`:1544-1644`).
-//! Both set `preventStep`, so every poll is consumed until the sequence ends.
+//! Both set `preventStep` and clear it when their last held movement starts:
+//! the jump mat as its second in-place jump begins (`:1558-1568`), the spin mat
+//! as its exit step begins (`:1635-1644`). The held movement then consumes the
+//! remaining polls through `TryInterruptObjectEventSpecialAnim` (`:353-382`),
+//! so every poll is consumed until the sequence ends.
 
 use super::{Direction, MapRuntime, PlayerState, StepOutcome, TransitCadence};
 use crate::overworld::map_runtime::ConnectedMapData;
