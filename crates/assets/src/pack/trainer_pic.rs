@@ -1,5 +1,5 @@
 //! Typed trainer front pictures (upstream `gTrainerFrontPicTable` and
-//! `gTrainerPalettes`, `src/data/trainer_graphics/front_pic_tables.h`).
+//! `gTrainerFrontPicPaletteTable`, `src/data/trainer_graphics/front_pic_tables.h`).
 //!
 //! The pack ids stay private so scene code composes no strings. Only the
 //! identities the pack carries resolve; every lookup re-validates shapes,
