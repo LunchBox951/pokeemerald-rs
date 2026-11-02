@@ -2,8 +2,9 @@
 //! per-track state, and drives the [`Mixer`] one V-blank frame at a time
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
-//! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
-//! and the terminal reserved kinds 0 and 3 decode but never execute.
+//! `PORT` and every `XCMD` besides the ADSR overrides (`xATTA`..`xRELE`), the
+//! pseudo-echo pair (`xIECV`/`xIECL`), and the terminal reserved kinds 0 and 3
+//! decode but never execute.
 
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -13,6 +14,10 @@ use crate::sequence::{clamp_tempo, xcmd_ends_track, Event, MAX_TEMPO_BPM};
 use crate::song::{Instrument, Song, SquareTone};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
+
+mod adsr_override;
+
+use adsr_override::{AdsrOverride, XCMD_ATTA, XCMD_RELE};
 
 /// `XCMD` sub-command number for `xIECV` (pseudo-echo volume,
 /// `m4a_tables.c:252`).
@@ -159,6 +164,9 @@ struct TrackState {
     /// (`Clear64byte` then `tone.type = 1`, `m4a_1.s:1218`..`:1230`), which
     /// never reads the voicegroup.
     voice: Option<usize>,
+    /// The `xATTA`..`xRELE` bytes written to this track's local tone copy
+    /// since the last `VOICE` (`m4a.c:1567`..`:1589`).
+    adsr_override: AdsrOverride,
     vol: u8,
     /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`).
     vol_x: u8,
@@ -204,6 +212,7 @@ impl TrackState {
             wait: 0,
             ended: false,
             voice: None,
+            adsr_override: AdsrOverride::default(),
             vol: DEFAULT_TRACK_VOLUME,
             vol_x: TRACK_VOLUME_SCALE,
             pan: 0,
@@ -732,7 +741,12 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Goto(index) => track.cursor = index,
-            Event::Voice(v) => track.voice = Some(usize::from(v)),
+            // `ply_voice` overwrites the whole local tone copy, discarding the
+            // ADSR overrides (`m4a_1.s:945`..`:965`).
+            Event::Voice(v) => {
+                track.voice = Some(usize::from(v));
+                track.adsr_override = AdsrOverride::default();
+            }
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -837,6 +851,12 @@ impl Sequencer {
             Event::Xcmd { kind, .. } if xcmd_ends_track(kind) => {
                 Self::finish_track(track, mixer, track_id);
             }
+            Event::Xcmd {
+                kind: kind @ XCMD_ATTA..=XCMD_RELE,
+                value,
+            } => track
+                .adsr_override
+                .set(kind, u8::try_from(value).unwrap_or(0)),
             Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
@@ -1048,6 +1068,14 @@ impl Sequencer {
             startup = startup_tone();
             &startup
         };
+        // Only a direct tone snapshots the track's local copy; a key-split or
+        // rhythm child is read from the bank, so it never sees an override
+        // (`m4a_1.s:1580`..`:1609`, `:1750`..`:1758`).
+        let overrides = if matches!(instrument, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
+            AdsrOverride::default()
+        } else {
+            track.adsr_override
+        };
         let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
             return false;
         };
@@ -1072,7 +1100,7 @@ impl Sequencer {
                 let freq = pitch::midi_key_to_freq(tone.wave.freq(), note_key, pit_m);
                 let voice = Voice::new(
                     tone.wave.clone(),
-                    tone.adsr,
+                    overrides.direct(tone.adsr),
                     freq,
                     right,
                     left,
@@ -1096,7 +1124,7 @@ impl Sequencer {
                     CgbChannelNumber::Square1,
                     sq.duty,
                     Some(admitted_sweep_byte(sq.sweep)),
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1118,7 +1146,7 @@ impl Sequencer {
                     CgbChannelNumber::Square2,
                     sq.duty,
                     None,
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1141,7 +1169,7 @@ impl Sequencer {
                     CgbVoice::wave(
                         w.wave_id.clone(),
                         samples,
-                        w.adsr,
+                        overrides.cgb(w.adsr),
                         w.fixed_rate,
                         note_key,
                         pit_m,
@@ -1161,7 +1189,7 @@ impl Sequencer {
             }
             Instrument::CgbNoise(n) => mixer.add_cgb_voice(
                 CgbVoice::noise(
-                    n.adsr,
+                    overrides.cgb(n.adsr),
                     note_key,
                     n.lfsr_width_selector,
                     vol_mr,
@@ -1309,6 +1337,8 @@ fn scale_lfo(depth: u8, triangle: i32) -> i8 {
     i8::from_ne_bytes([scaled as u32 as u8])
 }
 
+#[cfg(test)]
+mod adsr_override_tests;
 #[cfg(test)]
 mod cgb_psg_tests;
 #[cfg(test)]
