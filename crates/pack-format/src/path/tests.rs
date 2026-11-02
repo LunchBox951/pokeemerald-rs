@@ -128,26 +128,21 @@ impl ScratchRoot {
     /// The drop's cleanup, with `before_remove` run after the last identity
     /// check and immediately before the removal that follows it, where a test
     /// lands a swap deterministically. See [`ScratchRoot`] for what each
-    /// platform does and what it leaves open.
+    /// platform does and what it leaves open. Unix only: elsewhere the drop
+    /// removes nothing.
+    #[cfg(unix)]
     fn remove_with(&self, before_remove: impl FnOnce()) {
-        #[cfg(unix)]
-        {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            if let Some(cleared) = clear_through_handle(&self.held) {
-                if cleared.is_ok() && is_held_at(&self.held, &self.path) {
-                    before_remove();
-                    let _ = std::fs::remove_dir(&self.path);
-                }
-                return;
-            }
-            if is_held_at(&self.held, &self.path) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(cleared) = clear_through_handle(&self.held) {
+            if cleared.is_ok() && is_held_at(&self.held, &self.path) {
                 before_remove();
-                let _ = std::fs::remove_dir_all(&self.path);
+                let _ = std::fs::remove_dir(&self.path);
             }
+            return;
         }
-        #[cfg(not(unix))]
-        {
-            drop(before_remove);
+        if is_held_at(&self.held, &self.path) {
+            before_remove();
+            let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 }
@@ -162,6 +157,7 @@ impl std::ops::Deref for ScratchRoot {
 
 impl Drop for ScratchRoot {
     fn drop(&mut self) {
+        #[cfg(unix)]
         self.remove_with(|| {});
     }
 }
