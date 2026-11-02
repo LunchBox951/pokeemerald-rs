@@ -2397,7 +2397,6 @@ dependencies = [
  "rom-import",
  "rustix 1.1.5",
  "win-fs",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
