@@ -38,8 +38,11 @@ impl KeyRepeat {
     ///
     /// The compare is upstream's, bug included (`main.c:257-261`): this
     /// frame's raw input against the previous frame's remapped held set, and
-    /// the repeated set is never remapped. Under L=A a held `L` therefore
-    /// never equals the remembered `L|A`, so nothing repeats while `L` is down.
+    /// the repeated set is never remapped. Under L=A, `L` held without
+    /// physical `A` therefore never equals the remembered `L|A`, so nothing
+    /// repeats while that L-only held set is down. With physical `L` and `A`
+    /// both held the raw and remapped sets match, so the whole set still
+    /// repeats.
     pub(crate) fn advance(&mut self, buttons: ButtonState) -> Buttons {
         let key_input = buttons.raw_held();
         let mut repeated = buttons.raw_newly_pressed();
@@ -86,13 +89,23 @@ mod tests {
     }
 
     /// `ReadKeys` compares raw `keyInput` (`L|Down`) against the previous
-    /// remapped `heldKeys` (`L|A|Down`), so under L=A a held `L` suppresses
-    /// every repeat (`main.c:257-261`).
+    /// remapped `heldKeys` (`L|A|Down`), so under L=A an `L` held without
+    /// physical `A` suppresses every repeat (`main.c:257-261`).
     #[test]
     fn held_l_in_l_equals_a_mode_suppresses_repeat() {
         assert_eq!(frames_repeating(Buttons::L | Buttons::DOWN, true, 60), []);
         assert_eq!(
             frames_repeating(Buttons::L | Buttons::DOWN, false, 51),
+            [40, 45, 50]
+        );
+    }
+
+    /// With physical `L` and `A` both held under L=A, raw and remapped held
+    /// sets match (`L|A|Down`), so the whole set still repeats.
+    #[test]
+    fn held_l_with_physical_a_in_l_equals_a_mode_still_repeats() {
+        assert_eq!(
+            frames_repeating(Buttons::L | Buttons::A | Buttons::DOWN, true, 51),
             [40, 45, 50]
         );
     }
