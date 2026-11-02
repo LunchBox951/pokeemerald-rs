@@ -29488,164 +29488,164 @@
     "src/data/object_events/object_event_pic_tables.h": {
       "artifacts": {
         "sPicTable_BlackBelt": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Boy1": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Boy2": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0 when this table is the current player's own sheet. The same table is also the sheet an OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL object event draws from when the player is May, since upstream's rival graphics info points .images at the protagonist's pic table (object_event_graphics_info.h:1920-2032) and there is no rival-specific pic table or PNG. That rival case is packed by npc::sheets::ObjectSheet::pack instead: only stand cells 0 to 2 (south, north, west; east reuses west flipped), appended after the player's block and drawn from its own palette bank (upstream PALSLOT_NPC_SPECIAL). The same holds for sPicTable_MayNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
         "sPicTable_FatMan": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Fisherman": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Gentleman": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
         "sPicTable_Girl3": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Man3": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Man5": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Maniac": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_MartEmployee": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Mom": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Norman": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_PokefanF": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
         "sPicTable_PokefanM": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_ProfBirch": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_SchoolKidM": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
         "sPicTable_Scientist1": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_SwimmerF": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_SwimmerM": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Teala": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
         "sPicTable_Twin": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Woman2": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Woman4": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Woman5": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
         "sPicTable_Youngster": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
