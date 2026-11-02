@@ -321,6 +321,7 @@ mod tests {
     use super::{checksum, read_whole, GbaHeader, Rom, ROM_SIZE};
     use crate::error::{HeaderFault, ImportError};
     use crate::fixture::{shared_emerald_rom, RomFixture};
+    use crate::test_support::TempDir;
 
     #[test]
     fn parses_the_emerald_header() {
@@ -430,12 +431,7 @@ mod tests {
         // The identity a caller pins is the handle, so reading through one
         // has to reach the same verdicts a path does — including the size
         // check that keeps a wrong file from being read into memory whole.
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-read-from-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("read-from");
 
         let good = dir.join("emerald.gba");
         std::fs::write(&good, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
@@ -450,8 +446,32 @@ mod tests {
             Rom::read_from(&handle, &short),
             Err(ImportError::WrongSize { actual: 1024 })
         ));
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_symlink_at_the_fixture_directory_is_not_written_through() {
+        // The `read_from` fixtures write fixed file names into their
+        // scratch directory; a link planted at the directory's name must
+        // not carry those writes to its target.
+        let victim = TempDir::new("read-from-victim");
+        std::fs::write(victim.join("emerald.gba"), b"not yours").expect("the sentinel");
+        let link = std::env::temp_dir().join(format!(
+            "rom-import-read-from-probe-{}-0",
+            std::process::id()
+        ));
+        std::os::unix::fs::symlink(victim.path(), &link).expect("an unused probe name");
+
+        let dir = TempDir::new("read-from-probe");
+        let path = dir.join("emerald.gba");
+        std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
+        let handle = std::fs::File::open(&path).expect("the ROM opens");
+        Rom::read_from(&handle, &path).expect("the claimed copy validates");
+        drop(dir);
+
+        let survived = std::fs::read(victim.join("emerald.gba"));
+        let _ = std::fs::remove_file(&link);
+        assert_eq!(survived.expect("the sentinel"), b"not yours");
     }
 
     #[test]
@@ -465,12 +485,7 @@ mod tests {
         // variants below.
         use std::io::{Seek as _, SeekFrom};
 
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-cursor-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("cursor");
         let path = dir.join("emerald.gba");
         std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
 
@@ -486,8 +501,6 @@ mod tests {
             .expect("the cursor moves");
         let parked = Rom::read_from(&handle, &path).expect("a parked handle validates");
         assert_eq!(parked.digest(), first.digest());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// On unix, `read_from` is built on `pread`, which never consults or
@@ -499,12 +512,7 @@ mod tests {
     fn read_from_leaves_the_cursor_where_it_found_it() {
         use std::io::{Seek as _, SeekFrom};
 
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-cursor-unix-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("cursor-unix");
         let path = dir.join("emerald.gba");
         std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
 
@@ -525,8 +533,6 @@ mod tests {
             4096,
             "the caller's cursor must survive the read"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// On Windows, `seek_read` moves a synchronous handle's shared cursor to
@@ -543,12 +549,7 @@ mod tests {
     fn read_from_leaves_the_cursor_at_the_end_of_the_read() {
         use std::io::{Seek as _, SeekFrom};
 
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-cursor-windows-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("cursor-windows");
         let path = dir.join("emerald.gba");
         std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
 
@@ -571,8 +572,6 @@ mod tests {
             ROM_SIZE as u64,
             "the cursor must land at the end of the read regardless of where it started"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -582,12 +581,7 @@ mod tests {
         use std::io::{Seek as _, SeekFrom};
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-shared-cursor-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("shared-cursor");
         let path = dir.join("rom.bin");
         let contents: Vec<u8> = (0..=u8::MAX).cycle().take(4096).collect();
         std::fs::write(&path, &contents).expect("the file writes");
@@ -619,8 +613,6 @@ mod tests {
             }
             stop.store(true, Ordering::Relaxed);
         });
-
-        let _ = std::fs::remove_dir_all(&dir);
         outcome.expect("a peer's seek must not change what the whole file reads as");
     }
 
@@ -635,12 +627,7 @@ mod tests {
     fn read_whole_never_moves_a_peers_cursor() {
         use std::io::{Seek as _, SeekFrom};
 
-        let dir = std::env::temp_dir().join(format!(
-            "rom-import-peer-cursor-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let dir = TempDir::new("peer-cursor");
         let path = dir.join("rom.bin");
         let contents: Vec<u8> = (0..=u8::MAX).cycle().take(4096).collect();
         std::fs::write(&path, &contents).expect("the file writes");
@@ -661,7 +648,5 @@ mod tests {
             2048,
             "a peer's cursor must be exactly where it left it, not where this read touched"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
