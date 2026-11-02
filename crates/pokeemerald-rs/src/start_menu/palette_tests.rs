@@ -19,7 +19,7 @@ use platform::Buttons;
 #[test]
 fn standard_window_uses_message_palette_for_content_and_standard_palette_for_border() {
     use assets::{Glyph, GLYPH_PIXELS};
-    use engine::text::render::RevealedGlyph;
+    use engine::text::render::{RevealedGlyph, TextColors};
     use rendering::{Framebuffer, Rgb888};
 
     const STD_SENTINEL: Rgb888 = Rgb888 { r: 200, g: 0, b: 0 };
@@ -94,6 +94,9 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
             advance_width: 8,
             pixels,
         },
+        colors: TextColors::default(),
+        raster_height: 15,
+        paint_background: false,
     };
     chrome.draw_text(&mut fb, (left, top, width, height), (0, 0), &[glyph]);
 

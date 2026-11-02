@@ -8,8 +8,8 @@
 //!
 //! # Deliberately out of scope
 //!
-//! Colour, audio, and the other formatting controls are consumed without
-//! applying effects. Placeholders and dynamic tokens are skipped because this
+//! Audio and the remaining formatting controls are consumed without applying
+//! effects. Placeholders and dynamic tokens are skipped because this
 //! renderer has no expansion context. A keypad icon is not skipped: it advances
 //! the cursor by the icon's width and is reported through
 //! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
@@ -26,11 +26,22 @@
 //! - `FILL_WINDOW` resets the cursor and reports its whole-window equivalent
 //!   through [`Printer::cleared_window`], also for the caller to erase.
 //!
-//! Which colour an erase uses stays out of scope with the rest of formatting.
+//! # Colour state
+//!
+//! `COLOR`, `HIGHLIGHT`, `SHADOW`, and `COLOR_HIGHLIGHT_SHADOW` update the
+//! printer's [`TextColors`] (`pokeemerald/src/text.c:980-1003`). Every
+//! [`RevealedGlyph`] and [`ClearedSpan`] carries the colours in force when it
+//! was produced, and [`Printer::cleared_window_colors`] carries those a
+//! whole-window clear erases with, so the caller composes each operation with
+//! its own palette indices.
 
 use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
 use super::Token;
+
+mod colors;
+use colors::BackgroundPaint;
+pub use colors::TextColors;
 
 mod ext_ctrl {
     pub const ESCAPE: u8 = super::super::EXT_CTRL_CODE_ESCAPE;
@@ -43,6 +54,10 @@ mod ext_ctrl {
     pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
     pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
+    pub const COLOR: u8 = super::super::EXT_CTRL_CODE_COLOR;
+    pub const HIGHLIGHT: u8 = super::super::EXT_CTRL_CODE_HIGHLIGHT;
+    pub const SHADOW: u8 = super::super::EXT_CTRL_CODE_SHADOW;
+    pub const COLOR_HIGHLIGHT_SHADOW: u8 = super::super::EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW;
 }
 
 mod keypad_icon;
@@ -118,6 +133,9 @@ pub struct ClearedSpan {
     pub width: i32,
     /// Height in pixels: the font's Latin glyph height.
     pub height: i32,
+    /// The colours in force for the erase; `colors.background` fills it
+    /// (`pokeemerald/src/text.c:649-674`).
+    pub colors: TextColors,
 }
 
 /// Text reveal cadence.
@@ -232,6 +250,16 @@ pub struct RevealedGlyph {
     pub y: i32,
     /// The glyph's bitmap and advance width.
     pub glyph: Glyph,
+    /// The colours in force when the glyph was revealed.
+    pub colors: TextColors,
+    /// Rows of background upstream paints under the glyph: the font's Latin
+    /// glyph height ([`ClearedSpan::height`]).
+    pub raster_height: i32,
+    /// Whether the glyph's background pixels paint `colors.background`. False
+    /// while the printer still uses the unmodified message-box background,
+    /// which the window already shows; true once a `HIGHLIGHT` (or a
+    /// non-default configured background) selects one.
+    pub paint_background: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,6 +381,10 @@ pub struct Printer<S> {
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
+    initial_colors: TextColors,
+    colors: TextColors,
+    background: BackgroundPaint,
+    cleared_window_colors: Option<TextColors>,
 }
 
 impl<S: GlyphSource> Printer<S> {
@@ -380,6 +412,10 @@ impl<S: GlyphSource> Printer<S> {
             state: PrinterState::HandleChar,
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
+            initial_colors: TextColors::MESSAGE_BOX,
+            colors: TextColors::MESSAGE_BOX,
+            background: BackgroundPaint::Window,
+            cleared_window_colors: None,
         }
     }
 
@@ -453,6 +489,23 @@ impl<S: GlyphSource> Printer<S> {
         self
     }
 
+    /// Starts the printer with `colors` instead of the message-box defaults
+    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`). A background
+    /// other than the default is painted under glyphs from the first one.
+    #[must_use]
+    pub fn with_text_colors(mut self, colors: TextColors) -> Self {
+        self.initial_colors = colors;
+        self.colors = colors;
+        self.background = BackgroundPaint::for_initial(colors);
+        self
+    }
+
+    /// The colours currently in force: what the next glyph or erase uses.
+    #[must_use]
+    pub const fn colors(&self) -> TextColors {
+        self.colors
+    }
+
     /// The cursor's current window-local pixel position.
     #[must_use]
     pub const fn cursor(&self) -> PixelPos {
@@ -500,6 +553,16 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_window
     }
 
+    /// The colours the most recent [`Self::tick`]'s whole-window clear erased
+    /// with, when [`Self::cleared_window`] is set.
+    ///
+    /// Captured when the clear happened: a `HIGHLIGHT` later in the same tick
+    /// changes [`Self::colors`] but not this.
+    #[must_use]
+    pub const fn cleared_window_colors(&self) -> Option<TextColors> {
+        self.cleared_window_colors
+    }
+
     /// Returns whether the token stream has ended.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
@@ -514,6 +577,9 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
+        self.colors = self.initial_colors;
+        self.background = BackgroundPaint::for_initial(self.initial_colors);
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
@@ -529,6 +595,7 @@ impl<S: GlyphSource> Printer<S> {
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
         self.keypad_icon = None;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
@@ -560,6 +627,7 @@ impl<S: GlyphSource> Printer<S> {
                 if input.confirm_pressed() {
                     self.cursor = self.origin;
                     self.cleared_window = true;
+                    self.cleared_window_colors = Some(self.colors);
                     self.state = PrinterState::HandleChar;
                     TickEvent::Cleared
                 } else {
@@ -645,6 +713,7 @@ impl<S: GlyphSource> Printer<S> {
                     // returns, so token handling keeps going here.
                     ControlOutcome::ClearedWindow => {
                         self.cleared_window = true;
+                        self.cleared_window_colors = Some(self.colors);
                         None
                     }
                 },
@@ -681,6 +750,9 @@ impl<S: GlyphSource> Printer<S> {
                 x: self.cursor.0,
                 y: self.cursor.1,
                 glyph,
+                colors: self.colors,
+                raster_height: self.clear_height,
+                paint_background: self.background == BackgroundPaint::Painted,
             };
             self.cursor.0 = self.cursor.0.saturating_add(i32::from(glyph.advance_width));
             return TickEvent::Glyph(Box::new(placement));
@@ -752,9 +824,41 @@ impl<S: GlyphSource> Printer<S> {
                 self.cursor = self.origin;
                 return ControlOutcome::ClearedWindow;
             }
+            // `text.c:980-1003`: each updates its own palette index and
+            // repeats. A hand-built token short of its arguments changes
+            // nothing rather than partially assigning.
+            ext_ctrl::COLOR => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.foreground = index;
+                }
+            }
+            ext_ctrl::HIGHLIGHT => {
+                if let Some(&index) = arguments.first() {
+                    self.set_background(index);
+                }
+            }
+            ext_ctrl::SHADOW => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.shadow = index;
+                }
+            }
+            ext_ctrl::COLOR_HIGHLIGHT_SHADOW => {
+                if let [foreground, background, shadow, ..] = *arguments {
+                    self.colors.foreground = foreground;
+                    self.colors.shadow = shadow;
+                    self.set_background(background);
+                }
+            }
             _ => {}
         }
         ControlOutcome::Repeat
+    }
+
+    /// An accepted `HIGHLIGHT` selects the background upstream paints under
+    /// every later glyph, including an explicit return to the default one.
+    fn set_background(&mut self, index: u8) {
+        self.colors.background = index;
+        self.background = BackgroundPaint::Painted;
     }
 
     /// Records `width` pixels erased at the cursor and advances past them.
@@ -777,6 +881,7 @@ impl<S: GlyphSource> Printer<S> {
                 y: self.cursor.1,
                 width: representable,
                 height: self.clear_height,
+                colors: self.colors,
             });
             self.cursor.0 = self.cursor.0.saturating_add(representable);
         }
@@ -1322,6 +1427,7 @@ mod tests {
                 y: 1,
                 width: 4,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (cursor_before_clear.0 + 4, 1));
@@ -1494,6 +1600,7 @@ mod tests {
                 y: 1,
                 width: 14,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (23, 1));
@@ -2162,3 +2269,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "render/color_tests.rs"]
+mod color_tests;
