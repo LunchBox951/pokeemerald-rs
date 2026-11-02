@@ -79,6 +79,8 @@ mod tileset_anims;
 mod viewport;
 
 #[cfg(test)]
+pub(crate) mod synthetic_composition;
+#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;
