@@ -211,8 +211,9 @@ mod tests {
     }
 
     /// A 1x1 PNG whose PLTE has `colors` entries; the picture is not a frame.
+    /// It is 8-bit, the only depth that can index the 17 and 32 entry cases.
     fn palette_png(colors: u32, rgb: impl Fn(u8) -> [u8; 3]) -> Vec<u8> {
-        indexed_png_from_raw_with_plte(4, 1, 1, &[0, 0], &plte(colors, rgb))
+        indexed_png_from_raw_with_plte(8, 1, 1, &[0, 0], &plte(colors, rgb))
     }
 
     fn status_bar_rgb(i: u8) -> [u8; 3] {

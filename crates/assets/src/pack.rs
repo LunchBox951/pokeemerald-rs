@@ -20,6 +20,7 @@ mod paletted_image;
 mod pokedex_graphics;
 mod starter_chooser;
 mod text_tokens;
+mod trainer_battler;
 mod trainer_pic;
 
 use std::path::{Path, PathBuf};
@@ -53,6 +54,7 @@ pub use paletted_image::PalettedImage;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 
+pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;
 
 use format::kind_label;
