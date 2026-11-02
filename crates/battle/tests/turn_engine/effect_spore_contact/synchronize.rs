@@ -84,7 +84,7 @@ fn a_synchronize_attacker_does_not_reflect_onto_a_holder_that_already_has_a_stat
 #[test]
 fn a_synchronize_attacker_does_not_reflect_onto_a_holder_that_fainted_to_the_hit() {
     let dex = Dex::new();
-    let attacker = max_iv_mon(&dex, RALTS, 50, vec![TACKLE]);
+    let attacker = synchronizer_at_level(&dex, 50);
     let holder = shroomish(&dex, 5);
     let (battle, events) = take_player_move(
         attacker,
