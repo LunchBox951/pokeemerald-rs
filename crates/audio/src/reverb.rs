@@ -1,24 +1,19 @@
 //! Two-tap feedback reverb for the master mix.
 //!
-//! Each output sample sums both stereo channels from a 1,568-sample tap and a
-//! 1,344-sample tap, scales the sum by the song's reverb level, and seeds both
-//! mixer channels with the same wet sample before DirectSound voices add dry
-//! audio (`m4a_1.s:88..119`); CGB output never enters this ring.
+//! Both mixer channels are seeded with one mono wet sample before DirectSound
+//! voices add dry audio (`m4a_1.s:88..119`); CGB output never enters the ring.
 //!
-//! The hardware buffer holds 1,584 samples, but `pcmDmaPeriod` truncates that
-//! to seven complete 224-sample mixer frames (`m4a.c:407`). The native ring
-//! models those 1,568 reachable positions directly. Its two tap positions and
-//! mono write match `SoundMainRAM_Reverb` (`m4a_1.s:97..114`).
+//! The 1,584-sample hardware buffer holds seven whole 224-sample frames under
+//! `pcmDmaPeriod` (`m4a.c:407`), so the ring has 1,568 positions.
 //!
 //! With wrapped byte samples and the supported `0..=127` level, upstream
-//! arithmetically shifts the scaled sum by nine and then adds one when the
-//! stored byte's sign bit is set (`m4a_1.s:109..112`). This corrects fractional
-//! negative results toward zero and also biases exact negative multiples one
-//! step toward zero, so ordinary signed division is not equivalent.
+//! shifts the scaled sum right by nine and adds one when the stored byte's
+//! sign bit is set (`m4a_1.s:109..112`), which biases exact negative multiples
+//! toward zero; signed division is not equivalent.
 //!
 //! The mixer commits the wrapped wet-plus-DirectSound-dry frame back to the
-//! ring. The byte wrap (`m4a_1.s:308..339`) therefore occurs inside the
-//! feedback loop, as on the hardware's byte accumulator.
+//! ring, so the byte wrap (`m4a_1.s:308..339`) occurs inside the feedback loop,
+//! as on the hardware's byte accumulator.
 
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::voice::StereoAcc;
@@ -331,8 +326,7 @@ mod tests {
         const WAVE_PERIOD: usize = 8;
         const WAVE_MAXIMUM: i32 = 60;
         const WAVE_STEP: i32 = 15;
-        // Five percent is roughly twice the worst-case one-LSB error relative
-        // to this waveform's 60-sample amplitude after full-ring RMS averaging.
+        // Roughly twice the worst-case one-LSB error against the 60-sample amplitude.
         const RMS_RATIO_TOLERANCE: f64 = 0.05;
 
         let burst: Vec<StereoAcc> = (0..DELAY_SAMPLES)
