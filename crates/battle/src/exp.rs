@@ -21,7 +21,9 @@ pub fn trainer_faint_exp(enemy_base_exp: u8, enemy_level: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{trainer_faint_exp, wild_faint_exp};
+    use super::{
+        trainer_faint_exp, wild_faint_exp, FAINT_EXP_DIVISOR, PERCENT_SCALE, TRAINER_EXP_PERCENT,
+    };
 
     const BULBASAUR_BASE_EXP: u8 = 64;
     const TREECKO_BASE_EXP: u8 = 65;
@@ -62,5 +64,23 @@ mod tests {
 
         let trainer_bonus_applied_before_division = u32::from(1u8) * 150 / 100 / 7;
         assert_eq!(trainer_bonus_applied_before_division, 0);
+    }
+
+    /// `Cmd_getexp` divides by seven first and only then applies the 150%
+    /// bonus. An odd award separates the orders: 64 * 5 / 7 = 45, and
+    /// 45 * 150 / 100 = 67, whereas 64 * 5 * 150 / 100 / 7 = 68.
+    #[test]
+    fn the_bonus_follows_the_division_for_an_odd_award() {
+        assert_eq!(wild_faint_exp(BULBASAUR_BASE_EXP, 5), 45);
+        assert_eq!(trainer_faint_exp(BULBASAUR_BASE_EXP, 5), 67);
+
+        let bonus_applied_before_division = u32::from(BULBASAUR_BASE_EXP) * 5 * TRAINER_EXP_PERCENT
+            / PERCENT_SCALE
+            / FAINT_EXP_DIVISOR;
+        assert_eq!(bonus_applied_before_division, 68);
+        assert_ne!(
+            trainer_faint_exp(BULBASAUR_BASE_EXP, 5),
+            bonus_applied_before_division
+        );
     }
 }

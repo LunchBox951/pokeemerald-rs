@@ -518,9 +518,15 @@ impl CgbVoice {
 
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
     /// and emits its latch (`mgba/src/gb/audio.c:606-641,782`), a square keeps
-    /// its duty running, and wave is unchanged.
+    /// its duty running, and a wave stops clocking but keeps emitting its held
+    /// sample on the last committed route, since `NR30 = 0` clears neither the
+    /// sample nor `NR51` (`mgba/src/gb/audio.c:246-253,768-774`).
     pub(crate) fn render_idle_hardware(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
-        if self.oscillator.noise_mut().is_some() {
+        if let Some(contribution) = self.oscillator.held_wave_contribution() {
+            for output in acc.iter_mut() {
+                self.routing.accumulate(contribution, output);
+            }
+        } else if self.oscillator.noise_mut().is_some() {
             let volume = self.hardware_envelope_volume.volume();
             for output in acc.iter_mut() {
                 let contribution = self.oscillator.frame_contribution(0, volume, 0);
@@ -653,7 +659,12 @@ impl CgbVoice {
             self.oscillator
                 .commit_initial_writes(!self.envelope.is_active());
         }
-        if hardware_write || initial_trigger {
+        // A square's retiring first pass reaches no trigger of its own; only
+        // `CgbOscOff`'s `NR14` write follows (`m4a.c:1053-1056,1205-1226`).
+        let skips_trigger = initial_trigger
+            && !self.envelope.is_active()
+            && matches!(self.oscillator, Oscillator::Square(_));
+        if (hardware_write || initial_trigger) && !skips_trigger {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
@@ -782,6 +793,10 @@ impl CgbVoice {
             Oscillator::Square(s) => Some(s),
             _ => None,
         }
+    }
+
+    pub(crate) fn square_frequency(&self) -> Option<u16> {
+        self.square_oscillator().map(SquareChannel::frequency)
     }
 }
 

@@ -97,6 +97,13 @@ impl WaveChannel {
         self.latch = previous.latch;
     }
 
+    /// The output a stopped channel keeps presenting: the latch the last clock
+    /// left, with no phase advance (`mgba/src/gb/audio.c:246-253,768-774`).
+    /// A channel that never rendered holds zero.
+    pub(crate) fn held_output(&self) -> i32 {
+        self.latch.unwrap_or(0)
+    }
+
     fn head(&self) -> usize {
         (self.phase / PHASE_ONE) as usize % self.samples.len()
     }
@@ -223,6 +230,22 @@ mod tests {
             WaveChannel::resolve(ram[0], HALF),
             "the clock latched the head under the gain in effect when it fired"
         );
+    }
+
+    #[test]
+    fn a_held_output_neither_clocks_nor_changes_the_latch() {
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, 0x400);
+        assert_eq!(wave.held_output(), 0, "a channel that never rendered");
+        while wave.phase / PHASE_ONE == 0 {
+            wave.sample(FULL);
+        }
+        let (phase, held) = (wave.phase, wave.held_output());
+        assert_eq!(held, i32::from(wave_ram[0]));
+        for _ in 0..4 {
+            assert_eq!(wave.held_output(), held);
+        }
+        assert_eq!(wave.phase, phase);
     }
 
     #[test]
