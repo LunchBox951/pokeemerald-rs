@@ -662,12 +662,17 @@ impl CgbVoice {
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
         // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
-        let mut register_write_on_stopped_channel = false;
+        // The level a pitch write's `NR14` catch-up latches into a stopped
+        // square, before the high-byte store (`mgba/src/gb/audio.c:219-224`).
+        let mut stopped_write_latch = None;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
-                self.oscillator
+                let latched = self
+                    .oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
-                register_write_on_stopped_channel = self.length_stopped;
+                if self.length_stopped {
+                    stopped_write_latch = latched;
+                }
             }
         }
         // The note's first pitch block stores `NRx4` with the enable bit.
@@ -738,12 +743,13 @@ impl CgbVoice {
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
         self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
-        // A write's catch-up re-latches a stopped square at its new duty position
-        // (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
-        if register_write_on_stopped_channel && self.length_stopped {
+        // A write's catch-up re-latches a stopped square at the duty position
+        // it ran to before the high-byte store; nothing runs the stopped
+        // channel after it (`mgba/src/gb/audio.c:162-171,219-224,493-501,916-918`).
+        if let Some(level) = stopped_write_latch.filter(|_| self.length_stopped) {
             if let Some(held) = self
                 .oscillator
-                .relatched_square_contribution(self.frame_gain)
+                .relatched_square_contribution(level, self.frame_gain)
             {
                 self.last_contribution = held;
             }

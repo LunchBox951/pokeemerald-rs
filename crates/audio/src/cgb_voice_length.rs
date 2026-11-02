@@ -395,6 +395,52 @@ fn a_pitch_write_to_a_stopped_square_refreshes_its_held_sample() {
 }
 
 #[test]
+fn a_pitch_changing_write_to_a_stopped_square_latches_its_pre_high_byte_sample() {
+    // `NR13`'s catch-up runs the stopped channel at the old rate, `NR14`'s at
+    // the intermediate (new low byte, old high bits) rate, and the latch
+    // happens before the high byte is stored; nothing runs the stopped
+    // channel afterwards (`mgba/src/gb/audio.c:162-171,219-224,493-501`).
+    fn held_square(voice: &CgbVoice) -> SquareChannel {
+        match &voice.oscillator {
+            Oscillator::Square(square) => square.clone(),
+            _ => unreachable!("a square voice"),
+        }
+    }
+    let mut post_store_cases = Vec::new();
+    for channel in SQUARES {
+        for key_m in -24..=24 {
+            for idle_frames in 1..=40 {
+                let mut voice = square(channel, CgbAdsr::flat(), TIED_LENGTH);
+                let mut rig = Rig::at_step(6);
+                run(&mut rig, &mut voice, idle_frames);
+                assert!(voice.is_length_stopped());
+                let mut oracle = held_square(&voice);
+                let old = oracle.frequency();
+                voice.set_track_pitch(key_m, 0);
+                rig.frame(&mut voice);
+                assert!(voice.is_length_stopped());
+                let new = held_square(&voice).frequency();
+                // Settle at the old rate, retime to the intermediate, latch.
+                oracle.held_level();
+                oracle.retune_atomically((old & 0x700) | (new & 0xFF));
+                let pre_store = oracle.held_level();
+                let expected = (voice.frame_gain * i32::from(pre_store) * BIPOLAR_SAMPLE_SCALE)
+                    >> SAMPLE_GAIN_BITS;
+                if voice.last_contribution != expected {
+                    post_store_cases.push((channel, key_m, idle_frames, old, new));
+                }
+            }
+        }
+    }
+    assert!(
+        post_store_cases.is_empty(),
+        "{} cases latched the post-store sample, first {:?}",
+        post_store_cases.len(),
+        post_store_cases.first()
+    );
+}
+
+#[test]
 fn replacing_a_length_expired_noise_voice_keeps_its_held_latch() {
     // A stopped channel 4 is not run before the replacement's `NR43` writes
     // (`mgba/src/gb/audio.c:602-644`), and its trigger keeps the latch (`:371-383`).

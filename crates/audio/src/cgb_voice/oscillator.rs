@@ -51,14 +51,13 @@ impl Oscillator {
         }
     }
 
-    /// A square's contribution re-latched at its current duty position
+    /// A square's contribution at a `level` its register write latched,
     /// without stepping it; `None` for Wave and Noise.
-    pub(super) fn relatched_square_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+    pub(super) fn relatched_square_contribution(&self, level: i8, frame_gain: i32) -> Option<i32> {
         match self {
-            Self::Square(square) => Some(
-                (frame_gain * i32::from(square.held_level()) * BIPOLAR_SAMPLE_SCALE)
-                    >> SAMPLE_GAIN_BITS,
-            ),
+            Self::Square(_) => {
+                Some((frame_gain * i32::from(level) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS)
+            }
             Self::Wave { .. } | Self::Noise(_) => None,
         }
     }
@@ -106,16 +105,29 @@ impl Oscillator {
         }
     }
 
-    pub(super) fn retune(&mut self, note_key: u8, fine_pitch: u8, correction: DacCorrection) {
+    /// Retunes the channel; a square returns the level its `NR14` write's
+    /// catch-up latched before the high-byte store
+    /// ([`SquareChannel::set_frequency_latching`]).
+    pub(super) fn retune(
+        &mut self,
+        note_key: u8,
+        fine_pitch: u8,
+        correction: DacCorrection,
+    ) -> Option<i8> {
         match self {
-            Self::Square(square) => square
-                .set_frequency(correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch))),
+            Self::Square(square) => Some(square.set_frequency_latching(
+                correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch)),
+            )),
             Self::Wave { channel: wave, .. } => {
                 wave.set_frequency(
                     correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch)),
                 );
+                None
             }
-            Self::Noise(noise) => noise.retune(midi_key_to_noise_control(note_key)),
+            Self::Noise(noise) => {
+                noise.retune(midi_key_to_noise_control(note_key));
+                None
+            }
         }
     }
 
