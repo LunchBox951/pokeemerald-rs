@@ -18,7 +18,7 @@ fn distinct_palette() -> Vec<Rgb888> {
 
 /// A 6-wide glyph: foreground at (0,0), shadow at (1,0), a value-3 cell
 /// background at (3,0), background pixels at (2,0) inside its footprint, (10,0) beyond its advance width,
-/// and (2,20) below the raster height.
+/// and (2,15), the first row below the raster height.
 fn mixed_glyph(colors: TextColors, paint_background: bool) -> RevealedGlyph {
     let mut pixels = [0u8; GLYPH_PIXELS];
     pixels[0] = 1;
@@ -164,8 +164,8 @@ fn a_highlight_paints_only_the_glyphs_actual_footprint() {
         "past the advance"
     );
     assert_eq!(
-        fb.pixel(2, 20),
-        marker_fb().pixel(2, 20),
+        fb.pixel(2, 15),
+        marker_fb().pixel(2, 15),
         "below the raster"
     );
     assert_eq!(fb.pixel(2, 14), Some(palette[4]), "last raster row");
