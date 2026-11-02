@@ -8,6 +8,7 @@ use crate::palette_overlay::stage_overlay;
 
 use super::chrome::width_of;
 use super::labels;
+use super::sprite::Flip;
 use super::swap::ItemSwap;
 use super::{BagScreen, BagScreenResult, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
@@ -139,7 +140,8 @@ impl BagScreen {
         }
         let current = self.pocket_index();
         obj(&mut base, &|fb| {
-            self.chrome.draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current]);
+            self.chrome
+                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current], self.shake.angle());
         });
         bg(&mut base, &|fb| {
             self.draw_pocket_indicators(fb, current);
@@ -231,10 +233,11 @@ impl BagScreen {
         let bob = BAG_BOB_START + 1 + i32::from(ticks);
         if bob <= 0 {
             let origin = (BAG_ORIGIN.0, BAG_ORIGIN.1 + bob);
-            self.chrome.draw_bag(fb, origin, BAG_CLOSED_FRAME);
+            self.chrome
+                .draw_bag(fb, origin, BAG_CLOSED_FRAME, self.shake.angle());
         } else {
             self.chrome
-                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[destination]);
+                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[destination], self.shake.angle());
         }
     }
 
@@ -528,7 +531,7 @@ selected.",
             let frame_row = if sprite == 0 { 0 } else { SWAP_LINE_BODY_ROW };
             self.chrome
                 .swap_line_sheet()
-                .draw_frame(fb, (left, top), frame_row, false);
+                .draw_frame(fb, (left, top), frame_row, Flip::NONE);
         }
     }
 
