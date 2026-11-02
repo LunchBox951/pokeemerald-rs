@@ -188,7 +188,7 @@ mod save_continue_window_frame_tests;
 #[cfg(test)]
 mod start_menu_tests;
 
-/// The start menu's TAKE entry on a saved-slot lead (S-6, issue #2760): the
+/// The start menu's TAKE entry on a saved-slot lead (S-6): the
 /// item moves to the bag, the lead and its slot follow, a refusal changes
 /// nothing. Split from [`start_menu_tests`]: one module, one concept
 /// `(oop-boundaries)`.
