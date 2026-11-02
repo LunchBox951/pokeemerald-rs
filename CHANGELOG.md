@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.85.0] - 2026-10-31
 
-- Leech Seed is now modelled in battle: the seeded Pokémon loses an eighth of its HP at the end of each turn and the Pokémon that planted it recovers that HP, and Grass-type Pokémon are immune, as in the original game. Daisy on Route 103 can now be fought and uses it. Liquid Ooze is still being prepared, so a battle that pairs Leech Seed with a Liquid Ooze holder is still refused.
+- Leech Seed is now modelled in battle: the seeded Pokémon loses an eighth of its maximum HP at the end of each turn, and whichever Pokémon is in battle on the side that planted the seed recovers the HP lost, even if it replaced the one that planted it; Grass-type Pokémon are immune, as in the original game. Daisy on Route 103 can now be fought and uses it. Liquid Ooze is still being prepared, so a battle that pairs Leech Seed with a Liquid Ooze holder is still refused.
 
 ## [0.0.84.0] - 2026-10-30
 
