@@ -133,9 +133,9 @@ fn replaced(ids: &[u16], id: &str, entry: Entry) -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 const SET: [u16; 4] = [0, 4, 135, 288];
@@ -143,7 +143,7 @@ const SET: [u16; 4] = [0, 4, 135, 288];
 #[test]
 fn the_complete_set_resolves_each_pair() {
     let catalog = catalog(&[&[288, 4], &[135, 0]]);
-    let (pack, path) = load("battle-effect-all", entries(&SET));
+    let pack = load("battle-effect-all", entries(&SET));
     let mut seen = Vec::new();
     for record in BattleEffectRecord::inventory(&catalog) {
         let handle = pack.battle_effect(record.sprite()).unwrap();
@@ -161,7 +161,6 @@ fn the_complete_set_resolves_each_pair() {
         seen.push(index);
     }
     assert_eq!(seen, SET);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -174,20 +173,18 @@ fn a_missing_half_is_named_by_id() {
             .into_iter()
             .filter(|e| e.id != missing)
             .collect();
-        let (pack, path) = load(&format!("battle-effect-missing-{name}"), without);
+        let pack = load(&format!("battle-effect-missing-{name}"), without);
         assert!(pack.battle_effect(sprite(4)).is_ok());
         assert_eq!(
             pack.battle_effect(sprite(135)).unwrap_err(),
             PackError::UnknownAsset(missing.to_owned())
         );
-        let _ = std::fs::remove_file(path);
     }
-    let (pack, path) = load("battle-effect-absent", entries(&SET));
+    let pack = load("battle-effect-absent", entries(&SET));
     assert_eq!(
         pack.battle_effect(sprite(5)).unwrap_err(),
         PackError::UnknownAsset("battle-effect/005/image".to_owned())
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -199,7 +196,7 @@ fn a_wrong_kind_half_is_named_by_id() {
         payload: vec![0; 4],
     };
     let image_id = "battle-effect/135/image";
-    let (pack, path) = load(
+    let pack = load(
         "battle-effect-wrong-image",
         replaced(&SET, image_id, raw(image_id)),
     );
@@ -207,10 +204,9 @@ fn a_wrong_kind_half_is_named_by_id() {
         pack.battle_effect(sprite(135)).unwrap_err(),
         PackError::WrongKind { id, expected: "image", actual: "raw blob" } if id == image_id
     ));
-    let _ = std::fs::remove_file(path);
 
     let palette_id = "battle-effect/135/palette";
-    let (pack, path) = load(
+    let pack = load(
         "battle-effect-wrong-palette",
         replaced(&SET, palette_id, raw(palette_id)),
     );
@@ -218,7 +214,6 @@ fn a_wrong_kind_half_is_named_by_id() {
         pack.battle_effect(sprite(135)).unwrap_err(),
         PackError::WrongKind { id, expected: "palette", .. } if id == palette_id
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -239,7 +234,7 @@ fn malformed_entries_are_rejected_on_read() {
         (palette_id, palette(palette_id.into(), 0, 0)),
     ];
     for (index, (entry_id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(
+        let pack = load(
             &format!("battle-effect-bad-{index}"),
             replaced(&SET, entry_id, entry),
         );
@@ -251,7 +246,6 @@ fn malformed_entries_are_rejected_on_read() {
             "case {index}"
         );
         assert!(pack.battle_effect(sprite(4)).is_ok(), "case {index}");
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -261,14 +255,13 @@ fn malformed_entries_are_rejected_on_read() {
 fn a_multi_bank_palette_resolves() {
     let palette_id = "battle-effect/135/palette";
     for colors in [32, 80] {
-        let (pack, path) = load(
+        let pack = load(
             &format!("battle-effect-banks-{colors}"),
             replaced(&SET, palette_id, palette(palette_id.into(), colors, 0x1234)),
         );
         let handle = pack.battle_effect(sprite(135)).unwrap();
         assert_eq!(handle.art.palette.color_count, colors);
         assert_eq!(handle.art.palette.color(0), Some(0x1234));
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -281,25 +274,23 @@ fn an_empty_sheet_is_rejected() {
         meta: image_meta(0, 0, 4),
         payload: vec![],
     };
-    let (pack, path) = load("battle-effect-empty", replaced(&SET, image_id, empty));
+    let pack = load("battle-effect-empty", replaced(&SET, image_id, empty));
     assert!(matches!(
         pack.battle_effect(sprite(135)).unwrap_err(),
         PackError::MalformedBattleEffectAsset { id, .. } if id == image_id
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn malformed_error_names_the_entry_in_its_message() {
     let image_id = "battle-effect/135/image";
-    let (pack, path) = load(
+    let pack = load(
         "battle-effect-message",
         replaced(&SET, image_id, image(image_id.into(), (12, 8), 4, 1)),
     );
     let message = pack.battle_effect(sprite(135)).unwrap_err().to_string();
     assert!(message.contains(image_id), "{message}");
     assert!(message.contains("12x8"), "{message}");
-    let _ = std::fs::remove_file(path);
 }
 
 /// The stock catalog's closure: 193 distinct ids, including `ANIM_TAG_IMPACT`,

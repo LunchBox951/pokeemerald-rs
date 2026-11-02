@@ -127,9 +127,7 @@ fn fixture_entries() -> Vec<Entry> {
 
 fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(path);
-    pack
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {

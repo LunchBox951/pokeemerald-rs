@@ -28,8 +28,6 @@ fn loads_and_reads_every_entry_kind() {
 
     let raw = pack.raw("tileset/test/metatiles").unwrap();
     assert_eq!(raw, &[9, 9, 9]);
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -54,8 +52,6 @@ fn entries_walks_the_whole_directory_in_sorted_order() {
         &pack.bytes()[entry.offset..entry.offset + entry.length],
         pack.raw("tileset/test/metatiles").unwrap()
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -64,7 +60,6 @@ fn tileset_handle_needs_all_sixteen_palettes() {
     let pack = AssetPack::load(&path).unwrap();
     let err = pack.tileset("test").unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "tileset/test/palette/01"));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -73,7 +68,6 @@ fn unknown_asset_id_is_reported() {
     let pack = AssetPack::load(&path).unwrap();
     let err = pack.image("does/not/exist").unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "does/not/exist"));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -89,7 +83,6 @@ fn wrong_kind_is_reported() {
             ..
         }
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -108,21 +101,18 @@ fn missing_pack_file_gives_the_required_diagnostic() {
 
 #[test]
 fn bad_magic_is_rejected() {
-    let path = write_synthetic_pack("bad-magic");
     let mut bytes = synthetic_pack();
     bytes[0] = 0;
-    std::fs::write(&path, &bytes).unwrap();
+    let path = write_pack("bad-magic", &bytes);
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::BadMagic);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn unsupported_version_is_rejected() {
-    let path = write_synthetic_pack("bad-version");
     let mut bytes = synthetic_pack();
     bytes[FORMAT_VERSION_FIELD].copy_from_slice(&UNSUPPORTED_NEWER_FORMAT_VERSION.to_le_bytes());
-    std::fs::write(&path, &bytes).unwrap();
+    let path = write_pack("bad-version", &bytes);
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(
         err,
@@ -134,7 +124,6 @@ fn unsupported_version_is_rejected() {
          this build supports; players rebuild it with `pokeemerald-rs --import-rom <path \
          to your Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -157,11 +146,10 @@ fn a_pack_newer_than_this_build_is_not_described_as_older() {
 
 #[test]
 fn a_pack_older_than_this_build_is_described_as_predating_it() {
-    let path = write_synthetic_pack("older-version");
     let mut bytes = synthetic_pack();
     let older = FORMAT_VERSION - 1;
     bytes[FORMAT_VERSION_FIELD].copy_from_slice(&older.to_le_bytes());
-    std::fs::write(&path, &bytes).unwrap();
+    let path = write_pack("older-version", &bytes);
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(older));
     assert_eq!(
@@ -172,17 +160,14 @@ fn a_pack_older_than_this_build_is_described_as_predating_it() {
              to your Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
         )
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn truncated_pack_is_rejected() {
-    let path = write_synthetic_pack("truncated");
     let bytes = synthetic_pack();
-    std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+    let path = write_pack("truncated", &bytes[..bytes.len() / 2]);
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::Truncated);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -200,7 +185,6 @@ fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
         AssetPack::load(&truncated_palette).unwrap_err(),
         PackError::Truncated
     ));
-    let _ = std::fs::remove_file(truncated_palette);
 
     let truncated_image = write_pack(
         "misshapen-image",
@@ -219,7 +203,6 @@ fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
         AssetPack::load(&truncated_image).unwrap_err(),
         PackError::Truncated
     ));
-    let _ = std::fs::remove_file(truncated_image);
 }
 
 #[test]
@@ -250,37 +233,4 @@ fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
         "{} must be this workspace's root, not an install location",
         root.display()
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn write_pack_does_not_follow_a_preplanted_symlink() {
-    const SENTINEL: &[u8] = b"precious";
-    let hint = "symlink-regression";
-    let link = super::shared::pack_fixture_path(hint, 0);
-    let _ = std::fs::remove_file(&link);
-    // Exclusively created, so the sentinel itself never follows a planted link.
-    let target = write_pack("symlink-regression-target", SENTINEL);
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-
-    let bytes = synthetic_pack();
-    let path = write_pack(hint, &bytes);
-
-    let target_after = std::fs::read(&target).unwrap();
-    let written = std::fs::read(&path).unwrap();
-    let link_is_symlink = std::fs::symlink_metadata(&link)
-        .unwrap()
-        .file_type()
-        .is_symlink();
-    let distinct = path != link;
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&link);
-    let _ = std::fs::remove_file(&target);
-
-    assert!(target_after == SENTINEL, "symlink target was modified");
-    assert!(
-        link_is_symlink && distinct,
-        "fixture reused the symlink path"
-    );
-    assert!(written == bytes, "fixture bytes differ");
 }

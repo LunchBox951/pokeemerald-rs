@@ -61,9 +61,9 @@ fn shadow_entry() -> Entry {
     image(SHADOW_ID, 32, 8, TEXT_WINDOW_BIT_DEPTH)
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(mut entries: Vec<Entry>, entry: Entry) -> Vec<Entry> {
@@ -82,7 +82,7 @@ fn the_side_geometry_is_the_upstream_metatile_size() {
 
 #[test]
 fn frames_are_side_specific_and_keep_the_source_raster() {
-    let (pack, path) = load("healthbox-frames", frame_entries());
+    let pack = load("healthbox-frames", frame_entries());
     let frames = pack.singles_healthbox_frames().unwrap();
 
     assert_eq!(frames.player.side(), SinglesHealthboxSide::Player);
@@ -120,13 +120,11 @@ fn frames_are_side_specific_and_keep_the_source_raster() {
         assert_eq!(frames.ball_display_palette.color(index), Some(level * 32));
     }
     assert_eq!(frames.ball_status_bar_palette.color(16), None);
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn the_shadow_is_standalone() {
-    let (pack, path) = load("enemy-shadow", vec![shadow_entry()]);
+    let pack = load("enemy-shadow", vec![shadow_entry()]);
     let shadow = pack.enemy_mon_shadow().unwrap();
     assert_eq!((shadow.width, shadow.height, shadow.bit_depth), (32, 8, 4));
     assert_eq!(shadow.pixels, raster(32, 8).as_slice());
@@ -134,15 +132,13 @@ fn the_shadow_is_standalone() {
         pack.singles_healthbox_frames().unwrap_err(),
         PackError::UnknownAsset(id) if id == PLAYER_ID
     ));
-    let _ = std::fs::remove_file(path);
 
-    let (pack, path) = load("frames-without-shadow", frame_entries());
+    let pack = load("frames-without-shadow", frame_entries());
     assert!(pack.singles_healthbox_frames().is_ok());
     assert!(matches!(
         pack.enemy_mon_shadow().unwrap_err(),
         PackError::UnknownAsset(id) if id == SHADOW_ID
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -153,7 +149,7 @@ fn the_two_frames_are_not_interchangeable() {
     ];
     for entry in swapped {
         let id = entry.id;
-        let (pack, path) = load("frames-swapped", replaced(frame_entries(), entry));
+        let pack = load("frames-swapped", replaced(frame_entries(), entry));
         assert!(
             matches!(
                 pack.singles_healthbox_frames().unwrap_err(),
@@ -161,7 +157,6 @@ fn the_two_frames_are_not_interchangeable() {
             ),
             "{id}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -181,7 +176,7 @@ fn images_off_the_upstream_shape_are_rejected() {
     for (id, width, height, depth) in cases {
         let mut entries = frame_entries();
         entries.push(shadow_entry());
-        let (pack, path) = load(
+        let pack = load(
             "frames-bad-shape",
             replaced(entries, image(id, width, height, depth)),
         );
@@ -197,7 +192,6 @@ fn images_off_the_upstream_shape_are_rejected() {
             ),
             "{id} {width}x{height} at {depth}-bit"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -213,7 +207,7 @@ fn an_index_past_the_4bpp_bank_is_rejected() {
         };
         let mut entry = image(id, width, height, 4);
         entry.payload[5] = bad_index;
-        let (pack, path) = load("frames-bad-index", replaced(entries, entry));
+        let pack = load("frames-bad-index", replaced(entries, entry));
         let error = if id == SHADOW_ID {
             pack.enemy_mon_shadow().unwrap_err()
         } else {
@@ -226,7 +220,6 @@ fn an_index_past_the_4bpp_bank_is_rejected() {
             ),
             "{id}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -234,7 +227,7 @@ fn an_index_past_the_4bpp_bank_is_rejected() {
 fn palettes_of_the_wrong_size_are_rejected() {
     for id in [STATUS_BAR_ID, BALL_DISPLAY_ID] {
         for colors in [0, 15, 17, 32] {
-            let (pack, path) = load(
+            let pack = load(
                 "frames-bad-palette",
                 replaced(frame_entries(), palette(id, colors, 1)),
             );
@@ -245,7 +238,6 @@ fn palettes_of_the_wrong_size_are_rejected() {
                 ),
                 "{id} with {colors} colours"
             );
-            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -266,7 +258,6 @@ fn payloads_that_contradict_their_metadata_fail_to_load() {
     for entries in cases {
         let path = write_pack("frames-length", &pack_bytes(entries));
         assert!(matches!(AssetPack::load(&path), Err(PackError::Truncated)));
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -275,31 +266,28 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
     for id in FRAME_IDS {
         let mut entries = frame_entries();
         entries.retain(|e| e.id != id);
-        let (pack, path) = load("frames-missing", entries);
+        let pack = load("frames-missing", entries);
         assert!(matches!(
             pack.singles_healthbox_frames().unwrap_err(),
             PackError::UnknownAsset(missing) if missing == id
         ));
-        let _ = std::fs::remove_file(path);
 
         let expected = if id.contains("/palette/") {
             "palette"
         } else {
             "image"
         };
-        let (pack, path) = load("frames-wrong-kind", replaced(frame_entries(), raw(id)));
+        let pack = load("frames-wrong-kind", replaced(frame_entries(), raw(id)));
         assert!(matches!(
             pack.singles_healthbox_frames().unwrap_err(),
             PackError::WrongKind { id: bad, expected: want, actual: "raw blob" }
                 if bad == id && want == expected
         ));
-        let _ = std::fs::remove_file(path);
     }
 
-    let (pack, path) = load("shadow-wrong-kind", vec![raw(SHADOW_ID)]);
+    let pack = load("shadow-wrong-kind", vec![raw(SHADOW_ID)]);
     assert!(matches!(
         pack.enemy_mon_shadow().unwrap_err(),
         PackError::WrongKind { id, expected: "image", actual: "raw blob" } if id == SHADOW_ID
     ));
-    let _ = std::fs::remove_file(path);
 }

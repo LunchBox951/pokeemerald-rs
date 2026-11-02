@@ -11,6 +11,7 @@ mod battler;
 mod container;
 mod evolution_scene;
 mod field_message;
+mod fixture;
 mod layout;
 mod naming_screen;
 mod opening_scene;

@@ -308,9 +308,7 @@ fn pack_with(kind_tag: u8, payload: Vec<u8>) -> Vec<u8> {
 
 fn load(name: &str, bytes: &[u8]) -> AssetPack {
     let path = write_pack(name, bytes);
-    let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(path);
-    pack
+    AssetPack::load(&path).unwrap()
 }
 
 #[test]

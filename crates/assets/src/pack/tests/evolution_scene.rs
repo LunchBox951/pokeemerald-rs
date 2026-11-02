@@ -1,7 +1,7 @@
 use super::super::{AssetPack, PackError};
 use super::shared::{
-    image_meta, pack_bytes, write_pack, Entry, IMAGE_KIND_TAG, PALETTE_KIND_TAG, RAW_KIND_TAG,
-    TEXT_WINDOW_BIT_DEPTH,
+    image_meta, pack_bytes, write_pack, Entry, PackFixture, IMAGE_KIND_TAG, PALETTE_KIND_TAG,
+    RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
 };
 
 const MAP_BYTES: usize = 32 * 32 * 2;
@@ -56,7 +56,7 @@ fn scene_entries() -> Vec<Entry> {
     ]
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, PackFixture) {
     let path = write_pack(name, &pack_bytes(entries));
     (AssetPack::load(&path).unwrap(), path)
 }
@@ -76,7 +76,7 @@ fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
 
 #[test]
 fn a_complete_pack_bundles_the_evolution_scene() {
-    let (pack, path) = load("evolution-scene-complete", scene_entries());
+    let (pack, _pack_file) = load("evolution-scene-complete", scene_entries());
     let scene = pack.evolution_scene().unwrap();
     assert_eq!(
         (scene.background.width, scene.background.height),
@@ -97,20 +97,18 @@ fn a_complete_pack_bundles_the_evolution_scene() {
     assert_eq!(scene.sparkle.image.bit_depth, 4);
     assert_eq!(scene.sparkle.palette.color_count, 16);
     assert_eq!(scene.sparkle.palette.colors().next(), Some(0x0203));
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn a_missing_constituent_is_refused_by_id() {
     for entry in scene_entries() {
-        let (pack, path) = load("evolution-scene-missing", without(entry.id));
+        let (pack, _pack_file) = load("evolution-scene-missing", without(entry.id));
         let err = pack.evolution_scene().unwrap_err();
         assert!(
             matches!(&err, PackError::UnknownAsset(id) if id == entry.id),
             "{}: {err:?}",
             entry.id
         );
-        std::fs::remove_file(path).unwrap();
     }
 }
 
@@ -131,13 +129,12 @@ fn a_constituent_of_the_wrong_shape_is_refused_by_id() {
         (OUTER_MAP, raw(OUTER_MAP, MAP_BYTES + 2, 0)),
     ];
     for (id, entry) in cases {
-        let (pack, path) = load("evolution-scene-bad", replaced(id, entry));
+        let (pack, _pack_file) = load("evolution-scene-bad", replaced(id, entry));
         let err = pack.evolution_scene().unwrap_err();
         assert!(
             matches!(&err, PackError::MalformedEvolutionSceneAsset { id: bad, .. } if bad == id),
             "{id}: {err:?}"
         );
-        std::fs::remove_file(path).unwrap();
     }
 }
 
@@ -149,11 +146,10 @@ fn a_constituent_of_the_wrong_kind_is_refused() {
         (INNER_MAP, palette(INNER_MAP, 16, 1)),
     ];
     for (id, entry) in cases {
-        let (pack, path) = load("evolution-scene-wrong-kind", replaced(id, entry));
+        let (pack, _pack_file) = load("evolution-scene-wrong-kind", replaced(id, entry));
         assert!(
             matches!(pack.evolution_scene(), Err(PackError::WrongKind { .. })),
             "{id}"
         );
-        std::fs::remove_file(path).unwrap();
     }
 }

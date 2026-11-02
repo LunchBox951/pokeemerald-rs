@@ -57,9 +57,9 @@ fn scene_entries() -> Vec<Entry> {
     ]
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
@@ -77,7 +77,7 @@ fn without(id: &str) -> Vec<Entry> {
 
 #[test]
 fn a_complete_pack_bundles_the_birch_speech_scene() {
-    let (pack, path) = load("opening-scene-birch", scene_entries());
+    let pack = load("opening-scene-birch", scene_entries());
     let scene = pack.birch_speech().unwrap();
     assert_eq!((scene.shadow.width, scene.shadow.height), (128, 24));
     assert_eq!(scene.shadow.bit_depth, 4);
@@ -97,12 +97,11 @@ fn a_complete_pack_bundles_the_birch_speech_scene() {
     );
     assert_eq!(scene.lotad.palette.colors().next(), Some(0x0105));
     assert_ne!(scene.birch.image.pixels, scene.lotad.image.pixels);
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn a_complete_pack_bundles_the_wall_clock() {
-    let (pack, path) = load("opening-scene-clock", scene_entries());
+    let pack = load("opening-scene-clock", scene_entries());
     let clock = pack.wall_clock().unwrap();
     assert_eq!((clock.screen.width, clock.screen.height), (128, 64));
     assert_eq!((clock.hand.width, clock.hand.height), (64, 144));
@@ -113,13 +112,12 @@ fn a_complete_pack_bundles_the_wall_clock() {
     assert_eq!(clock.text_prompt_palette.color_count, 4);
     assert_eq!(clock.start_tilemap, vec![0xC1; MAP_BYTES]);
     assert_eq!(clock.view_tilemap, vec![0xC2; MAP_BYTES]);
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn a_missing_entry_is_refused_by_id() {
     for entry in scene_entries() {
-        let (pack, path) = load("opening-scene-missing", without(entry.id));
+        let pack = load("opening-scene-missing", without(entry.id));
         let birch = pack.birch_speech().err();
         let clock = pack.wall_clock().err();
         let refused = [birch, clock]
@@ -127,7 +125,6 @@ fn a_missing_entry_is_refused_by_id() {
             .flatten()
             .any(|err| matches!(err, PackError::UnknownAsset(id) if id == entry.id));
         assert!(refused, "{}", entry.id);
-        std::fs::remove_file(path).unwrap();
     }
 }
 
@@ -161,13 +158,12 @@ fn entries_of_the_wrong_shape_are_refused() {
         ),
     ];
     for (id, entry) in cases {
-        let (pack, path) = load("opening-scene-birch-bad", replaced(id, entry));
+        let pack = load("opening-scene-birch-bad", replaced(id, entry));
         let err = pack.birch_speech().unwrap_err();
         assert!(
             matches!(&err, PackError::MalformedOpeningSceneAsset { id: bad, .. } if bad == id),
             "{id}: {err:?}"
         );
-        std::fs::remove_file(path).unwrap();
     }
 
     let clock_cases: Vec<(&str, Entry)> = vec![
@@ -193,19 +189,18 @@ fn entries_of_the_wrong_shape_are_refused() {
         ),
     ];
     for (id, entry) in clock_cases {
-        let (pack, path) = load("opening-scene-clock-bad", replaced(id, entry));
+        let pack = load("opening-scene-clock-bad", replaced(id, entry));
         let err = pack.wall_clock().unwrap_err();
         assert!(
             matches!(&err, PackError::MalformedOpeningSceneAsset { id: bad, .. } if bad == id),
             "{id}: {err:?}"
         );
-        std::fs::remove_file(path).unwrap();
     }
 }
 
 #[test]
 fn a_wrong_kind_entry_is_refused() {
-    let (pack, path) = load(
+    let pack = load(
         "opening-scene-wrong-kind",
         replaced(
             "opening-scene/raw/clock_start",
@@ -216,5 +211,4 @@ fn a_wrong_kind_entry_is_refused() {
         pack.wall_clock(),
         Err(PackError::WrongKind { .. })
     ));
-    std::fs::remove_file(path).unwrap();
 }

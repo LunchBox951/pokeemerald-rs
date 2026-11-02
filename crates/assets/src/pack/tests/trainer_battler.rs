@@ -1,7 +1,7 @@
 use super::super::{AssetPack, BattlerDirection, PackError};
 use super::shared::{
-    image_meta, pack_bytes, write_pack, Entry, IMAGE_KIND_TAG, INDEXED_8_BIT, PALETTE_KIND_TAG,
-    RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
+    image_meta, pack_bytes, write_pack, Entry, PackFixture, IMAGE_KIND_TAG, INDEXED_8_BIT,
+    PALETTE_KIND_TAG, RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
 };
 use crate::TrainerPicId;
 
@@ -85,14 +85,14 @@ fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, PackFixture) {
     let path = write_pack(name, &pack_bytes(entries));
     (AssetPack::load(&path).unwrap(), path)
 }
 
 #[test]
 fn each_trainer_resolves_both_directions_with_its_own_art() {
-    let (pack, path) = load("trainer-battler-all", entries());
+    let (pack, _pack_file) = load("trainer-battler-all", entries());
     for (trainer, (id, _, _)) in TRAINERS.iter().enumerate() {
         for direction in DIRECTIONS {
             let handle = pack.trainer_battler(*id, direction).unwrap();
@@ -115,12 +115,11 @@ fn each_trainer_resolves_both_directions_with_its_own_art() {
             }
         }
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn the_back_sheet_keeps_every_frame() {
-    let (pack, path) = load("trainer-battler-frames", entries());
+    let (pack, _pack_file) = load("trainer-battler-frames", entries());
     let sheet = pack
         .trainer_battler(TrainerPicId::MAY, BattlerDirection::Back)
         .unwrap();
@@ -135,12 +134,11 @@ fn the_back_sheet_keeps_every_frame() {
         .map(|frame| signature(1, BattlerDirection::Back, frame))
         .collect();
     assert_eq!(frames, expected);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn both_directions_of_a_trainer_share_one_palette() {
-    let (pack, path) = load("trainer-battler-palette", entries());
+    let (pack, _pack_file) = load("trainer-battler-palette", entries());
     for (id, _, _) in TRAINERS {
         let front = pack.trainer_battler(id, BattlerDirection::Front).unwrap();
         let back = pack.trainer_battler(id, BattlerDirection::Back).unwrap();
@@ -153,7 +151,6 @@ fn both_directions_of_a_trainer_share_one_palette() {
         .trainer_battler(TrainerPicId::MAY, BattlerDirection::Front)
         .unwrap();
     assert_ne!(brendan.art.palette.raw, may.art.palette.raw);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -180,7 +177,7 @@ fn the_back_index_is_not_the_front_identity() {
 
 #[test]
 fn trainers_without_battler_art_are_unsupported_in_both_directions() {
-    let (pack, path) = load("trainer-battler-unsupported", entries());
+    let (pack, _pack_file) = load("trainer-battler-unsupported", entries());
     for id in [
         TrainerPicId::HIKER,
         TrainerPicId::RS_BRENDAN,
@@ -195,7 +192,6 @@ fn trainers_without_battler_art_are_unsupported_in_both_directions() {
             );
         }
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -204,7 +200,7 @@ fn missing_and_wrong_kind_entries_are_named() {
         .into_iter()
         .filter(|e| e.id != "trainer/may/back")
         .collect();
-    let (pack, path) = load("trainer-battler-missing", without);
+    let (pack, _pack_file) = load("trainer-battler-missing", without);
     assert!(pack
         .trainer_battler(TrainerPicId::MAY, BattlerDirection::Front)
         .is_ok());
@@ -212,7 +208,6 @@ fn missing_and_wrong_kind_entries_are_named() {
         pack.trainer_battler(TrainerPicId::MAY, BattlerDirection::Back).unwrap_err(),
         PackError::UnknownAsset(id) if id == "trainer/may/back"
     ));
-    let _ = std::fs::remove_file(path);
 
     let raw = Entry {
         id: "trainer/brendan/palette",
@@ -220,7 +215,7 @@ fn missing_and_wrong_kind_entries_are_named() {
         meta: vec![],
         payload: vec![0; 4],
     };
-    let (pack, path) = load(
+    let (pack, _pack_file) = load(
         "trainer-battler-wrong-kind",
         replaced("trainer/brendan/palette", raw),
     );
@@ -230,7 +225,6 @@ fn missing_and_wrong_kind_entries_are_named() {
             PackError::WrongKind { id, expected: "palette", .. } if id == "trainer/brendan/palette"
         ));
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -287,7 +281,7 @@ fn malformed_entries_are_rejected_on_read() {
         ),
     ];
     for (index, (what, entry_id, trainer, direction, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(
+        let (pack, _pack_file) = load(
             &format!("trainer-battler-bad-{index}"),
             replaced(entry_id, entry),
         );
@@ -298,6 +292,5 @@ fn malformed_entries_are_rejected_on_read() {
             ),
             "{what}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

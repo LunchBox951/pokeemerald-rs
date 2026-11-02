@@ -105,9 +105,9 @@ fn bag_entries() -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
@@ -122,7 +122,7 @@ fn without(id: &str) -> Vec<Entry> {
 
 #[test]
 fn bag_assets_bundle_every_fixed_graphic() {
-    let (pack, path) = load("bag-fixed", bag_entries());
+    let pack = load("bag-fixed", bag_entries());
 
     let bag = pack.bag_assets().unwrap();
     assert_eq!((bag.screen.width, bag.screen.height), (128, 32));
@@ -142,13 +142,11 @@ fn bag_assets_bundle_every_fixed_graphic() {
         (24, 16)
     );
     assert_eq!((bag.hm.width, bag.hm.height), (16, 16));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn scroll_indicator_and_swap_line_return_their_own_sheet_and_palette() {
-    let (pack, path) = load("bag-scroll-swap", bag_entries());
+    let pack = load("bag-scroll-swap", bag_entries());
     let bag = pack.bag_assets().unwrap();
 
     let arrows = bag.scroll_indicator().unwrap();
@@ -162,8 +160,6 @@ fn scroll_indicator_and_swap_line_return_their_own_sheet_and_palette() {
     assert_eq!(line.image.pixels[0], 7);
     assert_eq!(line.palette.color_count, 16);
     assert_eq!(line.palette.color(0), Some(0x0501));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -201,7 +197,7 @@ fn missing_or_malformed_scroll_and_swap_entries_are_rejected_on_lookup() {
             Some(entry) => replaced(id, entry),
             None => without(id),
         };
-        let (pack, path) = load(&format!("bag-scroll-swap-bad-{n}"), entries);
+        let pack = load(&format!("bag-scroll-swap-bad-{n}"), entries);
         // Unrelated fixed graphics still open; only the lookup refuses.
         let bag = pack.bag_assets().unwrap();
         let err = if is_scroll {
@@ -217,13 +213,12 @@ fn missing_or_malformed_scroll_and_swap_entries_are_rejected_on_lookup() {
             ),
             "case {n} `{id}`: {err:?}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
 #[test]
 fn every_identity_resolves_its_own_icon_pair() {
-    let (pack, path) = load("bag-icons", bag_entries());
+    let pack = load("bag-icons", bag_entries());
     let bag = pack.bag_assets().unwrap();
     let stems = super::super::bag::icon_stems();
     assert_eq!(stems.len(), ITEMS_COUNT + 1);
@@ -244,8 +239,6 @@ fn every_identity_resolves_its_own_icon_pair() {
         assert_eq!((icon.image.width, icon.image.height), (24, 24));
         assert_eq!(icon.palette.color_count, 16);
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -267,7 +260,7 @@ fn shared_images_and_palettes_pair_independently() {
 
 #[test]
 fn reserved_list_end_and_out_of_range_rows_follow_upstream() {
-    let (pack, path) = load("bag-sentinels", bag_entries());
+    let pack = load("bag-sentinels", bag_entries());
     let bag = pack.bag_assets().unwrap();
     let stems = super::super::bag::icon_stems();
     assert_eq!(stems[0], ("question_mark", "question_mark"));
@@ -293,22 +286,19 @@ fn reserved_list_end_and_out_of_range_rows_follow_upstream() {
         assert_eq!(icon.image.pixels, none.image.pixels);
         assert_eq!(icon.palette.color(0), none.palette.color(0));
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn missing_or_wrong_kind_entries_fail_without_substitution() {
     for id in [MENU, "bag/palette/bag", "bag/raw/menu", "bag/image/hm"] {
-        let (pack, path) = load("bag-missing", without(id));
+        let pack = load("bag-missing", without(id));
         assert!(matches!(
             pack.bag_assets().unwrap_err(),
             PackError::UnknownAsset(missing) if missing == id
         ));
-        let _ = std::fs::remove_file(path);
     }
 
-    let (pack, path) = load(
+    let pack = load(
         "bag-wrong-kind",
         replaced("bag/raw/menu", image("bag/raw/menu", (2, 2), 0)),
     );
@@ -316,16 +306,14 @@ fn missing_or_wrong_kind_entries_fail_without_substitution() {
         pack.bag_assets().unwrap_err(),
         PackError::WrongKind { id, expected: "raw blob", .. } if id == "bag/raw/menu"
     ));
-    let _ = std::fs::remove_file(path);
 
-    let (pack, path) = load("bag-icon-missing", without("bag/item-icon/image/potion"));
+    let pack = load("bag-icon-missing", without("bag/item-icon/image/potion"));
     let bag = pack.bag_assets().unwrap();
     assert!(matches!(
         bag.item_icon(ItemId(13)).unwrap_err(),
         PackError::UnknownAsset(id) if id == "bag/item-icon/image/potion"
     ));
     assert!(bag.item_icon(ItemId(14)).is_ok());
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -354,7 +342,7 @@ fn malformed_fixed_entries_are_rejected_on_read() {
         ("bag/raw/menu", raw("bag/raw/menu", TILEMAP_BYTES - 2, 0)),
     ];
     for (n, (id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("bag-malformed-{n}"), replaced(id, entry));
+        let pack = load(&format!("bag-malformed-{n}"), replaced(id, entry));
         assert!(
             matches!(
                 pack.bag_assets().unwrap_err(),
@@ -362,7 +350,6 @@ fn malformed_fixed_entries_are_rejected_on_read() {
             ),
             "wrong error for malformed `{id}`"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -375,7 +362,7 @@ fn malformed_icon_entries_are_rejected_on_lookup() {
         (palette_id, palette(palette_id, 15, 0)),
     ];
     for (n, (id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("bag-icon-malformed-{n}"), replaced(id, entry));
+        let pack = load(&format!("bag-icon-malformed-{n}"), replaced(id, entry));
         let bag = pack.bag_assets().unwrap();
         assert!(
             matches!(
@@ -384,7 +371,6 @@ fn malformed_icon_entries_are_rejected_on_lookup() {
             ),
             "wrong error for malformed `{id}`"
         );
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -415,7 +401,7 @@ const TYPE_ICON_RECTS: [(u32, u32); 18] = [
 fn menu_info_yields_each_type_and_label_icon_at_its_upstream_offset() {
     use super::super::{MenuInfoIcon, MenuInfoLabel};
 
-    let (pack, path) = load("bag-menu-info", bag_entries());
+    let pack = load("bag-menu-info", bag_entries());
     let info = pack.bag_assets().unwrap().menu_info().unwrap();
     assert_eq!((info.sheet.width, info.sheet.height), (128, 128));
     for (n, color) in [0x0601, 0x0602, 0x0603].into_iter().enumerate() {
@@ -514,8 +500,6 @@ fn menu_info_yields_each_type_and_label_icon_at_its_upstream_offset() {
         height: 1,
     };
     assert_eq!(info.icon_row(last, 0).map(<[u8]>::len), Some(8));
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -562,7 +546,7 @@ fn missing_or_malformed_menu_info_entries_are_rejected_on_lookup() {
             Some(entry) => replaced(id, entry),
             None => without(id),
         };
-        let (pack, path) = load(&format!("bag-menu-info-bad-{n}"), entries);
+        let pack = load(&format!("bag-menu-info-bad-{n}"), entries);
         // Unrelated fixed graphics still open; only the lookup refuses.
         let err = pack.bag_assets().unwrap().menu_info().unwrap_err();
         assert!(
@@ -575,6 +559,5 @@ fn missing_or_malformed_menu_info_entries_are_rejected_on_lookup() {
             ),
             "case {n} `{id}`: {err:?}"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

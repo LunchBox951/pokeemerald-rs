@@ -81,9 +81,9 @@ fn battler_entries() -> Vec<Entry> {
     entries
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
@@ -97,7 +97,7 @@ fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
 
 #[test]
 fn every_starter_direction_and_variant_resolves_its_own_pair() {
-    let (pack, path) = load("battler-all", battler_entries());
+    let pack = load("battler-all", battler_entries());
 
     let mut resolved = 0;
     for (species_index, (id, _)) in STARTERS.iter().enumerate() {
@@ -142,13 +142,11 @@ fn every_starter_direction_and_variant_resolves_its_own_pair() {
         resolved, EXPECTED_PAIR_COUNT,
         "every starter/view/palette combination must resolve"
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn a_species_without_battler_art_is_unsupported() {
-    let (pack, path) = load("battler-unsupported", battler_entries());
+    let pack = load("battler-unsupported", battler_entries());
     for species in [SpeciesId::GROVYLE, SpeciesId(0), SpeciesId(u16::MAX)] {
         assert_eq!(
             pack.species_battler(species, BattlerDirection::Front, PaletteVariant::Normal)
@@ -157,7 +155,6 @@ fn a_species_without_battler_art_is_unsupported() {
             "unsupported species {species:?} must not substitute starter art"
         );
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -166,7 +163,7 @@ fn a_missing_or_wrong_kind_entry_fails_without_substitution() {
         .into_iter()
         .filter(|e| e.id != "pokemon/torchic/back" && e.id != "pokemon/mudkip/palette/shiny")
         .collect();
-    let (pack, path) = load("battler-missing", entries);
+    let pack = load("battler-missing", entries);
     assert!(
         pack.species_battler(
             SpeciesId::TORCHIC,
@@ -192,7 +189,6 @@ fn a_missing_or_wrong_kind_entry_fails_without_substitution() {
         ),
         "missing shiny palette must not substitute the normal palette"
     );
-    let _ = std::fs::remove_file(path);
 
     let wrong_kind = Entry {
         id: "pokemon/treecko/back",
@@ -200,7 +196,7 @@ fn a_missing_or_wrong_kind_entry_fails_without_substitution() {
         meta: vec![],
         payload: vec![0; WRONG_KIND_PAYLOAD_BYTES],
     };
-    let (pack, path) = load(
+    let pack = load(
         "battler-wrong-kind",
         replaced("pokemon/treecko/back", wrong_kind),
     );
@@ -212,7 +208,6 @@ fn a_missing_or_wrong_kind_entry_fails_without_substitution() {
         ),
         "raw back-art entry must report WrongKind expecting image"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -267,7 +262,7 @@ fn malformed_entries_are_rejected_on_read() {
         ),
     ];
     for (n, (case, species, id, direction, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("battler-malformed-{n}"), replaced(id, entry));
+        let pack = load(&format!("battler-malformed-{n}"), replaced(id, entry));
         assert!(
             matches!(
                 pack.species_battler(species, direction, PaletteVariant::Shiny).unwrap_err(),
@@ -275,6 +270,5 @@ fn malformed_entries_are_rejected_on_read() {
             ),
             "wrong error for {case} ({species:?}/{direction:?}, `{id}`)"
         );
-        let _ = std::fs::remove_file(path);
     }
 }

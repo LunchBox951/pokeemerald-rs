@@ -2,7 +2,7 @@ use super::super::{
     AssetPack, FieldMessage, FieldMessageError, FieldMessageTable, PackError, FIELD_MESSAGE_COUNT,
 };
 use super::shared::{
-    pack_bytes, write_pack, write_synthetic_pack, Entry, PALETTE_KIND_TAG, RAW_KIND_TAG,
+    pack_bytes, synthetic_pack, write_pack, Entry, PALETTE_KIND_TAG, RAW_KIND_TAG,
 };
 
 const TABLE_PACK_ID: &str = "field-message/table";
@@ -166,9 +166,7 @@ fn pack_with(kind_tag: u8, payload: Vec<u8>) -> Vec<u8> {
 
 fn load(name: &str, bytes: &[u8]) -> AssetPack {
     let path = write_pack(name, bytes);
-    let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(path);
-    pack
+    AssetPack::load(&path).unwrap()
 }
 
 #[test]
@@ -220,13 +218,11 @@ fn accessor_valid_missing_wrong_kind_and_malformed() {
 #[test]
 fn a_pack_from_the_format_without_field_messages_is_refused_on_load() {
     const PREVIOUS_FORMAT_VERSION: u32 = 11;
-    let path = write_synthetic_pack("field-message-previous-version");
-    let mut bytes = std::fs::read(&path).unwrap();
+    let mut bytes = synthetic_pack();
     bytes[8..12].copy_from_slice(&PREVIOUS_FORMAT_VERSION.to_le_bytes());
-    std::fs::write(&path, bytes).unwrap();
+    let path = write_pack("field-message-previous-version", &bytes);
     assert_eq!(
         AssetPack::load(&path).map(|_| ()),
         Err(PackError::UnsupportedVersion(PREVIOUS_FORMAT_VERSION))
     );
-    let _ = std::fs::remove_file(path);
 }
