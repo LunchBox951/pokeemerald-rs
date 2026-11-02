@@ -8,6 +8,9 @@ use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES};
 use engine::save::PlayerGender;
 use rendering::{BitDepth, OamEntry, ObjShape};
 
+mod mat;
+#[cfg(test)]
+mod mat_tests;
 mod run;
 #[cfg(test)]
 mod run_tests;
@@ -182,11 +185,20 @@ pub(super) const fn stand_frame_for(facing: Direction) -> (u16, bool) {
 
 fn frame_for(player: &PlayerState) -> (u16, bool) {
     let (stand, h_flip) = stand_frame_for(player.facing());
-    let step = match player.facing() {
+    let step_base = match player.facing() {
         Direction::South => FRAME_SOUTH_STEP,
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
-    } + u16::from(player.second_foot_leads());
+    };
+    let step = step_base + u16::from(player.second_foot_leads());
+    if let Some(cell) = mat::go_cell_for(player) {
+        let frame = match cell {
+            mat::GoCell::Stand => stand,
+            mat::GoCell::LeadingFoot => step,
+            mat::GoCell::OtherFoot => step_base + u16::from(!player.second_foot_leads()),
+        };
+        return (frame, h_flip);
+    }
     let walking_foot_forward = player.slide_pose_held()
         || run::running_foot_forward(player)
         || (player.in_transit()
@@ -215,7 +227,7 @@ pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> OamEntry
     };
     OamEntry::new(
         PLAYER_OBJ_X,
-        PLAYER_OBJ_Y,
+        PLAYER_OBJ_Y.saturating_sub(mat::lift(player)),
         sheet_base + frame * FRAME_TILES,
         PLAYER_PALETTE_BANK,
         BitDepth::Bpp4,
@@ -438,7 +450,7 @@ mod tests {
     /// A 5x5 map whose `(2, 2)` tile carries `behavior`, otherwise plain
     /// ground, for proving [`frame_for`] reads the active crossing's own
     /// pace rather than assuming [`WALK_FRAMES_PER_TILE`].
-    fn behavior_runtime(behavior: u8) -> engine::overworld::MapRuntime<'static> {
+    pub(super) fn behavior_runtime(behavior: u8) -> engine::overworld::MapRuntime<'static> {
         let mut bytes = Vec::new();
         for y in 0..5u16 {
             for x in 0..5u16 {

@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.85.0] - 2026-10-31
+
+- General improvements in preparation for the Secret Base jump and spin mats.
+
 ## [0.0.84.0] - 2026-10-30
 
 - General improvements in preparation for the message shown when a Pokémon faints from poison in the field. The asset pack format changed, so the game asks you to import your ROM again once.
@@ -398,7 +402,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...dev
+[0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...dev
+[0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...f8b898c347008d4fe0b0de110644b684c52e4808
 [0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5f95606fc87e5a6ed148063bbb1ff44d2f8c234a...86a3bf584936f2e61d6b7f04590526afb7fced4a
 [0.0.82.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/91908af79c336519262ccf09e582f2e474451261...5f95606fc87e5a6ed148063bbb1ff44d2f8c234a
 [0.0.81.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/617c52d7a6314c124c872023c981306e38f5a390...91908af79c336519262ccf09e582f2e474451261
