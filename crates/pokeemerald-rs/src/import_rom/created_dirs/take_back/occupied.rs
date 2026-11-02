@@ -8,22 +8,19 @@
 //!   still gets it moved, and a crash in that window leaves it hidden at
 //!   `.undo-<hex>/level`; the capture is then re-checked and put back as
 //!   usual when the process lives.
-//! - A listing that cannot run for want of a free descriptor is no verdict
-//!   either way, and does not stop the rollback: the level is taken back as
-//!   before this check, whose protocol keeps whatever it holds. Any other
-//!   failure to list is reported and leaves the level standing.
+//! - A listing that fails, for want of a free descriptor or otherwise, is no
+//!   verdict that the level is empty: it is reported and leaves the level
+//!   standing, unmoved.
 
 use std::os::fd::AsFd;
 
 use rustix::fs::{Dir, Mode, OFlags};
-use rustix::io::Errno;
 
 use super::super::CreatedDirectory;
 
 /// Whether `dir`'s held original lists an entry other than `.` and `..`.
-/// `Ok(false)` for a level that is not held open or that cannot be listed
-/// for want of a free descriptor; any other failure to list is the error,
-/// not a verdict that the level is empty.
+/// `Ok(false)` for a level that is not held open; a failure to list is the
+/// error, not a verdict that the level is empty.
 pub(super) fn level_holds_entries(dir: &CreatedDirectory) -> rustix::io::Result<bool> {
     let Some(own) = dir.own.as_deref() else {
         return Ok(false);
@@ -37,12 +34,7 @@ pub(super) fn level_holds_entries(dir: &CreatedDirectory) -> rustix::io::Result<
         Mode::empty(),
     )
     .and_then(Dir::new);
-    let mut listing = match opened {
-        Ok(listing) => listing,
-        Err(Errno::MFILE | Errno::NFILE) => return Ok(false),
-        Err(err) => return Err(err),
-    };
-    for entry in &mut listing {
+    for entry in opened? {
         if !matches!(entry?.file_name().to_bytes(), b"." | b"..") {
             return Ok(true);
         }

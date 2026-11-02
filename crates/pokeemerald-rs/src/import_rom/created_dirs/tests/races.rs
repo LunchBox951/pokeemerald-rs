@@ -497,3 +497,54 @@ fn undo_does_not_strand_contents_when_the_name_is_retaken_before_restoration() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_populated_level_is_not_moved_when_its_listing_lacks_a_descriptor() {
+    use std::cell::RefCell;
+    let dir = TempDir::new("undo-emfile-populated");
+    let outer = dir.join("a");
+    let level = outer.join("b");
+    let created = super::create_directories(&level).unwrap();
+    assert_eq!(created.len(), 2);
+    fs::write(outer.join("keep"), b"x").unwrap();
+    let hog: RefCell<Vec<fs::File>> = RefCell::new(Vec::new());
+    let mut calls = 0;
+    let mut populated_captured = false;
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || {
+            calls += 1;
+            if calls == 2 {
+                let mut hog = hog.borrow_mut();
+                loop {
+                    match fs::File::open("/dev/null") {
+                        Ok(f) => hog.push(f),
+                        Err(e) => {
+                            assert_eq!(e.raw_os_error(), Some(24), "EMFILE expected: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        },
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeCheck && !hog.borrow().is_empty() {
+                hog.borrow_mut().clear();
+                let keep = format!("{}/keep", super::take_back::QUARANTINE_ENTRY);
+                if rustix::fs::statat(held, keep.as_str(), rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .is_ok()
+                {
+                    populated_captured = true;
+                }
+            }
+        },
+    );
+    hog.borrow_mut().clear();
+    assert_eq!(calls, 2, "both levels reached the take-back");
+    assert!(outer.join("keep").is_file(), "a/keep is back in place");
+    assert!(
+        !populated_captured,
+        "populated level a was renamed into the quarantine after its listing hit EMFILE"
+    );
+}
