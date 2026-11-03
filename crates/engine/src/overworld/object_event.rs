@@ -5,9 +5,9 @@
 //! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision, and
-//! interaction read the collection's live state; sight still consults the static templates this
-//! module also exposes.
+//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision,
+//! interaction, and trainer sight read the collection's live state; an unbound runtime still
+//! consults the static templates this module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -237,8 +237,9 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// Template overrides remain inside this value. A map runtime observes them only through an
 /// [`ObjectEventCollection`] bound to it, which then answers collision and interaction queries
 /// from each object's live position and elevation and feeds overworld rendering; an unbound
-/// runtime still reads the authored template coordinates. Walking commits the destination
-/// immediately, while the owning script or collection entry tracks animation time.
+/// runtime still reads the authored template coordinates. Trainer sight reads a collection
+/// handed to it directly. Walking commits the destination immediately, while the owning script
+/// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,

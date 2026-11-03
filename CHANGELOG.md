@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.97.0] - 2026-11-03
+
+- Trainers who spot you now look from where they are actually standing and facing, not from where the map first placed them.
+
 ## [0.0.96.0] - 2026-11-03
 
 - Game music now comes back on its own when the sound device is unplugged or changed, and starts once a sound device is connected if none was there at launch.
@@ -446,7 +450,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.96.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/63c4acad9535bc7ef3458c4f1417ca6d654f44c9...dev
+[0.0.97.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/bef9d280134cd25448aaae14fa68575a038c6e7c...dev
+[0.0.96.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/63c4acad9535bc7ef3458c4f1417ca6d654f44c9...bef9d280134cd25448aaae14fa68575a038c6e7c
 [0.0.95.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/04a9f5cbecfca3c393094fbc900a96295b0582aa...63c4acad9535bc7ef3458c4f1417ca6d654f44c9
 [0.0.94.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/3d9b8b80ad02a7faf656a6e6fa21619b4e5f41b2...04a9f5cbecfca3c393094fbc900a96295b0582aa
 [0.0.93.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c75ca4daa0cae329f64c264c0432db2fdb0c1087...3d9b8b80ad02a7faf656a6e6fa21619b4e5f41b2
