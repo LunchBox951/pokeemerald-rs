@@ -4,9 +4,33 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.85.0] - 2026-10-31
+## [0.0.91.0] - 2026-11-03
 
 - General improvements in preparation for battle messages.
+
+## [0.0.90.0] - 2026-11-03
+
+- Your whole party now joins wild battles: when your lead faints, a healthy reserve takes over instead of the game treating the battle as lost, and every Pokémon that fought keeps its own post-battle state.
+
+## [0.0.89.0] - 2026-11-03
+
+- General improvements in preparation for the naming screen: the keyboard pages, cursor, avatars and controls now draw from the asset pack at the original game's positions.
+
+## [0.0.88.0] - 2026-11-02
+
+- Importing from your ROM now brings in the naming screen's keyboard graphics, palettes and layouts.
+
+## [0.0.87.0] - 2026-11-02
+
+- People and objects around Littleroot, Oldale and the early routes are now drawn with their own graphics and sizes, indoors and out: the moving truck, boxes, dolls, Vigoroth, item balls, Birch's bag, the Zigzagoon and Route 103's berry trees. They overlap the player and each other in the original order, and characters keep the correct pose when they turn to face you.
+
+## [0.0.86.0] - 2026-11-02
+
+- Walking through tall grass now shows the grass rustling effect under and around the player.
+
+## [0.0.85.0] - 2026-10-31
+
+- General improvements in preparation for choosing your starter from Birch's bag: moving the hand between the three Poké Balls, previewing Treecko, Torchic or Mudkip, and confirming with YES or NO.
 
 ## [0.0.84.0] - 2026-10-30
 
@@ -402,7 +426,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...dev
+[0.0.91.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ab04a3a6d177430073b49cbbe73768b1bb9225ec...dev
+[0.0.90.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/15769320877d041ed09e6b1afd1ccac7bf877cc9...ab04a3a6d177430073b49cbbe73768b1bb9225ec
+[0.0.89.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6f73b1201b71784582b1c979e9d76cb022abbef6...15769320877d041ed09e6b1afd1ccac7bf877cc9
+[0.0.88.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/430ab507b37601248d2c5aa4ad86ebb0838d824c...6f73b1201b71784582b1c979e9d76cb022abbef6
+[0.0.87.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/93654e4a9ec194b71d1e7bbd261a8853976567f6...430ab507b37601248d2c5aa4ad86ebb0838d824c
+[0.0.86.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/356953c4e5f81486e29332ddc619f92197be714c...93654e4a9ec194b71d1e7bbd261a8853976567f6
+[0.0.85.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f8b898c347008d4fe0b0de110644b684c52e4808...356953c4e5f81486e29332ddc619f92197be714c
 [0.0.84.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/86a3bf584936f2e61d6b7f04590526afb7fced4a...f8b898c347008d4fe0b0de110644b684c52e4808
 [0.0.83.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5f95606fc87e5a6ed148063bbb1ff44d2f8c234a...86a3bf584936f2e61d6b7f04590526afb7fced4a
 [0.0.82.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/91908af79c336519262ccf09e582f2e474451261...5f95606fc87e5a6ed148063bbb1ff44d2f8c234a

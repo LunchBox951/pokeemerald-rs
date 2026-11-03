@@ -34,6 +34,7 @@ pub(crate) mod field_messages;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod naming_screen;
 pub(crate) mod opening_scene;
 pub(crate) mod poke_ball;
 pub(crate) mod song;
@@ -79,6 +80,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     evolution_scene::write,
     battle_interface::write,
     battlers::write,
+    naming_screen::write,
     poke_ball::write,
     trainer_front::write,
     trainer_battlers::write,
