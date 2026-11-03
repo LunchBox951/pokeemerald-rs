@@ -303,6 +303,112 @@ fn agbcc_is_provisioned_into_the_scratch_tree_only() {
 
 #[test]
 #[cfg(unix)]
+fn an_agbcc_install_inside_the_reference_is_rejected_before_verification() {
+    let mut fx = Fixture::new("agbcc-inside", GOOD);
+    let inside = fx.config.reference.join("agbcc-install");
+    fs::create_dir_all(inside.join("bin")).unwrap();
+    fs::write(inside.join("bin/agbcc"), "cc1").unwrap();
+    fx.config.agbcc_source = inside.join("..").join("agbcc-install");
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")
+                && t.contains("./install.sh <dir>")
+                && t.contains("POKEEMERALD_AGBCC=<dir>/tools/agbcc")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_symlink_inside_the_reference_is_rejected_before_verification() {
+    let mut fx = Fixture::new("agbcc-symlink-inside", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    fx.config.agbcc_source = link;
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_a_symlinked_directory_inside_the_reference_is_rejected() {
+    let mut fx = Fixture::new("agbcc-ancestor-link", GOOD);
+    let alias = fx.config.reference.join("alias");
+    std::os::unix::fs::symlink(&fx.root, &alias).unwrap();
+    fx.config.agbcc_source = alias.join("agbcc-install");
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn an_agbcc_path_that_leaves_the_reference_through_dotdot_is_not_contained() {
+    let fx = Fixture::new("agbcc-dotdot-out", GOOD);
+    let mut config = fx.config.clone();
+    config.agbcc_source = fx.config.reference.join("..").join("agbcc-install");
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_bare_relative_agbcc_symlink_inside_the_reference_is_contained() {
+    let fx = Fixture::new("agbcc-relative-link", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    let mut config = fx.config.clone();
+    config.agbcc_source = PathBuf::from("agbcc-link");
+    assert!(super::agbcc_inside_reference_from(
+        &config,
+        &fx.config.reference
+    ));
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_an_intermediate_symlink_inside_the_reference_is_rejected() {
+    let mut fx = Fixture::new("agbcc-intermediate-link", GOOD);
+    let inner = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &inner).unwrap();
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(&inner, &alias).unwrap();
+    fx.config.agbcc_source = alias;
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn an_agbcc_path_ending_in_dotdot_that_leaves_the_reference_is_not_contained() {
+    let fx = Fixture::new("agbcc-trailing-dotdot", GOOD);
+    let mut config = fx.config.clone();
+    config.agbcc_source = fx
+        .config
+        .reference
+        .join("..")
+        .join("agbcc-install")
+        .join("bin")
+        .join("..");
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
 fn a_missing_agbcc_install_is_a_missing_tool() {
     let mut fx = Fixture::new("noagbcc", GOOD);
     fx.config.agbcc_source = fx.root.join("absent");
@@ -628,3 +734,54 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_a_symlink_then_trailing_dotdot_outside_is_not_contained() {
+    let fx = Fixture::new("agbcc-link-trailing-dotdot", GOOD);
+    // root/alias -> root/external/anchor, so root/alias/.. is root/external.
+    let external = fx.root.join("external");
+    fs::create_dir_all(external.join("anchor")).unwrap();
+    // A real install outside the reference that merely shares its name.
+    fs::create_dir_all(external.join("reference").join("bin")).unwrap();
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(external.join("anchor"), &alias).unwrap();
+    let mut config = fx.config.clone();
+    config.agbcc_source = alias.join("..").join("reference").join("bin").join("..");
+    assert_eq!(
+        config.agbcc_source.canonicalize().unwrap(),
+        external.join("reference").canonicalize().unwrap()
+    );
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
+fn branching_symlinks_outside_the_reference_finish_promptly() {
+    let fx = Fixture::new("agbcc-branching-links", GOOD);
+    // L0 -> . and Ln -> L(n-1)/L(n-1): a per-branch hop limit walks 2^39 links.
+    let outside = fx.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(".", outside.join("L0")).unwrap();
+    for n in 1..=39 {
+        let prev = format!("L{}", n - 1);
+        std::os::unix::fs::symlink(format!("{prev}/{prev}"), outside.join(format!("L{n}")))
+            .unwrap();
+    }
+    let mut config = fx.config.clone();
+    config.agbcc_source = outside.join("L39");
+    let reference = fx.root.join("reference").canonicalize().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send((
+            super::passes_through_symlink_inside(&config.agbcc_source, &reference),
+            super::agbcc_inside_reference_from(&config, &fx.root),
+        ));
+    });
+    let result = rx.recv_timeout(std::time::Duration::from_secs(20));
+    assert_eq!(
+        result.ok(),
+        Some((false, false)),
+        "symlink walk did not finish within 20s"
+    );
+}
