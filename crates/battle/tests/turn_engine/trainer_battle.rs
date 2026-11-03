@@ -208,7 +208,7 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
             matches!(
                 e,
                 BattleEvent::Fainted { .. }
-                    | BattleEvent::ExpGained(_)
+                    | BattleEvent::ExpGained { .. }
                     | BattleEvent::MoneyGained(_)
                     | BattleEvent::Ended(_)
             )
@@ -220,7 +220,10 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
         tail,
         vec![
             &BattleEvent::Fainted { by_player: false },
-            &BattleEvent::ExpGained(69),
+            &BattleEvent::ExpGained {
+                amount: 69,
+                boosted: false,
+            },
             &BattleEvent::MoneyGained(300),
             &BattleEvent::Ended(BattleOutcome::PlayerWon),
         ]
@@ -250,7 +253,10 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(46)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 46,
+            boosted: false,
+        }),
         "a wild KO pays expYield * level / 7 with no bonus: {events:?}"
     );
     assert!(
@@ -291,11 +297,17 @@ fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(67)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 67,
+            boosted: false,
+        }),
         "a trainer KO pays 64*5/7 = 45, then 45*150/100 = 67: {events:?}"
     );
     assert!(
-        !events.contains(&BattleEvent::ExpGained(68)),
+        !events.contains(&BattleEvent::ExpGained {
+            amount: 68,
+            boosted: false,
+        }),
         "bonus-before-division would pay 68: {events:?}"
     );
     assert_eq!(battle.player().experience() - experience_before, 67);
@@ -319,7 +331,10 @@ fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(45)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 45,
+            boosted: false,
+        }),
         "a wild KO pays 64*5/7 = 45 with no bonus: {events:?}"
     );
     assert_eq!(battle.player().experience() - experience_before, 45);
@@ -560,7 +575,7 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
         .unwrap();
     let exp_index = first
         .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .position(|event| matches!(event, BattleEvent::ExpGained { .. }))
         .expect("the faint awards EXP");
     let send_out_index = first
         .iter()
@@ -906,7 +921,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     }
     let exp_index = events
         .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .position(|event| matches!(event, BattleEvent::ExpGained { .. }))
         .unwrap_or_else(|| panic!("the faint awards EXP: {events:?}"));
     let prompt_index = events
         .iter()
@@ -1156,14 +1171,20 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        first.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        first.contains(&BattleEvent::ExpGained {
+            amount: BOOSTED_AWARD_PER_LEVEL_5_STARTER,
+            boosted: false,
+        }),
         "{first:?}"
     );
     let second = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        second.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        second.contains(&BattleEvent::ExpGained {
+            amount: BOOSTED_AWARD_PER_LEVEL_5_STARTER,
+            boosted: false,
+        }),
         "paid again rather than folded into the first knockout's award: {second:?}"
     );
     assert_eq!(rng.draws(), 21, "exact scripted draw stream is consumed");
