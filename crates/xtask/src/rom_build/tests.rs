@@ -377,6 +377,38 @@ fn a_bare_relative_agbcc_symlink_inside_the_reference_is_contained() {
 
 #[test]
 #[cfg(unix)]
+fn an_agbcc_path_through_an_intermediate_symlink_inside_the_reference_is_rejected() {
+    let mut fx = Fixture::new("agbcc-intermediate-link", GOOD);
+    let inner = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &inner).unwrap();
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(&inner, &alias).unwrap();
+    fx.config.agbcc_source = alias;
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn an_agbcc_path_ending_in_dotdot_that_leaves_the_reference_is_not_contained() {
+    let fx = Fixture::new("agbcc-trailing-dotdot", GOOD);
+    let mut config = fx.config.clone();
+    config.agbcc_source = fx
+        .config
+        .reference
+        .join("..")
+        .join("agbcc-install")
+        .join("bin")
+        .join("..");
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
 fn a_missing_agbcc_install_is_a_missing_tool() {
     let mut fx = Fixture::new("noagbcc", GOOD);
     fx.config.agbcc_source = fx.root.join("absent");

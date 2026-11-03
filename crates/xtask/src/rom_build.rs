@@ -269,35 +269,83 @@ fn agbcc_inside_reference(config: &BuildConfig) -> bool {
 /// taken from made explicit, so a bare relative name (empty parent) resolves
 /// against `base` rather than staying relative to an absolute reference.
 fn agbcc_inside_reference_from(config: &BuildConfig, base: &Path) -> bool {
-    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| normalize_lexically(p));
     let reference = canon(&base.join(&config.reference));
     let source = base.join(&config.agbcc_source);
     let located = match (source.parent(), source.file_name()) {
         (Some(parent), Some(name)) => canon(parent).join(name),
-        _ => source.clone(),
+        // A path ending in `..` or `.` names no component of its own: its
+        // location is the directory the path steps to.
+        _ => canon(&normalize_lexically(&source)),
     };
     canon(&source).starts_with(&reference)
         || located.starts_with(&reference)
         || passes_through_symlink_inside(&source, &reference)
 }
 
+/// `path` with `.` dropped and each `..` stepping back over the component
+/// before it, so a path that cannot be canonicalized still compares by
+/// where it points rather than by its spelling.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            _ => out.push(component),
+        }
+    }
+    out
+}
+
+/// The most symlink hops a single path walk follows before it treats the
+/// link as an ordinary component (the OS's own `ELOOP` guard is 40).
+const MAX_SYMLINK_HOPS: u8 = 40;
+
 /// Whether resolving `source` one component at a time meets a symlink whose
 /// own location (everything before it resolved) lies within `reference`, as
-/// with `reference/alias/agbcc` where `alias` points outside. A `..` steps
-/// back from what has been resolved so far, as the OS does.
+/// with `reference/alias/agbcc` where `alias` points outside. Each symlink
+/// is followed one hop, its target walked the same way, so a link that
+/// points at a link inside the reference is met too. A `..` steps back from
+/// what has been resolved so far, as the OS does.
 fn passes_through_symlink_inside(source: &Path, reference: &Path) -> bool {
-    let mut walked = PathBuf::new();
-    for component in source.components() {
+    walk_symlinks(PathBuf::new(), source, reference, 0).is_none()
+}
+
+/// Walks `path` from `walked`, returning the walked path, or `None` once a
+/// symlink located inside `reference` is met.
+fn walk_symlinks(mut walked: PathBuf, path: &Path, reference: &Path, hops: u8) -> Option<PathBuf> {
+    for component in path.components() {
         match component {
             Component::Normal(name) => {
                 let located = walked.join(name);
                 let is_link = located
                     .symlink_metadata()
                     .is_ok_and(|meta| meta.file_type().is_symlink());
-                if is_link && located.starts_with(reference) {
-                    return true;
+                if !is_link {
+                    walked = located;
+                    continue;
                 }
-                walked = located.canonicalize().unwrap_or(located);
+                let location = walked
+                    .canonicalize()
+                    .map_or_else(|_| located.clone(), |dir| dir.join(name));
+                if location.starts_with(reference) {
+                    return None;
+                }
+                let target = std::fs::read_link(&located).ok();
+                match target.filter(|_| hops < MAX_SYMLINK_HOPS) {
+                    Some(target) => {
+                        let from = if target.is_absolute() {
+                            PathBuf::new()
+                        } else {
+                            walked.clone()
+                        };
+                        walked = walk_symlinks(from, &target, reference, hops + 1)?;
+                    }
+                    None => walked = located,
+                }
             }
             Component::ParentDir => {
                 walked.pop();
@@ -306,7 +354,7 @@ fn passes_through_symlink_inside(source: &Path, reference: &Path) -> bool {
             Component::RootDir | Component::Prefix(_) => walked.push(component),
         }
     }
-    false
+    Some(walked)
 }
 
 /// Verifies the reference, builds the pinned tree in scratch storage, and
