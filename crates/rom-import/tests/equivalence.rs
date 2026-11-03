@@ -36,6 +36,8 @@
 //! sample: the table and the samples it names are required of the ROM backend,
 //! and [`the_cries_are_named_by_id`] pins them by the table's own contents so
 //! a cry both backends drop together still fails.
+//! Every `audio/voicegroup/` and `audio/sample/` id is compared; the songs are
+//! pinned by [`ROM_IMPORTED_SONG_IDS`], not claimed by prefix.
 //!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
@@ -67,7 +69,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
-    "audio/",
+    "audio/voicegroup/",
+    "audio/sample/",
     "trainer-pic/",
     "trainer/",
     "battle-message/",
@@ -75,10 +78,43 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-anim/",
     "bag/",
     "starter-chooser/",
+    "pokemon/",
     "opening-scene/",
     "evolution-scene/",
     "poke-ball/",
+    "naming-screen/",
 ];
+
+/// The species whose static battler art both backends must carry: the
+/// starters, then the checkpoint's other eleven Pokémon.
+const BATTLER_SPECIES: [&str; 14] = [
+    "treecko",
+    "torchic",
+    "mudkip",
+    "poochyena",
+    "mightyena",
+    "wurmple",
+    "silcoon",
+    "beautifly",
+    "cascoon",
+    "dustox",
+    "zigzagoon",
+    "linoone",
+    "wingull",
+    "pelipper",
+];
+
+/// The only song the ROM backend imports, by id: its song root is the profile's lone
+/// `mus_title` entry. The checkout pack also carries every other checkpoint song, so
+/// `audio/song/` is not in [`COMPLETE_PREFIXES`]; a dropped title still fails by this id.
+const ROM_IMPORTED_SONG_IDS: [&str; 1] = ["audio/song/mus_title"];
+
+/// Whether the ROM backend claims every checkout entry with this id.
+fn is_claimed_complete(id: &str) -> bool {
+    COMPLETE_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
 /// in `gHealthboxElementsGfxTable` order, the battle bar, the singles
@@ -113,22 +149,21 @@ const BATTLE_INTERFACE_IDS: [&str; 24] = [
     "battle-interface/palette/ball_display",
 ];
 
-/// The starters' static battler entries: 12 ids the ROM backend must write
-/// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
-const STARTER_BATTLER_IDS: [&str; 12] = [
-    "pokemon/treecko/front",
-    "pokemon/treecko/back",
-    "pokemon/treecko/palette/normal",
-    "pokemon/treecko/palette/shiny",
-    "pokemon/torchic/front",
-    "pokemon/torchic/back",
-    "pokemon/torchic/palette/normal",
-    "pokemon/torchic/palette/shiny",
-    "pokemon/mudkip/front",
-    "pokemon/mudkip/back",
-    "pokemon/mudkip/palette/normal",
-    "pokemon/mudkip/palette/shiny",
-];
+/// Every battler entry, named by id so entries both backends drop together
+/// still fail: front, back, then normal and shiny palette per species.
+fn battler_ids() -> Vec<String> {
+    BATTLER_SPECIES
+        .iter()
+        .flat_map(|name| {
+            [
+                format!("pokemon/{name}/front"),
+                format!("pokemon/{name}/back"),
+                format!("pokemon/{name}/palette/normal"),
+                format!("pokemon/{name}/palette/shiny"),
+            ]
+        })
+        .collect()
+}
 
 /// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
 /// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
@@ -242,6 +277,30 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
 /// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
 
+/// A difference line for each of `ids` the ROM backend did not write.
+fn missing_imported<V>(ids: &[&str], imported: &BTreeMap<String, V>) -> Vec<String> {
+    ids.iter()
+        .filter(|id| !imported.contains_key(**id))
+        .map(|id| format!("{id}: the ROM backend wrote no such entry"))
+        .collect()
+}
+
+#[test]
+fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
+    assert!(is_claimed_complete("audio/voicegroup/title"));
+    assert!(is_claimed_complete(
+        "audio/sample/direct-sound/sc88pro_trumpet_60"
+    ));
+    for id in ROM_IMPORTED_SONG_IDS {
+        assert!(
+            !is_claimed_complete(id),
+            "{id} is pinned by id, not by prefix"
+        );
+    }
+    assert!(!is_claimed_complete("audio/song/se_select"));
+    assert!(!is_claimed_complete("audio/song/mus_vs_wild"));
+}
+
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
 fn the_rom_backend_matches_the_checkout_pack() {
@@ -288,10 +347,10 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     for id in checkout.keys() {
-        let claimed = COMPLETE_PREFIXES
-            .iter()
-            .any(|prefix| id.starts_with(prefix));
-        if claimed && !imported.contains_key(id) && !reviewed.contains_key(id.as_str()) {
+        if is_claimed_complete(id)
+            && !imported.contains_key(id)
+            && !reviewed.contains_key(id.as_str())
+        {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }
@@ -305,13 +364,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `pokemon/` is not a complete prefix while only the starters exist, so
-    // their entries are pinned by id: a dropped root fails here.
-    for id in STARTER_BATTLER_IDS {
-        if !imported.contains_key(id) {
-            differences.push(format!("{id}: the ROM backend wrote no such entry"));
-        }
-    }
+    // `audio/song/` is not a complete prefix, so the imported songs are
+    // pinned by id too (`ROM_IMPORTED_SONG_IDS`).
+    differences.extend(missing_imported(&ROM_IMPORTED_SONG_IDS, &imported));
 
     // `battle-interface/` is not a complete prefix, so the textbox, element,
     // battle-bar, frame, shadow, and ball-palette entries are pinned by id.
@@ -322,8 +377,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     // Named by id so a payload both backends drop together still fails.
-    let pinned: Vec<String> = checkpoint_payload_ids()
+    let pinned: Vec<String> = battler_ids()
         .into_iter()
+        .chain(checkpoint_payload_ids())
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
@@ -612,6 +668,71 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
             "{id} must stay pinned by id, not claimed by a prefix"
         );
     }
+}
+
+/// The profile's naming-screen roots are exactly the checkout manifest's 26
+/// ids, so the complete `naming-screen/` prefix cannot pass by both backends
+/// dropping the same entry.
+#[test]
+fn the_naming_screen_profile_roots_are_the_manifest_ids() {
+    const SHEETS: [&str; 15] = [
+        "menu",
+        "page_swap_frame",
+        "back_button",
+        "ok_button",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "cursor",
+        "cursor_squished",
+        "cursor_filled",
+        "page_swap_button",
+        "input_arrow",
+        "underscore",
+        "pc_icon_off",
+        "pc_icon_on",
+    ];
+    const PALETTES: [&str; 7] = [
+        "menu",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "buttons",
+        "cursor",
+        "keyboard",
+    ];
+    const TILEMAPS: [&str; 4] = [
+        "background",
+        "keyboard_upper",
+        "keyboard_lower",
+        "keyboard_symbols",
+    ];
+    let mut expected: Vec<String> = SHEETS
+        .iter()
+        .map(|stem| format!("naming-screen/image/{stem}"))
+        .chain(
+            PALETTES
+                .iter()
+                .map(|stem| format!("naming-screen/palette/{stem}")),
+        )
+        .chain(
+            TILEMAPS
+                .iter()
+                .map(|stem| format!("naming-screen/raw/{stem}")),
+        )
+        .collect();
+    expected.sort_unstable();
+    let roots = &rom_import::EMERALD_US_REV0.roots.naming_screen;
+    let mut profiled: Vec<String> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .map(str::to_owned)
+        .collect();
+    profiled.sort_unstable();
+    assert_eq!(profiled, expected);
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

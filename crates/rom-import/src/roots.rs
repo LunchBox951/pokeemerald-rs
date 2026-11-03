@@ -567,6 +567,23 @@ pub struct BattleInterfaceRoots {
     pub battle_bar: Option<BlobRoot>,
 }
 
+/// The naming screen's graphics (`graphics/naming_screen`).
+///
+/// The fifteen sheets, seven palettes, and four tilemaps under the
+/// `naming-screen/` pack ids the checkout extractor emits. Only the menu sheet
+/// and the tilemaps are LZ77 streams; the other sheets and the palettes are
+/// raw. The three cursor sheets are stored as their first five tiles, which
+/// the pack publishes as an 8x40 strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamingScreenRoots {
+    /// Every `naming-screen/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `naming-screen/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `naming-screen/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -702,7 +719,9 @@ pub struct Roots {
     pub evolution_scene: EvolutionSceneRoots,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfaceRoots,
-    /// The starters' static battler images and palettes.
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenRoots,
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
@@ -756,6 +775,7 @@ impl Roots {
         opening_scene: OpeningSceneRoots::NONE,
         evolution_scene: EvolutionSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
+        naming_screen: NamingScreenRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
@@ -782,6 +802,7 @@ impl Roots {
             .chain(self.opening_scene.images.iter())
             .chain(self.evolution_scene.images.iter())
             .chain(self.battle_interface.images.iter())
+            .chain(self.naming_screen.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -819,6 +840,7 @@ impl Roots {
             .chain(self.opening_scene.palettes.iter())
             .chain(self.evolution_scene.palettes.iter())
             .chain(self.battle_interface.palettes.iter())
+            .chain(self.naming_screen.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -900,6 +922,15 @@ impl BattleInterfaceRoots {
         tilemaps: &[],
         healthbox_elements: &[],
         battle_bar: None,
+    };
+}
+
+impl NamingScreenRoots {
+    /// No naming-screen roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
     };
 }
 
