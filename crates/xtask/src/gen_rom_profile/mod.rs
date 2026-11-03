@@ -38,6 +38,7 @@ mod layouts;
 mod locate;
 mod lz77_blobs;
 mod map_file;
+mod naming_screen;
 mod opening_scene;
 mod pack_source;
 mod palettes;
@@ -182,6 +183,7 @@ fn locate_profile(
         opening_scene: opening_scene::locate(ctx, lines)?,
         evolution_scene: evolution_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
+        naming_screen: naming_screen::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
         trainer_front,
