@@ -420,3 +420,49 @@ fn a_traded_reserve_that_replaces_the_fainted_lead_earns_the_traded_award() {
         "the other OT's reserve is a traded recipient"
     );
 }
+
+/// A checksum-valid, healthy reserve whose record does not decode into a battler (here an
+/// interior empty move slot, [`party::PartyError::InteriorEmptyMove`]) still counts toward
+/// `Cmd_checkteamslost`'s HP total, so the lead's faint is not a defeat and nothing whites
+/// out. The port cannot select that member either: [`party::select_active_battler`] skips
+/// it and falls back to slot 0, so the fainted lead is retained, the reserve keeps its
+/// bytes, and the next encounter is refused at battle construction
+/// (`begin_wild_battle`'s `FaintedBattler` drop) rather than played.
+#[test]
+fn an_undecodable_reserve_retains_the_fainted_lead_without_a_white_out() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(odd.box_data.substructures().is_ok() && odd.hp != 0);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&lead), odd];
+    let mut phase = phase_with_party(&records, 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(
+        phase.save1.money, 2001,
+        "no white-out: upstream's HP total is nonzero"
+    );
+    assert_eq!(phase.player.position(), (7, 5));
+    assert_eq!(decoded(&phase.save1.player_party[0]).current_hp(), 0);
+    assert_eq!(
+        phase.save1.player_party[1].to_bytes(),
+        records[1].to_bytes(),
+        "the undecodable reserve keeps its bytes"
+    );
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(0),
+        "the fainted lead is retained: the only other member cannot be selected"
+    );
+}
