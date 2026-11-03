@@ -74,11 +74,18 @@ fn player_loafs(battle: &Battle) -> bool {
     battle.battler_state(BattlerSide::Player).truant_loafing()
 }
 
-fn no_effect(by_player: bool) -> BattleEvent {
-    BattleEvent::NoEffect {
-        by_player,
-        move_id: TACKLE,
-    }
+fn used(by_player: bool, move_id: MoveId) -> BattleEvent {
+    BattleEvent::UsedMove { by_player, move_id }
+}
+
+fn no_effect(by_player: bool) -> [BattleEvent; 2] {
+    [
+        used(by_player, TACKLE),
+        BattleEvent::NoEffect {
+            by_player,
+            move_id: TACKLE,
+        },
+    ]
 }
 
 fn fast_asleep(by_player: bool) -> BattleEvent {
@@ -95,11 +102,14 @@ fn loafing(by_player: bool) -> BattleEvent {
     }
 }
 
-fn splash(by_player: bool) -> BattleEvent {
-    BattleEvent::NothingHappened {
-        by_player,
-        move_id: SPLASH,
-    }
+fn splash(by_player: bool) -> [BattleEvent; 2] {
+    [
+        used(by_player, SPLASH),
+        BattleEvent::NothingHappened {
+            by_player,
+            move_id: SPLASH,
+        },
+    ]
 }
 
 #[test]
@@ -116,7 +126,10 @@ fn a_holder_switched_out_with_its_counter_set_re_enters_able_to_act() {
     let starting_pp = battle.enemy().moves()[0].pp;
 
     let first = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(first, vec![no_effect(false), fast_asleep(true)]);
+    assert_eq!(
+        first,
+        [no_effect(false).as_slice(), &[fast_asleep(true)]].concat()
+    );
     assert!(enemy_loafs(&battle), "the holder's counter is set");
 
     let out = turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
@@ -152,7 +165,10 @@ fn a_holder_switched_out_with_its_counter_set_re_enters_able_to_act() {
     );
 
     let acting = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(acting, vec![no_effect(false), fast_asleep(true)]);
+    assert_eq!(
+        acting,
+        [no_effect(false).as_slice(), &[fast_asleep(true)]].concat()
+    );
     assert_eq!(battle.enemy().moves()[0].pp, starting_pp - 2);
     rng.assert_exhausted();
 }
@@ -172,6 +188,7 @@ fn a_replacement_after_an_action_faint_acts_on_its_first_turn() {
     assert_eq!(
         first,
         vec![
+            used(true, TACKLE),
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -188,11 +205,11 @@ fn a_replacement_after_an_action_faint_acts_on_its_first_turn() {
     assert!(!enemy_loafs(&battle), "the same turn's end pass cleared it");
 
     let second = turn_with(&mut battle, 1, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(second, vec![splash(true), no_effect(false)]);
+    assert_eq!(second, [splash(true), no_effect(false)].concat());
     assert!(enemy_loafs(&battle));
 
     let third = turn_with(&mut battle, 1, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(third, vec![splash(true), loafing(false)]);
+    assert_eq!(third, [splash(true).as_slice(), &[loafing(false)]].concat());
     assert!(!enemy_loafs(&battle));
     rng.assert_exhausted();
 }
@@ -210,28 +227,34 @@ fn a_replacement_after_a_residual_faint_loafs_on_its_first_turn() {
     let first = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
     assert_eq!(
         first,
-        vec![
-            splash(true),
-            splash(false),
-            BattleEvent::HurtByPoison {
-                by_player: false,
-                damage: 1,
-            },
-            BattleEvent::Fainted { by_player: false },
-            BattleEvent::TrainerSentOut {
-                species: SpeciesId::SLAKING,
-                bench_remaining: 0,
-            },
+        [
+            splash(true).as_slice(),
+            splash(false).as_slice(),
+            &[
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    damage: 1,
+                },
+                BattleEvent::Fainted { by_player: false },
+                BattleEvent::TrainerSentOut {
+                    species: SpeciesId::SLAKING,
+                    bench_remaining: 0,
+                },
+            ],
         ]
+        .concat()
     );
     assert!(enemy_loafs(&battle), "no end pass followed the send-out");
 
     let second = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(second, vec![splash(true), loafing(false)]);
+    assert_eq!(
+        second,
+        [splash(true).as_slice(), &[loafing(false)]].concat()
+    );
     assert!(!enemy_loafs(&battle));
 
     let third = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
-    assert_eq!(third, vec![splash(true), no_effect(false)]);
+    assert_eq!(third, [splash(true), no_effect(false)].concat());
     rng.assert_exhausted();
 }
 
@@ -256,28 +279,31 @@ fn a_double_residual_faint_sends_the_player_out_first_and_both_holders_loaf() {
     let first = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
     assert_eq!(
         first,
-        vec![
-            splash(true),
-            splash(false),
-            BattleEvent::HurtByPoison {
-                by_player: true,
-                damage: 1,
-            },
-            BattleEvent::Fainted { by_player: true },
-            BattleEvent::HurtByPoison {
-                by_player: false,
-                damage: 1,
-            },
-            BattleEvent::Fainted { by_player: false },
-            BattleEvent::PlayerSentOut {
-                species: SpeciesId::SLAKING,
-                reserves_remaining: 0,
-            },
-            BattleEvent::TrainerSentOut {
-                species: SpeciesId::SLAKING,
-                bench_remaining: 0,
-            },
+        [
+            splash(true).as_slice(),
+            splash(false).as_slice(),
+            &[
+                BattleEvent::HurtByPoison {
+                    by_player: true,
+                    damage: 1,
+                },
+                BattleEvent::Fainted { by_player: true },
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    damage: 1,
+                },
+                BattleEvent::Fainted { by_player: false },
+                BattleEvent::PlayerSentOut {
+                    species: SpeciesId::SLAKING,
+                    reserves_remaining: 0,
+                },
+                BattleEvent::TrainerSentOut {
+                    species: SpeciesId::SLAKING,
+                    bench_remaining: 0,
+                },
+            ],
         ]
+        .concat()
     );
     assert!(player_loafs(&battle) && enemy_loafs(&battle));
 

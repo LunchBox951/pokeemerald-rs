@@ -231,6 +231,7 @@ mod tests {
             allow_run: false,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [MapConnection],
         }));
         let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
@@ -583,6 +584,7 @@ mod tests {
             allow_run: false,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections: &[],
         };
         let events = MapEvents {
