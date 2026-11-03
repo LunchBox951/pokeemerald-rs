@@ -1400,7 +1400,6 @@ impl Battle {
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
     /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
-    #[allow(clippy::too_many_lines)] // one canceller chain, in upstream's `AtkCanceler_UnableToUseMove` order
     fn run_action(
         &mut self,
         player_is_attacker: bool,
