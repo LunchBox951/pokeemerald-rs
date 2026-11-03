@@ -270,6 +270,7 @@ fn absorbed_healing_on_above_max_saved_hp_clamps_and_reports_no_gain() {
         by_player: true,
         move_id: WATER_GUN,
         healed: 0,
+        ability: assets::AbilityId::WATER_ABSORB,
     }));
     assert_eq!(battle.enemy().current_hp(), stats.max_hp);
 }
