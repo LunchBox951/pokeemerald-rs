@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 24] {
+fn refused() -> [(BattlePokemon, AbilityId); 25] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -63,6 +63,10 @@ fn refused() -> [(BattlePokemon, AbilityId); 24] {
         (
             mon(SpeciesId::GOLDEEN, 1, Status1::Burned),
             AbilityId::WATER_VEIL,
+        ),
+        (
+            mon(SpeciesId::SLUGMA, 0, Status1::Frozen),
+            AbilityId::MAGMA_ARMOR,
         ),
         (
             mon(SpeciesId::HOOTHOOT, 0, Status1::Asleep { turns: 3 }),

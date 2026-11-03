@@ -32,6 +32,9 @@ const SLOTS: &[(u16, &str)] = &[
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
     (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
+    (51, "{B_ATK_NAME_WITH_PREFIX} is\nfrozen solid!"),
+    (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
+    (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
@@ -190,6 +193,31 @@ fn a_sleeping_user_prints_fast_asleep_in_place_of_its_move_and_wakes_ahead_of_it
             "Foe RATTATA is fast\nasleep.",
             "TORCHIC woke up!",
             "TORCHIC used\nEMBER!"
+        ]
+    );
+}
+
+#[test]
+fn a_frozen_user_prints_frozen_solid_and_a_thaw_names_the_move_that_caused_it() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::FrozenSolid {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::Thawed { by_player: true },
+        BattleEvent::ThawedByMove {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "Foe RATTATA is\nfrozen solid!",
+            "TORCHIC was\ndefrosted!",
+            "TORCHIC was\ndefrosted by EMBER!"
         ]
     );
 }
