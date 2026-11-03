@@ -162,7 +162,10 @@ impl OverworldPhase {
     /// as [`Self::reselect_lead_from_save`] picks. A slot held by one of the `entered`
     /// owners keeps that owner, whose live battler carries the state a save record does not
     /// (status, and the hidden-HP offset it has rebased); another slot is decoded from its
-    /// record, which the battle never changed. A failed selection keeps the previous lead.
+    /// record, which the battle never changed. A failed selection keeps the previous lead,
+    /// and so does a selection that is only [`crate::party::select_active_battler`]'s
+    /// fallback to a fainted slot 0: nothing usable decoded, so the lead that fought stays
+    /// the lead rather than moving to another fainted member.
     fn select_lead_after_wild_battle(&mut self, dex: &Dex, mut entered: Vec<LoadedLead>) {
         let selected = match LoadedLead::load(dex, &self.save1.player_party) {
             Ok(selected) => selected,
@@ -172,6 +175,12 @@ impl OverworldPhase {
             }
         };
         if self.owns_lead_slot(selected.slot()) {
+            return;
+        }
+        if selected.battler().is_fainted() {
+            eprintln!(
+                "wild battle: no usable member to select -- keeping the previously selected slot"
+            );
             return;
         }
         let owner = entered

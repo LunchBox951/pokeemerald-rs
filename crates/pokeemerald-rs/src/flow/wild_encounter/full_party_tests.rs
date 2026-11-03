@@ -466,3 +466,40 @@ fn an_undecodable_reserve_retains_the_fainted_lead_without_a_white_out() {
         "the fainted lead is retained: the only other member cannot be selected"
     );
 }
+
+/// The same undecodable-reserve loss with the lead in slot 1 behind an already-fainted
+/// slot 0: `select_active_battler`'s fallback to slot 0 is no selection, so the retained
+/// lead stays the slot-1 member that fought.
+#[test]
+fn an_undecodable_reserve_retains_a_nonzero_slot_fainted_lead() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&fainted(healthy_treecko(0))), saved(&lead), odd];
+    let mut phase = phase_with_party(&records, 1, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 2001, "no white-out");
+    assert_eq!(decoded(&phase.save1.player_party[1]).current_hp(), 0);
+    assert_eq!(
+        phase.save1.player_party[0].to_bytes(),
+        records[0].to_bytes(),
+        "the fainted slot 0 is untouched"
+    );
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(1),
+        "the fainted slot-1 lead is retained"
+    );
+}
