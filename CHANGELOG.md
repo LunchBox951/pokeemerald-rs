@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.94.0] - 2026-11-03
+
+- General improvements in preparation for Pokémon cries imported from your ROM.
+
 ## [0.0.93.0] - 2026-11-03
 
 - General improvements in preparation for background music extracted from your game files.
@@ -434,7 +438,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.93.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c75ca4daa0cae329f64c264c0432db2fdb0c1087...dev
+[0.0.94.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/3d9b8b80ad02a7faf656a6e6fa21619b4e5f41b2...dev
+[0.0.93.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c75ca4daa0cae329f64c264c0432db2fdb0c1087...3d9b8b80ad02a7faf656a6e6fa21619b4e5f41b2
 [0.0.92.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8117cf3e5cccc1112da77949f6d9001410b7f9fd...c75ca4daa0cae329f64c264c0432db2fdb0c1087
 [0.0.91.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ab04a3a6d177430073b49cbbe73768b1bb9225ec...8117cf3e5cccc1112da77949f6d9001410b7f9fd
 [0.0.90.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/15769320877d041ed09e6b1afd1ccac7bf877cc9...ab04a3a6d177430073b49cbbe73768b1bb9225ec
