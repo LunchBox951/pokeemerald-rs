@@ -698,7 +698,7 @@ pub struct Roots {
     pub battle_interface: BattleInterfaceRoots,
     /// The naming screen's sheets, palettes, and tilemaps.
     pub naming_screen: NamingScreenRoots,
-    /// The starters' static battler images and palettes.
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,

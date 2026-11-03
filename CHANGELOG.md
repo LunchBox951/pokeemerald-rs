@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.92.0] - 2026-11-03
+
+- Both asset pack sources now carry the battle artwork and palettes of eleven more early-route Pokémon: Poochyena, Mightyena, Wurmple, Silcoon, Beautifly, Cascoon, Dustox, Zigzagoon, Linoone, Wingull and Pelipper, in preparation for drawing them in battle.
+
 ## [0.0.91.0] - 2026-11-03
 
 - General improvements in preparation for battle messages.
@@ -426,7 +430,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.91.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ab04a3a6d177430073b49cbbe73768b1bb9225ec...dev
+[0.0.92.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8117cf3e5cccc1112da77949f6d9001410b7f9fd...dev
+[0.0.91.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ab04a3a6d177430073b49cbbe73768b1bb9225ec...8117cf3e5cccc1112da77949f6d9001410b7f9fd
 [0.0.90.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/15769320877d041ed09e6b1afd1ccac7bf877cc9...ab04a3a6d177430073b49cbbe73768b1bb9225ec
 [0.0.89.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6f73b1201b71784582b1c979e9d76cb022abbef6...15769320877d041ed09e6b1afd1ccac7bf877cc9
 [0.0.88.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/430ab507b37601248d2c5aa4ad86ebb0838d824c...6f73b1201b71784582b1c979e9d76cb022abbef6

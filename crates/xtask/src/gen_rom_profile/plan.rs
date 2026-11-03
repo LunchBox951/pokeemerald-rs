@@ -655,7 +655,7 @@ pub struct ProfilePlan {
     pub battle_interface: BattleInterfacePlan,
     /// The naming screen's sheets, palettes, and tilemaps.
     pub naming_screen: NamingScreenPlan,
-    /// The starters' static battler art.
+    /// The static battler art.
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
