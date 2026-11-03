@@ -62,6 +62,7 @@ pub(super) const BUTNOTHINGHAPPENED: u16 = 228;
 pub(super) const BUTITFAILED: u16 = 229;
 pub(super) const ITHURTCONFUSION: u16 = 230;
 pub(super) const BUTNOPPLEFT: u16 = 256;
+pub(super) const PKMNLOAFING: u16 = 278;
 pub(super) const PKMNSXBLOCKSY: u16 = 306;
 pub(super) const PKMNSXPREVENTSYLOSS: u16 = 309;
 pub(super) const PKMNSXMADEYINEFFECTIVE: u16 = 311;

@@ -32,6 +32,7 @@ const SLOTS: &[(u16, &str)] = &[
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
     (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
+    (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
     (209, "sharply "),
@@ -190,6 +191,26 @@ fn a_sleeping_user_prints_fast_asleep_in_place_of_its_move_and_wakes_ahead_of_it
             "TORCHIC woke up!",
             "TORCHIC used\nEMBER!"
         ]
+    );
+}
+
+#[test]
+fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::LoafingAround {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        ["Foe RATTATA is\nloafing around!", "TORCHIC used\nEMBER!"]
     );
 }
 

@@ -66,5 +66,7 @@ mod status_ability_matrix;
 mod traded_recipient_exp;
 #[path = "turn_engine/trainer_battle.rs"]
 mod trainer_battle;
+#[path = "turn_engine/truant.rs"]
+mod truant;
 #[path = "turn_engine/turn_order.rs"]
 mod turn_order;
