@@ -734,3 +734,23 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_a_symlink_then_trailing_dotdot_outside_is_not_contained() {
+    let fx = Fixture::new("agbcc-link-trailing-dotdot", GOOD);
+    // root/alias -> root/external/anchor, so root/alias/.. is root/external.
+    let external = fx.root.join("external");
+    fs::create_dir_all(external.join("anchor")).unwrap();
+    // A real install outside the reference that merely shares its name.
+    fs::create_dir_all(external.join("reference").join("bin")).unwrap();
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(external.join("anchor"), &alias).unwrap();
+    let mut config = fx.config.clone();
+    config.agbcc_source = alias.join("..").join("reference").join("bin").join("..");
+    assert_eq!(
+        config.agbcc_source.canonicalize().unwrap(),
+        external.join("reference").canonicalize().unwrap()
+    );
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}

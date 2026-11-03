@@ -274,18 +274,18 @@ fn agbcc_inside_reference_from(config: &BuildConfig, base: &Path) -> bool {
     let source = base.join(&config.agbcc_source);
     let located = match (source.parent(), source.file_name()) {
         (Some(parent), Some(name)) => canon(parent).join(name),
-        // A path ending in `..` or `.` names no component of its own: its
-        // location is the directory the path steps to.
-        _ => canon(&normalize_lexically(&source)),
+        // A path ending in `..` or `.` names no component of its own; its
+        // location is wherever it resolves, symlinks followed first so a
+        // trailing `..` after a link steps back from the link's target.
+        _ => canon(&source),
     };
     canon(&source).starts_with(&reference)
         || located.starts_with(&reference)
         || passes_through_symlink_inside(&source, &reference)
 }
 
-/// `path` with `.` dropped and each `..` stepping back over the component
-/// before it, so a path that cannot be canonicalized still compares by
-/// where it points rather than by its spelling.
+/// Lexical fallback for a path that cannot be canonicalized, so it still
+/// compares by where it points rather than by its spelling.
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -304,12 +304,9 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 /// link as an ordinary component (the OS's own `ELOOP` guard is 40).
 const MAX_SYMLINK_HOPS: u8 = 40;
 
-/// Whether resolving `source` one component at a time meets a symlink whose
-/// own location (everything before it resolved) lies within `reference`, as
-/// with `reference/alias/agbcc` where `alias` points outside. Each symlink
-/// is followed one hop, its target walked the same way, so a link that
-/// points at a link inside the reference is met too. A `..` steps back from
-/// what has been resolved so far, as the OS does.
+/// Whether `source` passes through a symlink located inside `reference`,
+/// as with `reference/alias/agbcc` where `alias` points outside: the link
+/// itself is the untracked file that fails the clean-tree verification.
 fn passes_through_symlink_inside(source: &Path, reference: &Path) -> bool {
     walk_symlinks(PathBuf::new(), source, reference, 0).is_none()
 }
