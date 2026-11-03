@@ -206,7 +206,7 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
         .expect("MAP_ROUTE103 is bundled map data")
         .object_events
         .iter()
-        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event")
 }
 
