@@ -44,7 +44,7 @@ const ROOT_VOICEGROUP_LABEL: &str = "title";
 /// # Errors
 ///
 /// [`GenRomProfileError::StructMismatch`] if the pack's `audio/song/` ids
-/// are anything but [`SUPPORTED_SONG_ID`],
+/// do not include [`SUPPORTED_SONG_ID`],
 /// [`GenRomProfileError::MissingUpstreamCheckout`] without a `pokeemerald/`
 /// checkout, [`GenRomProfileError::UpstreamSource`] if one of its `sound/`
 /// files does not parse, plus any locator failure.
@@ -53,14 +53,14 @@ pub fn locate(
     report: &mut Vec<ReportLine>,
 ) -> Result<AudioPlan, GenRomProfileError> {
     // Every derivation below is written around this one song, never a family
-    // of them, so a pack with other songs must fail here.
+    // of them. The checkout pack carries the whole checkpoint manifest, but
+    // the ROM backend imports only this song until #1850, so the others are
+    // left unclaimed rather than refused.
     let song_ids = ctx.pack.ids_with_prefix("audio/song/");
-    if song_ids.len() != 1 || song_ids[0] != SUPPORTED_SONG_ID {
+    if !song_ids.iter().any(|id| id == SUPPORTED_SONG_ID) {
         return Err(GenRomProfileError::StructMismatch {
             id: "audio/song/*".to_owned(),
-            reason: format!(
-                "only [\"{SUPPORTED_SONG_ID}\"] is supported, the pack holds {song_ids:?}"
-            ),
+            reason: format!("[\"{SUPPORTED_SONG_ID}\"] is required, the pack holds {song_ids:?}"),
         });
     }
 

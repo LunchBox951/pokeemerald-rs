@@ -6,48 +6,59 @@
 
 use super::error::MidiError;
 
-/// Returns the `ms` value of the `song <symbol>, ...` row, resolving a `MUSIC_PLAYER_*` name
-/// through the file's `.equiv` lines and accepting a decimal literal directly.
+/// `label`, `music_player`, and `unknown` of the `song` macro (`asm/macros/m4a.inc:1-5`).
+const SONG_MACRO_OPERANDS: usize = 3;
+
+/// The comment-free, trimmed text of `line`.
+fn code_of(line: &str) -> &str {
+    line.split('@').next().unwrap_or("").trim()
+}
+
+/// Returns the `ms` value of the one `song <symbol>, ...` row, resolving a `MUSIC_PLAYER_*` name
+/// through the file's `.equiv` lines and accepting a decimal literal directly. Rows for other
+/// symbols are not inspected, so upstream's repeated reserved rows stay legal.
 ///
 /// # Errors
 ///
 /// [`MidiError::SongTableEntryMissing`] when no row names `symbol`;
+/// [`MidiError::SongTableEntryDuplicate`] when several do;
 /// [`MidiError::SongTablePlayerMalformed`] when the row has no player field, or
-/// its player is neither a defined `MUSIC_PLAYER_*` name nor a `u16` literal.
+/// its player is neither a defined `MUSIC_PLAYER_*` name nor a `u16` literal;
+/// [`MidiError::SongTableRowMalformed`] when the row lacks the `me` operand, carries extra
+/// operands, or has a `me` operand that is not a `u16` literal.
 pub(super) fn player_for(text: &str, symbol: &str) -> Result<u16, MidiError> {
-    // `Some(None)` is a row that names `symbol` but carries no player field:
-    // malformed table data, which must not read as an absent row.
-    let mut row_player = None;
-    for line in text.lines() {
-        let line = line.split('@').next().unwrap_or("").trim();
-        if let Some(rest) = line.strip_prefix("song ") {
-            let mut fields = rest.split(',').map(str::trim);
-            if fields.next() == Some(symbol) {
-                row_player = Some(fields.next().filter(|field| !field.is_empty()));
-                break;
-            }
-        }
+    let mut rows = text
+        .lines()
+        .filter_map(|line| code_of(line).strip_prefix("song "))
+        .map(|rest| rest.split(',').map(str::trim).collect::<Vec<_>>())
+        .filter(|fields| fields[0] == symbol);
+    let fields = rows
+        .next()
+        .ok_or_else(|| MidiError::SongTableEntryMissing(symbol.to_owned()))?;
+    if rows.next().is_some() {
+        return Err(MidiError::SongTableEntryDuplicate(symbol.to_owned()));
     }
-    let player = row_player
-        .ok_or_else(|| MidiError::SongTableEntryMissing(symbol.to_owned()))?
+    let player = fields
+        .get(1)
+        .copied()
+        .filter(|field| !field.is_empty())
         .ok_or_else(|| MidiError::SongTablePlayerMalformed(String::new()))?;
+    let me_is_literal = fields.get(2).is_some_and(|me| me.parse::<u16>().is_ok());
+    if fields.len() != SONG_MACRO_OPERANDS || !me_is_literal {
+        return Err(MidiError::SongTableRowMalformed(symbol.to_owned()));
+    }
     if let Ok(value) = player.parse::<u16>() {
         return Ok(value);
     }
-    for line in text.lines() {
-        let line = line.split('@').next().unwrap_or("").trim();
-        let Some(rest) = line.strip_prefix(".equiv ") else {
-            continue;
-        };
-        let mut fields = rest.split(',').map(str::trim);
-        if fields.next() == Some(player) {
-            return fields
-                .next()
-                .and_then(|value| value.parse().ok())
-                .ok_or_else(|| MidiError::SongTablePlayerMalformed(player.to_owned()));
-        }
-    }
-    Err(MidiError::SongTablePlayerMalformed(player.to_owned()))
+    let equiv_value = text
+        .lines()
+        .filter_map(|line| code_of(line).strip_prefix(".equiv "))
+        .map(|rest| rest.split(',').map(str::trim))
+        .find_map(|mut fields| (fields.next() == Some(player)).then(|| fields.next()));
+    equiv_value
+        .flatten()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| MidiError::SongTablePlayerMalformed(player.to_owned()))
 }
 
 #[cfg(test)]
@@ -97,6 +108,46 @@ mod tests {
             Err(MidiError::SongTablePlayerMalformed(
                 "MUSIC_PLAYER_NOPE".to_owned()
             ))
+        );
+    }
+
+    #[test]
+    fn a_selected_row_listed_twice_is_ambiguous() {
+        let table = "\tsong se_select, 2, 2\n\tsong se_select, 2, 2\n";
+        assert_eq!(
+            player_for(table, "se_select"),
+            Err(MidiError::SongTableEntryDuplicate("se_select".to_owned()))
+        );
+    }
+
+    #[test]
+    fn repeated_unselected_rows_stay_legal() {
+        let table = "\tsong dummy_song_header, 0, 0\n\tsong dummy_song_header, 0, 0\n\
+            \tsong se_select, 2, 2\n";
+        assert_eq!(player_for(table, "se_select"), Ok(2));
+    }
+
+    #[test]
+    fn a_row_missing_its_me_operand_or_carrying_extras_is_malformed() {
+        for row in [
+            "song se_select, 2",
+            "song se_select, 2,",
+            "song se_select, 2, x",
+            "song se_select, 2, 2, 2",
+        ] {
+            assert_eq!(
+                player_for(row, "se_select"),
+                Err(MidiError::SongTableRowMalformed("se_select".to_owned())),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trailing_comment_does_not_change_a_row() {
+        assert_eq!(
+            player_for("\tsong se_select,2,2 @ comment\n", "se_select"),
+            Ok(2)
         );
     }
 }
