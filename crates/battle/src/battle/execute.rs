@@ -463,7 +463,7 @@ impl Battle {
                 events.push(BattleEvent::AbilityHealed {
                     by_player: attacker_is_player,
                     move_id,
-                    healed: defender.current_hp() - before,
+                    healed: defender.current_hp().saturating_sub(before),
                     ability: defender.ability(),
                 });
             }
