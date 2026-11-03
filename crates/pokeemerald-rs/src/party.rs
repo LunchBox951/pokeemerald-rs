@@ -811,9 +811,8 @@ impl LoadedLead {
         })
     }
 
-    /// Adopts the member saved in `slot` as a battle reserve: its battler, its
-    /// record and the offset its load hid, ready for a later merge into that
-    /// same slot. Unlike [`Self::load`] this inspects only `record`, never
+    /// Adopts the member saved in `slot` as a battle reserve: its battler and
+    /// its record, ready for a later merge into that same slot. Unlike [`Self::load`] this inspects only `record`, never
     /// falling back to another slot, and logs nothing.
     ///
     /// # Errors
@@ -825,12 +824,10 @@ impl LoadedLead {
             return Err(PartyError::Egg);
         }
         let battler = from_save_pokemon(dex, record)?;
-        let hidden_hp_offset = hp_hidden_by_load(dex, record, &battler);
         Ok(Self {
             slot,
             battler: Some(battler),
             record: *record,
-            hidden_hp_offset,
         })
     }
 
