@@ -1,11 +1,14 @@
 //! Exercises audio output, negotiation, and stream behavior without a device.
 
-use super::config::{sample_format_rank, select_config};
+use super::config::{negotiate, sample_format_rank, select_config};
+use super::playback::PlaybackClock;
+use super::stream::{build_stream, StreamHealth};
 use super::stream::{
     f32_to_i16, fill_i16_output, i16_scratch_capacity, OutputDevice, DEFAULT_SCRATCH_SAMPLES,
     MAX_SCRATCH_CALLBACK_FRAMES,
 };
 use super::*;
+use std::sync::atomic::AtomicU64;
 
 /// A device whose every `cpal` call fails with one chosen kind.
 ///
@@ -15,6 +18,8 @@ use super::*;
 struct FailingDevice(cpal::ErrorKind);
 
 impl OutputDevice for FailingDevice {
+    type Stream = cpal::Stream;
+
     fn supported_output_configs(
         &self,
     ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
@@ -29,7 +34,7 @@ impl OutputDevice for FailingDevice {
         _timeout: Option<std::time::Duration>,
     ) -> Result<cpal::Stream, cpal::Error>
     where
-        T: cpal::SizedSample,
+        T: cpal::SizedSample + 'static,
         D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
         E: FnMut(cpal::Error) + Send + 'static,
     {
@@ -103,6 +108,7 @@ fn a_lost_device_after_the_query_stays_an_audio_error() {
             &config,
             Source::Direct(consumer),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(StreamHealth::default()),
             Arc::new(PlaybackClock::new()),
         ) else {
             panic!("the fake device always fails the build");

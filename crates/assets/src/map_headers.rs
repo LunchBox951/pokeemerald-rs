@@ -14,6 +14,7 @@
 
 use crate::error::AssetError;
 use crate::map_layouts::LayoutId;
+use crate::script_refs::MapScriptTableRef;
 use crate::wild_encounters::MapId;
 
 /// Number of map headers.
@@ -356,6 +357,10 @@ pub struct MapHeader {
     pub show_name: bool,
     /// Map-specific battle backdrop.
     pub battle_scene: BattleScene,
+    /// The `mapScripts` table, or `None` if the header has none. A map that
+    /// shares another map's table (`shared_scripts_map`) names that owner's
+    /// table, and a table with no records is still a table.
+    pub map_scripts: Option<MapScriptTableRef>,
     /// Connections to neighbouring maps.
     pub connections: &'static [MapConnection],
 }
@@ -1054,6 +1059,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1083,6 +1089,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SlateportCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1117,6 +1124,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1156,6 +1164,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1190,6 +1199,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1219,6 +1229,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1248,6 +1259,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1282,6 +1294,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -1300,6 +1313,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::West,
             offset: 40,
@@ -1322,6 +1336,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LittlerootTown_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::North,
             offset: 0,
@@ -1344,6 +1359,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("OldaleTown_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1378,6 +1394,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DewfordTown_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1407,6 +1424,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::East,
             offset: -40,
@@ -1429,6 +1447,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FallarborTown_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1458,6 +1477,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VerdanturfTown_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1487,6 +1507,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1516,6 +1537,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route101_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1545,6 +1567,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route102_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1574,6 +1597,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route103_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -1603,6 +1627,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route104_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1637,6 +1662,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route105_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1671,6 +1697,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route106_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1700,6 +1727,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route107_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1729,6 +1757,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route108_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1758,6 +1787,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route109_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1787,6 +1817,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route110_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1821,6 +1852,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route111_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -1855,6 +1887,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route112_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -1889,6 +1922,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route113_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -1923,6 +1957,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route114_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -1952,6 +1987,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route115_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -1981,6 +2017,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route116_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2010,6 +2047,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route117_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2039,6 +2077,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route118_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2073,6 +2112,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route119_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2102,6 +2142,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route120_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2131,6 +2172,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route121_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2165,6 +2207,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route122_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2194,6 +2237,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route123_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2223,6 +2267,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route124_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2267,6 +2312,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route125_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2301,6 +2347,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route126_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2335,6 +2382,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route127_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2374,6 +2422,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route128_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2413,6 +2462,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route129_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2447,6 +2497,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route130_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2476,6 +2527,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route131_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2505,6 +2557,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route132_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2534,6 +2587,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route133_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2563,6 +2617,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route134_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -2592,6 +2647,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route124_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::South,
@@ -2621,6 +2677,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route126_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2655,6 +2712,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route127_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::Emerge,
@@ -2689,6 +2747,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route128_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -2718,6 +2777,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route129_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::Emerge,
             offset: 0,
@@ -2740,6 +2800,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route105_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::Emerge,
             offset: 0,
@@ -2762,6 +2823,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route125_MapScripts")),
         connections: &[MapConnection {
             direction: Direction::Emerge,
             offset: 0,
@@ -2784,6 +2846,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LittlerootTown_BrendansHouse_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2802,6 +2867,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LittlerootTown_BrendansHouse_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2820,6 +2888,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LittlerootTown_MaysHouse_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2838,6 +2909,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LittlerootTown_MaysHouse_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2856,6 +2930,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LittlerootTown_ProfessorBirchsLab_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2874,6 +2951,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("OldaleTown_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -2892,6 +2970,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("OldaleTown_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -2910,6 +2989,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "OldaleTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2928,6 +3010,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "OldaleTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -2946,6 +3031,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("OldaleTown_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -2964,6 +3050,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DewfordTown_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -2982,6 +3069,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "DewfordTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3000,6 +3090,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "DewfordTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3018,6 +3111,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("DewfordTown_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3036,6 +3130,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DewfordTown_Hall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3054,6 +3149,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DewfordTown_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3072,6 +3168,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_HerbShop_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3090,6 +3187,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_Gym_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3108,6 +3206,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_Gym_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3126,6 +3225,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_House_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3144,6 +3244,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LavaridgeTown_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3162,6 +3263,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LavaridgeTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3180,6 +3284,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LavaridgeTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3198,6 +3305,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FallarborTown_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3216,6 +3324,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_BattleTentLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3234,6 +3345,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_BattleTentCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3252,6 +3366,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_BattleTentBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3270,6 +3387,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3288,6 +3408,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3306,6 +3429,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_CozmosHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3324,6 +3450,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FallarborTown_MoveRelearnersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3342,6 +3471,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_BattleTentLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3360,6 +3492,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_BattleTentCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3378,6 +3513,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_BattleTentBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3396,6 +3534,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VerdanturfTown_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3414,6 +3553,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3432,6 +3574,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3450,6 +3595,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_WandasHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3468,6 +3616,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "VerdanturfTown_FriendshipRatersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3486,6 +3637,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VerdanturfTown_House_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3504,6 +3656,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "PacifidlogTown_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3522,6 +3677,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "PacifidlogTown_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3540,6 +3698,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3558,6 +3717,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3576,6 +3736,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3594,6 +3755,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_House4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3612,6 +3774,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PacifidlogTown_House5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3630,6 +3793,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "PetalburgCity_WallysHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3648,6 +3814,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgCity_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3666,6 +3833,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3684,6 +3852,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3702,6 +3871,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "PetalburgCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3720,6 +3892,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "PetalburgCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3738,6 +3913,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3756,6 +3932,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_SternsShipyard_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3774,6 +3953,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_SternsShipyard_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3792,6 +3974,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_BattleTentLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3810,6 +3995,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_BattleTentCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3828,6 +4016,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_BattleTentBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3846,6 +4037,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_NameRatersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3864,6 +4058,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_PokemonFanClub_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3882,6 +4079,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_OceanicMuseum_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3900,6 +4100,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_OceanicMuseum_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3918,6 +4121,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SlateportCity_Harbor_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3936,6 +4140,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SlateportCity_House_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -3954,6 +4159,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3972,6 +4180,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SlateportCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -3990,6 +4201,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SlateportCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4008,6 +4220,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4026,6 +4239,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_BikeShop_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4044,6 +4258,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4062,6 +4277,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_GameCorner_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4080,6 +4296,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4098,6 +4315,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MauvilleCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4116,6 +4336,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MauvilleCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4134,6 +4357,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MauvilleCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4152,6 +4376,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_DevonCorp_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4170,6 +4397,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_DevonCorp_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4188,6 +4418,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_DevonCorp_3F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4206,6 +4439,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4224,6 +4458,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_PokemonSchool_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4242,6 +4479,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4260,6 +4500,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4278,6 +4521,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4296,6 +4540,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Flat1_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4314,6 +4559,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Flat1_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4332,6 +4578,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4350,6 +4597,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "RustboroCity_CuttersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4368,6 +4618,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4386,6 +4637,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Flat2_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4404,6 +4656,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Flat2_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4422,6 +4675,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_Flat2_3F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4440,6 +4694,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RustboroCity_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4458,6 +4713,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4476,6 +4732,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4494,6 +4751,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FortreeCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4512,6 +4772,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FortreeCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4530,6 +4793,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4548,6 +4812,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4566,6 +4831,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4584,6 +4850,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_House4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4602,6 +4869,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FortreeCity_House5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4620,6 +4888,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "FortreeCity_DecorationShop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4638,6 +4909,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_CoveLilyMotel_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4656,6 +4930,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_CoveLilyMotel_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4674,6 +4951,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_LilycoveMuseum_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4692,6 +4972,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_LilycoveMuseum_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4710,6 +4993,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_ContestLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4728,6 +5014,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_ContestHall_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4746,6 +5035,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4764,6 +5056,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4782,6 +5077,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_UnusedMart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4800,6 +5096,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_PokemonTrainerFanClub_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4818,6 +5117,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_Harbor_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4836,6 +5136,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_MoveDeletersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4854,6 +5157,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4872,6 +5176,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4890,6 +5195,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4908,6 +5214,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("LilycoveCity_House4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -4926,6 +5233,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStore_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4944,6 +5254,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStore_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4962,6 +5275,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStore_3F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4980,6 +5296,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStore_4F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -4998,6 +5317,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStore_5F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5016,6 +5338,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStoreRooftop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5034,6 +5359,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "LilycoveCity_DepartmentStoreElevator_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5052,6 +5380,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_Gym_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5070,6 +5399,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5088,6 +5418,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5106,6 +5437,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5124,6 +5458,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5142,6 +5479,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5160,6 +5498,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5178,6 +5517,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_StevensHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5196,6 +5538,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MossdeepCity_House4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5214,6 +5557,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_SpaceCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5232,6 +5578,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_SpaceCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5250,6 +5599,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_GameCorner_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5268,6 +5620,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MossdeepCity_GameCorner_B1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5286,6 +5641,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_Gym_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5304,6 +5660,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_Gym_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5322,6 +5679,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SootopolisCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5340,6 +5700,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SootopolisCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5358,6 +5721,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5376,6 +5740,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5394,6 +5759,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5412,6 +5778,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5430,6 +5797,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5448,6 +5816,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5466,6 +5835,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House6_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5484,6 +5854,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SootopolisCity_House7_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5502,6 +5873,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SootopolisCity_LotadAndSeedotHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5520,6 +5894,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SootopolisCity_MysteryEventsHouse_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5538,6 +5915,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "SootopolisCity_MysteryEventsHouse_B1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5556,6 +5936,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Sidney,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_SidneysRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5574,6 +5957,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Phoebe,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_PhoebesRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5592,6 +5978,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Glacia,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_GlaciasRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5610,6 +5999,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Drake,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_DrakesRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5628,6 +6020,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_ChampionsRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5646,6 +6041,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_Hall1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5664,6 +6060,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_Hall2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5682,6 +6079,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_Hall3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5700,6 +6098,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_Hall4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5718,6 +6117,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("EverGrandeCity_Hall5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5736,6 +6136,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_PokemonLeague_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5754,6 +6157,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_HallOfFame_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5772,6 +6178,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5790,6 +6199,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5808,6 +6220,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "EverGrandeCity_PokemonLeague_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5826,6 +6241,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route104_MrBrineysHouse_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5844,6 +6260,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route104_PrettyPetalFlowerShop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5862,6 +6281,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route111_WinstrateFamilysHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5880,6 +6302,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route111_OldLadysRestStop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5898,6 +6323,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route112_CableCarStation_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5916,6 +6344,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "MtChimney_CableCarStation_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5934,6 +6365,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route114_FossilManiacsHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5952,6 +6386,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route114_FossilManiacsTunnel_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -5970,6 +6407,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route114_LanettesHouse_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -5988,6 +6426,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route116_TunnelersRestHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6006,6 +6447,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route117_PokemonDayCare_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6024,6 +6466,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route121_SafariZoneEntrance_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6042,6 +6487,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MeteorFalls_1F_1R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6060,6 +6506,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MeteorFalls_1F_2R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6078,6 +6525,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MeteorFalls_B1F_1R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6096,6 +6544,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MeteorFalls_B1F_2R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6114,6 +6563,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RusturfTunnel_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6132,6 +6582,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Underwater_SootopolisCity_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6150,6 +6603,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DesertRuins_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6168,6 +6622,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("GraniteCave_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6186,6 +6641,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("GraniteCave_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6204,6 +6660,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("GraniteCave_B2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6222,6 +6679,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("GraniteCave_StevensRoom_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6240,6 +6698,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("PetalburgWoods_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6258,6 +6717,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtChimney_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6276,6 +6736,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("JaggedPass_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6294,6 +6755,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FieryPath_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6312,6 +6774,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6330,6 +6793,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6348,6 +6812,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_3F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6366,6 +6831,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_4F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6384,6 +6850,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_5F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6402,6 +6869,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_6F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6420,6 +6888,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_Exterior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6438,6 +6907,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MtPyre_Summit_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6456,6 +6926,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Aqua,
+        map_scripts: Some(MapScriptTableRef::new("AquaHideout_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6474,6 +6945,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Aqua,
+        map_scripts: Some(MapScriptTableRef::new("AquaHideout_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6492,6 +6964,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Aqua,
+        map_scripts: Some(MapScriptTableRef::new("AquaHideout_B2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6510,6 +6983,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Underwater_SeafloorCavern_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6528,6 +7004,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6546,6 +7023,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6564,6 +7042,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6582,6 +7061,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6600,6 +7080,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6618,6 +7099,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6636,6 +7118,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room6_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6654,6 +7137,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room7_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6672,6 +7156,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room8_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6690,6 +7175,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SeafloorCavern_Room9_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6708,6 +7194,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("CaveOfOrigin_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6726,6 +7213,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("CaveOfOrigin_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6744,6 +7232,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "CaveOfOrigin_UnusedRubySapphireMap1_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6762,6 +7253,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "CaveOfOrigin_UnusedRubySapphireMap2_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6780,6 +7274,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "CaveOfOrigin_UnusedRubySapphireMap3_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6798,6 +7295,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("CaveOfOrigin_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6816,6 +7314,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VictoryRoad_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6834,6 +7333,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VictoryRoad_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6852,6 +7352,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("VictoryRoad_B2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6870,6 +7371,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_LowTideEntranceRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6888,6 +7392,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_LowTideInnerRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6906,6 +7413,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_LowTideStairsRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6924,6 +7434,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_LowTideLowerRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6942,6 +7455,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_HighTideEntranceRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6960,6 +7476,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_HighTideInnerRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -6978,6 +7497,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NewMauville_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -6996,6 +7516,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NewMauville_Inside_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7014,6 +7535,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AbandonedShip_Deck_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7032,6 +7554,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_Corridors_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7050,6 +7575,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AbandonedShip_Rooms_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7068,6 +7594,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_Corridors_B1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7086,6 +7615,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AbandonedShip_Rooms_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7104,6 +7634,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_Rooms2_B1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7122,6 +7655,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_Underwater1_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7140,6 +7676,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AbandonedShip_Room_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7158,6 +7695,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AbandonedShip_Rooms2_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7176,6 +7714,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_CaptainsOffice_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7194,6 +7735,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_Underwater2_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7212,6 +7756,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_HiddenFloorCorridors_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7230,6 +7777,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AbandonedShip_HiddenFloorRooms_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7248,6 +7798,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("IslandCave_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7266,6 +7817,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AncientTomb_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7284,6 +7836,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_Route134_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7302,6 +7855,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Underwater_SealedChamber_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7320,6 +7876,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SealedChamber_OuterRoom_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7338,6 +7895,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SealedChamber_InnerRoom_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7356,6 +7914,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ScorchedSlab_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7374,6 +7933,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Magma,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AquaHideout_UnusedRubyMap1_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7392,6 +7954,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Magma,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AquaHideout_UnusedRubyMap2_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7410,6 +7975,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Magma,
+        map_scripts: Some(MapScriptTableRef::new(
+            "AquaHideout_UnusedRubyMap3_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7428,6 +7996,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7446,6 +8015,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_Outside_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7464,6 +8034,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7482,6 +8053,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7500,6 +8072,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_3F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7518,6 +8091,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_4F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7536,6 +8110,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "ShoalCave_LowTideIceRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -7554,6 +8131,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_5F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7572,6 +8150,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SkyPillar_Top_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7590,6 +8169,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7608,6 +8188,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_2F_1R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7626,6 +8207,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_2F_2R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7644,6 +8226,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_3F_1R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7662,6 +8245,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_3F_2R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7680,6 +8264,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_4F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7698,6 +8283,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_3F_3R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7716,6 +8302,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MagmaHideout_2F_3R_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7734,6 +8321,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MirageTower_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7752,6 +8340,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MirageTower_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7770,6 +8359,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MirageTower_3F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7788,6 +8378,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MirageTower_4F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7806,6 +8397,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("DesertUnderpass_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7824,6 +8416,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ArtisanCave_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7842,6 +8435,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ArtisanCave_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7860,6 +8454,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Underwater_MarineCave_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7878,6 +8473,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MarineCave_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7896,6 +8492,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MarineCave_End_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7914,6 +8511,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TerraCave_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7932,6 +8530,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TerraCave_End_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7950,6 +8549,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("AlteringCave_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7968,6 +8568,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("MeteorFalls_StevensCave_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -7986,6 +8587,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8004,6 +8606,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8022,6 +8625,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8040,6 +8644,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8058,6 +8663,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8076,6 +8682,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8094,6 +8701,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8112,6 +8720,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8130,6 +8739,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8148,6 +8758,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8166,6 +8777,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8184,6 +8796,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8202,6 +8815,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8220,6 +8834,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8238,6 +8853,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8256,6 +8872,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8274,6 +8891,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8292,6 +8910,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8310,6 +8929,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8328,6 +8948,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8346,6 +8967,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8364,6 +8986,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8382,6 +9005,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8400,6 +9024,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("SecretBase_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8418,6 +9043,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("BattleColosseum_2P_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8436,6 +9062,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TradeCenter_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8454,6 +9081,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("RecordCorner_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8472,6 +9100,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("BattleColosseum_4P_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8490,6 +9119,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8508,6 +9138,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8526,6 +9157,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8544,6 +9176,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8562,6 +9195,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8580,6 +9214,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8598,6 +9233,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8616,6 +9252,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8634,6 +9271,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8652,6 +9290,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8670,6 +9309,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8688,6 +9328,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("ContestHall_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8706,6 +9347,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("InsideOfTruck_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8724,6 +9366,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SSTidalCorridor_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8742,6 +9385,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SSTidalLowerDeck_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8760,6 +9404,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SSTidalRooms_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8778,6 +9423,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8796,6 +9442,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8814,6 +9461,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8832,6 +9480,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8850,6 +9499,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8868,6 +9518,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8886,6 +9537,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8904,6 +9556,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8922,6 +9575,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8940,6 +9594,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8958,6 +9613,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8976,6 +9632,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -8994,6 +9651,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9012,6 +9670,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9030,6 +9689,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9048,6 +9708,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Gym,
+        map_scripts: Some(MapScriptTableRef::new("BattlePyramidSquare01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9066,6 +9727,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new("UnionRoom_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9084,6 +9746,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_Northwest_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::East,
@@ -9113,6 +9776,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_North_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -9147,6 +9811,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_Southwest_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -9176,6 +9841,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_South_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::North,
@@ -9210,6 +9876,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_OutsideWest_MapScripts",
+        )),
         connections: &[MapConnection {
             direction: Direction::East,
             offset: 0,
@@ -9232,6 +9901,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9250,6 +9922,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerElevator_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9268,6 +9943,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9286,6 +9964,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9304,6 +9985,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SouthernIsland_Exterior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9322,6 +10004,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SouthernIsland_Interior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9340,6 +10023,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_RestHouse_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9358,6 +10042,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_Northeast_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -9387,6 +10072,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("SafariZone_Southeast_MapScripts")),
         connections: &[
             MapConnection {
                 direction: Direction::West,
@@ -9416,6 +10102,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_OutsideEast_MapScripts",
+        )),
         connections: &[MapConnection {
             direction: Direction::West,
             offset: 0,
@@ -9438,6 +10127,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerMultiPartnerRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9456,6 +10148,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerMultiCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9474,6 +10169,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Frontier,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleTowerMultiBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9492,6 +10190,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleDomeLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9510,6 +10211,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleDomeCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9528,6 +10232,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleDomePreBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9546,6 +10253,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleDomeBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9564,6 +10274,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePalaceLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9582,6 +10295,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePalaceCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9600,6 +10316,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePalaceBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9618,6 +10337,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePyramidLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9636,6 +10358,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePyramidFloor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9654,6 +10379,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePyramidTop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9672,6 +10400,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleArenaLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9690,6 +10421,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleArenaCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9708,6 +10442,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleArenaBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9726,6 +10463,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleFactoryLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9744,6 +10484,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleFactoryPreBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9762,6 +10505,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattleFactoryBattleRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9780,6 +10526,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeLobby_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9798,6 +10547,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9816,6 +10568,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeThreePathRoom_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9834,6 +10589,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeRoomNormal_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9852,6 +10610,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeRoomFinal_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9870,6 +10631,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_BattlePikeRoomWildMons_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9888,6 +10652,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_RankingHall_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9906,6 +10673,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9924,6 +10692,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_ExchangeServiceCorner_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -9942,6 +10713,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9960,6 +10732,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9978,6 +10751,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -9996,6 +10770,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_ScottsHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10014,6 +10791,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge5_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10032,6 +10810,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge6_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10050,6 +10829,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge7_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10068,6 +10848,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_ReceptionGate_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10086,6 +10869,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge8_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10104,6 +10888,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Lounge9_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10122,6 +10907,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_PokemonCenter_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10140,6 +10928,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "BattleFrontier_PokemonCenter_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10158,6 +10949,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BattleFrontier_Mart_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10176,6 +10968,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FarawayIsland_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10194,6 +10987,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("FarawayIsland_Interior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10212,6 +11006,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BirthIsland_Exterior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10230,6 +11025,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("BirthIsland_Harbor_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10248,6 +11044,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10266,6 +11063,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10284,6 +11082,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_2F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10302,6 +11101,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_3F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10320,6 +11120,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_4F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10338,6 +11139,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_Roof_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10356,6 +11158,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Exterior_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10374,6 +11177,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Harbor_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10392,6 +11196,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Entrance_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10410,6 +11215,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_B1F_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10428,6 +11234,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Fork_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10446,6 +11253,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Up1_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10464,6 +11272,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Up2_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10482,6 +11291,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Up3_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10500,6 +11310,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Up4_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10518,6 +11329,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Top_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10536,6 +11348,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down01_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10554,6 +11367,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down02_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10572,6 +11386,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down03_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10590,6 +11405,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down04_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10608,6 +11424,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down05_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10626,6 +11443,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down06_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10644,6 +11462,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down07_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10662,6 +11481,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down08_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10680,6 +11500,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down09_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10698,6 +11519,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down10_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10716,6 +11538,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Down11_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10734,6 +11557,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: true,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("NavelRock_Bottom_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10752,6 +11576,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("TrainerHill_Elevator_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10770,6 +11595,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route104_Prototype_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10788,6 +11614,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: true,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route104_PrototypePrettyPetalFlowerShop_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10806,6 +11635,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route109_SeashoreHouse_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10824,6 +11654,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHouseEntrance_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10842,6 +11675,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route110_TrickHouseEnd_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -10860,6 +11694,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHouseCorridor_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10878,6 +11715,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle1_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10896,6 +11736,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle2_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10914,6 +11757,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle3_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10932,6 +11778,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle4_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10950,6 +11799,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle5_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10968,6 +11820,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle6_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -10986,6 +11841,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle7_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11004,6 +11862,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_TrickHousePuzzle8_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11022,6 +11883,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_SeasideCyclingRoadSouthEntrance_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11040,6 +11904,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route110_SeasideCyclingRoadNorthEntrance_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11058,6 +11925,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route113_GlassWorkshop_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -11076,6 +11944,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route123_BerryMastersHouse_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11094,6 +11965,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route119_WeatherInstitute_1F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11112,6 +11986,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route119_WeatherInstitute_2F_MapScripts",
+        )),
         connections: &[],
     },
     MapHeader {
@@ -11130,6 +12007,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new("Route119_House_MapScripts")),
         connections: &[],
     },
     MapHeader {
@@ -11148,6 +12026,9 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: Some(MapScriptTableRef::new(
+            "Route124_DivingTreasureHuntersHouse_MapScripts",
+        )),
         connections: &[],
     },
 ];
@@ -11383,6 +12264,43 @@ mod tests {
             for c in h.connections {
                 assert!(Direction::from_id(c.direction.id()).is_ok());
             }
+        }
+    }
+
+    #[test]
+    fn every_header_names_its_map_script_table() {
+        let table = MapHeaderTable::new();
+        let table_of = |id| {
+            table
+                .header(MapId(id))
+                .unwrap()
+                .map_scripts
+                .map(crate::script_refs::MapScriptTableRef::id)
+        };
+        // An owned table is named after the map; shared tables name the owner's
+        // (`shared_scripts_map`), so those maps are not table-less.
+        assert_eq!(
+            table_of("MAP_PETALBURG_CITY"),
+            Some("PetalburgCity_MapScripts")
+        );
+        assert_eq!(
+            table_of("MAP_CONTEST_HALL_BEAUTY"),
+            Some("ContestHall_MapScripts")
+        );
+        assert_eq!(
+            table_of("MAP_SECRET_BASE_RED_CAVE1"),
+            Some("SecretBase_MapScripts")
+        );
+        assert_eq!(
+            table_of("MAP_BATTLE_PYRAMID_SQUARE02"),
+            Some("BattlePyramidSquare01_MapScripts")
+        );
+        for header in table.iter() {
+            let id = header
+                .map_scripts
+                .expect("upstream headers always name a table")
+                .id();
+            assert!(id.ends_with("_MapScripts"), "{}: {id}", header.id.0);
         }
     }
 }

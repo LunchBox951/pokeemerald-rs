@@ -771,6 +771,16 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     Ok(mon)
 }
 
+/// Whether `record` reads as a real species the way `MON_DATA_SPECIES` does: a secure
+/// region that passes its checksum and names something other than `SPECIES_NONE`. The
+/// header's `hasSpecies` bit is a separate, possibly stale flag and proves neither.
+pub(crate) fn record_has_validated_species(record: &Pokemon) -> bool {
+    record
+        .box_data
+        .substructures()
+        .is_ok_and(|substructures| read_u16(&substructures.growth, GROWTH_SPECIES) != SPECIES_NONE)
+}
+
 /// Byte offset of a party record's OT name in its unencrypted header
 /// (`struct BoxPokemon.otName`, `pokeemerald/include/pokemon.h:198`).
 const BOX_OT_NAME_OFFSET: usize = 20;
@@ -975,6 +985,29 @@ impl LoadedLead {
             slot,
             battler: Some(battler),
             record,
+            hidden_hp_offset,
+        })
+    }
+
+    /// Adopts the member saved in `slot` as a battle reserve: its battler, its
+    /// record and the offset its load hid, ready for a later merge into that
+    /// same slot. Unlike [`Self::load`] this inspects only `record`, never
+    /// falling back to another slot, and logs nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartyError::Egg`] for an egg or Bad Egg, and the decode
+    /// error for a record that is empty or does not decode.
+    pub(crate) fn load_slot(dex: &Dex, slot: usize, record: &Pokemon) -> Result<Self, PartyError> {
+        if record_is_egg_or_bad_egg(record) {
+            return Err(PartyError::Egg);
+        }
+        let battler = from_save_pokemon(dex, record)?;
+        let hidden_hp_offset = hp_hidden_by_load(dex, record, &battler);
+        Ok(Self {
+            slot,
+            battler: Some(battler),
+            record: *record,
             hidden_hp_offset,
         })
     }

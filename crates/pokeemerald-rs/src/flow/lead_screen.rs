@@ -14,9 +14,10 @@
 //! and keep. The battle does not start, nothing is drawn, no trigger state is
 //! spent (the Route 101 rescue stays armed; wild encounters stay disabled; a
 //! trainer is not defeated), and the item is never stripped from the lead.
-//! Only the lead reaches a battle, so only the lead is screened here;
-//! [`battle::Battle::new_with_player_reserves`] screens reserves for a caller
-//! that supplies them. No item effect is implemented, so an imported save
+//! Only the lead is screened here for the first-battle, rival and
+//! sight-trainer flows, which bring no reserves. The wild flow screens each
+//! saved reserve through the same function and leaves out one it refuses,
+//! keeping its saved item. No item effect is implemented, so an imported save
 //! whose lead holds an item with a battle effect cannot enter these battles
 //! until the player takes the item off it.
 //!
