@@ -2,8 +2,9 @@
 //! speed, and the damage/heal/faint/reset lifecycle.
 
 use super::super::{
-    compute_stats, BattlePokemon, Evs, Ivs, MoveSlot, StatStages, MAX_IV, MAX_LEVEL, MAX_MON_MOVES,
-    MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
+    compute_stats, BattlePokemon, Evs, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL,
+    MAX_MON_MOVES, MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
+    SPECIES_SHEDINJA,
 };
 use super::shared::{
     sample_mon, BULBASAUR, FIRST_UNREPRESENTABLE_IV, HARDY_PERSONALITY, MAX_IVS, TACKLE,
@@ -657,7 +658,8 @@ fn deoxys_speed_forme_stats_read_its_adopted_evs() {
     assert_eq!(stats.attack, 147);
     assert_eq!(stats.defense, 110);
     assert_eq!(stats.speed, 200);
-    // Max HP is never a `GetDeoxysStat` read, so it keeps the zero-EV floor.
+    // Max HP is never a `GetDeoxysStat` read, and `with_evs` only adopts the
+    // EVs: it does not recalculate the stored block.
     assert_eq!(stats.max_hp, 125);
 }
 
@@ -675,7 +677,65 @@ fn deoxys_speed_forme_stats_keep_their_evs_across_a_level_up() {
     // ((95*2 + 31 + 63) * 55) / 100 + 5.
     assert_eq!(stats.attack, 161);
     assert_eq!(stats.defense, 121);
-    assert_eq!(stats.max_hp, 137);
+    // The level-up is a full `CalculateMonStats`, so the HP EVs count too:
+    // ((2*50 + 31 + 252/4) * 55) / 100 + 55 + 10.
+    assert_eq!(stats.max_hp, 171);
+    // The stored block stays Normal Forme (base 150 Attack / 150 Speed):
+    // ((2*150 + 31 + 63) * 55) / 100 + 5 and ((2*150 + 31) * 55) / 100 + 5.
+    let stored = mon.cached_stats();
+    assert_eq!(
+        (stored.attack, stored.speed, stored.max_hp),
+        (221, 187, 171)
+    );
+}
+
+#[test]
+fn deoxys_stored_block_is_normal_forme_at_construction_and_after_adopting_evs() {
+    let dex = Dex::new();
+    let fresh = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH]).unwrap();
+    let stored = fresh.cached_stats();
+    assert_eq!(
+        (
+            stored.max_hp,
+            stored.attack,
+            stored.defense,
+            stored.speed,
+            stored.sp_attack,
+            stored.sp_defense
+        ),
+        (125, 170, 70, 170, 170, 70),
+        "`CalculateMonStats` writes the raw Normal Forme block"
+    );
+    assert_eq!(fresh.stats().speed, 200, "the live view reads Speed Forme");
+
+    let trained = fresh.with_evs(DEOXYS_ATTACK_TRAINED);
+    assert_eq!(
+        trained.cached_stats(),
+        stored,
+        "adopting EVs never rewrites the stored block"
+    );
+    assert_eq!(trained.stats().attack, 147);
+}
+
+#[test]
+fn deoxys_adopted_cache_is_stored_verbatim_while_the_live_view_reads_its_evs() {
+    let dex = Dex::new();
+    let fresh = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH]).unwrap();
+    let stale = Stats {
+        attack: 99,
+        ..fresh.cached_stats()
+    };
+    let mon = fresh
+        .with_cached_stats(stale, 100)
+        .with_evs(DEOXYS_ATTACK_TRAINED);
+    assert_eq!(mon.cached_stats(), stale);
+    assert_eq!(mon.current_hp(), 100);
+    assert_eq!(
+        mon.stats().attack,
+        147,
+        "the live view still derives from the EVs"
+    );
+    assert_eq!(mon.stats().max_hp, stale.max_hp);
 }
 
 #[test]

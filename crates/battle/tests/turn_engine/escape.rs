@@ -101,6 +101,10 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
                 by_player: true,
                 success: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: STRUGGLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: STRUGGLE,
@@ -113,7 +117,7 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
                 damage: player_max_hp / 4,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "the failed run and the forced Struggle that follows it must both commit"
     );
@@ -199,18 +203,26 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: bulbasaur_tackle_damage,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: rattata_tackle_damage,
                 is_critical: false,
-            },
+            }
         ],
         "the +6-stage mon moves first only if turn order reads \
          effective speed"

@@ -60,6 +60,14 @@ fn run(
     (battle, events, rng)
 }
 
+/// The announcement every executed move prints ahead of its outcome.
+fn used_move(by_player: bool) -> BattleEvent {
+    BattleEvent::UsedMove {
+        by_player,
+        move_id: TACKLE,
+    }
+}
+
 fn player_hit(event: &BattleEvent) -> bool {
     matches!(
         event,
@@ -92,7 +100,8 @@ fn a_zero_draw_thaws_the_lead_and_its_move_proceeds_with_one_freeze_draw() {
     assert_eq!(rng.draws(), 3 + 1 + 4 + 4);
     rng.assert_exhausted();
     assert_eq!(events[0], BattleEvent::Thawed { by_player: true });
-    assert!(player_hit(&events[1]), "{events:?}");
+    assert_eq!(events[1], used_move(true));
+    assert!(player_hit(&events[2]), "{events:?}");
     assert_eq!(battle.player().status1(), Status1::Healthy);
     assert_eq!(battle.player().moves()[0].pp, starting_pp - 1);
 }
@@ -183,7 +192,8 @@ fn a_thaw_precedes_the_confusion_decrement_of_the_same_action() {
         events[1],
         BattleEvent::SnappedOutOfConfusion { by_player: true }
     );
-    assert!(player_hit(&events[2]), "{events:?}");
+    assert_eq!(events[2], used_move(true));
+    assert!(player_hit(&events[3]), "{events:?}");
     assert_eq!(battle.player().status1(), Status1::Healthy);
 }
 

@@ -34,11 +34,19 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
+            },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::GROWL
             },
             BattleEvent::StatFell {
                 by_player: false,
@@ -46,7 +54,7 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
                 stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
-            },
+            }
         ]
     );
     assert_eq!(battle.player().stages().attack, StatStage::new(-1).unwrap());
@@ -84,16 +92,24 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::STRING_SHOT
+            },
             BattleEvent::Missed {
                 by_player: false,
                 move_id: MoveId::STRING_SHOT,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -134,17 +150,25 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::GROWL
+            },
             BattleEvent::StatWontGoLower {
                 by_player: true,
                 move_id: MoveId::GROWL,
                 stat: ChangedStat::Attack,
+            },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
             },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 3,
                 is_critical: false,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -180,6 +204,10 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::GROWL
+            },
             BattleEvent::StatFell {
                 by_player: false,
                 move_id: MoveId::GROWL,
@@ -187,12 +215,16 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
             },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 3,
                 is_critical: false,
-            },
+            }
         ],
         "the player's Tackle must reflect the -1 Attack stage Growl \
          just applied, not the neutral baseline of 5"
@@ -245,11 +277,19 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     assert_eq!(
         turn1,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
+            },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::STRING_SHOT
             },
             BattleEvent::StatFell {
                 by_player: true,
@@ -257,7 +297,7 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
                 stat: ChangedStat::Speed,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
-            },
+            }
         ],
         "turn 1: Poochyena (faster) moves first"
     );
@@ -273,18 +313,26 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     assert_eq!(
         turn2,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
-            },
+            }
         ],
         "turn 2: the player now moves FIRST despite being the \
          raw-slower mon -- only explicable by the Speed debuff \
@@ -403,9 +451,17 @@ fn deoxys_speed_forme_speed_outruns_a_target_the_normal_forme_would_lose_to() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
 
+    assert_eq!(
+        events[0],
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: MoveId::TACKLE,
+        },
+        "Deoxys announces first: {events:?}"
+    );
     assert!(
         matches!(
-            events.first(),
+            events.get(1),
             Some(BattleEvent::Hit {
                 by_player: true,
                 ..
