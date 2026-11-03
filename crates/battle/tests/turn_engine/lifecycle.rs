@@ -376,6 +376,11 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
     let mut battle =
         Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
             .unwrap();
+    assert_eq!(
+        battle.player_position(),
+        0,
+        "the starting active member leads"
+    );
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -385,6 +390,11 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
             reserves_remaining: 0,
         }),
         "fixture sanity: the second Rattata replaced the first: {events:?}"
+    );
+    assert_eq!(
+        battle.player_position(),
+        1,
+        "the active member is the second one in party order"
     );
     assert_eq!(battle.player().current_hp(), reserve_max_hp);
 

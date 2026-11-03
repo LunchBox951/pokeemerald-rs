@@ -3,7 +3,7 @@
 
 use engine::overworld::wild_encounter::WildEncounter;
 
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, WildBattle};
 use crate::flow::save_continue_support::new_game_phase;
 
 /// `SPECIES_WURMPLE`, the same ordinary fightable wild species
@@ -39,7 +39,7 @@ fn a_wild_opponent_takes_the_save_owners_ot_id_not_the_leads() {
 
     phase.begin_wild_battle(Some(encounter));
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("a fightable Wurmple must construct");
     };
     let enemy = battle.enemy();
