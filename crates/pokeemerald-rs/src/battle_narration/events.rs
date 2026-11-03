@@ -95,14 +95,17 @@ pub(super) fn requests(
     lifecycle::requests(narrator, names, event)
 }
 
-/// `CANCELER_ASLEEP`'s messages, in the sleeper's own name:
-/// `BattleScript_MoveUsedIsAsleep` prints in place of the move announcement
-/// and `BattleScript_MoveUsedWokeUp` ahead of it
-/// (`data/battle_scripts_1.s:3717`-`:3728`).
+/// `CANCELER_ASLEEP`'s and `CANCELER_TRUANT`'s messages, in the user's own
+/// name: `BattleScript_MoveUsedIsAsleep` prints in place of the move
+/// announcement and `BattleScript_MoveUsedWokeUp` ahead of it
+/// (`data/battle_scripts_1.s:3717`-`:3728`);
+/// `BattleScript_MoveUsedLoafingAround` prints `gInobedientStringIds`'s
+/// `B_MSG_LOAFING` entry in place of the announcement (`:4232`-`:4240`).
 fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let (template, by_player) = match *event {
         BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player),
         BattleEvent::WokeUp { by_player } => (id::PKMNWOKEUP, by_player),
+        BattleEvent::LoafingAround { by_player, .. } => (id::PKMNLOAFING, by_player),
         _ => return None,
     };
     let context = narrator.context().user_vs_target(Side::user(by_player));
