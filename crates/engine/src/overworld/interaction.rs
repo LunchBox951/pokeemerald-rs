@@ -8,7 +8,7 @@
 
 use assets::{ObjectEvent, SecretBaseId};
 
-use super::background_event::{resolve_background_event, BackgroundEventTarget, NO_SCRIPT};
+use super::background_event::{resolve_background_event, BackgroundEventTarget};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::is_counter;
@@ -62,10 +62,10 @@ pub fn select_interaction_target(
 
     let front_is_counter = front_behavior.is_some_and(is_counter);
     let object = interacted_object(front, facing, front_is_counter, runtime, event_data);
-    if let Some(object) = object.filter(|object| object.script != NO_SCRIPT) {
+    if let Some((object, script)) = object.and_then(|object| Some((object, object.script?))) {
         return Some(InteractionTarget::Object(ObjectInteraction {
             local_id: object.local_id,
-            script: object.script,
+            script: script.id(),
             player_facing: facing,
         }));
     }
