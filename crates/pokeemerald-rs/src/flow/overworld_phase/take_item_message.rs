@@ -31,15 +31,20 @@ pub(super) fn nickname_tokens(record: &engine::save::Pokemon) -> Vec<Token> {
 ///   `gText_ReceivedItemFromPkmn`, with `gStringVar2` the item's name.
 /// - [`TakeHeldItem::HoldsMail`] has no upstream text. Upstream never reaches
 ///   TAKE ITEM for mail (it offers `CursorCb_TakeMail`, which this port does
-///   not model), so the closest text is `gText_PkmnNotHolding`: there is no
-///   item to take.
+///   not model, #3017), so the port says what is true: the lead is holding
+///   MAIL, which TAKE leaves in place.
 /// - No lead prints `gText_NoPokemon`.
 pub(super) fn take_item_message(outcome: Option<TakeHeldItem>, nickname: Vec<Token>) -> Vec<Token> {
     let mut tokens = match outcome {
         None => plain("There is no\nPOKéMON."),
-        Some(TakeHeldItem::NotHolding | TakeHeldItem::HoldsMail(_)) => {
+        Some(TakeHeldItem::NotHolding) => {
             let mut tokens = nickname;
             tokens.extend(plain(" isn't holding\nanything."));
+            tokens
+        }
+        Some(TakeHeldItem::HoldsMail(_)) => {
+            let mut tokens = nickname;
+            tokens.extend(plain(" is holding\nMAIL."));
             tokens
         }
         Some(TakeHeldItem::BagFull(_)) => {
@@ -106,7 +111,7 @@ mod tests {
         );
         assert_eq!(
             message(Some(TakeHeldItem::HoldsMail(ItemId::ORANGE_MAIL))),
-            "TREECKO isn't holding/anything.$"
+            "TREECKO is holding/MAIL.$"
         );
         assert_eq!(
             message(Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))),
