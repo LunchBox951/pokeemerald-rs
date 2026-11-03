@@ -1,0 +1,721 @@
+use std::fmt;
+#[cfg(feature = "scenario")]
+use std::path::Path;
+use std::sync::OnceLock;
+
+use pokeemerald_rs::main_menu::MainMenuItem;
+use pokeemerald_rs::{App, AppButtons, AppState, BattleOutcome};
+
+use crate::ScenarioName;
+
+mod boot_to_first_fight;
+#[cfg(feature = "scenario")]
+mod session;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScenarioFrame {
+    buttons: AppButtons,
+    expected: AppState,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScenarioSpec {
+    initial: AppState,
+    frames: &'static [ScenarioFrame],
+    requires_first_battle_outcome: bool,
+}
+
+/// The number of frames between a front-end fade-wait press and the
+/// destination's first frame (I-3, issue #1329): `rendering::palette_fade`'s
+/// own 22-call trace after `begin`, less the second update the press frame
+/// itself runs, so the last of these frames is the one whose update reports
+/// `Done` and still presents the fully faded title.
+const FADE_WAIT_FRAMES: usize = 21;
+
+/// The frames a fresh boot runs `CB2_InitTitleScreen` before the title
+/// reads input (I-2): states 0 to 4 on S0..S4, then state 5 until the white
+/// fade-in, delay 1, reports done on S34, with `MainCB2` first running on
+/// S35 (`pokeemerald/src/title_screen.c:570-680`; `pokeemerald_rs`'s
+/// `flow::title_init_tests`). A press on any of them is ignored, so the
+/// scripts hold nothing for this long and press START on the frame after.
+const TITLE_INIT_FRAMES: usize = 35;
+
+/// Wait out the title's setup frames and white fade-in, press Start, hold through the white title fade-wait
+/// (`pokeemerald_rs::flow::AppScene::TitleFadeWait`, reported as
+/// `AppState::Title` throughout), then confirm the main menu is current and
+/// stays current one frame later.
+fn boot_to_main_menu_frames() -> &'static [ScenarioFrame] {
+    static FRAMES: OnceLock<Vec<ScenarioFrame>> = OnceLock::new();
+    FRAMES.get_or_init(|| {
+        expand_segments(&[
+            Segment {
+                buttons: AppButtons::NONE,
+                count: TITLE_INIT_FRAMES,
+                expected: AppState::Title,
+            },
+            Segment {
+                buttons: AppButtons::START,
+                count: 1,
+                expected: AppState::Title,
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: FADE_WAIT_FRAMES,
+                expected: AppState::Title,
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: 1,
+                expected: AppState::MainMenu(MainMenuItem::NewGame),
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: 1,
+                expected: AppState::MainMenu(MainMenuItem::NewGame),
+            },
+        ])
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    buttons: AppButtons,
+    count: usize,
+    expected: AppState,
+}
+
+fn expand_segments(segments: &[Segment]) -> Vec<ScenarioFrame> {
+    let mut frames = Vec::with_capacity(segments.iter().map(|segment| segment.count).sum());
+    for segment in segments {
+        frames.extend(std::iter::repeat_n(
+            ScenarioFrame {
+                buttons: segment.buttons,
+                expected: segment.expected,
+            },
+            segment.count,
+        ));
+    }
+    frames
+}
+
+fn spec(name: ScenarioName) -> ScenarioSpec {
+    match name {
+        ScenarioName::BootToMainMenu => ScenarioSpec {
+            initial: AppState::Title,
+            frames: boot_to_main_menu_frames(),
+            requires_first_battle_outcome: false,
+        },
+        ScenarioName::BootToFirstFight => ScenarioSpec {
+            initial: AppState::Title,
+            frames: boot_to_first_fight::frames(),
+            requires_first_battle_outcome: true,
+        },
+    }
+}
+
+/// A scenario setup or execution failure. Every `frame` field below is a
+/// zero-based index into the scenario's frames, not a one-based frame number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScenarioError {
+    /// App creation failed.
+    #[cfg(feature = "scenario")]
+    Start(String),
+    /// The pack or save media a scenario needs could not be prepared, so
+    /// there is no evidence to judge.
+    #[cfg(feature = "scenario")]
+    Setup(String),
+    /// The initial app state did not match the scenario.
+    InitialState {
+        expected: AppState,
+        actual: AppState,
+    },
+    /// Applying a frame's held buttons failed.
+    Input { frame: usize, reason: String },
+    /// Advancing one app frame failed.
+    Step { frame: usize, reason: String },
+    /// The app stopped before all scenario frames ran.
+    UnexpectedStop { frame: usize },
+    /// A frame ended in an unexpected app state.
+    Milestone {
+        frame: usize,
+        expected: AppState,
+        actual: AppState,
+    },
+    /// The first battle ended without a terminal outcome.
+    FirstBattleEndedWithoutOutcome { frame: usize },
+    /// The outcome observed at the first-battle transition was lost before
+    /// the scenario finished: it went missing or changed on a later frame.
+    FirstBattleOutcomeNotRetained { frame: usize },
+}
+
+impl fmt::Display for ScenarioError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(feature = "scenario")]
+            Self::Start(reason) => write!(f, "real headless app failed to start: {reason}"),
+            #[cfg(feature = "scenario")]
+            Self::Setup(reason) => {
+                write!(f, "scenario media unavailable, no evidence gathered: {reason}")
+            }
+            Self::InitialState { expected, actual } => write!(
+                f,
+                "initial milestone mismatch: expected {expected:?}, reached {actual:?}"
+            ),
+            Self::Input { frame, reason } => {
+                write!(f, "frame {frame} input injection failed: {reason}")
+            }
+            Self::Step { frame, reason } => {
+                write!(f, "frame {frame} app step failed: {reason}")
+            }
+            Self::UnexpectedStop { frame } => {
+                write!(f, "frame {frame} reported an unexpected stop")
+            }
+            Self::Milestone {
+                frame,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "frame {frame} milestone mismatch: expected {expected:?}, reached {actual:?}"
+            ),
+            Self::FirstBattleEndedWithoutOutcome { frame } => write!(
+                f,
+                "frame {frame} ended the scripted first battle without a terminal outcome"
+            ),
+            Self::FirstBattleOutcomeNotRetained { frame } => write!(
+                f,
+                "frame {frame} lost the first-battle outcome observed at the FirstBattle-to-Overworld \
+                 transition before the scenario finished"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScenarioError {}
+
+/// Results of a completed scenario.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// Completed frames.
+    pub frames_run: usize,
+    /// Visited states in order, including the initial state and excluding consecutive duplicates.
+    pub milestones: Vec<AppState>,
+    /// Retained terminal outcome of the scripted first battle, if one completed.
+    pub first_battle_outcome: Option<BattleOutcome>,
+}
+
+trait ScenarioDriver {
+    fn state(&self) -> AppState;
+    fn first_battle_outcome(&self) -> Option<BattleOutcome>;
+    fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String>;
+    fn step(&mut self) -> Result<bool, String>;
+}
+
+impl ScenarioDriver for App {
+    fn state(&self) -> AppState {
+        self.state()
+    }
+
+    fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+        self.first_battle_outcome()
+    }
+
+    fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String> {
+        self.set_headless_buttons(buttons)
+            .map_err(|error| error.to_string())
+    }
+
+    fn step(&mut self) -> Result<bool, String> {
+        self.step().map_err(|error| error.to_string())
+    }
+}
+
+/// Runs a named scenario against a private copy of the checkout's extracted
+/// pack and an isolated durable save through the production headless app.
+/// [`App::new_headless_real_at`] pins every lazy pack load to that copy
+/// alone (issue #412), never a process-wide `$POKEEMERALD_PACK` override, so an installed or inherited pack can never
+/// substitute the bytes under a running scenario -- proved hostile-environment
+/// safe by `tests/scenario_pack_pin.rs` (a child process, since handing this
+/// process's own environment a decoy is the global mutable state the change
+/// exists to remove `(oop-boundaries)`).
+///
+/// With `rom`, the pack is instead imported from that supported ROM into the
+/// run's own scratch directory; without it, the checkout-extracted pack is
+/// copied there.
+///
+/// # Errors
+///
+/// Returns [`ScenarioError`] if the media cannot be prepared (missing pack,
+/// failed import or save construction: no evidence) or app creation or a
+/// scripted frame fails.
+#[cfg(feature = "scenario")]
+pub fn run_with(name: ScenarioName, rom: Option<&Path>) -> Result<Report, ScenarioError> {
+    let selection = rom.map_or_else(session::PackSelection::checkout, |rom| {
+        session::PackSelection::ImportedRom(rom.to_path_buf())
+    });
+    run_selected(name, &selection)
+}
+
+/// [`run_with`] against an explicitly chosen pack source and an isolated durable
+/// save, both owned by the run ([`session::Session`]).
+#[cfg(feature = "scenario")]
+fn run_selected(
+    name: ScenarioName,
+    selection: &session::PackSelection,
+) -> Result<Report, ScenarioError> {
+    let session = session::Session::new(selection)?;
+    let mut app = session.start()?;
+    run_with_driver(spec(name), &mut app)
+}
+
+fn run_with_driver(
+    spec: ScenarioSpec,
+    driver: &mut impl ScenarioDriver,
+) -> Result<Report, ScenarioError> {
+    let actual_initial_state = driver.state();
+    if actual_initial_state != spec.initial {
+        return Err(ScenarioError::InitialState {
+            expected: spec.initial,
+            actual: actual_initial_state,
+        });
+    }
+
+    let mut milestones = vec![actual_initial_state];
+    let mut previous_state = actual_initial_state;
+    let mut retained_outcome: Option<BattleOutcome> = None;
+    for (frame, expected_frame) in spec.frames.iter().enumerate() {
+        driver
+            .set_buttons(expected_frame.buttons)
+            .map_err(|reason| ScenarioError::Input { frame, reason })?;
+        let should_continue = driver
+            .step()
+            .map_err(|reason| ScenarioError::Step { frame, reason })?;
+        if !should_continue {
+            return Err(ScenarioError::UnexpectedStop { frame });
+        }
+
+        let actual_state = driver.state();
+        if actual_state != expected_frame.expected {
+            return Err(ScenarioError::Milestone {
+                frame,
+                expected: expected_frame.expected,
+                actual: actual_state,
+            });
+        }
+        let first_battle_ended = spec.requires_first_battle_outcome
+            && previous_state == AppState::FirstBattle
+            && actual_state != AppState::FirstBattle;
+        if first_battle_ended {
+            let Some(outcome) = driver.first_battle_outcome() else {
+                return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
+            };
+            retained_outcome = Some(outcome);
+        } else if let Some(outcome) = retained_outcome {
+            if driver.first_battle_outcome() != Some(outcome) {
+                return Err(ScenarioError::FirstBattleOutcomeNotRetained { frame });
+            }
+        }
+        if milestones.last() != Some(&actual_state) {
+            milestones.push(actual_state);
+        }
+        previous_state = actual_state;
+    }
+
+    Ok(Report {
+        frames_run: spec.frames.len(),
+        milestones,
+        first_battle_outcome: driver.first_battle_outcome(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::{
+        run_with_driver, spec, ScenarioDriver, ScenarioError, ScenarioFrame, ScenarioSpec,
+    };
+    use crate::ScenarioName;
+    use pokeemerald_rs::main_menu::MainMenuItem;
+    use pokeemerald_rs::{AppButtons, AppState, BattleOutcome};
+
+    struct FakeFrame {
+        expected_buttons: AppButtons,
+        next_state: AppState,
+        should_continue: bool,
+    }
+
+    struct FakeDriver {
+        current_state: AppState,
+        held_buttons: AppButtons,
+        frames: VecDeque<FakeFrame>,
+        first_battle_outcome: Option<BattleOutcome>,
+    }
+
+    impl FakeDriver {
+        /// Hand-specified, independently of [`spec`], so a wrong scripted
+        /// input or per-frame expectation in the real script fails against
+        /// it rather than changing both sides of the comparison.
+        ///
+        /// Frames 0 through 34 are the title's setup frames and white fade-in
+        /// with nothing held (`CB2_InitTitleScreen`, 35 callback frames, the
+        /// last installing `MainCB2`). Frame 35 presses START and stays on the
+        /// title while its white fade begins. Frames 36 through 56 are the released fade-wait, still
+        /// reported as the title: `rendering::palette_fade`'s 22 updates
+        /// after `begin`, less the one the press frame runs, the last of
+        /// them the frame the fade reports done. Frames 57 and 58 are the
+        /// main menu.
+        fn boot_to_main_menu() -> Self {
+            let frame = |expected_buttons, next_state| FakeFrame {
+                expected_buttons,
+                next_state,
+                should_continue: true,
+            };
+            let mut frames = VecDeque::new();
+            frames.extend(
+                std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(35),
+            );
+            frames.push_back(frame(AppButtons::START, AppState::Title));
+            frames.extend(
+                std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(21),
+            );
+            frames.extend([
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+            ]);
+            Self {
+                current_state: AppState::Title,
+                held_buttons: AppButtons::NONE,
+                first_battle_outcome: None,
+                frames,
+            }
+        }
+    }
+
+    impl ScenarioDriver for FakeDriver {
+        fn state(&self) -> AppState {
+            self.current_state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.first_battle_outcome
+        }
+
+        fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String> {
+            self.held_buttons = buttons;
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            let Some(frame) = self.frames.pop_front() else {
+                return Err("script advanced beyond the fake's frames".to_owned());
+            };
+            if self.held_buttons != frame.expected_buttons {
+                return Err(format!(
+                    "expected held bits {:04x}, got {:04x}",
+                    frame.expected_buttons.bits(),
+                    self.held_buttons.bits()
+                ));
+            }
+            self.current_state = frame.next_state;
+            Ok(frame.should_continue)
+        }
+    }
+
+    #[test]
+    fn boot_to_main_menu_drives_press_release_and_ordered_milestones() {
+        let mut driver = FakeDriver::boot_to_main_menu();
+        let report = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
+            .expect("the proving scenario should pass");
+
+        assert_eq!(report.frames_run, 59);
+        assert_eq!(report.first_battle_outcome, None);
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)],
+            "the fade-wait frames must not introduce a distinct milestone \
+             of their own"
+        );
+        assert!(driver.frames.is_empty(), "every scripted frame must run");
+    }
+
+    #[test]
+    fn a_wrong_initial_state_fails_before_input() {
+        let mut driver = FakeDriver::boot_to_main_menu();
+        let frame_count = driver.frames.len();
+        driver.current_state = AppState::SyntheticBoot;
+        let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
+            .expect_err("the title milestone is required");
+        assert!(matches!(
+            error,
+            ScenarioError::InitialState {
+                expected: AppState::Title,
+                actual: AppState::SyntheticBoot
+            }
+        ));
+        assert_eq!(
+            driver.frames.len(),
+            frame_count,
+            "no frame may run after the mismatch"
+        );
+    }
+
+    #[test]
+    fn a_wrong_post_frame_milestone_fails_closed() {
+        let mut driver = FakeDriver::boot_to_main_menu();
+        let last = driver.frames.len() - 1;
+        driver.frames[last].next_state = AppState::Title;
+        let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
+            .expect_err("the menu milestone is required");
+        assert!(matches!(
+            error,
+            ScenarioError::Milestone {
+                frame,
+                expected: AppState::MainMenu(MainMenuItem::NewGame),
+                actual: AppState::Title
+            } if frame == last
+        ));
+    }
+
+    #[test]
+    fn an_unexpected_stop_fails_before_accepting_the_milestone() {
+        let mut driver = FakeDriver::boot_to_main_menu();
+        driver.frames[0].should_continue = false;
+        let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
+            .expect_err("a null backend must never stop");
+        assert_eq!(error, ScenarioError::UnexpectedStop { frame: 0 });
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_aborted_transition() {
+        let mut driver = FakeDriver {
+            current_state: AppState::FirstBattle,
+            held_buttons: AppButtons::NONE,
+            frames: VecDeque::from([FakeFrame {
+                expected_buttons: AppButtons::NONE,
+                next_state: AppState::Overworld,
+                should_continue: true,
+            }]),
+            first_battle_outcome: None,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[ScenarioFrame {
+                buttons: AppButtons::NONE,
+                expected: AppState::Overworld,
+            }],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("an emptied first-battle slot needs a terminal outcome");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleEndedWithoutOutcome { frame: 0 }
+        );
+    }
+
+    struct ClearingDriver {
+        state: AppState,
+        outcome: Option<BattleOutcome>,
+        frame: usize,
+    }
+
+    impl ScenarioDriver for ClearingDriver {
+        fn state(&self) -> AppState {
+            self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.outcome
+        }
+
+        fn set_buttons(&mut self, _buttons: AppButtons) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            const TRANSITION_FRAME: usize = 0;
+            self.outcome = (self.frame == TRANSITION_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
+            self.state = AppState::Overworld;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_outcome_cleared_after_the_transition() {
+        let mut driver = ClearingDriver {
+            state: AppState::FirstBattle,
+            outcome: None,
+            frame: 0,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[
+                ScenarioFrame {
+                    buttons: AppButtons::NONE,
+                    expected: AppState::Overworld,
+                },
+                ScenarioFrame {
+                    buttons: AppButtons::NONE,
+                    expected: AppState::Overworld,
+                },
+            ],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("a retained outcome cleared after the transition must fail the scenario");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
+        );
+    }
+
+    struct TransientClearDriver {
+        state: AppState,
+        outcome: Option<BattleOutcome>,
+        frame: usize,
+    }
+
+    impl ScenarioDriver for TransientClearDriver {
+        fn state(&self) -> AppState {
+            self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.outcome
+        }
+
+        fn set_buttons(&mut self, _buttons: AppButtons) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            const CLEARED_FRAME: usize = 1;
+            self.outcome = (self.frame != CLEARED_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
+            self.state = AppState::Overworld;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_outcome_cleared_then_restored_after_the_transition() {
+        const FRAME: ScenarioFrame = ScenarioFrame {
+            buttons: AppButtons::NONE,
+            expected: AppState::Overworld,
+        };
+        let mut driver = TransientClearDriver {
+            state: AppState::FirstBattle,
+            outcome: None,
+            frame: 0,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[FRAME, FRAME, FRAME],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("an outcome cleared on an intermediate frame must fail the scenario");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn real_pack_boot_to_main_menu_passes_and_reaches_every_milestone_in_order() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let report = super::run_with(ScenarioName::BootToMainMenu, None)
+            .expect("boot-to-main-menu should pass against the real pack");
+        assert_eq!(
+            report.frames_run,
+            spec(ScenarioName::BootToMainMenu).frames.len()
+        );
+        assert_eq!(report.first_battle_outcome, None);
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn real_pack_runs_on_an_owned_copy_and_restarts_onto_the_same_durable_save() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let selection = super::session::PackSelection::checkout();
+        let report = super::run_selected(ScenarioName::BootToMainMenu, &selection)
+            .expect("boot-to-main-menu should pass against an owned copy of the real pack");
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+
+        let session = super::session::Session::new(&selection)
+            .expect("the real pack must prepare an owned session");
+        let first = session.start().expect("first boot");
+        assert_eq!(first.state(), AppState::Title);
+        drop(first);
+        let restarted = session.start().expect("restart onto the same save");
+        assert_eq!(restarted.state(), AppState::Title);
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs $POKEEMERALD_ROM, the supported cartridge image"]
+    fn real_rom_import_runs_boot_to_main_menu_from_its_own_imported_pack() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Skip, never fail, without a ROM: CI's `--ignored` legs run with none
+        // (`rom-import`'s equivalence gate does the same `(gated-by-default)`).
+        let Some(rom) = std::env::var_os("POKEEMERALD_ROM").filter(|rom| !rom.is_empty()) else {
+            eprintln!("skipped: set POKEEMERALD_ROM to a supported cartridge image to run this");
+            return;
+        };
+        let report = super::run_with(
+            ScenarioName::BootToMainMenu,
+            Some(std::path::Path::new(&rom)),
+        )
+        .expect("boot-to-main-menu should pass against a pack imported from the ROM");
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+    }
+
+    use super::{expand_segments, Segment};
+
+    #[test]
+    fn expand_segments_flattens_each_run_in_order() {
+        let segments = [
+            Segment {
+                buttons: AppButtons::UP,
+                count: 3,
+                expected: AppState::Overworld,
+            },
+            Segment {
+                buttons: AppButtons::A,
+                count: 1,
+                expected: AppState::FirstBattle,
+            },
+        ];
+        let frames = expand_segments(&segments);
+        assert_eq!(frames.len(), 4);
+        assert!(frames[..3]
+            .iter()
+            .all(|frame| frame.buttons == AppButtons::UP && frame.expected == AppState::Overworld));
+        assert_eq!(frames[3].buttons, AppButtons::A);
+        assert_eq!(frames[3].expected, AppState::FirstBattle);
+    }
+}

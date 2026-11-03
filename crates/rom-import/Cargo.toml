@@ -1,0 +1,23 @@
+[package]
+name = "rom-import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The importer's output side. Both are in-workspace crates, not new external
+# dependencies; this crate takes no others (minimal-deps). `assets` owns the
+# audio schemas (`Sample`, `VoiceGroup`, `Song`) and their wire encoders,
+# which the audio domains emit through rather than duplicate.
+assets = { path = "../assets" }
+pack-format = { path = "../pack-format" }
+
+# Windows handle identity and handle-bound delete for `classify_partial_file`'s
+# cleanup (see `src/lib.rs`). In-workspace, not a new external dependency;
+# `win-fs` owns the one `windows-sys` use (dependency ledger, `README.md`).
+[target.'cfg(windows)'.dependencies]
+win-fs = { path = "../win-fs" }
+
+[lints]
+workspace = true

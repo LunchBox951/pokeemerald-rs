@@ -1,0 +1,471 @@
+//! Secondary-effect chance handling after damaging moves.
+//!
+//! Emerald checks a certain effect before drawing. Every other path draws
+//! before checking whether the move prepared an effect or the hit had an
+//! effect (`pokeemerald/src/battle_script_commands.c:2908-2939`). Plain and
+//! ineffective hits therefore consume a discarded draw, while a certain
+//! effect on a successful hit consumes none.
+//!
+//! Struggle is the explicit move exception outside [`SECONDARY_TRAMPOLINES`].
+//! Its full recoil script prepares a certain user-side effect
+//! (`pokeemerald/data/battle_scripts_1.s:897-898`). Effect application is not
+//! implemented, so an effect that would apply fails closed after consuming
+//! exactly the draw Emerald consumes.
+//!
+//! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`),
+//! [`EFFECT_CONFUSE_HIT`] (the `status2` `MOVE_EFFECT_CONFUSION` case,
+//! `:2528-2544`) and [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
+//! case, `:2666-2683`) are the three ported trampolines.
+
+use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
+
+use crate::damage::{aggregate_type_effectiveness, BattleRng, STRUGGLE};
+use crate::dex::Dex;
+use crate::error::BattleError;
+use crate::pokemon::BattlePokemon;
+
+/// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
+pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
+/// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
+pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
+/// Move effect shared by Confusion and Psybeam.
+pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect::CONFUSE_HIT;
+
+/// Metadata for a damaging move-effect script ending in `setmoveeffect`
+/// followed immediately by `goto BattleScript_EffectHit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Trampoline {
+    /// The damaging move effect that uses the trampoline.
+    pub effect: MoveEffect,
+    /// The symbolic `MOVE_EFFECT_*` value prepared by the script.
+    pub move_effect: &'static str,
+    /// Whether a successful hit skips the chance draw.
+    pub certain: bool,
+    /// Whether the effect applies to the move user instead of its target.
+    pub affects_user: bool,
+}
+
+const fn chance_on_target(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
+    Trampoline {
+        effect,
+        move_effect,
+        certain: false,
+        affects_user: false,
+    }
+}
+
+const fn chance_on_user(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
+    Trampoline {
+        effect,
+        move_effect,
+        certain: false,
+        affects_user: true,
+    }
+}
+
+const fn certain_on_target(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
+    Trampoline {
+        effect,
+        move_effect,
+        certain: true,
+        affects_user: false,
+    }
+}
+
+const fn certain_on_user(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
+    Trampoline {
+        effect,
+        move_effect,
+        certain: true,
+        affects_user: true,
+    }
+}
+
+/// The complete sorted set of damaging move effects with a [`Trampoline`]
+/// script suffix.
+pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
+    chance_on_target(EFFECT_POISON_HIT, "MOVE_EFFECT_POISON"),
+    chance_on_target(MoveEffect::BURN_HIT, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
+    chance_on_target(MoveEffect::PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
+    chance_on_target(MoveEffect::FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::PAY_DAY, "MOVE_EFFECT_PAYDAY"),
+    chance_on_target(MoveEffect::TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
+    chance_on_target(MoveEffect::TRAP, "MOVE_EFFECT_WRAP"),
+    chance_on_target(MoveEffect::ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
+    chance_on_target(MoveEffect::DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
+    chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
+    chance_on_target(
+        MoveEffect::SPECIAL_ATTACK_DOWN_HIT,
+        "MOVE_EFFECT_SP_ATK_MINUS_1",
+    ),
+    chance_on_target(
+        MoveEffect::SPECIAL_DEFENSE_DOWN_HIT,
+        "MOVE_EFFECT_SP_DEF_MINUS_1",
+    ),
+    chance_on_target(MoveEffect::ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
+    chance_on_target(EFFECT_CONFUSE_HIT, "MOVE_EFFECT_CONFUSION"),
+    chance_on_target(MoveEffect::THIEF, "MOVE_EFFECT_STEAL_ITEM"),
+    chance_on_target(MoveEffect::THAW_HIT, "MOVE_EFFECT_BURN"),
+    certain_on_user(MoveEffect::RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
+    chance_on_user(MoveEffect::DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
+    chance_on_user(MoveEffect::ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
+    chance_on_user(MoveEffect::ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
+    chance_on_target(MoveEffect::TWISTER, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
+    certain_on_target(MoveEffect::FAKE_OUT, "MOVE_EFFECT_FLINCH"),
+    certain_on_user(MoveEffect::SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
+    chance_on_target(MoveEffect::KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
+    certain_on_user(MoveEffect::DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
+    chance_on_target(MoveEffect::BLAZE_KICK, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::POISON_FANG, "MOVE_EFFECT_TOXIC"),
+    certain_on_user(MoveEffect::OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
+    chance_on_target(MoveEffect::POISON_TAIL, "MOVE_EFFECT_POISON"),
+];
+
+/// Returns `effect`'s secondary-effect trampoline metadata.
+#[must_use]
+pub fn trampoline_for_effect(effect: MoveEffect) -> Option<&'static Trampoline> {
+    SECONDARY_TRAMPOLINES.iter().find(|t| t.effect == effect)
+}
+
+/// Returns whether `effect`'s script has a modeled [`Trampoline`] suffix.
+#[must_use]
+pub fn is_secondary_effect(effect: MoveEffect) -> bool {
+    trampoline_for_effect(effect).is_some()
+}
+
+/// Returns whether `effect` is [`EFFECT_POISON_HIT`], one of the two
+/// [`SECONDARY_TRAMPOLINES`] entries [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_POISON_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_CONFUSE_HIT`], the other
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_CONFUSE_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], the third
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_SPEED_DOWN_HIT
+}
+
+/// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
+/// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
+/// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
+/// `SetMoveEffect` calls it (`battle_script_commands.c:6987-7007,7035-7037`).
+/// Each leaves the defender unchanged with no message, unlike the
+/// `STAT_CHANGE_ALLOW_PTR` path a stat-lowering move takes.
+#[must_use]
+fn speed_drop_can_land(defender: &BattlePokemon) -> bool {
+    !matches!(
+        defender.ability(),
+        AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
+    )
+}
+
+/// `SetMoveEffect`'s silent `STATUS1_POISON` guards
+/// (`battle_script_commands.c:2330-2337`), plus Shield Dust's silent block
+/// of a plain move's chance-based effect (`:2253-2255`), and Wonder Guard's
+/// `MOVE_RESULT_MISSED` foreclosing the hit -- and so the secondary it would
+/// have carried -- before `SetMoveEffect` ever runs
+/// (`battle_script_commands.c:1409-1418`).
+#[must_use]
+fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
+    defender.status1().is_healthy() && poison_can_land_ignoring_status(move_type, defender)
+}
+
+/// [`poison_can_land`] without the primary-status guard, for the screen in
+/// [`ensure_admissible`]: that screen runs at construction and at each
+/// turn's start, before move order is decided, and a sleeping defender can
+/// wake on its own earlier action the same turn
+/// ([`crate::status1::tick_sleep`], including Early Bird's two-turn
+/// decrement) before this attacker's move executes. Only a sleeper's status
+/// is skipped here, because no other primary status can clear mid-turn.
+#[must_use]
+fn poison_can_land_ignoring_status(move_type: Type, defender: &BattlePokemon) -> bool {
+    let types = defender.types();
+    let is_poison_or_steel_type = types.contains(&Type::Poison) || types.contains(&Type::Steel);
+    let wonder_guard_blocks = defender.ability() == AbilityId::WONDER_GUARD
+        && aggregate_type_effectiveness(move_type, types) != Effectiveness::SuperEffective;
+    !is_poison_or_steel_type
+        && !wonder_guard_blocks
+        && defender.ability() != AbilityId::IMMUNITY
+        && defender.ability() != AbilityId::SHIELD_DUST
+}
+
+/// Whether Poison Point's `MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_POISON` can
+/// poison `attacker`.
+///
+/// The ability re-enters `SetMoveEffect` through `seteffectsecondary` with
+/// `primary == FALSE` and no certain flag, so the Immunity and Poison-/Steel-type
+/// prevention branches stay silent and fall through to the plain guards: a
+/// Poison or Steel type, an existing primary status, or Immunity leave the
+/// attacker unchanged (`battle_util.c:2806`-`:2818`,
+/// `battle_script_commands.c:2299`-`:2340`). Shield Dust is skipped because the
+/// ability marker `HITMARKER_STATUS_ABILITY_EFFECT` is set (`:2253`-`:2255`).
+#[must_use]
+pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
+    let types = attacker.types();
+    attacker.status1().is_healthy()
+        && !types.contains(&Type::Poison)
+        && !types.contains(&Type::Steel)
+        && attacker.ability() != AbilityId::IMMUNITY
+}
+
+/// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
+/// chance branch passes. That branch still spends its `Random() % 100` draw,
+/// and both this value and Serene Grace's doubled 200 clear the same
+/// comparison, so the doubling is unobservable
+/// (`battle_script_commands.c:2912-2930`). The draw-free branch at `:2917`
+/// is chosen by a prepared `MOVE_EFFECT_CERTAIN` flag, never by this chance.
+const GUARANTEED_EFFECT_CHANCE: u8 = 100;
+
+/// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
+/// Own Tempo and an already-active confusion volatile both leave the byte
+/// silently discarded (`battle_script_commands.c:2531-2538`), and Shield
+/// Dust blocks any chance-based `status2`/`status1` effect the same way it
+/// blocks poison's (`:2253-2255`) -- unlike the direct
+/// [`crate::confuse::resolve_confuse_move`] path, which runs through
+/// `seteffectprimary` and so never reaches that guard.
+#[must_use]
+fn confuse_hit_can_land(defender: &BattlePokemon) -> bool {
+    defender.ability() != AbilityId::OWN_TEMPO
+        && defender.ability() != AbilityId::SHIELD_DUST
+        && !defender.volatiles().confused()
+}
+
+/// Whether Serene Grace's unported chance-doubling
+/// (`battle_script_commands.c:2912-2915`) could still matter for an
+/// [`EFFECT_CONFUSE_HIT`] move landing on `defender`.
+///
+/// Unlike [`poison_can_land`], this intentionally omits the defender's
+/// current confusion volatile: [`ensure_admissible`] runs at construction and
+/// at each turn's start, before that turn's own move order is decided, and a
+/// defender that is confused at that checkpoint can still snap out on its
+/// own earlier action the same turn
+/// (`crate::volatile::Volatiles::tick_confusion`) before this attacker's
+/// move ever executes. Reading only Own Tempo and Shield Dust -- neither of
+/// which changes mid-battle -- keeps the screen sound at every checkpoint
+/// instead of trusting a volatile that can go stale within the same turn.
+#[must_use]
+fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
+    defender.ability() != AbilityId::OWN_TEMPO && defender.ability() != AbilityId::SHIELD_DUST
+}
+
+/// Rejects an [`EFFECT_POISON_HIT`] move when landing the status would
+/// activate an unsupported ability interaction.
+///
+/// A no-op whenever the poison guards already refuse the target. Upstream's
+/// poison case admits Guts and Marvel Scale
+/// (`battle_script_commands.c:2299-2340`); their status-dependent damage
+/// reads (`pokemon.c:3211-3214`) are modelled by
+/// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
+/// newly poisoning either holder is admitted. Shed Skin is likewise admitted:
+/// its end-turn cure draw lives in `Battle::residual_effects` instead of
+/// here. The defender's Synchronize is admitted too:
+/// [`resolve_synchronize_poison_reflection`] models the move-end reflection
+/// onto the original attacker, so there is nothing left here to refuse.
+///
+/// [`EFFECT_CONFUSE_HIT`] gets the same Serene Grace screen, through
+/// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
+/// landing check -- see that function's docs for why the defender's current
+/// confusion volatile is deliberately not read here.
+/// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
+/// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
+/// both values stay in the same chance branch, spend its `Random() % 100`
+/// draw, and clear the same comparison (`:2923-2930`), so the doubling
+/// changes neither outcome nor RNG use.
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
+/// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
+/// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
+/// the attacker's Serene Grace, when the move would newly poison or confuse
+/// the defender.
+pub fn ensure_admissible(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<(), BattleError> {
+    let mv = dex.move_data(move_id)?;
+    if is_poison_hit_effect(mv.effect) {
+        let move_type = mv
+            .move_type
+            .battle_type()
+            .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+        let status_can_clear = defender.status1().is_asleep();
+        let could_land = if status_can_clear {
+            poison_can_land_ignoring_status(move_type, defender)
+        } else {
+            poison_can_land(move_type, defender)
+        };
+        if attacker.ability() == AbilityId::SERENE_GRACE && could_land {
+            return Err(BattleError::UnportedAbilityInteraction(
+                AbilityId::SERENE_GRACE,
+            ));
+        }
+        return Ok(());
+    }
+    let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
+        confuse_hit_could_ever_land(defender)
+    } else {
+        is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
+    };
+    if status_could_ever_land
+        && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
+        && attacker.ability() == AbilityId::SERENE_GRACE
+    {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE,
+        ));
+    }
+    Ok(())
+}
+
+/// What a landed [`spend_effect_chance_draw`] call asks the caller to apply.
+///
+/// A move carries exactly one `EFFECT_*`, so at most one variant besides
+/// [`SecondaryApplication::None`] can ever come back from a single call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SecondaryApplication {
+    /// Nothing lands: an unmodeled path, a discarded draw, or a guard that
+    /// silently blocked the landing.
+    #[default]
+    None,
+    /// The caller must write [`crate::status1::Status1::Poisoned`] to
+    /// `defender`, still subject to the caller's own post-damage faint
+    /// check: `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`).
+    Poison,
+    /// The caller must draw a duration
+    /// (`crate::confuse::draw_confusion_duration`) and write it to the
+    /// defender's confusion volatile, subject to that same post-damage faint
+    /// check: the duration draw itself is inside the guard, not before it
+    /// (`battle_script_commands.c:2529-2544`).
+    Confuse,
+    /// The caller must lower the defender's Speed stage by one, subject to
+    /// the same post-damage faint check. A defender already at the minimum
+    /// stage is left unchanged without a message
+    /// (`battle_script_commands.c:7056-7059,7094-7095`).
+    SpeedDown,
+}
+
+/// Spends the post-damage effect-chance draw for `move_id`.
+///
+/// A certain effect on a successful hit skips the draw. Every other path
+/// spends one draw, even when the hit had no effect or the move has no
+/// modeled trampoline.
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
+/// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
+/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
+/// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
+/// whose type cannot participate in battle calculations; either way, any
+/// required chance draw has already been consumed.
+pub fn spend_effect_chance_draw(
+    dex: &Dex,
+    move_id: MoveId,
+    hit_had_effect: bool,
+    defender: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<SecondaryApplication, BattleError> {
+    let mv = dex.move_data(move_id)?;
+    let trampoline = trampoline_for_effect(mv.effect);
+    let is_struggle = move_id == STRUGGLE;
+    let has_modeled_effect = is_struggle || trampoline.is_some();
+    let modeled_effect_is_certain = is_struggle || trampoline.is_some_and(|effect| effect.certain);
+
+    if hit_had_effect && modeled_effect_is_certain {
+        return Err(BattleError::UnportedSecondaryEffect(move_id));
+    }
+
+    let effect_chance_roll = u32::from(rng.next_u16()) % 100;
+    let effect_chance_succeeded = effect_chance_roll < u32::from(mv.secondary_effect_chance);
+
+    if !(hit_had_effect && has_modeled_effect && effect_chance_succeeded) {
+        return Ok(SecondaryApplication::None);
+    }
+
+    if is_poison_hit_effect(mv.effect) {
+        let move_type = mv
+            .move_type
+            .battle_type()
+            .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+        return Ok(if poison_can_land(move_type, defender) {
+            SecondaryApplication::Poison
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_confuse_hit_effect(mv.effect) {
+        return Ok(if confuse_hit_can_land(defender) {
+            SecondaryApplication::Confuse
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_speed_down_hit_effect(mv.effect) {
+        return Ok(if speed_drop_can_land(defender) {
+            SecondaryApplication::SpeedDown
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    Err(BattleError::UnportedSecondaryEffect(move_id))
+}
+
+/// The result of reflecting a Synchronize holder's poison back onto the
+/// original attacker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynchronizePoisonReflectionOutcome {
+    /// The original attacker's [`AbilityId::IMMUNITY`] protected it.
+    ImmunityProtected,
+    /// The original attacker's Poison or Steel typing protected it.
+    TypeProtected,
+    /// The original attacker already carries a primary status, so the
+    /// reflection writes nothing.
+    AlreadyStatused,
+    /// The original attacker must be poisoned.
+    Applied,
+}
+
+/// Resolves a Synchronize poison reflection against `attacker`: `SetMoveEffect`'s
+/// `STATUS1_POISON` case re-entered through `MOVE_EFFECT_AFFECTS_USER` with
+/// `primary == TRUE`, which protects an Immunity or Poison-/Steel-typed
+/// attacker ahead of the existing-status no-op
+/// (`battle_util.c:2971`-`:2986`, `battle_script_commands.c:2299`-`:2340`).
+#[must_use]
+pub fn resolve_synchronize_poison_reflection(
+    attacker: &BattlePokemon,
+) -> SynchronizePoisonReflectionOutcome {
+    if attacker.ability() == AbilityId::IMMUNITY {
+        return SynchronizePoisonReflectionOutcome::ImmunityProtected;
+    }
+    let types = attacker.types();
+    if types.contains(&Type::Poison) || types.contains(&Type::Steel) {
+        return SynchronizePoisonReflectionOutcome::TypeProtected;
+    }
+    if !attacker.status1().is_healthy() {
+        return SynchronizePoisonReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizePoisonReflectionOutcome::Applied
+}
+
+#[cfg(test)]
+#[path = "secondary/tests.rs"]
+mod tests;

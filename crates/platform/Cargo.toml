@@ -1,0 +1,14 @@
+[package]
+name = "platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cpal = { version = "0.18", features = ["pulseaudio"] }
+softbuffer = "0.4"
+winit = "0.30"
