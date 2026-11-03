@@ -1264,7 +1264,8 @@ impl Battle {
         };
         // A traded recipient's award takes one more truncating 150% after the
         // trainer multiplier (`src/battle_script_commands.c:3378`-`:3390`).
-        if self.player.is_traded_recipient() {
+        let boosted = self.player.is_traded_recipient();
+        if boosted {
             exp = exp * 150 / 100;
         }
         // `MonGainEVs` runs ahead of the exp and level-up sequence, so a
@@ -1272,7 +1273,10 @@ impl Battle {
         // (`src/battle_script_commands.c:3420`).
         self.player.gain_evs(defeated.ev_yield);
         let pending = self.player.apply_experience(&self.dex, exp)?;
-        events.push(BattleEvent::ExpGained(exp));
+        events.push(BattleEvent::ExpGained {
+            amount: exp,
+            boosted,
+        });
         if let Some(prompt) = pending {
             events.push(BattleEvent::MoveLearnPrompt {
                 move_id: prompt.move_id(),
@@ -1384,31 +1388,8 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
-        // `CANCELER_ASLEEP` decrements sleep ahead of every other modelled
-        // canceller (`src/battle_util.c:2015`-`:2057`): a duration that
-        // survives cancels the move, expiry lets it proceed.
-        let attacker = if player_is_attacker {
-            &mut self.player
-        } else {
-            &mut self.enemy
-        };
-        match tick_sleep(attacker.status1(), attacker.ability()) {
-            SleepTick::NotAsleep => {}
-            SleepTick::StillAsleep(status) => {
-                attacker.set_status1(status);
-                events.push(BattleEvent::FastAsleep {
-                    by_player: player_is_attacker,
-                    move_id,
-                });
-                self.record_cancelled_move(player_is_attacker, move_id)?;
-                return Ok(());
-            }
-            SleepTick::WokeUp => {
-                attacker.set_status1(Status1::Healthy);
-                events.push(BattleEvent::WokeUp {
-                    by_player: player_is_attacker,
-                });
-            }
+        if self.tick_attacker_sleep(player_is_attacker, move_id, events)? {
+            return Ok(());
         }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
@@ -1446,6 +1427,10 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
+        events.push(BattleEvent::UsedMove {
+            by_player: player_is_attacker,
+            move_id,
+        });
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
         // test (`battle_script_commands.c:932-939`); the blocked script's
@@ -1493,6 +1478,42 @@ impl Battle {
             }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// Runs the attacker's `CANCELER_ASLEEP` step: sleep is decremented ahead
+    /// of every other modelled canceller (`src/battle_util.c:2015`-`:2057`).
+    /// A duration that survives cancels the move and returns `true`; expiry
+    /// wakes the attacker and lets the move proceed.
+    fn tick_attacker_sleep(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match tick_sleep(attacker.status1(), attacker.ability()) {
+            SleepTick::NotAsleep => Ok(false),
+            SleepTick::StillAsleep(status) => {
+                attacker.set_status1(status);
+                events.push(BattleEvent::FastAsleep {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                self.record_cancelled_move(player_is_attacker, move_id)?;
+                Ok(true)
+            }
+            SleepTick::WokeUp => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::WokeUp {
+                    by_player: player_is_attacker,
+                });
+                Ok(false)
+            }
+        }
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one
@@ -1652,7 +1673,7 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
+                .filter(|e| matches!(e, BattleEvent::ExpGained { .. }))
                 .count(),
             1,
             "experience should be awarded exactly once: {events:?}"

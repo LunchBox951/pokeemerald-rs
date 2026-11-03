@@ -395,7 +395,7 @@ fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
             )
             .expect("turn");
         if let Some(exp) = events.iter().find_map(|event| match event {
-            battle::BattleEvent::ExpGained(exp) => Some(*exp),
+            battle::BattleEvent::ExpGained { amount, .. } => Some(*amount),
             _ => None,
         }) {
             return (traded, exp);

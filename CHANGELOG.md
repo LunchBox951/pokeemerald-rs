@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.91.0] - 2026-11-03
+
+- General improvements in preparation for battle messages.
+
 ## [0.0.90.0] - 2026-11-03
 
 - Your whole party now joins wild battles: when your lead faints, a healthy reserve takes over instead of the game treating the battle as lost, and every Pokémon that fought keeps its own post-battle state.
@@ -422,7 +426,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.90.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/15769320877d041ed09e6b1afd1ccac7bf877cc9...dev
+[0.0.91.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ab04a3a6d177430073b49cbbe73768b1bb9225ec...dev
+[0.0.90.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/15769320877d041ed09e6b1afd1ccac7bf877cc9...ab04a3a6d177430073b49cbbe73768b1bb9225ec
 [0.0.89.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6f73b1201b71784582b1c979e9d76cb022abbef6...15769320877d041ed09e6b1afd1ccac7bf877cc9
 [0.0.88.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/430ab507b37601248d2c5aa4ad86ebb0838d824c...6f73b1201b71784582b1c979e9d76cb022abbef6
 [0.0.87.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/93654e4a9ec194b71d1e7bbd261a8853976567f6...430ab507b37601248d2c5aa4ad86ebb0838d824c
