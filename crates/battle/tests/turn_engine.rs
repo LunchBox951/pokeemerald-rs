@@ -6,6 +6,8 @@ mod common;
 
 #[path = "turn_engine/absorbing_abilities.rs"]
 mod absorbing_abilities;
+#[path = "turn_engine/announcement.rs"]
+mod announcement;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]
@@ -18,6 +20,8 @@ mod effect_spore_contact;
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
 mod first_battle;
+#[path = "turn_engine/freeze.rs"]
+mod freeze;
 #[path = "turn_engine/lifecycle.rs"]
 mod lifecycle;
 #[path = "turn_engine/move_resolution.rs"]
@@ -60,7 +64,11 @@ mod stat_changes;
 mod static_contact;
 #[path = "turn_engine/status_ability_matrix.rs"]
 mod status_ability_matrix;
+#[path = "turn_engine/traded_recipient_exp.rs"]
+mod traded_recipient_exp;
 #[path = "turn_engine/trainer_battle.rs"]
 mod trainer_battle;
+#[path = "turn_engine/truant.rs"]
+mod truant;
 #[path = "turn_engine/turn_order.rs"]
 mod turn_order;

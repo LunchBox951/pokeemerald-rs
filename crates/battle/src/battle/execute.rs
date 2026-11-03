@@ -2,7 +2,7 @@
 
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
-use crate::ability::huge_power_attack;
+use crate::ability::{burn_halves_damage, huge_power_attack};
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -45,8 +45,9 @@ const CONFUSION_SELF_HIT_POWER: u8 = 40;
 /// Whether the events one move produced mark `MOVE_RESULT_NO_EFFECT`, the
 /// flag that turns the target's landed-move record into `MOVE_UNAVAILABLE`
 /// (`battle_script_commands.c:4419`-`:4433`). A miss, a type immunity,
-/// Levitate, Wonder Guard, an absorbed or healed-through move, an explicit
-/// failure and a capped primary stat change set it; a blocked status that
+/// Levitate, Wonder Guard, a move an absorbing ability healed through or made
+/// useless, an explicit failure and a capped primary stat change set it
+/// (`data/battle_scripts_1.s:4088`, `:4098`); a blocked status that
 /// leaves `gMoveResultFlags` alone (Limber, Own Tempo, an already-applied
 /// status, Flash Fire) does not.
 fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
@@ -58,6 +59,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
                 | BattleEvent::AbilityHealed { .. }
+                | BattleEvent::AbsorbMadeMoveUseless { .. }
                 | BattleEvent::ButItFailed { .. }
                 | BattleEvent::StatWontGoHigher { .. }
                 | BattleEvent::StatWontGoLower { .. }
@@ -461,7 +463,8 @@ impl Battle {
                 events.push(BattleEvent::AbilityHealed {
                     by_player: attacker_is_player,
                     move_id,
-                    healed: defender.current_hp() - before,
+                    healed: defender.current_hp().saturating_sub(before),
+                    ability: defender.ability(),
                 });
             }
             HitOutcome::FlashFireBlocked { first_activation } => {
@@ -507,9 +510,10 @@ impl Battle {
                 ));
             }
             HitOutcome::Absorbed { healing: 0 } => {
-                events.push(BattleEvent::NoEffect {
+                events.push(BattleEvent::AbsorbMadeMoveUseless {
                     by_player: attacker_is_player,
                     move_id,
+                    ability: self.battlers(attacker_is_player).1.ability(),
                 });
             }
             HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
@@ -531,58 +535,19 @@ impl Battle {
                     damage: hp_lost,
                     is_critical,
                 });
+                self.push_type_effectiveness(attacker_is_player, move_id, events);
                 // `seteffectwithchance` precedes `tryfaintmon`
                 // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
                 // leads with an `hp == 0` guard
                 // (`battle_script_commands.c:2261`-`:2264`), shared by every
                 // arm the trampoline can reach.
-                let mut poisoned_synchronize_holder = false;
-                match resolution.secondary_effect {
-                    SecondaryApplication::None => {}
-                    SecondaryApplication::Poison => {
-                        let defender = if attacker_is_player {
-                            &mut self.enemy
-                        } else {
-                            &mut self.player
-                        };
-                        if !defender.is_fainted() {
-                            defender.set_status1(Status1::Poisoned);
-                            poisoned_synchronize_holder =
-                                defender.ability() == AbilityId::SYNCHRONIZE;
-                            events.push(BattleEvent::Poisoned {
-                                by_player: attacker_is_player,
-                                move_id,
-                            });
-                        }
-                    }
-                    SecondaryApplication::Confuse => {
-                        let target_fainted = if attacker_is_player {
-                            self.enemy.is_fainted()
-                        } else {
-                            self.player.is_fainted()
-                        };
-                        if !target_fainted {
-                            // The duration draw is inside `SetMoveEffect`'s
-                            // own `hp == 0` guard, not before it, so it only
-                            // happens once the target is known to have
-                            // survived this same hit.
-                            let turns = draw_confusion_duration(rng);
-                            let defender = if attacker_is_player {
-                                &mut self.enemy
-                            } else {
-                                &mut self.player
-                            };
-                            defender.volatiles_mut().set_confusion(turns);
-                            events.push(BattleEvent::ConfusionInflicted {
-                                by_player: attacker_is_player,
-                                move_id,
-                            });
-                        }
-                    }
-                    SecondaryApplication::SpeedDown => {
-                        self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
-                    }
-                }
+                let poisoned_synchronize_holder = self.apply_hit_secondary_effect(
+                    attacker_is_player,
+                    move_id,
+                    resolution.secondary_effect,
+                    rng,
+                    events,
+                );
                 // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
                 // same `seteffectwithchance` step, still ahead of the
                 // target's own `tryfaintmon` (`data/battle_scripts_1.s:265`-
@@ -599,6 +564,69 @@ impl Battle {
             }
         }
         Ok(())
+    }
+
+    /// The secondary effect of a landed hit, applied to a target that survived
+    /// it. `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`), shared by every arm the
+    /// trampoline can reach. Returns whether a Synchronize holder was poisoned,
+    /// which [`Self::reflect_synchronize_poison`] settles after the target's
+    /// own faint check.
+    fn apply_hit_secondary_effect(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        secondary_effect: SecondaryApplication,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> bool {
+        let mut poisoned_synchronize_holder = false;
+        match secondary_effect {
+            SecondaryApplication::None => {}
+            SecondaryApplication::Poison => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                if !defender.is_fainted() {
+                    defender.set_status1(Status1::Poisoned);
+                    poisoned_synchronize_holder = defender.ability() == AbilityId::SYNCHRONIZE;
+                    events.push(BattleEvent::Poisoned {
+                        by_player: attacker_is_player,
+                        move_id,
+                    });
+                }
+            }
+            SecondaryApplication::Confuse => {
+                let target_fainted = if attacker_is_player {
+                    self.enemy.is_fainted()
+                } else {
+                    self.player.is_fainted()
+                };
+                if !target_fainted {
+                    // The duration draw is inside `SetMoveEffect`'s
+                    // own `hp == 0` guard, not before it, so it only
+                    // happens once the target is known to have
+                    // survived this same hit.
+                    let turns = draw_confusion_duration(rng);
+                    let defender = if attacker_is_player {
+                        &mut self.enemy
+                    } else {
+                        &mut self.player
+                    };
+                    defender.volatiles_mut().set_confusion(turns);
+                    events.push(BattleEvent::ConfusionInflicted {
+                        by_player: attacker_is_player,
+                        move_id,
+                    });
+                }
+            }
+            SecondaryApplication::SpeedDown => {
+                self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+            }
+        }
+        poisoned_synchronize_holder
     }
 
     /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
@@ -684,7 +712,8 @@ impl Battle {
     /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
     /// confused Selfdestruct or Explosion user takes the larger self-hit
     /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
-    /// depleted slot reaches it too).
+    /// depleted slot reaches it too). The same call halves a burned battler's
+    /// damage unless it has Guts (`:3262`-`:3264`).
     pub(super) fn apply_confusion_self_hit(
         &mut self,
         battler_is_player: bool,
@@ -714,10 +743,10 @@ impl Battle {
             attack_stage,
             defense_stat,
             defense_stage,
-            // A burned battler's self-hit should halve like any physical
-            // hit (`pokeemerald/src/pokemon.c:3262`-`:3264`); that call site
-            // is tracked by #2850.
-            attacker_burned: false,
+            // `CalculateBaseDamage` halves a burned non-Guts attacker's
+            // damage after the division by 50 (`pokeemerald/src/pokemon.c:3262`
+            // -`:3264`); the confused battler is the attacker here.
+            attacker_burned: burn_halves_damage(battler.ability(), battler.status1()),
             reflect: false,
             light_screen: false,
             weather: Weather::None,
@@ -774,8 +803,8 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
-        // `FaintClearSetData` resets the battler's history and Perish Song
-        // countdown (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
+        // `FaintClearSetData` resets the battler's history, Perish Song
+        // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
             BattlerState::default();
     }

@@ -541,3 +541,42 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
         );
     }
 }
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_holds_the_tall_grass_sheet_and_its_palette() {
+    const TALL_GRASS_WIDTH: u32 = 80;
+    const TALL_GRASS_HEIGHT: u32 = 16;
+
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let sheet = pack
+        .field_effect_image("tall_grass")
+        .expect("tall_grass sheet");
+    assert_eq!(
+        (sheet.width, sheet.height),
+        (TALL_GRASS_WIDTH, TALL_GRASS_HEIGHT)
+    );
+    let palette = pack
+        .field_effect_palette("general_1")
+        .expect("general_1 palette");
+    assert_eq!(palette.color_count, EXPECTED_PALETTE_COLOR_COUNT);
+    // `graphics/field_effects/palettes/general_1.pal`: colour 1 is (180, 255, 131).
+    assert_eq!(palette.colors().nth(1), Some(0x43F6));
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
+    const FIRST_COLORS: [u16; 2] = [0x7fff, 0x0010];
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let ball = pack.poke_ball().expect("the Poké Ball");
+
+    assert_eq!((ball.sheet.image.width, ball.sheet.image.height), (16, 48));
+    assert_eq!(ball.sheet.image.pixels.len(), 16 * 48);
+    assert_eq!(ball.sheet.palette.color_count, 16);
+    let leading: Vec<u16> = ball.sheet.palette.colors().take(2).collect();
+    assert_eq!(leading, FIRST_COLORS);
+    assert_eq!((ball.open_sheet.width, ball.open_sheet.height), (16, 16));
+    assert_eq!(ball.open_sheet.pixels.len(), 16 * 16);
+}

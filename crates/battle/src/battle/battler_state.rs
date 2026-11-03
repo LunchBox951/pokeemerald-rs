@@ -1,9 +1,10 @@
-//! Per-battler move history and Perish Song state.
+//! Per-battler move history, Perish Song and Truant state.
 //!
 //! Upstream keeps these in arrays indexed by battler (`gLastLandedMoves`,
-//! `gLastHitBy`, `gStatuses3[].perishSongTimer`) that `SwitchInClearSetData`
-//! and `FaintClearSetData` reset, so they belong to the battler's occupancy
-//! of the field and not to a party member.
+//! `gLastHitBy`, `gStatuses3[].perishSongTimer`,
+//! `gDisableStructs[].truantCounter`) that `SwitchInClearSetData` and
+//! `FaintClearSetData` reset, so they belong to the battler's occupancy
+//! of the field and not to a party member. None of it reaches a save.
 
 use assets::MoveId;
 
@@ -59,6 +60,7 @@ pub struct BattlerState {
     last_landed_move: LastLandedMove,
     last_hitter: Option<BattlerSide>,
     perish_song: Option<PerishSongTurns>,
+    truant_loafing: bool,
 }
 
 impl BattlerState {
@@ -79,6 +81,27 @@ impl BattlerState {
     #[must_use]
     pub const fn perish_song(&self) -> Option<PerishSongTurns> {
         self.perish_song
+    }
+
+    /// Whether this occupant's Truant counter (`gDisableStructs[].truantCounter`)
+    /// is set, so its next move action loafs. Only a Truant holder ever
+    /// carries it, and it starts clear for an initially active battler.
+    #[must_use]
+    pub const fn truant_loafing(&self) -> bool {
+        self.truant_loafing
+    }
+
+    /// `Cmd_switchineffects` sets the counter for an incoming Truant holder
+    /// after `SwitchInClearSetData` zeroed it (`battle_script_commands.c:5258`-
+    /// `:5263`); a battler of any other ability keeps it clear.
+    pub(super) fn enter_field(&mut self, has_truant: bool) {
+        self.truant_loafing = has_truant;
+    }
+
+    /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_TRUANT` case toggles the counter
+    /// (`battle_util.c:2653`-`:2655`).
+    pub(super) fn toggle_truant(&mut self) {
+        self.truant_loafing = !self.truant_loafing;
     }
 
     /// `Cmd_moveend`'s `MOVEEND_UPDATE_LAST_MOVES` write for the target: a

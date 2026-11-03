@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::audio::AudioError;
+use crate::event_scripts::EventScriptError;
 use crate::pokedex::PokedexError;
 use crate::SpeciesId;
 
@@ -89,6 +90,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Poké Ball entry differs from the upstream graphic's shape.
+    MalformedPokeBallAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler entry differs from the upstream graphic's shape.
     MalformedBattlerAsset {
         /// Asset id.
@@ -107,9 +115,25 @@ pub enum PackError {
     },
     /// The pack carries no trainer picture for this identity.
     UnsupportedTrainerPic(TrainerPicId),
+    /// A trainer battler entry differs from the upstream graphic's shape.
+    MalformedTrainerBattlerAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The pack carries no battler art for this trainer.
+    UnsupportedTrainerBattler(TrainerPicId),
     /// An opening-scene entry (Birch's speech scene or the wall clock) differs
     /// from the upstream graphic's shape.
     MalformedOpeningSceneAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// An evolution-scene entry differs from the upstream graphic's shape.
+    MalformedEvolutionSceneAsset {
         /// Asset id.
         id: String,
         /// What differs from the expected shape.
@@ -177,6 +201,21 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: BattleAnimationError,
+    },
+    /// The `script/events` entry failed its schema's decode.
+    EventScriptDecode {
+        /// Entry asset id.
+        id: String,
+        /// Underlying schema error.
+        source: EventScriptError,
+    },
+    /// A reference into the `script/events` payload does not resolve: the
+    /// root, table, symbol or standard-script slot is absent.
+    EventScriptResolve {
+        /// Entry asset id.
+        id: String,
+        /// Underlying lookup error.
+        source: EventScriptError,
     },
     /// The `pokedex/data` entry failed its schema's decode.
     PokedexDecode {
@@ -273,6 +312,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedPokeBallAsset { id, detail } => {
+                write!(f, "asset pack: poke-ball entry `{id}` {detail}")
+            }
             Self::MalformedBattlerAsset { id, detail } => {
                 write!(f, "asset pack: battler entry `{id}` {detail}")
             }
@@ -289,8 +331,19 @@ impl fmt::Display for PackError {
                 "asset pack: no trainer picture for index {}",
                 pic.index()
             ),
+            Self::MalformedTrainerBattlerAsset { id, detail } => {
+                write!(f, "asset pack: trainer battler entry `{id}` {detail}")
+            }
+            Self::UnsupportedTrainerBattler(trainer) => write!(
+                f,
+                "asset pack: no trainer battler art for trainer picture {}",
+                trainer.index()
+            ),
             Self::MalformedOpeningSceneAsset { id, detail } => {
                 write!(f, "asset pack: opening-scene entry `{id}` {detail}")
+            }
+            Self::MalformedEvolutionSceneAsset { id, detail } => {
+                write!(f, "asset pack: evolution-scene entry `{id}` {detail}")
             }
             Self::MalformedPokedexGraphic { id, detail } => {
                 write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
@@ -331,6 +384,18 @@ impl fmt::Display for PackError {
                     "asset pack: battle-animation entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::EventScriptDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: event-script entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::EventScriptResolve { id, source } => {
+                write!(
+                    f,
+                    "asset pack: event-script reference does not resolve in `{id}`: {source}"
+                )
+            }
             Self::PokedexDecode { id, source } => {
                 write!(
                     f,
@@ -348,6 +413,9 @@ impl std::error::Error for PackError {
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::FieldMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
+            Self::EventScriptDecode { source, .. } | Self::EventScriptResolve { source, .. } => {
+                Some(source)
+            }
             Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
@@ -362,11 +430,15 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedPokeBallAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
             | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedTrainerBattlerAsset { .. }
+            | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }
+            | Self::MalformedEvolutionSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }

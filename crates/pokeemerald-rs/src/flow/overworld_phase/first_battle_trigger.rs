@@ -77,7 +77,7 @@ impl OverworldPhase {
             if guard_fails {
                 continue;
             }
-            return script == TRIGGER_SCRIPT;
+            return script.id() == TRIGGER_SCRIPT;
         }
         false
     }
@@ -117,7 +117,7 @@ impl OverworldPhase {
                  may re-fire"
             );
         }
-        let Some(lead) = self.take_lead_battler() else {
+        let Some(lead) = self.take_lead_for_battle() else {
             eprintln!("first battle: no party mon yet -- no battle to start");
             return;
         };

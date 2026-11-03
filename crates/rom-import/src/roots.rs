@@ -29,6 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod poke_ball;
+
+pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -331,7 +335,27 @@ pub struct SampleRoot {
     pub data_len: u32,
 }
 
-/// The audio roots `MUS_TITLE` needs.
+/// The species cry tables and the samples they name.
+///
+/// `gCryTable` and `gCryTable_Reverse` (`pokeemerald/sound/cry_tables.inc`)
+/// are each [`assets::audio::CRY_TABLE_LEN`] `ToneData` records whose `wav`
+/// word points at a DPCM-compressed `WaveData`. The reverse table repeats the
+/// normal table's samples under the reverse `ToneData` type, so one sample
+/// list serves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CryRoots {
+    /// `gCryTable`, the first normal `ToneData` record.
+    pub normal: GbaPtr,
+    /// `gCryTable_Reverse`, the first reverse `ToneData` record.
+    pub reverse: GbaPtr,
+    /// Every cry sample in table order, so entry `n` is the sample record `n`
+    /// of both tables points at. Each root has a 16-byte `WaveData` header,
+    /// and its `data_len` is the decoded sample count, not the compressed
+    /// length stored in the ROM.
+    pub samples: &'static [SampleRoot],
+}
+
+/// The audio roots `MUS_TITLE` and the species cries need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioRoots {
     /// `gSongTable`, an array of 8-byte `{header, ms, me}` entries.
@@ -346,6 +370,9 @@ pub struct AudioRoots {
     pub direct_sound: &'static [SampleRoot],
     /// Every CGB programmable-wave table those voicegroups reference.
     pub programmable_wave: &'static [SampleRoot],
+    /// The species cry tables and samples, or `None` for a profile built
+    /// from a pack that holds no cries.
+    pub cry: Option<CryRoots>,
 }
 
 /// One special battle-message template and the upstream symbol it is.
@@ -481,6 +508,22 @@ pub struct OpeningSceneRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
+/// The evolution scene's animated background and sparkle sprite
+/// (`graphics/evolution_scene`, `graphics/misc/evo_sparkle.png`).
+///
+/// The two images, three palettes, and two tilemaps under the
+/// `evolution-scene/` pack ids the checkout extractor emits. The images and
+/// tilemaps are stored compressed; the palettes are raw `.gbapal` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvolutionSceneRoots {
+    /// Every `evolution-scene/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `evolution-scene/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `evolution-scene/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// The battle textbox, menu text, and singles health-box graphics
 /// (`graphics/battle_interface`).
 ///
@@ -524,6 +567,23 @@ pub struct BattleInterfaceRoots {
     pub battle_bar: Option<BlobRoot>,
 }
 
+/// The naming screen's graphics (`graphics/naming_screen`).
+///
+/// The fifteen sheets, seven palettes, and four tilemaps under the
+/// `naming-screen/` pack ids the checkout extractor emits. Only the menu sheet
+/// and the tilemaps are LZ77 streams; the other sheets and the palettes are
+/// raw. The three cursor sheets are stored as their first five tiles, which
+/// the pack publishes as an 8x40 strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamingScreenRoots {
+    /// Every `naming-screen/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `naming-screen/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `naming-screen/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -557,6 +617,67 @@ pub struct BattlerRoots {
     pub shiny_palette_table: GbaPtr,
     /// Every species with pack entries.
     pub species: &'static [BattlerRoot],
+}
+
+/// One trainer front picture: the rows its `TRAINER_PIC_*` index selects in
+/// `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerFrontRoot {
+    /// The picture's `TRAINER_PIC_*` value, the row index in both tables.
+    pub trainer_pic: u16,
+    /// The front image `gTrainerFrontPicTable[trainer_pic]` points at.
+    pub front: ImageRoot,
+    /// The palette `gTrainerFrontPicPaletteTable[trainer_pic]` points at.
+    pub palette: PaletteRoot,
+}
+
+/// A set of trainer front pictures with the tables that index them
+/// (`src/data/trainer_graphics/front_pic_tables.h`): the Birch-speech
+/// portraits, and the front half of the trainer battlers.
+///
+/// The two tables are recorded so a reader can corroborate each picture's
+/// row by pointer, size and tag rather than trust the addresses alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerFrontRoots {
+    /// `gTrainerFrontPicTable`: 8-byte `{data, size, tag}` rows.
+    pub front_table: GbaPtr,
+    /// `gTrainerFrontPicPaletteTable`: 8-byte `{data, tag}` rows.
+    pub palette_table: GbaPtr,
+    /// Every trainer picture with pack entries.
+    pub trainers: &'static [TrainerFrontRoot],
+}
+
+/// One trainer back picture: the row its `TRAINER_BACK_PIC_*` index selects
+/// in `gTrainerBackPicTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerBackRoot {
+    /// The trainer's front picture index, naming the [`TrainerFrontRoot`] whose
+    /// palette the back picture shares.
+    pub trainer_pic: u16,
+    /// The picture's `TRAINER_BACK_PIC_*` value, the row index in both back
+    /// tables. A different index space from `trainer_pic`.
+    pub back_pic: u16,
+    /// The uncompressed four-frame sheet `gTrainerBackPicTable[back_pic]` points at.
+    pub back: ImageRoot,
+}
+
+/// The Brendan and May trainer battlers
+/// (`src/data/trainer_graphics/front_pic_tables.h`, `back_pic_tables.h`).
+///
+/// The front half reuses [`TrainerFrontRoots`]: the same tables and the same
+/// ROM payloads the Birch-speech portraits read, published under the battler
+/// ids. Each back picture's palette row in `gTrainerBackPicPaletteTable` points
+/// at that trainer's front palette, so the palette is recorded once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerBattlerRoots {
+    /// The front pictures and palettes, with the front tables.
+    pub front: TrainerFrontRoots,
+    /// `gTrainerBackPicTable`: 8-byte `{data, size, tag}` rows.
+    pub back_table: GbaPtr,
+    /// `gTrainerBackPicPaletteTable`: 8-byte `{data, tag}` rows.
+    pub back_palette_table: GbaPtr,
+    /// Every trainer back picture with a pack entry.
+    pub backs: &'static [TrainerBackRoot],
 }
 
 /// The authoritative ROM addresses a profile carries, grouped by domain.
@@ -594,10 +715,20 @@ pub struct Roots {
     pub starter_chooser: StarterChooserRoots,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningSceneRoots,
+    /// The evolution scene's background and sparkle sprite.
+    pub evolution_scene: EvolutionSceneRoots,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfaceRoots,
-    /// The starters' static battler images and palettes.
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenRoots,
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallRoots,
+    /// The Birch-speech trainer front pictures.
+    pub trainer_front: TrainerFrontRoots,
+    /// The Brendan and May trainer battlers.
+    pub trainer_battlers: TrainerBattlerRoots,
 }
 
 impl Roots {
@@ -634,6 +765,7 @@ impl Roots {
             keysplits: &[],
             direct_sound: &[],
             programmable_wave: &[],
+            cry: None,
         },
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
@@ -641,8 +773,13 @@ impl Roots {
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
+        evolution_scene: EvolutionSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
+        naming_screen: NamingScreenRoots::NONE,
         battlers: BattlerRoots::NONE,
+        poke_ball: PokeBallRoots::NONE,
+        trainer_front: TrainerFrontRoots::NONE,
+        trainer_battlers: TrainerBattlerRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -663,13 +800,30 @@ impl Roots {
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
+            .chain(self.evolution_scene.images.iter())
             .chain(self.battle_interface.images.iter())
+            .chain(self.naming_screen.images.iter())
             .chain(
                 self.battlers
                     .species
                     .iter()
                     .flat_map(|battler| [&battler.front, &battler.back]),
             )
+            .chain(
+                self.poke_ball
+                    .poke_ball
+                    .iter()
+                    .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
+            )
+            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
+            .chain(
+                self.trainer_battlers
+                    .front
+                    .trainers
+                    .iter()
+                    .map(|pic| &pic.front),
+            )
+            .chain(self.trainer_battlers.backs.iter().map(|pic| &pic.back))
     }
 
     /// Every palette root in the table, across every domain.
@@ -684,12 +838,23 @@ impl Roots {
             .chain(self.bag.palettes.iter())
             .chain(self.starter_chooser.palettes.iter())
             .chain(self.opening_scene.palettes.iter())
+            .chain(self.evolution_scene.palettes.iter())
             .chain(self.battle_interface.palettes.iter())
+            .chain(self.naming_screen.palettes.iter())
             .chain(
                 self.battlers
                     .species
                     .iter()
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
+            )
+            .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
+            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
+            .chain(
+                self.trainer_battlers
+                    .front
+                    .trainers
+                    .iter()
+                    .map(|pic| &pic.palette),
             )
     }
 }
@@ -740,6 +905,15 @@ impl OpeningSceneRoots {
     };
 }
 
+impl EvolutionSceneRoots {
+    /// No evolution-scene roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
 impl BattleInterfaceRoots {
     /// No battle-interface roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
@@ -751,6 +925,15 @@ impl BattleInterfaceRoots {
     };
 }
 
+impl NamingScreenRoots {
+    /// No naming-screen roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
 impl BattlerRoots {
     /// No battler roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
@@ -759,6 +942,25 @@ impl BattlerRoots {
         palette_table: GbaPtr::AT_BASE,
         shiny_palette_table: GbaPtr::AT_BASE,
         species: &[],
+    };
+}
+
+impl TrainerFrontRoots {
+    /// No trainer front roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        front_table: GbaPtr::AT_BASE,
+        palette_table: GbaPtr::AT_BASE,
+        trainers: &[],
+    };
+}
+
+impl TrainerBattlerRoots {
+    /// No trainer battler roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        front: TrainerFrontRoots::NONE,
+        back_table: GbaPtr::AT_BASE,
+        back_palette_table: GbaPtr::AT_BASE,
+        backs: &[],
     };
 }
 

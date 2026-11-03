@@ -25,6 +25,8 @@ enum SquareDuty {
 
 impl SquareDuty {
     const REGISTER_MASK: u8 = 0b11;
+    /// The duty field's position in `NRx1` (`mgba/src/gb/audio.c:885-888`).
+    const NRX1_SHIFT: u8 = 6;
 
     fn from_register(value: u8) -> Self {
         match value & Self::REGISTER_MASK {
@@ -72,6 +74,18 @@ fn frequency_step_delta(freq_reg: u16) -> u32 {
     )
 }
 
+/// The frequency register and duty clock a slot's hardware holds, kept apart
+/// from a replacement's pending pitch until its pitch block commits.
+#[derive(Clone, Copy, Debug)]
+struct HardwareClock {
+    frequency: u16,
+    note_high_bits: u16,
+    phase: u32,
+    step_delta: u32,
+    idle_samples: u32,
+    idle_step_delta: Option<u32>,
+}
+
 /// CGB channel 1 or 2 square-wave generator.
 #[derive(Clone, Debug)]
 pub struct SquareChannel {
@@ -93,6 +107,9 @@ pub struct SquareChannel {
     /// (`mgba/src/gb/audio.c:493-503,975-979`) and [`Self::settled_phase`]
     /// retimes it once.
     idle_step_delta: Option<u32>,
+    /// The replaced note's hardware, held until the first pass shows whether
+    /// the pitch block runs ([`Self::commit_initial_writes`]).
+    predecessor: Option<HardwareClock>,
 }
 
 impl SquareChannel {
@@ -110,9 +127,22 @@ impl SquareChannel {
             disabled_at_trigger,
             idle_samples: 0,
             idle_step_delta: None,
+            predecessor: None,
         };
         chan.set_frequency(freq_reg);
         chan
+    }
+
+    /// The `NRx1` store of `CgbSound`'s first pass: the 8-bit sum of the duty
+    /// field and the instrument's raw length byte (`pokeemerald/src/m4a.c:1001`).
+    /// The hardware takes the duty from bits 6-7 of that byte, so an encoded
+    /// length whose carry reaches them changes the pattern
+    /// (`mgba/src/gb/audio.c:885-888`). Returns the stored byte, whose low six
+    /// bits load the length counter.
+    pub fn write_nrx1(&mut self, length_register: u8) -> u8 {
+        let register = ((self.duty as u8) << SquareDuty::NRX1_SHIFT).wrapping_add(length_register);
+        self.duty = SquareDuty::from_register(register >> SquareDuty::NRX1_SHIFT);
+        register
     }
 
     /// Reports whether the most recent trigger's sweep check disabled the channel.
@@ -124,6 +154,11 @@ impl SquareChannel {
     #[cfg(test)]
     pub(crate) fn sweep_frequency(&self) -> Option<u16> {
         self.sweep.as_ref().map(|s| s.shadow_frequency)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frequency(&self) -> u16 {
+        self.frequency
     }
 
     #[cfg(test)]
@@ -162,6 +197,37 @@ impl SquareChannel {
         self.idle_step_delta = None;
     }
 
+    /// Inherits the replaced note's duty clock and keeps its register state
+    /// aside for a first pass that retires before the pitch write.
+    pub(crate) fn inherit_hardware_from(&mut self, previous: &Self) {
+        self.continue_duty_from(previous);
+        self.predecessor = Some(HardwareClock {
+            frequency: previous.frequency,
+            note_high_bits: previous.note_high_bits,
+            phase: previous.phase,
+            step_delta: previous.step_delta,
+            idle_samples: previous.idle_samples,
+            idle_step_delta: previous.idle_step_delta,
+        });
+    }
+
+    /// Settles the first pass's writes: a retiring pass jumps past the
+    /// `NRx3`/`NRx4` pitch write, so only the duty and sweep writes land on
+    /// the predecessor's register (`pokeemerald/src/m4a.c:997-1002,1053-1056,1197-1202`).
+    pub(crate) fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
+        let Some(hardware) = self.predecessor.take() else {
+            return;
+        };
+        if retires_on_first_pass {
+            self.frequency = hardware.frequency;
+            self.note_high_bits = hardware.note_high_bits;
+            self.phase = hardware.phase;
+            self.step_delta = hardware.step_delta;
+            self.idle_samples = hardware.idle_samples;
+            self.idle_step_delta = hardware.idle_step_delta;
+        }
+    }
+
     /// Records idle `samples` without advancing the duty position: a disabled
     /// channel's catch-up is skipped (`GBAudioRun`'s `dead != 2` gate,
     /// `mgba/src/gb/audio.c:493-510`) until the next register write
@@ -192,12 +258,23 @@ impl SquareChannel {
     /// Retunes from an 11-bit frequency register value as a pitch write does
     /// through `NR13` then `NR14` (`pokeemerald/src/m4a.c:1198-1203`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        self.set_frequency_latching(freq_reg);
+    }
+
+    /// [`Self::set_frequency`], returning the bipolar level the `NR14` write's
+    /// catch-up latches: the duty position run at the old rate (`NR13`) then
+    /// the intermediate rate, before the high byte is stored
+    /// (`mgba/src/gb/audio.c:162-171,219-224,493-501`). A stopped channel is
+    /// not run after the store, so the final frequency cannot move this latch.
+    pub(crate) fn set_frequency_latching(&mut self, freq_reg: u16) -> i8 {
         self.settle_idle_samples();
         let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
         let intermediate = intermediate_frequency(self.frequency, freq_reg);
         self.play_frequency(intermediate);
+        let latched = self.held_level();
         self.note_high_bits = freq_reg & FREQUENCY_HIGH_BITS;
         self.play_frequency(freq_reg);
+        latched
     }
 
     /// A sweep write-back retune, with no `NR13`/`NR14` intermediate step.
@@ -250,6 +327,20 @@ impl SquareChannel {
                 }
                 false
             }
+        }
+    }
+
+    /// The bipolar unit level at the current duty position, without stepping
+    /// it: what a register write's catch-up re-latches into a channel that is
+    /// not playing (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+    pub fn held_level(&mut self) -> i8 {
+        self.settle_idle_samples();
+        let pattern = self.duty.pattern();
+        let step = (self.phase / PHASE_ONE) as usize % pattern.len();
+        if pattern[step] {
+            1
+        } else {
+            -1
         }
     }
 
@@ -683,6 +774,26 @@ mod tests {
             "the off-write must rate the channel as if only its low frequency byte survived",
         );
     }
+
+    #[test]
+    fn stopped_pitch_write_latches_before_the_final_high_byte_retune() {
+        // mGBA: NR13's catch-up runs at the old rate, NR14's at the
+        // intermediate rate; the final frequency only takes effect after the
+        // NR14 store, so it cannot move the index latched by this write.
+        let old = 0x02C;
+        let new = 0x705;
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, old, None);
+        let old_delta = square.step_delta;
+        let mid_delta = frequency_step_delta(intermediate_frequency(old, new));
+        let final_delta = frequency_step_delta(new);
+        let samples = PHASE_ONE.div_ceil(final_delta) + 1;
+        assert!(old_delta * samples < PHASE_ONE);
+        assert!(mid_delta * samples < PHASE_ONE);
+        assert!(final_delta * samples >= PHASE_ONE);
+        square.defer_idle_samples(samples as usize);
+        let latched = square.set_frequency_latching(new);
+        assert_eq!(latched, 1, "phase index {}", square.phase / PHASE_ONE);
+    }
 }
 
 #[cfg(test)]
@@ -759,5 +870,89 @@ mod deferred_idle_settlement_tests {
         assert_eq!(square.phase, expected);
         let _ = square.sample();
         assert_eq!(square.phase, expected.wrapping_add(square.step_delta));
+    }
+}
+
+#[cfg(test)]
+mod retiring_first_pass_tests {
+    use super::*;
+
+    const PREDECESSOR_FREQUENCY: u16 = 0x60B;
+    const INCOMING_FREQUENCY: u16 = 0x705;
+    const INCOMING_DUTY: u8 = 3;
+
+    fn predecessor() -> SquareChannel {
+        let mut previous = SquareChannel::new(0, PREDECESSOR_FREQUENCY, None);
+        for _ in 0..7 {
+            previous.sample();
+        }
+        previous.defer_idle_samples(5);
+        previous
+    }
+
+    fn replacement(previous: &SquareChannel, sweep_byte: Option<u8>) -> SquareChannel {
+        let sweep = sweep_byte.map(|byte| Sweep::from_byte(byte, INCOMING_FREQUENCY));
+        let mut replacement = SquareChannel::new(INCOMING_DUTY, INCOMING_FREQUENCY, sweep);
+        replacement.inherit_hardware_from(previous);
+        replacement
+    }
+
+    #[test]
+    fn a_retiring_first_pass_keeps_the_predecessors_clock_and_the_incoming_duty() {
+        let previous = predecessor();
+        let mut retiring = replacement(&previous, None);
+        retiring.commit_initial_writes(true);
+
+        assert_eq!(retiring.frequency, PREDECESSOR_FREQUENCY);
+        assert_eq!(retiring.step_delta, previous.step_delta);
+        assert_eq!(retiring.settled_phase(), previous.settled_phase());
+        assert_eq!(retiring.duty as usize, usize::from(INCOMING_DUTY));
+
+        assert!(retiring.apply_hardware_off_write());
+        assert_eq!(
+            retiring.frequency,
+            PREDECESSOR_FREQUENCY & FREQUENCY_LOW_BYTE
+        );
+    }
+
+    #[test]
+    fn an_active_first_pass_keeps_the_replacements_pitch() {
+        let previous = predecessor();
+        let mut active = replacement(&previous, None);
+        let mut oracle = SquareChannel::new(INCOMING_DUTY, INCOMING_FREQUENCY, None);
+        oracle.continue_duty_from(&previous);
+        active.commit_initial_writes(false);
+
+        assert_eq!(active.frequency, INCOMING_FREQUENCY);
+        assert_eq!(active.settled_phase(), oracle.settled_phase());
+        assert!(active.predecessor.is_none());
+    }
+
+    #[test]
+    fn a_retiring_square1_sweeps_from_the_retained_low_byte_under_the_incoming_control() {
+        const PERIOD_1_DOWN_SHIFT_1: u8 = 0x19;
+        let previous = predecessor();
+        let mut retiring = replacement(&previous, Some(PERIOD_1_DOWN_SHIFT_1));
+        retiring.commit_initial_writes(true);
+        assert!(retiring.apply_hardware_off_write());
+
+        assert_eq!(retiring.sweep_frequency(), Some(0x0B));
+        assert!(retiring.step_sweep_tick());
+        assert_eq!(retiring.sweep_frequency(), Some(6));
+        assert!(retiring.step_sweep_tick());
+        assert_eq!(retiring.sweep_frequency(), Some(3));
+    }
+
+    #[test]
+    fn a_retiring_square1_trigger_checks_overflow_at_the_retained_frequency() {
+        const PERIOD_0_UP_SHIFT_1: u8 = 0x01;
+        let previous = predecessor();
+        let mut retiring = replacement(&previous, Some(PERIOD_0_UP_SHIFT_1));
+        assert!(retiring.is_disabled());
+        retiring.commit_initial_writes(true);
+
+        assert!(retiring.apply_hardware_off_write());
+        assert!(!retiring.is_disabled());
+        assert_eq!(retiring.sweep_frequency(), Some(0x0B));
     }
 }

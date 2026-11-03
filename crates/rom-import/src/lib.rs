@@ -46,14 +46,23 @@
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
-//!   battle textbox with the two menu text palettes (`battle-interface/*`).
+//!   evolution scene's background and sparkle (`evolution-scene/*`), the
+//!   battle textbox with the two menu text palettes (`battle-interface/*`), the
+//!   naming screen's sheets, palettes and tilemaps (`naming-screen/*`), the
+//!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
+//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
+//!   battlers (`trainer/*`: the same front pictures again, the uncompressed
+//!   four-frame back sheets behind `gTrainerBackPicTable`, and one palette per
+//!   trainer that `gTrainerBackPicPaletteTable` shares with the front).
 //!   The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
 //!   `assets`' own schema encoders, and `MUS_TITLE` itself
 //!   (`audio/song/*`), decoded from the engine's track byte-code into
-//!   `assets::Song` events. A domain that has a ROM struct behind
+//!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
+//!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to
+//!   PCM). A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
@@ -98,7 +107,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use domains::audio::decode_voicegroup_payload;
+pub use domains::audio::{decode_cry_payloads, decode_voicegroup_payload};
 pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
@@ -122,12 +131,15 @@ pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot,
-    OpeningSceneRoots, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
+    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
+    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 };
+pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
+pub use roots::{TrainerFrontRoot, TrainerFrontRoots};
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 
 /// What an import produced.

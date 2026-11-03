@@ -13,9 +13,12 @@ use super::battle_interface::healthbox_element_pack_ids;
 use super::battle_interface::healthbox_frame_pack_ids;
 use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
+use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
+use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
+pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;
 use super::ExtractError;
 
 #[derive(Clone, Copy)]
@@ -553,7 +556,7 @@ pub(crate) fn text_window_ids() -> Vec<String> {
         .collect()
 }
 
-/// One starter whose static battler art the pack carries.
+/// One species whose static battler art the pack carries.
 #[derive(Clone, Copy)]
 pub(crate) struct BattlerSource {
     /// The directory under `graphics/pokemon/` and the pack id's species stem.
@@ -562,7 +565,22 @@ pub(crate) struct BattlerSource {
     pub(crate) species: assets::SpeciesId,
 }
 
+/// Width and height of a battler picture (`MON_PIC_WIDTH`).
+pub(crate) const BATTLER_SIDE: u32 = 64;
+/// Poochyena's `front.png` is a 64x256 sheet (`pokemon.h:1825`).
+const POOCHYENA_FRONT_SHEET_HEIGHT: u32 = 256;
+
 impl BattlerSource {
+    /// Rows of the species' `front.png`: the 64-row picture, or for Poochyena
+    /// the 256-row sheet upstream stores, whose first 64 rows are the picture.
+    pub(crate) fn front_height(self) -> u32 {
+        if self.species == assets::SpeciesId::POOCHYENA {
+            POOCHYENA_FRONT_SHEET_HEIGHT
+        } else {
+            BATTLER_SIDE
+        }
+    }
+
     /// The front image id.
     pub(crate) fn front_id(self) -> String {
         format!("pokemon/{}/front", self.name)
@@ -594,9 +612,15 @@ impl BattlerSource {
     }
 }
 
-/// Treecko, Torchic, and Mudkip (`still_front_pic_table.h:283,286,289`,
-/// `back_pic_table.h:280,283,286`).
-pub(crate) const BATTLERS: [BattlerSource; 3] = [
+/// The starters, then Poochyena, Mightyena, Wurmple, Silcoon, Beautifly,
+/// Cascoon, Dustox, Zigzagoon, Linoone, Wingull, and Pelipper.
+///
+/// Listed by species, never by table position: the rows between these in
+/// `gMonStillFrontPicTable` (`still_front_pic_table.h:283,286,289,292-300,
+/// 315-316`) belong to species the pack does not carry. The other three
+/// tables hold the same rows at `back_pic_table.h:280,283,286,289-297,312-313`
+/// and likewise in `palette_table.h` and `shiny_palette_table.h`.
+pub(crate) const BATTLERS: [BattlerSource; 14] = [
     BattlerSource {
         name: "treecko",
         species: assets::SpeciesId::TREECKO,
@@ -608,6 +632,50 @@ pub(crate) const BATTLERS: [BattlerSource; 3] = [
     BattlerSource {
         name: "mudkip",
         species: assets::SpeciesId::MUDKIP,
+    },
+    BattlerSource {
+        name: "poochyena",
+        species: assets::SpeciesId::POOCHYENA,
+    },
+    BattlerSource {
+        name: "mightyena",
+        species: assets::SpeciesId::MIGHTYENA,
+    },
+    BattlerSource {
+        name: "wurmple",
+        species: assets::SpeciesId::WURMPLE,
+    },
+    BattlerSource {
+        name: "silcoon",
+        species: assets::SpeciesId::SILCOON,
+    },
+    BattlerSource {
+        name: "beautifly",
+        species: assets::SpeciesId::BEAUTIFLY,
+    },
+    BattlerSource {
+        name: "cascoon",
+        species: assets::SpeciesId::CASCOON,
+    },
+    BattlerSource {
+        name: "dustox",
+        species: assets::SpeciesId::DUSTOX,
+    },
+    BattlerSource {
+        name: "zigzagoon",
+        species: assets::SpeciesId::ZIGZAGOON,
+    },
+    BattlerSource {
+        name: "linoone",
+        species: assets::SpeciesId::LINOONE,
+    },
+    BattlerSource {
+        name: "wingull",
+        species: assets::SpeciesId::WINGULL,
+    },
+    BattlerSource {
+        name: "pelipper",
+        species: assets::SpeciesId::PELIPPER,
     },
 ];
 
@@ -631,6 +699,18 @@ pub(crate) fn starter_chooser_ids() -> Vec<String> {
 /// palettes, and three tilemaps.
 pub(crate) fn opening_scene_ids() -> Vec<String> {
     opening_scene_pack_ids()
+}
+
+/// Every `evolution-scene/` pack id extraction emits: two images, three
+/// palettes, and two tilemaps.
+pub(crate) fn evolution_scene_ids() -> Vec<String> {
+    evolution_scene_pack_ids()
+}
+
+/// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its
+/// palette, and the opened-ball sheet.
+pub(crate) fn poke_ball_ids() -> Vec<String> {
+    poke_ball_pack_ids()
 }
 
 /// Where the naming screen's sources live, relative to the checkout.
@@ -756,4 +836,26 @@ pub(crate) fn healthbox_battle_bar_id() -> String {
 /// beside the textbox and element ids.
 pub(crate) fn healthbox_frame_ids() -> Vec<String> {
     healthbox_frame_pack_ids()
+}
+
+/// Every `trainer-pic/` pack id extraction emits: the front image and
+/// palette of Brendan and of May.
+pub(crate) fn trainer_front_ids() -> Vec<String> {
+    TRAINER_FRONT_PICS
+        .iter()
+        .flat_map(|pic| [pic.image_id, pic.palette_id])
+        .map(str::to_owned)
+        .collect()
+}
+
+pub(crate) use super::trainer_battler::TRAINERS as TRAINER_BATTLERS;
+
+/// Every `trainer/` pack id extraction emits: for Brendan and for May the
+/// front picture, the back sheet and the shared palette.
+pub(crate) fn trainer_battler_ids() -> Vec<String> {
+    TRAINER_BATTLERS
+        .iter()
+        .flat_map(|trainer| [trainer.front_id, trainer.back_id, trainer.palette_id])
+        .map(str::to_owned)
+        .collect()
 }

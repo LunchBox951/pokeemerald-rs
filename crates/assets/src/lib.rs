@@ -25,7 +25,8 @@
 //! grid/border bytes are not compiled into this crate as Rust source,
 //! unlike the tables above — per Discussion #71 policy A they live in a
 //! local, gitignored asset pack that `cargo xtask extract` produces;
-//! [`pack`] is this crate's typed loader over that pack.
+//! [`pack`] is this crate's typed loader over that pack; its trainer
+//! battler art is reached through `AssetPack::trainer_battler`.
 //! [`map_layouts`], [`metatile_attributes`], and [`fonts`] provide the
 //! decode layer those bytes feed once read out of the pack:
 //! [`map_layouts::LayoutGrid`]/[`map_layouts::BorderGrid`] for a layout's
@@ -58,6 +59,7 @@ pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
 pub mod pokedex;
+pub mod script_refs;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -110,6 +112,7 @@ pub use new_game_flags::{
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
+pub use script_refs::{MapScriptTableRef, ScriptRef};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
@@ -125,10 +128,10 @@ pub use items::{
 };
 pub use move_names::MoveNames;
 pub use pack::{
-    AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind, ImageRef,
-    PackError, PaletteRef, PaletteVariant, PalettedImage, PokedexGraphicsHandle,
-    StarterChooserHandle, StarterPreviewHandle, StarterSpecies, TilesetHandle, TrainerPicHandle,
-    WallClockHandle,
+    AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
+    EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
+    PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle,
+    StarterSpecies, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
