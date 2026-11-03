@@ -27,11 +27,19 @@ const W: [u16; 2] = [0, 0];
 /// discarded effect chance. The type immunity still spends all four.
 const H: [u16; 4] = [0, 1, 0, 0];
 
-fn tackle_no_effect(by_player: bool) -> BattleEvent {
-    BattleEvent::NoEffect {
-        by_player,
-        move_id: TACKLE,
-    }
+fn used(by_player: bool, move_id: MoveId) -> BattleEvent {
+    BattleEvent::UsedMove { by_player, move_id }
+}
+
+/// An executed Tackle against the Ghost type: announced, then no effect.
+fn tackle_no_effect(by_player: bool) -> [BattleEvent; 2] {
+    [
+        used(by_player, TACKLE),
+        BattleEvent::NoEffect {
+            by_player,
+            move_id: TACKLE,
+        },
+    ]
 }
 
 fn fast_asleep(by_player: bool) -> BattleEvent {
@@ -112,7 +120,11 @@ fn an_initial_holder_on_either_side_acts_loafs_then_acts() {
             let first = turn(&mut battle, &mut rng);
             assert_eq!(
                 first,
-                vec![tackle_no_effect(holder_is_player), partner_asleep],
+                [
+                    tackle_no_effect(holder_is_player).as_slice(),
+                    &[partner_asleep]
+                ]
+                .concat(),
                 "{species} first turn"
             );
             assert_eq!(pp_of(&battle), starting_pp - 1);
@@ -126,7 +138,11 @@ fn an_initial_holder_on_either_side_acts_loafs_then_acts() {
             let third = turn(&mut battle, &mut rng);
             assert_eq!(
                 third,
-                vec![tackle_no_effect(holder_is_player), partner_asleep]
+                [
+                    tackle_no_effect(holder_is_player).as_slice(),
+                    &[partner_asleep]
+                ]
+                .concat()
             );
             assert_eq!(pp_of(&battle), starting_pp - 2);
             assert!(phase(&battle, side));
@@ -175,7 +191,10 @@ fn sleep_advances_the_phase_and_waking_leads_straight_into_loafing() {
     let third = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(third, vec![tackle_no_effect(true), fast_asleep(false)]);
+    assert_eq!(
+        third,
+        [tackle_no_effect(true).as_slice(), &[fast_asleep(false)]].concat()
+    );
     assert_eq!(battle.player().moves()[0].pp, starting_pp - 1);
     rng.assert_exhausted();
 }
@@ -200,11 +219,12 @@ fn sleep_cancels_before_the_loafing_gate_and_the_phase_still_flips() {
         .unwrap();
     assert_eq!(
         third,
-        vec![
-            BattleEvent::WokeUp { by_player: true },
-            tackle_no_effect(true),
-            fast_asleep(false),
+        [
+            &[BattleEvent::WokeUp { by_player: true }],
+            tackle_no_effect(true).as_slice(),
+            &[fast_asleep(false)],
         ]
+        .concat()
     );
     rng.assert_exhausted();
 }
@@ -230,7 +250,12 @@ fn loafing_consumes_no_confusion_paralysis_or_move_draw() {
         .unwrap();
     assert_eq!(
         first,
-        vec![confused, tackle_no_effect(true), fast_asleep(false)]
+        [
+            &[confused],
+            tackle_no_effect(true).as_slice(),
+            &[fast_asleep(false)]
+        ]
+        .concat()
     );
     assert_eq!(rng.draws(), 1 + 2 + 6);
 
@@ -254,7 +279,12 @@ fn loafing_consumes_no_confusion_paralysis_or_move_draw() {
         .unwrap();
     assert_eq!(
         third,
-        vec![confused, tackle_no_effect(true), fast_asleep(false)]
+        [
+            &[confused],
+            tackle_no_effect(true).as_slice(),
+            &[fast_asleep(false)]
+        ]
+        .concat()
     );
     assert_eq!(battle.player().moves()[0].pp, starting_pp - 2);
     rng.assert_exhausted();
@@ -268,19 +298,22 @@ fn a_loafing_action_records_its_cancelled_move_against_the_target() {
     assert!(player.stats().speed > enemy.stats().speed);
     let mut rng = SequenceRng::new(script(&[&C, &W, &H, &W]));
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let splash = BattleEvent::NothingHappened {
-        by_player: true,
-        move_id: SPLASH,
-    };
+    let splash = [
+        used(true, SPLASH),
+        BattleEvent::NothingHappened {
+            by_player: true,
+            move_id: SPLASH,
+        },
+    ];
 
     let first = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(first, vec![splash, tackle_no_effect(false)]);
+    assert_eq!(first, [splash, tackle_no_effect(false)].concat());
     let second = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(second, vec![splash, loafing(false)]);
+    assert_eq!(second, [splash.as_slice(), &[loafing(false)]].concat());
 
     let state = battle.battler_state(BattlerSide::Player);
     assert_eq!(state.last_hitter(), Some(BattlerSide::Enemy));
@@ -314,19 +347,22 @@ fn a_reserve_sent_out_after_the_residual_faint_loafs_on_its_first_action() {
         .unwrap();
     assert_eq!(
         first,
-        vec![
-            fast_asleep(false),
-            tackle_no_effect(true),
-            BattleEvent::HurtByPoison {
-                by_player: true,
-                damage: 1,
-            },
-            BattleEvent::Fainted { by_player: true },
-            BattleEvent::PlayerSentOut {
-                species: SpeciesId::SLAKING,
-                reserves_remaining: 0,
-            },
+        [
+            &[fast_asleep(false)],
+            tackle_no_effect(true).as_slice(),
+            &[
+                BattleEvent::HurtByPoison {
+                    by_player: true,
+                    damage: 1,
+                },
+                BattleEvent::Fainted { by_player: true },
+                BattleEvent::PlayerSentOut {
+                    species: SpeciesId::SLAKING,
+                    reserves_remaining: 0,
+                },
+            ],
         ]
+        .concat()
     );
     assert!(
         phase(&battle, BattlerSide::Player),
@@ -344,7 +380,10 @@ fn a_reserve_sent_out_after_the_residual_faint_loafs_on_its_first_action() {
     let third = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(third, vec![tackle_no_effect(true), fast_asleep(false)]);
+    assert_eq!(
+        third,
+        [tackle_no_effect(true).as_slice(), &[fast_asleep(false)]].concat()
+    );
     assert_eq!(battle.player().moves()[0].pp, starting_pp - 1);
     rng.assert_exhausted();
 }
@@ -366,6 +405,7 @@ fn a_reserve_sent_out_after_an_action_faint_acts_on_its_first_action() {
     assert_eq!(
         first,
         vec![
+            used(false, TACKLE),
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -388,7 +428,7 @@ fn a_reserve_sent_out_after_an_action_faint_acts_on_its_first_action() {
     let second = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(second[0], tackle_no_effect(true));
+    assert_eq!(second[..2], tackle_no_effect(true));
     assert!(!second.contains(&loafing(true)));
     assert_eq!(battle.player().moves()[0].pp, starting_pp - 1);
     rng.assert_exhausted();
