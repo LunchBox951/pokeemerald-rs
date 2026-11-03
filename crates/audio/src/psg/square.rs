@@ -25,6 +25,8 @@ enum SquareDuty {
 
 impl SquareDuty {
     const REGISTER_MASK: u8 = 0b11;
+    /// The duty field's position in `NRx1` (`mgba/src/gb/audio.c:885-888`).
+    const NRX1_SHIFT: u8 = 6;
 
     fn from_register(value: u8) -> Self {
         match value & Self::REGISTER_MASK {
@@ -129,6 +131,18 @@ impl SquareChannel {
         };
         chan.set_frequency(freq_reg);
         chan
+    }
+
+    /// The `NRx1` store of `CgbSound`'s first pass: the 8-bit sum of the duty
+    /// field and the instrument's raw length byte (`pokeemerald/src/m4a.c:1001`).
+    /// The hardware takes the duty from bits 6-7 of that byte, so an encoded
+    /// length whose carry reaches them changes the pattern
+    /// (`mgba/src/gb/audio.c:885-888`). Returns the stored byte, whose low six
+    /// bits load the length counter.
+    pub fn write_nrx1(&mut self, length_register: u8) -> u8 {
+        let register = ((self.duty as u8) << SquareDuty::NRX1_SHIFT).wrapping_add(length_register);
+        self.duty = SquareDuty::from_register(register >> SquareDuty::NRX1_SHIFT);
+        register
     }
 
     /// Reports whether the most recent trigger's sweep check disabled the channel.
@@ -244,12 +258,23 @@ impl SquareChannel {
     /// Retunes from an 11-bit frequency register value as a pitch write does
     /// through `NR13` then `NR14` (`pokeemerald/src/m4a.c:1198-1203`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        self.set_frequency_latching(freq_reg);
+    }
+
+    /// [`Self::set_frequency`], returning the bipolar level the `NR14` write's
+    /// catch-up latches: the duty position run at the old rate (`NR13`) then
+    /// the intermediate rate, before the high byte is stored
+    /// (`mgba/src/gb/audio.c:162-171,219-224,493-501`). A stopped channel is
+    /// not run after the store, so the final frequency cannot move this latch.
+    pub(crate) fn set_frequency_latching(&mut self, freq_reg: u16) -> i8 {
         self.settle_idle_samples();
         let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
         let intermediate = intermediate_frequency(self.frequency, freq_reg);
         self.play_frequency(intermediate);
+        let latched = self.held_level();
         self.note_high_bits = freq_reg & FREQUENCY_HIGH_BITS;
         self.play_frequency(freq_reg);
+        latched
     }
 
     /// A sweep write-back retune, with no `NR13`/`NR14` intermediate step.
@@ -302,6 +327,20 @@ impl SquareChannel {
                 }
                 false
             }
+        }
+    }
+
+    /// The bipolar unit level at the current duty position, without stepping
+    /// it: what a register write's catch-up re-latches into a channel that is
+    /// not playing (`mgba/src/gb/audio.c:162-171,493-501,916-918`).
+    pub fn held_level(&mut self) -> i8 {
+        self.settle_idle_samples();
+        let pattern = self.duty.pattern();
+        let step = (self.phase / PHASE_ONE) as usize % pattern.len();
+        if pattern[step] {
+            1
+        } else {
+            -1
         }
     }
 
@@ -734,6 +773,26 @@ mod tests {
             square.step_delta, truncated.step_delta,
             "the off-write must rate the channel as if only its low frequency byte survived",
         );
+    }
+
+    #[test]
+    fn stopped_pitch_write_latches_before_the_final_high_byte_retune() {
+        // mGBA: NR13's catch-up runs at the old rate, NR14's at the
+        // intermediate rate; the final frequency only takes effect after the
+        // NR14 store, so it cannot move the index latched by this write.
+        let old = 0x02C;
+        let new = 0x705;
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, old, None);
+        let old_delta = square.step_delta;
+        let mid_delta = frequency_step_delta(intermediate_frequency(old, new));
+        let final_delta = frequency_step_delta(new);
+        let samples = PHASE_ONE.div_ceil(final_delta) + 1;
+        assert!(old_delta * samples < PHASE_ONE);
+        assert!(mid_delta * samples < PHASE_ONE);
+        assert!(final_delta * samples >= PHASE_ONE);
+        square.defer_idle_samples(samples as usize);
+        let latched = square.set_frequency_latching(new);
+        assert_eq!(latched, 1, "phase index {}", square.phase / PHASE_ONE);
     }
 }
 

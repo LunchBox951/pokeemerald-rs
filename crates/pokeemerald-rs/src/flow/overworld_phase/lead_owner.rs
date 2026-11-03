@@ -9,6 +9,7 @@
 //! returns the battler, never the slot.
 
 use battle::{BattleError, BattlePokemon, Dex};
+use engine::save::Pokemon;
 
 use super::OverworldPhase;
 use crate::party::{self, LoadedLead};
@@ -41,19 +42,27 @@ impl OverworldPhase {
     /// the lead only if its personality and OT id match the battler's, so a
     /// lead installed without a saved record is left as is.
     fn classified_for_battle(&self, lead: BattlePokemon) -> BattlePokemon {
+        self.classified_against_record(self.lead.as_ref().map(LoadedLead::record), lead)
+    }
+
+    /// `battler` classified against the save owner through `record`, the saved
+    /// record backing it: [`Self::classified_for_battle`]'s rule for any party
+    /// member, so a battle reserve earns the same traded-recipient award as
+    /// the lead.
+    pub(super) fn classified_against_record(
+        &self,
+        record: Option<&Pokemon>,
+        battler: BattlePokemon,
+    ) -> BattlePokemon {
         let owner_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        let traded = self
-            .lead
-            .as_ref()
-            .map(LoadedLead::record)
-            .is_some_and(|record| {
-                record.box_data.personality() == lead.personality()
-                    && record.box_data.ot_id() == lead.original_trainer_id()
-                    && !party::has_unstamped_owner_name(record, owner_id)
-                    && party::is_traded_record(record, owner_id, &self.save2.player_name)
-            });
-        let traded = traded || lead.is_traded_recipient();
-        lead.with_traded_recipient(traded)
+        let traded = record.is_some_and(|record| {
+            record.box_data.personality() == battler.personality()
+                && record.box_data.ot_id() == battler.original_trainer_id()
+                && !party::has_unstamped_owner_name(record, owner_id)
+                && party::is_traded_record(record, owner_id, &self.save2.player_name)
+        });
+        let traded = traded || battler.is_traded_recipient();
+        battler.with_traded_recipient(traded)
     }
 
     /// A copy of the resident lead for a battle start, classified against the

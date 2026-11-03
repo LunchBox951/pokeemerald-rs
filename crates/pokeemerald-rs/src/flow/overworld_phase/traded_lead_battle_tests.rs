@@ -53,7 +53,7 @@ fn rival_award(phase: &OverworldPhase) -> u32 {
             .take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(&mut rng))
             .expect("turn");
         if let Some(exp) = events.iter().find_map(|event| match event {
-            BattleEvent::ExpGained(exp) => Some(*exp),
+            BattleEvent::ExpGained { amount, .. } => Some(*amount),
             _ => None,
         }) {
             return exp;
@@ -111,4 +111,57 @@ fn a_new_game_starter_healed_into_its_empty_record_stays_domestic() {
         !phase.lead_for_battle().unwrap().is_traded_recipient(),
         "the player's own starter must not be classified as traded after a heal"
     );
+}
+
+/// `Cmd_getexp` selects `STRINGID_ABOOSTED` (330) for a traded recipient's
+/// award (`src/battle_script_commands.c:3381-3391`), so the narrated EXP
+/// line must read " a boosted" for the boosted award.
+#[test]
+fn a_traded_leads_boosted_award_is_narrated_as_boosted() {
+    use crate::battle_narration::{
+        AssetNames, BattleBuffer, BattleKind, Battler, BufferOp, Narrator, Scene, TemplateId,
+    };
+    const PKMNGAINEDEXP: u16 = 13;
+    const ABOOSTED: u16 = 330;
+    let traded = phase_with_lead(OWNER_ID ^ 1, OWNER_NAME);
+    assert!(traded.lead_for_battle().unwrap().is_traded_recipient());
+    let lead = traded.lead_for_battle().expect("a lead");
+    let mut rng = Rng::new(1);
+    let mut battle = start_npc_trainer_battle(lead, ROUTE_103_RIVAL, &mut rng).expect("starts");
+    let mut narrator = Narrator::new(Scene {
+        kind: BattleKind::Trainer,
+        player_name: "RUSTY".to_owned(),
+        player: Battler {
+            name: "TREECKO".to_owned(),
+            ability: None,
+        },
+        opponent: Battler {
+            name: "TORCHIC".to_owned(),
+            ability: None,
+        },
+        trainer: None,
+        hp_scale: 0,
+    });
+    for _ in 0..20 {
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(&mut rng))
+            .expect("turn");
+        if let Some(event) = events
+            .iter()
+            .find(|e| matches!(e, BattleEvent::ExpGained { .. }))
+        {
+            let requests = narrator.requests(&AssetNames, event).expect("narrates");
+            let exp_line = requests
+                .iter()
+                .find(|r| r.template == TemplateId::Table(PKMNGAINEDEXP))
+                .expect("an EXP line");
+            assert_eq!(
+                exp_line.context.buffers[1],
+                BattleBuffer::Program(vec![BufferOp::String(ABOOSTED)]),
+                "a traded recipient's boosted award must narrate STRINGID_ABOOSTED"
+            );
+            return;
+        }
+    }
+    panic!("the rival's first mon never fainted");
 }
