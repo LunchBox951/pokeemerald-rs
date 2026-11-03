@@ -269,6 +269,10 @@ fn a_switch_acts_before_a_faster_players_move() {
                 species: TORCHIC,
                 ..
             },
+            BattleEvent::UsedMove {
+                by_player: true,
+                ..
+            },
             BattleEvent::Hit {
                 by_player: true,
                 ..

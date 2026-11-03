@@ -6,8 +6,9 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-    EvolutionScenePlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, OpeningScenePlan, PalettePlan,
-    ProfilePlan, ReportLine, Resolution, StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    CryPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, NamingScreenPlan,
+    OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine, Resolution, StarterChooserPlan,
+    TileAnimPlan, TilesetPlan,
 };
 use super::plan::{TrainerBattlerPlan, TrainerFrontPlan};
 
@@ -72,11 +73,12 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot,
-    MapLayoutRoot, OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot,
-    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
+    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
+    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -139,6 +141,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     opening_scene_roots(&mut out, &plan.opening_scene);
     evolution_scene_roots(&mut out, &plan.evolution_scene);
     battle_interface_roots(&mut out, &plan.battle_interface);
+    naming_screen_roots(&mut out, &plan.naming_screen);
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
@@ -196,6 +199,14 @@ fn battle_interface_roots(out: &mut String, interface: &BattleInterfacePlan) {
         blob_root(&interface.battle_bar)
     );
     let _ = writeln!(out, "    }},");
+}
+
+fn naming_screen_roots(out: &mut String, naming: &NamingScreenPlan) {
+    graphics_family(
+        out,
+        ("naming_screen", "NamingScreenRoots"),
+        (&naming.images, &naming.palettes, &naming.tilemaps),
+    );
 }
 
 /// A family of images, palettes, and tilemap blobs: the `Roots` field and
@@ -411,7 +422,39 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
         }
         let _ = writeln!(out, "        ],");
     }
+    cry_roots(out, audio.cry.as_ref());
     let _ = writeln!(out, "    }},");
+}
+
+fn cry_roots(out: &mut String, cry: Option<&CryPlan>) {
+    let Some(cry) = cry else {
+        let _ = writeln!(out, "        cry: None,");
+        return;
+    };
+    let _ = writeln!(out, "        cry: Some(CryRoots {{");
+    let _ = writeln!(
+        out,
+        "            normal: {},",
+        gba_ptr_expression(cry.normal)
+    );
+    let _ = writeln!(
+        out,
+        "            reverse: {},",
+        gba_ptr_expression(cry.reverse)
+    );
+    let _ = writeln!(out, "            samples: &[");
+    for sample in &cry.samples {
+        let _ = writeln!(
+            out,
+            "                SampleRoot {{ id: {:?}, addr: {}, header_len: {}, data_len: {} }},",
+            sample.id,
+            gba_ptr_expression(sample.addr),
+            sample.header_len,
+            sample.data_len
+        );
+    }
+    let _ = writeln!(out, "            ],");
+    let _ = writeln!(out, "        }}),");
 }
 
 fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
@@ -860,9 +903,9 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
-        BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, OpeningScenePlan,
-        PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan, TitleScreenPlan,
-        TrainerBattlerPlan, TrainerFrontPlan,
+        BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, NamingScreenPlan,
+        OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan,
+        TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1059,6 +1102,55 @@ mod bag_field_tests {
         }
     }
 
+    fn naming_plan() -> NamingScreenPlan {
+        NamingScreenPlan {
+            images: vec![ImagePlan {
+                id: "naming-screen/image/cursor".to_owned(),
+                addr: 0x081C_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 8,
+                height: 40,
+                metatile_width: 1,
+                metatile_height: 5,
+                tile_count: 5,
+            }],
+            palettes: vec![PalettePlan {
+                id: "naming-screen/palette/keyboard".to_owned(),
+                addr: 0x081D_0000,
+                color_count: 16,
+                encoding: Encoding::Raw,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "naming-screen/raw/background".to_owned(),
+                addr: 0x081E_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
+    fn assert_naming_roots(module: &str) {
+        assert!(
+            module.contains("    naming_screen: NamingScreenRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"naming-screen/image/cursor\", addr: GbaPtr::at(0x081C_0000), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 8, height: 40, metatile_width: 1, metatile_height: 5, tile_count: 5 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"naming-screen/palette/keyboard\", addr: GbaPtr::at(0x081D_0000), color_count: 16, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"naming-screen/raw/background\", addr: GbaPtr::at(0x081E_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("NamingScreenRoots::NONE"), "{module}");
+    }
+
     fn assert_interface_roots(module: &str) {
         assert!(
             module.contains("    battle_interface: BattleInterfaceRoots {"),
@@ -1162,6 +1254,7 @@ mod bag_field_tests {
                 keysplits: vec![],
                 direct_sound: vec![],
                 programmable_wave: vec![],
+                cry: None,
             },
             battle_messages: BattleMessagePlan {
                 table: base,
@@ -1203,6 +1296,7 @@ mod bag_field_tests {
             evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
             battle_interface: interface_plan(),
+            naming_screen: naming_plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
@@ -1213,6 +1307,7 @@ mod bag_field_tests {
             "{module}"
         );
         assert_interface_roots(&module);
+        assert_naming_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),
@@ -1229,6 +1324,32 @@ mod bag_field_tests {
             "{module}"
         );
         assert!(!module.contains("BagRoots::NONE"), "{module}");
+    }
+
+    #[test]
+    fn the_cry_roots_are_emitted_whole_or_as_none() {
+        let mut none = String::new();
+        super::cry_roots(&mut none, None);
+        assert_eq!(none, "        cry: None,\n");
+
+        let plan = crate::gen_rom_profile::plan::CryPlan {
+            normal: 0x0869_DCF4,
+            reverse: 0x0869_EF24,
+            samples: vec![crate::gen_rom_profile::plan::SamplePlan {
+                id: "audio/sample/direct-sound/cry/bulbasaur".to_owned(),
+                addr: 0x0874_6704,
+                header_len: 16,
+                data_len: 8183,
+            }],
+        };
+        let mut some = String::new();
+        super::cry_roots(&mut some, Some(&plan));
+        assert!(some.contains("normal: GbaPtr::at(0x0869_DCF4),"), "{some}");
+        assert!(some.contains("reverse: GbaPtr::at(0x0869_EF24),"), "{some}");
+        assert!(
+            some.contains("SampleRoot { id: \"audio/sample/direct-sound/cry/bulbasaur\", addr: GbaPtr::at(0x0874_6704), header_len: 16, data_len: 8183 }"),
+            "{some}"
+        );
     }
 }
 

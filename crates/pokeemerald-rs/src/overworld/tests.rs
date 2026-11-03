@@ -640,7 +640,11 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
 
     // Controls, built independently over the same entries `compose` draws
     // from: confirm this arrangement straddles both budgets' cutoffs.
-    let sprite_entries = scene.sprites.entries(&player, &event_data);
+    let sprite_entries: Vec<rendering::OamEntry> = scene
+        .sprite_entries(&player, &event_data)
+        .into_iter()
+        .map(super::SheetSprite::oam)
+        .collect();
     let normal_budget = rendering::SpriteLayer::new(
         &sprite_entries,
         scene.sprites.tiles(),
@@ -1205,7 +1209,7 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
-    let entries = scene.sprites.entries(&player, &data);
+    let entries = scene.sprite_entries(&player, &data);
     assert_eq!(
         entries.len(),
         2,
@@ -1226,15 +1230,15 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
 
     // Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west
     // stand frame h-flipped (`avatar::stand_frame_for`). Her sheet is packed
-    // first (`object_events[0]`), one `FRAME_BLOCK_TILES` stride after the
-    // player's block.
+    // first (`object_events[0]`), right after the player's block, and every
+    // cell a facing can show is packed (south, north, west: her live facing
+    // changes when she turns to the player), so her west frame is third.
     let block = super::avatar::FRAME_BLOCK_TILES;
-    let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
 
     let mom = entries[1];
     assert_eq!(mom.palette_bank(), 4, "OBJ_EVENT_PAL_TAG_NPC_4 (mom.pal)");
-    assert_eq!(mom.tile_index(), block + west_stand);
+    assert_eq!(mom.tile_index(), block + 2 * super::avatar::FRAME_TILES);
     assert!(mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
     assert!(mom.enabled());
     assert_eq!(mom.dimensions(), (16, 32));
@@ -1267,15 +1271,27 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
 
     // Bindings follow the packing order `npc::resolve_bindings` walks.
     let bindings = scene.sprites.bindings();
-    assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
+    assert_eq!(
+        bindings.len(),
+        7,
+        "mom, woman_4, norman, the rival, ninja boy and both Vigoroths"
+    );
     assert!(
         bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
         "the rival is bound to the player's own sheet even though \
          RESET_MAP_FLAGS hides him: bindings are per `graphics_id`, not per \
          visibility"
     );
-    assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
-    assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
+    for hidden_but_bound in [
+        "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+        "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+        "OBJ_EVENT_GFX_NINJA_BOY",
+    ] {
+        assert!(
+            bindings.contains_key(hidden_but_bound),
+            "{hidden_but_bound}"
+        );
+    }
 }
 
 /// `SceneSprites::bindings` binds the opposite-gender rival for either
@@ -1482,13 +1498,13 @@ fn assert_background_npc_draws_an_oam_entry(
         event.elevation,
         Direction::South,
     );
-    let entries = scene.sprites.entries(&player, data);
+    let entries = scene.sprite_entries(&player, data);
 
-    let block = super::avatar::FRAME_BLOCK_TILES;
     let drawn: Vec<_> = entries
         .iter()
         .filter(|entry| {
-            (binding.base_tile()..binding.base_tile() + block).contains(&entry.tile_index())
+            (binding.base_tile()..binding.base_tile() + binding.packed_tiles())
+                .contains(&entry.tile_index())
         })
         .collect();
     assert_eq!(
@@ -1693,7 +1709,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
 
     // (0, 7): ordinary floor south of the bed, elevation 3.
     let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
-    let floor_entries = scene.sprites.entries(&on_the_floor, &data);
+    let floor_entries = scene.sprite_entries(&on_the_floor, &data);
     assert_eq!(
         floor_entries[0].priority(),
         super::avatar::PLAYER_OBJ_PRIORITY,
@@ -1704,7 +1720,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     // data from `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
     // the same tile the collision-side test above checks.
     let on_the_bed_edge = PlayerState::new((0, 5), 4, Direction::North);
-    let bed_entries = scene.sprites.entries(&on_the_bed_edge, &data);
+    let bed_entries = scene.sprite_entries(&on_the_bed_edge, &data);
     assert_eq!(
         bed_entries[0].priority(),
         1,
@@ -1733,7 +1749,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
         (0, 4),
         "precondition: the wildcard tile drifts the two elevation fields apart"
     );
-    let drifted_entries = scene.sprites.entries(&walker, &data);
+    let drifted_entries = scene.sprite_entries(&walker, &data);
     assert_eq!(
         drifted_entries[0].priority(),
         1,
@@ -2193,9 +2209,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             3,
             Direction::South,
         );
-        let entries = scene
-            .sprites
-            .entries(&player, &engine::event_data::EventData::new());
+        let entries = scene.sprite_entries(&player, &engine::event_data::EventData::new());
         assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0].priority(),
@@ -2207,9 +2221,10 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
         // player, so a row inside the shared 16px band lies inside both.
         let x = usize::from(super::avatar::PLAYER_OBJ_X) + 8;
         let y = usize::from(super::avatar::PLAYER_OBJ_Y) + if npc_dy > 0 { 24 } else { 8 };
-        let color_at = |e: &[rendering::OamEntry]| {
+        let color_at = |e: &[super::SheetSprite]| {
+            let e: Vec<rendering::OamEntry> = e.iter().map(|e| e.oam()).collect();
             rendering::SpriteLayer::new(
-                e,
+                &e,
                 scene.sprites.tiles(),
                 scene.sprites.tiles(),
                 scene.sprites.palette(),

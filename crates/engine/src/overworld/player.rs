@@ -312,6 +312,24 @@ impl PlayerState {
         self.position
     }
 
+    /// Returns the tile the player's object event occupied before its active
+    /// crossing began: `previousCoords`, which equals the current tile once
+    /// the crossing finishes and at rest (`ShiftStillObjectEventCoords`,
+    /// `event_object_movement.c:2162-2165`).
+    ///
+    /// Taken from the committed crossing direction, not
+    /// [`facing`](Self::facing), which may change mid-step.
+    #[must_use]
+    pub const fn previous_position(&self) -> TilePos {
+        match self.transit_direction {
+            Some(direction) => {
+                let (dx, dy) = direction.delta();
+                (self.position.0 - dx, self.position.1 - dy)
+            }
+            None => self.position,
+        }
+    }
+
     /// Returns the elevation used for collision checks.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
@@ -1158,6 +1176,8 @@ mod tests {
     mod step_parity_tests;
 
     mod bump_tests;
+    /// The previous tile of an active crossing.
+    mod previous_position_tests;
     /// Held-B running: its gates, cadence, and preserved interactions.
     mod running_tests;
 

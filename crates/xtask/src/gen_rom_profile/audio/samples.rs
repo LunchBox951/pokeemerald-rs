@@ -88,7 +88,10 @@ fn instrument_ids(ctx: &Context<'_>) -> Vec<String> {
 ///
 /// [`GenRomProfileError::EntryShape`] naming `id` when the payload does not
 /// decode as a valid `DirectSound` sample.
-fn direct_sound_of(ctx: &Context<'_>, id: &str) -> Result<DirectSoundSample, GenRomProfileError> {
+pub(super) fn direct_sound_of(
+    ctx: &Context<'_>,
+    id: &str,
+) -> Result<DirectSoundSample, GenRomProfileError> {
     let payload = raw_payload(ctx, id)?;
     match Sample::decode(payload) {
         Ok(Sample::DirectSound(sample)) => Ok(sample),
