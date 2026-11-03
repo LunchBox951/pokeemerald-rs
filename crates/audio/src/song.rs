@@ -61,6 +61,9 @@ pub struct SquareTone {
     pub adsr: CgbAdsr,
     /// Whether to use Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
+    /// Raw `ToneData::length`: the `NRx1` sound length, whose nonzero value
+    /// also sets the `NRx4` length-enable bit (`m4a_1.s:1771-1772`).
+    pub length: u8,
 }
 
 /// A CGB programmable-wave instrument (hardware channel 3).
@@ -85,6 +88,9 @@ pub struct NoiseTone {
     pub lfsr_width_selector: u8,
     /// The instrument's volume envelope.
     pub adsr: CgbAdsr,
+    /// Raw `ToneData::length`: the `NR41` sound length, whose nonzero value
+    /// also sets the `NR44` length-enable bit (`m4a_1.s:1771-1772`).
+    pub length: u8,
 }
 
 /// A playable voice or a key-based indirection to a playable voice.
