@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.92.0] - 2026-11-03
 
-- Every Pokémon you can meet before the first Gym now has its battle artwork in both asset pack sources, so none of them appears as a placeholder in battle.
+- Both asset pack sources now carry the battle artwork and palettes of eleven more early-route Pokémon: Poochyena, Mightyena, Wurmple, Silcoon, Beautifly, Cascoon, Dustox, Zigzagoon, Linoone, Wingull and Pelipper, in preparation for drawing them in battle.
 
 ## [0.0.91.0] - 2026-11-03
 
