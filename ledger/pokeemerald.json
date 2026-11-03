@@ -12885,6 +12885,20 @@
       "status": "pending"
     },
     "graphics/field_effects": {
+      "artifacts": {
+        "palettes/general_1.pal": {
+          "reason": "graphics/field_effects/palettes/general_1.pal (16 colours, gFieldEffectObjectPalette1, bound by FLDEFF_PAL_TAG_GENERAL_1, field_effect_objects.h:2,96) is extracted as field-effect/palette/general_1 by cargo xtask extract and read through AssetPack::field_effect_palette. Not covered: the ROM-import backend does not yet write this entry; gSpritePalette_GeneralFieldEffect1 is outside sObjectEventSpritePalettes, which the importer's sprite palette corroboration requires every palette to be in.",
+          "rust_target": "crates/xtask/src/extract/field_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "pics/tall_grass.png": {
+          "reason": "graphics/field_effects/pics/tall_grass.png (80x16, five 2x2-tile cells, object_event_graphics.h:312) is extracted as field-effect/image/tall_grass by cargo xtask extract and read through AssetPack::field_effect_image. Not covered: the ROM-import backend does not yet write this entry (no generator root or importer domain), so a ROM-imported pack draws no tall-grass effect; the entry is outside rom-import's equivalence COMPLETE_PREFIXES until it does.",
+          "rust_target": "crates/xtask/src/extract/field_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16775,157 +16789,157 @@
     "graphics/naming_screen": {
       "artifacts": {
         "back_button.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds back_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/back_button. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds back_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/back_button. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "background.bin": {
-          "reason": "graphics.c:1416-1419 compresses background.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/background.",
+          "reason": "graphics.c:1416-1419 compresses background.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/background. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "buttons.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/buttons.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/buttons. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "cursor.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/cursor.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/cursor. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "cursor.png": {
-          "reason": "graphics.c:1410-1412 builds cursor.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor, and refuses a sheet whose dropped sixth tile holds colour.",
+          "reason": "graphics.c:1410-1412 builds cursor.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor, and refuses a sheet whose dropped sixth tile holds colour. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "cursor_filled.png": {
-          "reason": "graphics.c:1410-1412 builds cursor_filled.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_filled, and refuses a sheet whose dropped sixth tile holds colour.",
+          "reason": "graphics.c:1410-1412 builds cursor_filled.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_filled, and refuses a sheet whose dropped sixth tile holds colour. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "cursor_squished.png": {
-          "reason": "graphics.c:1410-1412 builds cursor_squished.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_squished, and refuses a sheet whose dropped sixth tile holds colour.",
+          "reason": "graphics.c:1410-1412 builds cursor_squished.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_squished, and refuses a sheet whose dropped sixth tile holds colour. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "input_arrow.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds input_arrow.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/input_arrow. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds input_arrow.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/input_arrow. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "keyboard.pal": {
-          "reason": "sKeyboard_Pal (naming_screen.c:187), loaded by LoadPalettes (naming_screen.c:1884). Published as the 16-colour palette naming-screen/palette/keyboard.",
+          "reason": "sKeyboard_Pal (naming_screen.c:187), loaded by LoadPalettes (naming_screen.c:1884). Published as the 16-colour palette naming-screen/palette/keyboard. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "keyboard_lower.bin": {
-          "reason": "graphics.c:1416-1419 compresses keyboard_lower.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_lower.",
+          "reason": "graphics.c:1416-1419 compresses keyboard_lower.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_lower. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "keyboard_symbols.bin": {
-          "reason": "graphics.c:1416-1419 compresses keyboard_symbols.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_symbols.",
+          "reason": "graphics.c:1416-1419 compresses keyboard_symbols.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_symbols. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "keyboard_upper.bin": {
-          "reason": "graphics.c:1416-1419 compresses keyboard_upper.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_upper.",
+          "reason": "graphics.c:1416-1419 compresses keyboard_upper.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_upper. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "menu.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/menu.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/menu. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "menu.png": {
-          "reason": "graphics.c:1403 builds menu.png as 4bpp LZ77 graphics (gNamingScreenMenu_Gfx); the checkout holds the uncompressed source, so the extractor publishes its decoded 24x128 four-bit index raster as naming-screen/image/menu. Its colours come from menu.pal, not the PNG palette.",
+          "reason": "graphics.c:1403 builds menu.png as 4bpp LZ77 graphics (gNamingScreenMenu_Gfx); the checkout holds the uncompressed source, so the extractor publishes its decoded 24x128 four-bit index raster as naming-screen/image/menu. Its colours come from menu.pal, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "ok_button.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds ok_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/ok_button. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds ok_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/ok_button. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_button.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_button. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_button. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_frame.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_frame.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_frame. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_frame.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_frame. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_lower.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_lower.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_lower. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_lower.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_lower.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_lower. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_lower.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_lower. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_others.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_others.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_others. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_others.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_others.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_others. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_others.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_others. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_upper.pal": {
-          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_upper.",
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_upper. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "page_swap_upper.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_upper.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_upper. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_upper.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_upper. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "pc_icon_off.png": {
-          "reason": "sPCIconOff_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_off. Colours come from the palette files, not the PNG palette.",
+          "reason": "sPCIconOff_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_off. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "pc_icon_on.png": {
-          "reason": "sPCIconOn_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_on. Colours come from the palette files, not the PNG palette.",
+          "reason": "sPCIconOn_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_on. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "underscore.png": {
-          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds underscore.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/underscore. Colours come from the palette files, not the PNG palette.",
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds underscore.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/underscore. Colours come from the palette files, not the PNG palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/naming_screen.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/xtask/src/extract/naming_screen.rs",
           "spec": "S-4",
           "status": "ported"
@@ -17429,6 +17443,32 @@
       "status": "pending"
     },
     "graphics/pokemon/beautifly": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 beautifly image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static beautifly still-front image (`gMonStillFrontPic_Beautifly`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC beautifly palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC beautifly palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17519,6 +17559,32 @@
       "status": "pending"
     },
     "graphics/pokemon/cascoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 cascoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static cascoon still-front image (`gMonStillFrontPic_Cascoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC cascoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC cascoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17777,6 +17843,32 @@
       "status": "pending"
     },
     "graphics/pokemon/dustox": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 dustox image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static dustox still-front image (`gMonStillFrontPic_Dustox`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC dustox palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC dustox palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18311,6 +18403,32 @@
       "status": "pending"
     },
     "graphics/pokemon/linoone": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 linoone image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static linoone still-front image (`gMonStillFrontPic_Linoone`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC linoone palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC linoone palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18541,6 +18659,32 @@
       "status": "pending"
     },
     "graphics/pokemon/mightyena": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 mightyena image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static mightyena still-front image (`gMonStillFrontPic_Mightyena`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC mightyena palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC mightyena palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18753,6 +18897,32 @@
       "status": "pending"
     },
     "graphics/pokemon/pelipper": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 pelipper image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static pelipper still-front image (`gMonStillFrontPic_Pelipper`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC pelipper palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC pelipper palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18855,6 +19025,32 @@
       "status": "pending"
     },
     "graphics/pokemon/poochyena": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 poochyena image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static poochyena still-front image (`gMonStillFrontPic_Poochyena`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Its 64x256 sheet is kept whole in the pack; the typed lookup reads the top 64x64 picture the species table loads. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC poochyena palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC poochyena palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19137,6 +19333,32 @@
       "status": "pending"
     },
     "graphics/pokemon/silcoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 silcoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static silcoon still-front image (`gMonStillFrontPic_Silcoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC silcoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC silcoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19663,6 +19885,32 @@
       "status": "pending"
     },
     "graphics/pokemon/wingull": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 wingull image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static wingull still-front image (`gMonStillFrontPic_Wingull`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC wingull palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC wingull palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19681,6 +19929,32 @@
       "status": "pending"
     },
     "graphics/pokemon/wurmple": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 wurmple image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static wurmple still-front image (`gMonStillFrontPic_Wurmple`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC wurmple palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC wurmple palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19717,6 +19991,32 @@
       "status": "pending"
     },
     "graphics/pokemon/zigzagoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 zigzagoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static zigzagoon still-front image (`gMonStillFrontPic_Zigzagoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC zigzagoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC zigzagoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19785,7 +20085,7 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). No chooser rendering claimed.",
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). The chooser scene (crates/pokeemerald-rs/src/starter_chooser/graphics.rs) decodes these sheets and tilemaps and renders them.",
       "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
       "spec": "S-4",
       "status": "ported"
@@ -28451,6 +28751,12 @@
     },
     "src/battle_controllers.c": {
       "artifacts": {
+        "BtlController_EmitPrintString": {
+          "reason": "battle_controllers.c:1136-:1165. NarrationContext owns the state the print command snapshots: current and original move, last item and ability, the scripting battler, the move type, the battler abilities, and the three text buffers; a request carries it so later battle changes never alter a queued message. Not modelled: gBattleOutcome, the hpScale of the print (held on the narrator scene), the party-index and item-effect-battler fields, and the controller transfer buffer.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/context.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "SetBattlePartyIds": {
           "reason": "SetBattlePartyIds's player-side scan (:585-606), called by InitBattleControllers (:97): the first party slot with nonzero HP, a real species, and no egg flag becomes gBattlerPartyIndexes[0], the battle's active battler. This port's continue path reimplements that scan as party::select_active_battler, called from OverworldPhase::load_lead_from_save so a continued save with a fainted lead and a healthy trailing member sends out the healthy one instead of being refused. the loaded lead (party::LoadedLead::slot) then carries the selected index through both the wild and trainer handoffs and into the write-back merge (OverworldPhase::copy_party_and_objects_to_save, OverworldPhase::white_out), matching SetPlayerMonData's own write through gBattlerPartyIndexes (battle_controller_player.c:1927-1945). Both this call site and the white-out reselect (OverworldPhase::heal_whole_party_and_reselect_lead) pass all PARTY_SIZE (6) stored records to the selector for a nonzero stored count, not just the player_party_count-length prefix -- upstream's own scan is over all PARTY_SIZE slots, so a slot beyond the stored count that still decodes to a real, healthy Pokemon must remain reachable as the lead (issue #1241). The scan itself is upstream parity: all six slots regardless of count, matching SetBattlePartyIds's own count-blind sweep (battle_controllers.c:585-606), issue #1241. The one deliberate divergence is the zero-count early return: a stored count of zero short-circuits before this scan and resumes with no lead by design (OverworldPhase::load_lead_from_save's own doc), where upstream's count-blind sweep would still select a valid residual slot. The zero-count save side is not divergent at all: copy_party_and_objects_to_save leaves a no-lead slot's bytes and count exactly as loaded, matching SavePlayerParty's own unconditional copy (load_save.c:160-168), per issue #1371, which supersedes issue #353's earlier zero-count framing; white-out's own reselect likewise skips its rescan when the clamped count is zero, leaving the previously selected lead in place. An all-unusable party still fails closed: an all-fainted party falls back to slot 0's own fainted decode (rejected downstream by Battle::new's FaintedBattler check, matching this port's pre-existing behavior), and an egg-only party's fallback returns PartyError::Egg rather than decoding slot 0 as a battler, since an egg is never a battler upstream either -- both preserve the single-member legacy-heal migration's expectations. The shared eligibility predicate also excludes records whose unencrypted header marks isBadEgg, even with a valid secure checksum and a clear secure egg bit; the slot-0 fallback rejects those with PartyError::Egg without changing their saved bytes (issue #1795).",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
@@ -28570,11 +28876,29 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BattleStringExpandPlaceholders": {
+          "reason": "battle_message.c:2312-:2764. Modelled for a single wild or trainer battle: the three buffers and string-variable copies, player and opponent nicknames, attacker, target, effect, active, and scripting battlers with the Foe or Wild prefix, current and original move (with the type-move fallback), last item and ability, battler abilities, trainer class, name, and defeat text (followed by the wait-for-input control), player name, and the Ally and Foe prefix selectors. A replacement is copied without being expanded again. Link, multi, double, frontier, Trainer Hill, e-Reader, secret-base, and partner selectors are refused with an error rather than printed empty.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/expand.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BufferStringBattle": {
+          "reason": "battle_message.c:1959-:2253. Modelled for a single wild or trainer battle: STRINGID_INTROMSG, STRINGID_INTROSENDOUT (player and trainer), STRINGID_SWITCHINMON by hpScale, and STRINGID_USEDMOVE with its move name and exclamation fragment. Not modelled: STRINGID_RETURNMON, the STRINGID_BATTLEEND link and frontier paths, double and link branches, and the grammar-table choice among the five exclamation strings, which are all \"!\" in English.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/narrator.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BufferStringBattle-template-payloads": {
-          "reason": "The 74 raw special-template token streams (49 direct templates plus the type-move and helper fragments) reach battle-message/table from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_message.rs) and the ROM importer reading the profile-recorded roots (crates/rom-import/src/domains/battle_messages.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Selection, buffer mutation, and expansion are deferred.",
+          "reason": "The 74 raw special-template token streams (49 direct templates plus the type-move and helper fragments) reach battle-message/table from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_message.rs) and the ROM importer reading the profile-recorded roots (crates/rom-import/src/domains/battle_messages.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Selection, buffer mutation and expansion are modelled for a single wild or trainer battle in crates/pokeemerald-rs/src/battle_narration (narrator.rs selects per the BufferStringBattle row; expand.rs mutates the buffers per the ExpandBattleTextBuffPlaceholders row and expands per the BattleStringExpandPlaceholders row); the link, double, multi and frontier branches of those three stay unmodelled.",
           "rust_target": "crates/rom-import/src/domains/battle_messages.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "ExpandBattleTextBuffPlaceholders": {
+          "reason": "battle_message.c:2776-:2873. All eleven B_BUFF_* entries are typed BufferOp values rather than FD/FF byte programs: string, number, move, type, nickname with and without prefix, stat, species, negative flavor, ability, and item. Number, species, nickname and item entries replace the output so far (CopyItemName copies over it); a prefixed nickname appends the Foe or Wild prefix and then the name; the rest append. A string entry copies its table text without expanding it, and expansion overwrites the matching gStringVar. Buffer 1 resolves a status name through TryGetStatusString as a typed StatusName because the Japanese spellings it matches are outside the supported text. Not modelled: the link-battle Enigma Berry item branch.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/expand.rs",
+          "spec": "S-6",
+          "status": "stubbed"
         },
         "gAbsorbDrainStringIds": {
           "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
@@ -28583,7 +28907,7 @@
           "status": "ported"
         },
         "gBattleStringsTable": {
-          "reason": "The full 369-slot table, including four external PC-transfer strings, reaches battle-message/table as canonical raw token data from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_message.rs) and the ROM importer following gBattleStringsTable (crates/rom-import/src/domains/battle_messages.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Request selection and placeholder expansion are deferred.",
+          "reason": "The full 369-slot table, including four external PC-transfer strings, reaches battle-message/table as canonical raw token data from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_message.rs) and the ROM importer following gBattleStringsTable (crates/rom-import/src/domains/battle_messages.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. crates/pokeemerald-rs/src/battle_narration selects entries for the reachable BattleEvent families and expands them; the PC-transfer, item, capture, party-menu, and level-up entries have no battle event to select them yet.",
           "rust_target": "crates/rom-import/src/domains/battle_messages.rs",
           "spec": "S-4",
           "status": "ported"
@@ -28832,7 +29156,7 @@
     "src/battle_setup.c": {
       "artifacts": {
         "BattleSetup_StartWildBattle": {
-          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle_with_lead_effects builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle), most of CB2_EndWildBattle's non-defeat return path (script re-entry, presentation cleanup), ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). The player-loss path IS modelled as of issue #261: CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routing to CB2_WhiteOut is now flow::overworld_phase::white_out::OverworldPhase::white_out, called by advance_wild_battle_frame the instant BattleOutcome::PlayerLost is reported -- see src/overworld.c#DoWhiteOut for the full citation. As of issue #865, the non-defeat branch's tileset-animation reset is modelled too: CB2_EndWildBattle's non-defeat arm (:602-615) takes SetMainCallback2(CB2_ReturnToField) -> CB2_ReturnToFieldLocal/ReturnToFieldLocal's InitViewGraphics (overworld.c:1961-1976,2088-2094) -> InitMapView's InitTilesetAnimations (overworld.c:523-530), which zeroes sPrimaryTilesetAnimCounter (tileset_anims.c:600-615); flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame now resets OverworldPhase::tick to 0 whenever the battle slot clears without BattleOutcome::PlayerLost, covering a win, a successful run, and a turn that failed with no formal outcome. The fail-closed lead_can_fight guard is fully retired (issue #251): an ordinary wild or trainer loss heals the lead in the same frame the outcome is reported (issue #261's white-out), and a concluded Route 101 first battle now heals it too -- CB2_EndFirstBattle (:950-954) unconditionally resumes Route101_EventScript_BirchsBag, whose HealPlayerParty/var-writes/warp tail flow::overworld_phase::first_battle_conclusion models on every outcome -- so no loss path leaves a fainted lead free-roaming and no roll guard remains. The write-back still resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. The same fail-closed no-draw policy still gates whole maps for an unrelated reason: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine. The lead is screened by flow::lead_screen::ensure_lead_can_battle: OverworldPhase::wild_lead_admissible gates the encounter roll and start_wild_battle_with_lead_effects repeats it ahead of CreateWildMon's draws, so a lead holding an item with a battle effect disables wild encounters instead of drawing a battle that would drop the item's effect. The wild opponent's own held item remains unselected (NONE).",
+          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle_with_lead_effects builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's whole saved party -- the active member plus every other decodable, non-egg, non-fainted, engine-playable saved slot as a reserve in slot order (SetBattlePartyIds scans all six slots, battle_controllers.c:585-606; flow::overworld_phase::wild_battle::wild_reserve_owners over battle::Battle::new_with_player_reserves; a reserve the engine cannot play yet, or a valid record that does not decode into a battler, is left out and keeps its bytes; a record whose checksum fails is a Bad Egg, pokemon.c:3742-3747, and counts for nothing) -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle), most of CB2_EndWildBattle's non-defeat return path (script re-entry, presentation cleanup), ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). The player-loss path IS modelled: CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routing to CB2_WhiteOut is flow::overworld_phase::white_out::OverworldPhase::white_out, called by advance_wild_battle_frame the instant BattleOutcome::PlayerLost is reported, which the battle does only once every party member has fainted (Cmd_checkteamslost, battle_script_commands.c:3534-3564), so a lead's faint with a healthy reserve behind it neither halves money nor warps. When the battle ends, each member that was sent out is merged back into its own saved slot under the lead's reconciliation rules (OverworldPhase::complete_wild_battle), members never sent out, eggs and undecodable records keep their saved bytes, and the field lead is re-selected from the saved party. A healthy, valid member left out of the roster keeps the party's HP total nonzero, so a roster-exhausting loss then neither whites out nor halves money -- see src/overworld.c#DoWhiteOut for the full citation -- and that member becomes the field lead when it decodes (a battler the engine cannot play yet). A valid record that does not decode into a battler cannot be selected at all: party::select_active_battler skips it and falls back to slot 0, a fainted fallback that OverworldPhase::select_lead_after_wild_battle declines, so the lead that fought is retained in its own slot, unhealed, with the money untouched (full_party_tests::an_undecodable_reserve_retains_the_fainted_lead_without_a_white_out and ::an_undecodable_reserve_retains_a_nonzero_slot_fainted_lead). That is the port's decode limit, the same one continue records as OverworldPhase::undecodable_lead_retained, not a divergence to resolve by whiting out: upstream's HP total is nonzero, so DoWhiteOut must not run. Until the party is healed, every later encounter is refused at battle::Battle::new_with_player_reserves (FaintedBattler) and dropped. The non-defeat branch's tileset-animation reset is modelled too: CB2_EndWildBattle's non-defeat arm (:602-615) takes SetMainCallback2(CB2_ReturnToField) -> CB2_ReturnToFieldLocal/ReturnToFieldLocal's InitViewGraphics (overworld.c:1961-1976,2088-2094) -> InitMapView's InitTilesetAnimations (overworld.c:523-530), which zeroes sPrimaryTilesetAnimCounter (tileset_anims.c:600-615); flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame resets OverworldPhase::tick to 0 whenever the battle slot clears (a loss's white-out warp zeroes it too), covering a win, a successful run, and a turn that failed with no formal outcome. The fail-closed lead_can_fight guard is retired: an ordinary wild or trainer loss heals the party in the same frame the outcome is reported, and a concluded Route 101 first battle now heals it too -- CB2_EndFirstBattle (:950-954) unconditionally resumes Route101_EventScript_BirchsBag, whose HealPlayerParty/var-writes/warp tail flow::overworld_phase::first_battle_conclusion models on every outcome -- so no loss path with a decodable party leaves a fainted lead free-roaming (the undecodable-reserve exception above is the one that does) and no roll guard remains. The write-back still resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. The same fail-closed no-draw policy still gates whole maps for an unrelated reason: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine. The lead is screened by flow::lead_screen::ensure_lead_can_battle: OverworldPhase::wild_lead_admissible gates the encounter roll and start_wild_battle_with_lead_effects repeats it ahead of CreateWildMon's draws (a reserve fails the same screen by being left out of the roster, not by refusing the encounter), so a lead holding an item with a battle effect disables wild encounters instead of drawing a battle that would drop the item's effect. The wild opponent's own held item remains unselected (NONE).",
           "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -28894,7 +29218,7 @@
           "status": "stubbed"
         },
         "AbilityBattleEffects-absorbing": {
-          "reason": "ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170). crate::hit::damage_core runs absorbing_outcome after the accuracy stage and before the critical-hit draw: Volt Absorb against a powered Electric move and Water Absorb against a powered Water move report HitOutcome::Absorbed with max(1, maxHP / 4) healing (zero at full HP, surfaced as BattleEvent::NoEffect like BattleScript_MonMadeMoveUseless), and Flash Fire against a Fire move reports HitOutcome::FlashFireBlocked, which crate::battle::execute::Battle::execute_hit_move turns into the Volatiles::flash_fire latch. A repeated activation still cancels the move without boosting (B_MSG_FLASH_FIRE_NO_BOOST), writes no no-effect flag, and has no power gate. The latched attacker's Fire damage is multiplied 15/10 before the final +2 (crate::damage::base_damage_with_flash_fire, pokemon.c:3366-3371). An absorbed Water Gun consumes one accuracy draw and an always-hit Shock Wave none; PP is spent once before execution. NOT modelled: the frozen-holder exemption (Status1 cannot represent freeze), absorption inside the multi-hit, drain and fixed-damage pipelines (no admitted move there is Electric, Water or Fire), message/animation text, and Burn-based Fire moves, which admission still refuses. Pinned by tests/turn_engine/absorbing_abilities.rs and hit/tests.rs.",
+          "reason": "ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170). crate::hit::damage_core runs absorbing_outcome after the accuracy stage and before the critical-hit draw: Volt Absorb against a powered Electric move and Water Absorb against a powered Water move report HitOutcome::Absorbed with max(1, maxHP / 4) healing (zero at full HP, surfaced as BattleEvent::AbsorbMadeMoveUseless for BattleScript_MonMadeMoveUseless's STRINGID_PKMNSXMADEYUSELESS, battle_util.c:2732-2737, data/battle_scripts_1.s:4091-4099), and Flash Fire against a Fire move reports HitOutcome::FlashFireBlocked, which crate::battle::execute::Battle::execute_hit_move turns into the Volatiles::flash_fire latch. A repeated activation still cancels the move without boosting (B_MSG_FLASH_FIRE_NO_BOOST), writes no no-effect flag, and has no power gate. The latched attacker's Fire damage is multiplied 15/10 before the final +2 (crate::damage::base_damage_with_flash_fire, pokemon.c:3366-3371). An absorbed Water Gun consumes one accuracy draw and an always-hit Shock Wave none; PP is spent once before execution. The message text IS modelled, in crates/pokeemerald-rs/src/battle_narration/events.rs: a full-HP absorb narrates STRINGID_PKMNSXMADEYUSELESS from AbsorbMadeMoveUseless, a heal narrates STRINGID_PKMNRESTOREDHPUSING from AbilityHealed, and Flash Fire narrates STRINGID_PKMNRAISEDFIREPOWERWITH or STRINGID_PKMNSXMADEYINEFFECTIVE from FlashFireAbsorbed. NOT modelled: the frozen-holder exemption (Status1 cannot represent freeze), absorption inside the multi-hit, drain and fixed-damage pipelines (no admitted move there is Electric, Water or Fire), the animation, and Burn-based Fire moves, which admission still refuses. Pinned by tests/turn_engine/absorbing_abilities.rs and hit/tests.rs.",
           "rust_target": "crates/battle/src/hit.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -29490,6 +29814,14 @@
       "status": "pending"
     },
     "src/data/field_effects/field_effect_objects.h": {
+      "artifacts": {
+        "gFieldEffectObjectTemplate_TallGrass": {
+          "reason": "field_effect_objects.h:71-100: five 16x16 cells (sPicTable_TallGrass), animation commands showing cells 1, 2, 3, 4, 0 for ten frames each then ANIMCMD_END (sAnim_TallGrass), a 16x16 OBJ (gObjectEventBaseOam_16x16), and the FLDEFF_PAL_TAG_GENERAL_1 palette on scene bank 6, all in grass.rs. The UpdateTallGrassFieldEffect callback is tracked at src/field_effect_helpers.c#UpdateTallGrassFieldEffect.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29686,6 +30018,92 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_graphics_info.h": {
+      "artifacts": {
+        "gObjectEventGraphicsInfo_BerryTree": {
+          "reason": "Route 103's three berry trees at BERRY_STAGE_BERRIES (npc/sheets.rs initial_berry_sheet): stage 4's 16x32 Cheri/Leppa cell 4 (sAnim_BerryTreeStage4 pic 7, sPicTable_CheriBerryTree/LeppaBerryTree) with gBerryTreePaletteSlotTable_Cheri/_Leppa's NPC_3/NPC_2 slot. A static fresh-save state: berry growth, planting, watering and SetBerryTreeGraphics' per-save stage are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_BirchsBag": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_CuttableTree": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16, inanimate, stay-still cell 0 of four, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_EnemyZigzagoon": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, nine-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_ItemBall": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_MovingBox": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_MysteryEventDeliveryman": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x32, three-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_NinjaBoy": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16, nine-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_Nurse": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x32, four-cell sAnimTable_Nurse, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_PichuDoll": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_SwabluDoll": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_Truck": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 48x48 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_VigorothCarryingBox": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, cells 0 for every stand frame, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_VigorothFacingAway": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, cell 3 for every stand frame, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29693,7 +30111,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 23 resolving arms -- 20 'standard' 16x32 NPCs (the Littleroot-family eight plus Oldale Town's girl/mart employee/footprints man and Route 103's black belt/boy 1/fisherman/man 3/man 5/pokefan m/swimmer f/swimmer m/woman 2) and the two rival variants (all 22 fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below -- against the 76 distinct graphics ids the 76 maps whose layouts are bundled (assets::bundled_overworld::maps_with_bundled_layouts: the six Littleroot-family maps, Route 101, Oldale Town, Route 103, and every map reusing the truck, house, mart and Pokemon Center layouts) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered: gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 54 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the moving box, Vigoroth, Zigzagoon, berry-tree and cuttable-tree props, the ninja boy, and the people sheets without a binding such as the nurse) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
+          "reason": "npc::resolve_sprite_source (with npc/sheets.rs object_sheet and initial_berry_sheet) is a bounded re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping and of each pointed-to struct's .width/.height/.paletteTag/.paletteSlot/.inanimate/.images/.anims fields (object_event_graphics_info.h, object_event_pic_tables.h, object_event_anims.h) for every graphics id the fixed object events of the checkpoint maps name. Modelled: the two protagonist sheets and both rival variants (reusing the matching protagonist's art, kept on its own palette bank for PALSLOT_NPC_SPECIAL), 26 standard nine-frame 16x32 people, the 16x16 ninja boy, item ball, Birch's bag, cuttable tree, moving box and two dolls, the 16x32 nurse and mystery-event deliveryman (4- and 3-cell sheets), the two 32x32 Vigoroth variants and Zigzagoon, the 48x48 truck, and Route 103's three berry trees at the BERRY_STAGE_BERRIES stage new_game.inc plants them at (resolved per event by trainer_sight_or_berry_tree_id; no berry state, growth, planting or watering). Each graphic shows its stationary frame for the object's live facing: the cell sAnimTable_Standard/_Nurse/_Inanimate/_CuttableTree/_BerryTree select for that facing, with the pic table's own cell remapping (Vigoroth cells 0 and 3, nurse and deliveryman cells 0-2); walking, bowing, cutting and growth animation are not run. Packing keeps only the sheet cells some facing of some event of the scene can show (sheets::Facing::reachable_cells: south, north and west for a directional sheet, its one cell for a fixed one), so a live turn such as faceplayer always lands on a packed frame. The packed sheets are the scene's ROM-side image store, not OBJ VRAM: composing stages only each frame's drawn sprites into OBJ VRAM (obj_vram::stage), so the ten-bit OBJ tile field bounds one frame's sprites, not the scene's sheets. Upstream's single resident NPC_SPECIAL palette slot (the last special palette loaded wins) is not reproduced: moving box, truck, Vigoroth and Zigzagoon each get their own native bank. Not modelled: the OBJ_EVENT_GFX_VAR_1..VAR_B decoration slots and every non-rival OBJ_EVENT_GFX_VAR_0 value (GetObjectEventGraphicsInfo's VarGetObjectEventGraphicsId indirection, event_object_movement.c:1914-1931, is modelled for n == 0 narrowed to the two rival ids), every graphics id outside the checkpoint maps, and the rest of this 239-entry table's rows.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -29706,130 +30124,166 @@
     "src/data/object_events/object_event_pic_tables.h": {
       "artifacts": {
         "sPicTable_BlackBelt": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Boy1": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Boy2": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0 when this table is the current player's own sheet. The same table is also the sheet an OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL object event draws from when the player is May, since upstream's rival graphics info points .images at the protagonist's pic table (object_event_graphics_info.h:1920-2032) and there is no rival-specific pic table or PNG. That rival case is packed by npc::sheets::ObjectSheet::pack instead: only stand cells 0 to 2 (south, north, west; east reuses west flipped), appended after the player's block and drawn from its own palette bank (upstream PALSLOT_NPC_SPECIAL). The same holds for sPicTable_MayNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
         "sPicTable_FatMan": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Fisherman": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "sPicTable_Gentleman": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sPicTable_Girl3": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Man3": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Man5": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Maniac": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_MartEmployee": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Mom": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Norman": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "sPicTable_PokefanF": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sPicTable_PokefanM": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_ProfBirch": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "sPicTable_SchoolKidM": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sPicTable_Scientist1": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_SwimmerF": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_SwimmerM": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "sPicTable_Teala": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sPicTable_Twin": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Woman2": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "sPicTable_Woman4": {
-          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "sPicTable_Woman5": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "sPicTable_Youngster": {
+          "reason": "This pic table's nine 16x32 frames (overworld_frame(<pic>, 2, 4, 0..8)) are cut from this pic's sprite/<name> pack sheet by npc::sheets::ObjectSheet::people and ObjectSheet::pack, after npc::resolve_sprite_source binds the matching OBJ_EVENT_GFX_* id to that sheet. Only the stand cells sAnimTable_Standard shows at rest are packed and drawn: cell 0 south, 1 north and 2 west, with east reusing west flipped. Cells 3 to 8, the walking frames, are not packed: no NPC walking animation is modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         }
       },
       "category": "code.header",
@@ -29837,6 +30291,14 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_subsprites.h": {
+      "artifacts": {
+        "sOamTables_48x48": {
+          "reason": "sOamTable_48x48's twelve pieces (a 32x8 then a 16x8 per 8-pixel row, tile offsets 0, 4, 6, 10, ... in the row-major frame, all priority 2) transcribed as npc::oam::truck_entries. Every table number maps to the same table, so no elevation or long-grass variant exists to model.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/oam.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29978,20 +30440,86 @@
     },
     "src/data/pokemon_graphics/back_pic_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30028,20 +30556,86 @@
     },
     "src/data/pokemon_graphics/palette_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30053,20 +30647,86 @@
     },
     "src/data/pokemon_graphics/shiny_palette_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30078,20 +30738,86 @@
     },
     "src/data/pokemon_graphics/still_front_pic_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30457,17 +31183,53 @@
     },
     "src/event_object_movement.c": {
       "artifacts": {
+        "DoGroundEffects_OnBeginStep": {
+          "reason": "event_object_movement.c:8098-8116. OverworldPhase::step runs the player's begin-step pass for the tall-grass flag only, from the frame a step starts (StepOutcome::Advanced) and from the crossing step on the entered map (finish_crossing), after the step's own elevation update. Every other begin-step ground effect (long grass, puddles, ripples, sand, ash, shadows) and every non-player object event are unmodelled.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "DoGroundEffects_OnSpawn": {
+          "reason": "event_object_movement.c:8080-8096. Two halves of the spawn-frame ground-effect pass are modelled. Elevation (crates/pokeemerald-rs/src/overworld/sprites.rs): sprites::CellElevations::settled gives an object its live elevation replaced by its own layout-grid cell's elevation unless that cell is ELEVATION_TRANSITION or ELEVATION_MULTI_LEVEL or lies off the grid (the ObjectEventUpdateElevation :7759-7771 pass DoGroundEffects_OnSpawn reaches on the spawn frame: :4931, gated by triggerGroundEffectsOnMove = TRUE from InitObjectEventStateFromTemplate :1301), so May's Pichu doll authored at elevation 4 on a cell of elevation 3 draws at priority 2; SceneSprites::live_entries applies it to each object's live tile on every compose, at render time rather than stored back onto the object. Tall grass (crates/pokeemerald-rs/src/overworld/grass.rs): OverworldScene::seed_tall_grass_placement is the player's spawn-time pass for the tall-grass flag only, once per placement (triggerGroundEffectsOnMove is true for a fresh object, :1301, and after a return to the field, :1799-1802: a battle return re-arms it). Stubbed: every other spawn-time ground effect (long grass, ripples, sand, puddles, shadows, reflections) and every non-player object event's tall-grass effect are unmodelled; UpdateObjectEventElevationAndPriority is separately tracked. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp landings.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/sprites.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "DoesObjectCollideWithObjectAt": {
           "reason": "COLLISION_OBJECT_EVENT: the destination-tile occupancy test, re-implemented as PlayerState::step's third and last collision check (after the grid collision bits and the elevation mismatch, matching GetCollisionAtCoords' own test order), via engine::overworld::object_event::visible_object_event_at over the runtime's bound live ObjectEventCollection, so a moved object blocks its live tile and vacates its authored one. AreElevationsCompatible is the same either-side-ELEVATION_TRANSITION wildcard predicate MapRuntime::object_events_at applies. Narrowed: upstream's curObject != objectEvent self-skip has no counterpart (the player is a PlayerState, never a collection entry); upstream's second previousCoords term is not modelled, because ObjectEventState retains its previous position with no animation-completion lifecycle and reserving it would block the vacated tile indefinitely; a connection-crossing step does not run the test at all because ConnectedMapData exposes no neighbouring-map event data.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
+        "GetGroundEffectFlags_TallGrassOnBeginStep": {
+          "reason": "event_object_movement.c:7456-7466: the flag is set exactly when MetatileBehavior_IsTallGrass holds for the object's current metatile behaviour, MB_TALL_GRASS alone and not long grass or any other encounter behaviour. engine::overworld::metatile_behavior::is_tall_grass is that predicate; OverworldScene::is_tall_grass_at reads it over the player's destination or placement tile, where the other flag getters of the same dispatch stay unmodelled.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetGroundEffectFlags_TallGrassOnSpawn": {
+          "reason": "event_object_movement.c:7456-7466: the flag is set exactly when MetatileBehavior_IsTallGrass holds for the object's current metatile behaviour, MB_TALL_GRASS alone and not long grass or any other encounter behaviour. engine::overworld::metatile_behavior::is_tall_grass is that predicate; OverworldScene::is_tall_grass_at reads it over the player's destination or placement tile, where the other flag getters of the same dispatch stay unmodelled.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetObjectEventIdByPosition": {
           "reason": "Position-plus-elevation-wildcard object-event scan rewritten as MapRuntime::object_events_at. With a bound ObjectEventCollection (MapRuntime::with_object_events) it delegates to ObjectEventCollection::object_events_at and compares each object's live position and elevation, returning the authored template as metadata; a bound collection never falls back to authored coordinates. Unbound runtimes (trainer sight) still scan authored coordinates. ObjectEventDoesElevationMatch's rule (either side's ELEVATION_TRANSITION is a wildcard) is the shared collision::elevations_compatible predicate. It returns an iterator over every match on the tile, not a single hit, because upstream only scans spawned object events (a set hide flag prevents the spawn) while this port scans every template: the hide-flag filter therefore runs inside the scan, in engine::overworld::object_event::visible_object_event_at. Both consumers, the facing lookup (facing_object_event) and PlayerState::step's COLLISION_OBJECT_EVENT check, go through that one composed search. Templates stack per tile with independent flags (the Birch lab's three starter balls at (6, 8)). Known narrowing: live elevation is the retained state elevation, which no writer updates from the ground (ObjectEventUpdateElevation, event_object_movement.c:1758-1770, :8089); trainer sight and cross-map objects are not migrated.",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "GroundEffect_SpawnOnTallGrass": {
+          "reason": "event_object_movement.c:7800-7811. TallGrassEffects::spawn_placement starts the effect already on its settled cell (SeekSpriteAnim(sprite, 4), field_effect_helpers.c:311-313) when the player is placed on tall grass: OverworldScene::seed_tall_grass_placement runs once per placement, from the first field frame after a new game, a continue, a warp landing (each builds a fresh scene), or a battle return (OverworldPhase::reinit_field_tileset_animations drops every effect first, as ResetSpriteData does, overworld.c:2134). Not modelled: object events other than the player spawning grass effects.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "GroundEffect_StepOnTallGrass": {
+          "reason": "event_object_movement.c:7813-7825. TallGrassEffects::spawn_step starts the FLDEFF_TALL_GRASS effect on the tile the player's begin-step entered (OverworldPhase::step, finish_crossing), with the player's updated previousElevation as sElevation and OBJ priority 2; the effect is not skipped to the end of its animation (gFieldEffectArguments[7] FALSE). Not modelled: any object event but the player starting the effect (NPC ground-effect dispatch), and disableCoveringGroundEffects, which only a jump or bike path sets.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "InitObjectEventStateFromTemplate": {
           "reason": "ObjectEventCollection::from_templates seeds one live ObjectEventState per authored template, in declaration order, reproducing this function's position/previousCoords/elevation/facing/movementType initialization (:1296-1321; the facing derivation itself was already transcribed as gInitialMovementTypeFacingDirections/initial_facing_direction, object_event.rs). Keyed lookup by local_id (LiveObjectEvent::template().local_id) models GetObjectEventIdByLocalId's linear scan (:1275-1285), and ObjectEventCollection::object_events_at models GetObjectEventIdByPosition/ObjectEventDoesElevationMatch's live-position scan (:2192-2215), which MapRuntime::object_events_at delegates to when a collection is bound. Not modelled: GetAvailableObjectEventId's slot reuse/dedup against (localId, mapNum, mapGroup) -- this collection is per-map so mapNum/mapGroup do not apply and every template gets exactly one persistent slot; the active flag, triggerGroundEffectsOnMove, dynamic graphics id, and sMovementTypeHasRange's zero-range-to-one clamp (all sprite/task-simulation concerns out of this engine-only slice's boundary); and the hide-flag/camera-radius spawn gate, which stays object_event.rs's query-time concern (visible_object_event_at/object_event_is_in_view) rather than an admission test this collection performs.",
@@ -30517,6 +31279,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "SetObjectSubpriorityByElevation": {
+          "reason": "npc::oam::subpriority_from_bottom computes sElevationToSubpriority[elevation] (:7691-7693) + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + subpriority from SetObjectSubpriorityByElevation (:7773-7779, via the :7739-7745 computation; object events pass subpriority 1, the tall-grass effect its own first-command bias) with bottom the sprite's rendered bottom edge for its own height (16, 32 or 48), and npc::oam::order_sprites sorts the player, the object events and the tall-grass effects, each with its own subpriority, by ascending parent OBJ priority, then subpriority, then lower on-screen y (SortSprites, sprite.c:413-415), keeping a multi-OBJ sprite together and ties in player-then-template-then-effect order; npc::oam::elevated_oam_entries builds the DepthSprite for each visible bound object from its live tile, facing and settled elevation, recomputed each compose. Stubbed: upstream's object-allocation order for exact ties is not reproduced.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/oam.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "SetSpritePosToMapCoords": {
           "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). PLAYER_OBJ_Y also folds in centerToCornerVecY (-16) and the resting gSpriteCoordOffsetY bias (-sVerticalCameraPan - 8 == -40, UpdateCameraPanning's own entry) via RESTING_SCROLL_Y (issue #977), landing the player's fixed OAM row at 56 -- matching upstream's resting 7*16 - 16 - 40. Bike pan-ahead (the only thing that would move dx/dy away from 0) is not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
@@ -30548,7 +31316,7 @@
           "status": "stubbed"
         },
         "UpdateObjectEventElevationAndPriority": {
-          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / priority_for_elevation, now driving BOTH the player OBJ's OAM priority (from PlayerState::previous_elevation) and every stationary NPC/object event's (from its template elevation, npc::oam_entries) -- replacing the fixed PLAYER_OBJ_PRIORITY both used to draw at. sElevationToSubspriteTableNum (:7733-7735) has no counterpart, and for 16x32 object events it costs nothing: its values index sOamTables_16x32 (object_event_subsprites.h:176-183) entries 1/2/0, which are a single full-size 16x32 subsprite at priority 2, a single full-size 16x32 at priority 1, and the empty table AddSubspritesToOamBuffer copies through as the plain OBJ at oam.priority -- exactly the values sElevationToPriority already gives, so one OBJ at priority_for_elevation's value is pixel-identical. The genuinely multi-piece tables are reached only by SetObjectEventSpriteOamTableForLongGrass (:7690-7705, table nums 4/5), an unported ground effect. Stubbed, not rewritten: the fixedPriority branch is NOT modelled -- the Rust render path unconditionally derives an elevation priority, so a fixed-priority object event would diverge once one is bundled. Subpriority is modelled: npc::subpriority computes sElevationToSubpriority[elevation] (:7691-7693, npc::ELEVATION_TO_SUBPRIORITY) + (16 - (((y + 8) & 0xFF) >> 4)) * 2 + 1 from SetObjectSubpriorityByElevation (:7739-7745), with y the OBJ's rendered top plus its 32px height, and npc::order_by_depth sorts the whole OAM list by ascending OBJ priority, then subpriority, so the lower subpriority of each OBJ priority gets the lower OAM index (the renderer keeps the earlier entry on an equal-priority tie) and slot order matches what SortSprites hands the PPU across priorities (#1630), equal subpriorities falling to the lower on-screen y first as SortSprites does (sprite.c:413-415) and full ties keeping player-then-template order; the elevation base matters because elevations 2 and 3 share priority 2. Upstream's object-allocation order for exact ties is not reproduced. Also NOT modelled: the grid re-derivation of an object's previousElevation on its first DoGroundEffects_OnSpawn pass (SceneSprites has no layout grid; see npc::oam_entries' comment for the one bundled object it would move, an unbound doll). This function is also where a freshly spawned object event's ELEVATION_TRANSITION landing sentinel gets resolved (first statement past the fixedPriority early-return): its ObjectEventUpdateElevation(objEvent) call (event_object_movement.c:7742) runs from DoGroundEffects_OnSpawn (:4931, gated by triggerGroundEffectsOnMove = TRUE, set for every fresh spawn by InitObjectEventStateFromTemplate at :1301) on the spawn frame itself, before input unlocks -- not deferred to the object's first subsequent step. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's faithful model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp-event landings (issue #297).",
+          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / avatar::priority_for_elevation, driving the player OBJ's OAM priority (from PlayerState::previous_elevation) and every object event's (from the elevation it settles at). sElevationToSubspriteTableNum (:7733-7735) has no counterpart: its values index the sOamTables_16x16/16x32/32x32 entries 1/2/0 (object_event_subsprites.h), a single full-size subsprite at priority 2, one at priority 1, and the empty table AddSubspritesToOamBuffer copies through as the plain OBJ at oam.priority -- exactly sElevationToPriority's values, so one OBJ per sprite at priority_for_elevation is pixel-identical; the 48x48 truck's six tables are identical priority-2 pieces, so it draws at priority 2 whatever its elevation while sorting by its parent's elevation priority (npc::oam::truck_entries). The multi-piece long-grass tables (SetObjectEventSpriteOamTableForLongGrass, :7690-7705, table nums 4/5) are an unported ground effect. Stubbed, not rewritten: the fixedPriority branch is not modelled (a fixed-priority object event would diverge once one is bundled). This row owns the priority half only; the rest of the function's work is split across rows that each name their module: the subpriority and draw order are src/event_object_movement.c#SetObjectSubpriorityByElevation (npc/oam.rs) and the cell-elevation settle is src/event_object_movement.c#DoGroundEffects_OnSpawn (sprites.rs). Priority is recomputed on every compose from each object's live elevation (OverworldScene::compose_live), not once per scene load.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -30751,6 +31519,26 @@
       "status": "pending"
     },
     "src/field_effect_helpers.c": {
+      "artifacts": {
+        "FldEff_TallGrass": {
+          "reason": "field_effect_helpers.c:291-314. TallGrassEffects::push creates the effect on its tile with the owner's previous elevation and OBJ priority 2, drawn as a 16x16 OBJ whose top-left sits one metatile below an object event's 16x32 top (SetSpritePosToOffsetMapCoords(+8, +8), centre to corner), palette bank 6; the settled variant seeks to command 4. The effect's identity is its tile alone: the owner is always the player, so sLocalId/sMapNum/sMapGroup need no encoding.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "UpdateGrassFieldEffectSubpriority": {
+          "reason": "field_effect_helpers.c:1662-1690. TallGrassEffect::subpriority is SetObjectSubpriorityByElevation (npc::subpriority_from_bottom) plus the overlap rule against the player's and every bound object-event sprite's depth, with upstream's strict bounds and first-match break. Not modelled: object events whose graphics the scene does not bind (they draw no sprite here); an object whose graphic is not 16x32 is compared with 16x32 bounds from its parent's top-left rather than with its own centre and height.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "UpdateTallGrassFieldEffect": {
+          "reason": "field_effect_helpers.c:316-355. TallGrassEffects::advance runs the callback ahead of the animation step as AnimateSprites does (sprite.c:308-320): remove when the tile is no longer MB_TALL_GRASS, or once the owner's current and previous tiles both left it and the animation had already ended; the first-command subpriority bias; on-screen culling as UpdateObjectEventSpriteInvisibility. Not modelled: the gCamera rebasing of sX/sY across a map-edge connection (:325-330), so an in-flight effect is dropped when the scene is rebuilt for a crossing, while the crossing step's own effect starts in the entered scene; and owners other than the player.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -32134,6 +32922,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsTallGrass": {
+          "reason": "metatile_behavior.c:729-734: exactly MB_TALL_GRASS, as is_tall_grass, pinned over the whole u8 id space; long grass (MB_LONG_GRASS) is a separate behaviour and is not tall grass.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsTrainerHillTimer": {
           "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -32318,6 +33112,36 @@
     },
     "src/naming_screen.c": {
       "artifacts": {
+        "CreateSprites": {
+          "reason": "CreateSprites (naming_screen.c:1110-1116) with CreateCursorSprite, CreatePageSwapButtonSprites, CreateBackOkSprites, CreateTextEntrySprites and the sprite templates and subsprite tables (:1119-1364, :2140-2519): the cursor, page-swap frame, label and fill, Back, OK, input arrow, and underscores at their settled positions, banks and priorities as OAM entries, with the cursor semi-transparent. Not modelled: the invisible-until-slide-on state, SpriteCB_PageSwap, SpriteCB_Cursor flashing, the arrow and underscore bob callbacks (callers pass offsets), the input-target icon other than the player's, and CreateSprites' call order.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawBgTilemap": {
+          "reason": "DrawBgTilemap (naming_screen.c:1888-1891): the 32x20 background, upper, lower, and symbols tilemaps copied into a BG tilemap buffer, rewritten as NamingScene's decoded tilemaps padded to the 32x32 screenblock; each frame overlays the window tiles PutWindowTilemap writes.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "DrawKeyboardPageOnDeck": {
+          "reason": "DrawKeyboardPageOnDeck (naming_screen.c:1961-1996): modelled as PageSelection, which pairs the visible page with KeyboardPage::next on the other keyboard layer and draws both (sPageToNextKeyboardId, sNextKeyboardPageTilemaps, :584-603, :1951-1959). Not modelled: choosing the hidden layer from the BG1CNT and BG2CNT priorities, the swap animation and its priority exchange, and the call timing; the caller states which layer is in front.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawTextEntry": {
+          "reason": "DrawTextEntry (naming_screen.c:1898-1920): the entry window filled with 1 and each slot's character printed in FONT_NORMAL at inputCharBaseXPos - 0x40 + 8 * i, y 1, in the default font colours, as NamingScene's entry window. Not modelled: IsWideLetter (always false upstream), the gender icon (TryDrawGenderIcon), and the entry state itself, which the caller supplies.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "DrawTextEntryBox": {
+          "reason": "DrawTextEntryBox (naming_screen.c:1704-1735): the title window filled with 1 and the title printed at (8, 1), as DrawNormalTextEntryBox for the player template's YOUR NAME? title. Not modelled: DrawMonTextEntryBox's species-name prefix and the box and Walda titles.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "HandleDpadMovement": {
           "reason": "HandleDpadMovement (naming_screen.c:1602-1698) rewritten in NamingScreenModel::read_dpad: sequential Up/Down/Left/Right test with the last match winning, horizontal wrap through the button column, the key-row/button-row mapping with the remembered tButtonId row (including its BUTTON_BACK/BUTTON_OK overwrite quirk), and vertical wrap per column kind. The screen-local 16-frame initial repeat set in NamingScreen_Init (:465-484) and the 5-frame continued repeat of ReadKeys (main.c:250-290) are modelled by a per-screen key-repeat counter that advances on every frame, including locked ones (issue #1854).",
           "rust_target": "crates/pokeemerald-rs/src/naming.rs",
@@ -32330,11 +33154,53 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "LoadPalettes": {
+          "reason": "LoadPalettes (naming_screen.c:1881-1886): the six gNamingScreenMenu_Pal rows into background banks 0-5, keyboard.pal into bank 10, and text-window palette 2 into bank 11, rewritten as the background palette NamingScene builds from NamingScreenHandle::menu_palette_banks. The matching object banks (the sSpritePalettes allocation: menu 0-5, buttons again at 6 and 7, the avatar at 8) are built beside it.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "MainState_FadeIn": {
+          "reason": "MainState_FadeIn (naming_screen.c:620-638): the initial still arrangement is modelled as PageSelection::initial and NamingScene::render: the background, lower and upper tilemaps, both keyboard windows, the entry and title, and the controls banner, with upper visible on BG1 and lower prepared on BG2. Not modelled: the palette fade-in, the state advance, the VRAM copies, and the sprite creation order.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "NamingScreen_CreatePlayerIcon": {
+          "reason": "NamingScreen_CreatePlayerIcon (naming_screen.c:1396-1405): the rival graphic of the player's own gender (Brendan or May) at (56, 37), OAM priority 3, on frame 3 that ANIM_STD_GO_SOUTH starts on, as the NamingAvatar sprite. Not modelled: GetRivalAvatarGraphicsIdByStateIdAndGender (the caller picks the avatar), the walking animation, and the other input-target icons.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "NamingScreen_InitBGs": {
+          "reason": "NamingScreen_InitBGs (naming_screen.c:497-535) with sBgTemplates and sWindowTemplates (:200-276): the five windows' tile rectangles, base blocks and palette banks, the BG priorities 0, 1, 2, 3 with the keyboard pair exchanging 1 and 2, and BLDCNT target 2 on BG1 and BG2 with BLDALPHA 12 and 8, as NamingScene's layers and effects. Not modelled: DISPCNT and GPU register writes, tilemap-buffer allocation, scroll resets, and the standard window and tile loading.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "PrintControls": {
+          "reason": "PrintControls (naming_screen.c:1998-2006): the banner window filled with 15 and gText_MoveOkBack printed in FONT_SMALL at (2, 1), white on dark gray, in bank 11. Not modelled: the D-pad, A and B keypad icons, whose keypad_icons art is not in the asset pack; the banner reserves each icon's 8 pixels and draws only the words.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "PrintKeyboardKeys": {
+          "reason": "PrintKeyboardKeys (naming_screen.c:1927-1959) with sFillValues and the sNamingScreenKeyboardText rows of text_input_strings.c:10-21, rewritten as NamingScene's per-page 152x64 window: page fill (13 upper, 14 lower, 15 symbols), white-on-dark-gray FONT_NORMAL rows at y = 16 * row + 1, the {CLEAR n} gaps of KeyboardPage::clear_gaps, and sPageColumnXPos as KeyboardPage::column_x_offsets in page_spec.rs. Printed through the engine Printer with every glyph revealed at once.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "SaveInputText": {
           "reason": "SaveInputText (naming_screen.c:1850-1863) rewritten in NamingScreenModel::confirm: the entry replaces the caller's seeded destination unless every entered character is blank (space or EOS); the confirmed value is returned and no intro or save state is touched (issue #1854). MainState_PressedOKButton's party-full PC message belongs to the CAUGHT_MON template, which this model does not serve.",
           "rust_target": "crates/pokeemerald-rs/src/naming.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "SetCursorPos": {
+          "reason": "SetCursorPos (naming_screen.c:1130-1144): the sprite centre at sPageColumnXPos[column] + 38 and row * 16 + 88, and the hidden button column, as KeyboardPage::cursor_center. Not modelled: the sX, sY, sPrevX and sPrevY bookkeeping, which the caller's cursor model owns.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/page_spec.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         }
       },
       "category": "code.source",
@@ -33390,8 +34256,8 @@
     "src/sprite.c": {
       "artifacts": {
         "UpdateOamCoords": {
-          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to an enabled sprite's OAM position) ported as npc::oam_entries' own camera_lag addition inside object_screen_position (issue #217, I-3) -- the fix for NPC sprites snapping to their destination tile at step start instead of staying glued to the camera through the walk animation. The branch *selection* (which sprites opt in) is not modelled, and honestly cannot be split by sprite: upstream sets coordOffsetEnabled = TRUE unconditionally in TrySetupObjectEventSprite (src/event_object_movement.c:1466), which every object event reaches -- the player's own included (InitPlayerAvatar -> SpawnSpecialObjectEvent -> TrySpawnObjectEventTemplate -> TrySetupObjectEventSprite; src/field_player_avatar.c:1399, src/event_object_movement.c:1490,1507). So the offset is on for every sprite this module draws and the branch is unconditional here. The player nevertheless looks screen-fixed upstream (and is drawn at the fixed avatar::PLAYER_OBJ_X/Y here) for a different reason than 'no offset': its own walk animation advances sprite->x/y by 1px/frame along travel (Step1, src/event_object_movement.c:8191), cancelling the coord offset frame for frame. This port collapses that cancellation to a constant rather than reproducing both halves -- see SetSpritePosToMapCoords' own ledger entry.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to an enabled sprite's OAM position) ported as npc::oam::object_origin's camera_lag addition, which anchors a sprite of any size centred on its tile with its bottom edge on the tile's bottom edge (event_object_movement.c:1459-1464: centre (16x + 8, 16y + 16 - height/2), then centerToCornerVec); the OBJ then wraps to OAM coordinates so NPC sprites stay glued to the camera through the walk animation instead of snapping to the destination tile at step start. The branch selection (which sprites opt in) is not modelled and cannot be split by sprite: upstream sets coordOffsetEnabled = TRUE unconditionally in TrySetupObjectEventSprite (src/event_object_movement.c:1466), which every object event reaches, the player's own included (InitPlayerAvatar -> SpawnSpecialObjectEvent -> TrySpawnObjectEventTemplate -> TrySetupObjectEventSprite; src/field_player_avatar.c:1399, src/event_object_movement.c:1490,1507). So the offset is on for every sprite this module draws. The player looks screen-fixed upstream (and is drawn at the fixed avatar::PLAYER_OBJ_X/Y here) because its own walk animation advances sprite->x/y by 1px/frame along travel (Step1, src/event_object_movement.c:8191), cancelling the coord offset frame for frame; this port collapses that cancellation to a constant -- see SetSpritePosToMapCoords' own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/oam.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
@@ -33456,6 +34322,116 @@
       "status": "pending"
     },
     "src/starter_choose.c": {
+      "artifacts": {
+        "CB2_ChooseStarter": {
+          "reason": "starter_choose.c:374-463: StarterChooserScene::from_pack builds the chooser with Torchic selected: the bag and grass BGs at their priorities, the standard border and message palette, the ball/hand and circle sheets, the black fade-in (NormalPaletteFade::begin_in), the label window with darkening inside it and no effects outside, and the hand and three balls. Native owned resources replace the hardware register and VRAM reset sequence.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CB2_StarterChoose": {
+          "reason": "starter_choose.c:465-472: StarterChooserScene::step runs one task handler, then the sprite callbacks and animations, then the palette fade update, in upstream's order. A handler that installs its successor does not run it until the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "ClearStarterLabel": {
+          "reason": "starter_choose.c:606-615: clearing removes the label text and empties WIN0, so no darkening remains.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreatePokemonFrontSprite": {
+          "reason": "starter_choose.c:629-636: the preview is the species' normal front art as a 64x64 affine-normal OBJ at palette bank 14 and priority 0, drawn ahead of the circle. No Pokémon is created.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreateStarterPokemonLabel": {
+          "reason": "starter_choose.c:570-604: the label draws the Pokédex category plus POKéMON in the narrow font and the species name in the normal font, each centred in 104 pixels, in the palette's white and light-gray shadow on a transparent window, and sets WIN0 to the window grown by half a tile (the byte registers wrap, so Treecko's left edge is 252). The three category strings are constants because the pack carries no Pokédex payload.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/text.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "GetStarterPokemon": {
+          "reason": "starter_choose.c:350-356: StarterChoice::species_id maps the three chooser positions (Treecko, Torchic, Mudkip) to their species. The raw u16 ordinal API is not exposed, so upstream's clamp of values above 3 to Treecko and its out-of-range read at 3 have no equivalent.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "SpriteCB_Pokeball": {
+          "reason": "starter_choose.c:647-654 and the animation tables at :211-265: the selected ball plays its 128-frame sheet-frame loop, restarting only when its selection changes; the other balls hold sheet frame 0. Ball coordinates never move.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_SelectionHand": {
+          "reason": "starter_choose.c:638-645: the hand follows the selected ball's cursor position and floats by Sin(phase, 8) with the phase advancing 4 per frame, a 64-frame period that never resets across moves, previews or cancels.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_StarterPokemon": {
+          "reason": "starter_choose.c:656-667 and the affine tables at :267-282: the Pokémon and circle step toward (120, 64) by 4 horizontally and 2 vertically per frame from their creation frame, with the circle's and picture's affine scales ramping to 320/256 and 256/256 over 16 frames.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_AskConfirmStarter": {
+          "reason": "starter_choose.c:528-536: the confirmation text, the YES/NO menu with the cursor on YES and a normal-cry request for the selected species at pan zero are produced on their upstream frame. The cry is a typed StarterSoundRequest; nothing plays it yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_CreateStarterLabel": {
+          "reason": "starter_choose.c:623-627: the new label is drawn on its own input-free frame before the input handler runs again.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_DeclineStarter": {
+          "reason": "starter_choose.c:565-568: the decline frame only reinstalls the draw task, so the selection screen returns two frames after the cancel and accepts input on the third.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_HandleConfirmStarterInput": {
+          "reason": "starter_choose.c:538-563 with menu.c Menu_ProcessInputNoWrapClearOnChoose: A, B, Up and Down are polled in that priority with a nonwrapping cursor. YES returns the typed StarterChoice, and NO or B destroys the preview and returns to the selection after the Select requests upstream makes (two for A on NO). The write to gSpecialVar_Result and the return to the saved callback belong to the caller, which the ChooseStarter script binding does not yet supply (tracked by #1605); nothing plays the sounds yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_HandleStarterChooseInput": {
+          "reason": "starter_choose.c:484-516: a fresh A clears the label and creates the circle and Pokémon preview at the selected ball; otherwise a fresh Left or Right moves the selection without wrapping, each test guarded by its bound, so A outranks Left outranks Right. No sound plays, and the entry fade does not gate input.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_MoveStarterChooseCursor": {
+          "reason": "starter_choose.c:617-621: a moved selection clears the old label on its own input-free frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_StarterChoose": {
+          "reason": "starter_choose.c:474-482: DrawSelection opens the selected starter's label and the instruction window (PROF. BIRCH is in trouble!), then installs the input handler for the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_WaitForStarterSprite": {
+          "reason": "starter_choose.c:518-526: the confirmation is scheduled only once the circle's affine animation has ended and it sits at the preview target, which the task sees on the frame after the animation's last step.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "VblankCB_StarterChoose": {
+          "reason": "starter_choose.c:358-363: StarterChooserScene::compose publishes the current OAM, palettes and tiles as an owned frame on demand. The VBlank interrupt, OAM DMA and the sprite-copy and palette-transfer queues are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/graphics.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

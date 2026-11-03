@@ -21,6 +21,7 @@
 //! - every player and NPC PNG, the `brendan` and `may` palettes, the four
 //!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
 //!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
+//! - the tall-grass field-effect sheet and its `general_1` palette;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
@@ -30,8 +31,9 @@
 //!   sprite, and Lotad's front picture with its normal palette) and the wall
 //!   clock (face and hand sheets, both gender palettes, the prompt palette, and
 //!   both tilemaps);
-//! - the static battler art of Treecko, Torchic, and Mudkip: front and back
-//!   images with normal and shiny palettes;
+//! - the static battler art of the starters and the checkpoint's other eleven
+//!   Pokémon (`scope::BATTLERS`): front and back images with normal and shiny
+//!   palettes;
 //! - the Brendan and May trainer front pictures with their palettes;
 //! - the Brendan and May trainer battlers: front picture, four-frame back
 //!   sheet and the palette both share;
@@ -66,6 +68,7 @@
 //!   `tileset/<name>/palette/<NN>`
 //! - `title/{image,palette,raw}/<name>`
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
+//! - `field-effect/{image,palette}/<name>`
 //! - `layout/<name>/{map,border}`
 //! - `font/<name>/glyphs`
 //! - `text-window/{image,palette}/<stem>`
@@ -107,6 +110,7 @@ mod checkpoint_maps_tests;
 pub(crate) mod cry;
 mod error;
 mod evolution_scene;
+mod field_effect;
 mod field_message;
 mod fonts;
 pub mod inflate;
@@ -197,6 +201,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
+    field_effect::extract_field_effects(&upstream, &mut writer)?;
     trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
     trainer_battler::extract_trainer_battlers(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
