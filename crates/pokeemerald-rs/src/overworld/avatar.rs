@@ -12,6 +12,7 @@ mod run;
 #[cfg(test)]
 mod run_tests;
 
+use super::obj_vram::SheetSprite;
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
 pub(super) const FRAME_W: usize = 16;
@@ -23,6 +24,7 @@ pub(super) const NUM_WALK_FRAMES: usize = 9;
 )]
 pub(super) const FRAME_TILES: u16 =
     (FRAME_W / BitDepth::TILE_DIM * FRAME_H / BitDepth::TILE_DIM) as u16;
+#[cfg(test)]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the nine-frame block fits in u16"
@@ -206,25 +208,29 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
 /// `run_base_tile` is where the player's running sheet starts in the
 /// combined tileset; it is drawn from instead of the walking sheet at tile 0
 /// while [`run::draws_running_sheet`].
-pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> OamEntry {
+pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSprite {
     let (frame, h_flip) = frame_for(player);
     let sheet_base = if run::draws_running_sheet(player) {
         run_base_tile
     } else {
         0
     };
-    OamEntry::new(
-        PLAYER_OBJ_X,
-        PLAYER_OBJ_Y,
-        sheet_base + frame * FRAME_TILES,
-        PLAYER_PALETTE_BANK,
-        BitDepth::Bpp4,
-        h_flip,
-        false,
-        PLAYER_OBJ_SHAPE,
-        PLAYER_OBJ_SIZE,
-        priority_for_elevation(player.previous_elevation()),
-        true,
+    let sheet_tile = sheet_base + frame * FRAME_TILES;
+    SheetSprite::new(
+        OamEntry::new(
+            PLAYER_OBJ_X,
+            PLAYER_OBJ_Y,
+            sheet_tile,
+            PLAYER_PALETTE_BANK,
+            BitDepth::Bpp4,
+            h_flip,
+            false,
+            PLAYER_OBJ_SHAPE,
+            PLAYER_OBJ_SIZE,
+            priority_for_elevation(player.previous_elevation()),
+            true,
+        ),
+        sheet_tile,
     )
 }
 
@@ -669,6 +675,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [assets::MapConnection],
         };
         let events = assets::MapEvents {

@@ -190,11 +190,15 @@ impl NoiseChannel {
     /// Holds the replaced channel's whole clock state until
     /// [`Self::commit_initial_writes`], and meanwhile keeps its latch as
     /// [`Self::continue_output_from`] does. `volume` is the predecessor's
-    /// hardware volume, which its pending clocks resolve against.
-    pub fn inherit_hardware_from(&mut self, previous: &Self, volume: u8) {
+    /// hardware volume, which its pending clocks resolve against; `stopped`
+    /// says its length counter had stopped it, so it owes none.
+    pub fn inherit_hardware_from(&mut self, previous: &Self, volume: u8, stopped: bool) {
         self.continue_output_from(previous);
         let mut channel = Box::new(previous.clone());
         channel.inherited = None;
+        // A channel its length counter stopped is not run before a register
+        // write, so it owes no clocks (`mgba/src/gb/audio.c:602-644`).
+        channel.clocking &= !stopped;
         self.inherited = Some(InheritedHardware { channel, volume });
     }
 
