@@ -300,20 +300,28 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
-/// The most symlink hops a single path walk follows before it treats the
-/// link as an ordinary component (the OS's own `ELOOP` guard is 40).
+/// The most symlink hops one whole path walk follows, across every branch,
+/// before it treats further links as ordinary components (the OS's own
+/// `ELOOP` guard is 40). A shared budget keeps a chain of links whose
+/// targets name each other twice from doubling the walk at every hop.
 const MAX_SYMLINK_HOPS: u8 = 40;
 
 /// Whether `source` passes through a symlink located inside `reference`,
 /// as with `reference/alias/agbcc` where `alias` points outside: the link
 /// itself is the untracked file that fails the clean-tree verification.
 fn passes_through_symlink_inside(source: &Path, reference: &Path) -> bool {
-    walk_symlinks(PathBuf::new(), source, reference, 0).is_none()
+    let mut hops = 0;
+    walk_symlinks(PathBuf::new(), source, reference, &mut hops).is_none()
 }
 
 /// Walks `path` from `walked`, returning the walked path, or `None` once a
 /// symlink located inside `reference` is met.
-fn walk_symlinks(mut walked: PathBuf, path: &Path, reference: &Path, hops: u8) -> Option<PathBuf> {
+fn walk_symlinks(
+    mut walked: PathBuf,
+    path: &Path,
+    reference: &Path,
+    hops: &mut u8,
+) -> Option<PathBuf> {
     for component in path.components() {
         match component {
             Component::Normal(name) => {
@@ -332,14 +340,15 @@ fn walk_symlinks(mut walked: PathBuf, path: &Path, reference: &Path, hops: u8) -
                     return None;
                 }
                 let target = std::fs::read_link(&located).ok();
-                match target.filter(|_| hops < MAX_SYMLINK_HOPS) {
+                match target.filter(|_| *hops < MAX_SYMLINK_HOPS) {
                     Some(target) => {
+                        *hops += 1;
                         let from = if target.is_absolute() {
                             PathBuf::new()
                         } else {
                             walked.clone()
                         };
-                        walked = walk_symlinks(from, &target, reference, hops + 1)?;
+                        walked = walk_symlinks(from, &target, reference, hops)?;
                     }
                     None => walked = located,
                 }

@@ -754,3 +754,34 @@ fn an_agbcc_path_through_a_symlink_then_trailing_dotdot_outside_is_not_contained
     );
     assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
 }
+
+#[test]
+#[cfg(unix)]
+fn branching_symlinks_outside_the_reference_finish_promptly() {
+    let fx = Fixture::new("agbcc-branching-links", GOOD);
+    // L0 -> . and Ln -> L(n-1)/L(n-1): a per-branch hop limit walks 2^39 links.
+    let outside = fx.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(".", outside.join("L0")).unwrap();
+    for n in 1..=39 {
+        let prev = format!("L{}", n - 1);
+        std::os::unix::fs::symlink(format!("{prev}/{prev}"), outside.join(format!("L{n}")))
+            .unwrap();
+    }
+    let mut config = fx.config.clone();
+    config.agbcc_source = outside.join("L39");
+    let reference = fx.root.join("reference").canonicalize().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send((
+            super::passes_through_symlink_inside(&config.agbcc_source, &reference),
+            super::agbcc_inside_reference_from(&config, &fx.root),
+        ));
+    });
+    let result = rx.recv_timeout(std::time::Duration::from_secs(20));
+    assert_eq!(
+        result.ok(),
+        Some((false, false)),
+        "symlink walk did not finish within 20s"
+    );
+}
