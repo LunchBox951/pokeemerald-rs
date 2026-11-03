@@ -30167,7 +30167,7 @@
           "status": "ported"
         },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30191,13 +30191,13 @@
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30283,7 +30283,7 @@
           "status": "ported"
         },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30307,13 +30307,13 @@
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30374,7 +30374,7 @@
           "status": "ported"
         },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30398,13 +30398,13 @@
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30465,7 +30465,7 @@
           "status": "ported"
         },
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -30489,13 +30489,13 @@
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed battler lookup's species key (one of the three starters, now beside the eleven other checkpoint species) and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
