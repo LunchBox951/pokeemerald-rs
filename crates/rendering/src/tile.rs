@@ -51,6 +51,14 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// A tile of palette index 0 everywhere: transparent on every OBJ and BG.
+    #[must_use]
+    pub const fn transparent() -> Self {
+        Self {
+            indices: [0; BitDepth::TILE_DIM * BitDepth::TILE_DIM],
+        }
+    }
+
     /// The palette index at `(x, y)`.
     ///
     /// # Panics
@@ -118,6 +126,12 @@ impl Tileset {
         };
         let tiles = data.chunks_exact(tile_len).map(decode_one).collect();
         Ok(Self { bit_depth, tiles })
+    }
+
+    /// Builds a set from already decoded tiles sharing `bit_depth`.
+    #[must_use]
+    pub const fn from_tiles(bit_depth: BitDepth, tiles: Vec<Tile>) -> Self {
+        Self { bit_depth, tiles }
     }
 
     /// The bit depth shared by every tile.

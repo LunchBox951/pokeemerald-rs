@@ -39,9 +39,12 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
 
     let exp_index = events
         .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .position(|event| matches!(event, BattleEvent::ExpGained { .. }))
         .unwrap_or_else(|| panic!("the direct-hit knockout pays out: {events:?}"));
-    let BattleEvent::ExpGained(exp_gained) = events[exp_index] else {
+    let BattleEvent::ExpGained {
+        amount: exp_gained, ..
+    } = events[exp_index]
+    else {
         unreachable!("position() matched ExpGained")
     };
     let sent_out_index = events
