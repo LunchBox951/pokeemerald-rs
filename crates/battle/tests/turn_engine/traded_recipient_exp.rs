@@ -54,7 +54,7 @@ fn exp_of(events: &[BattleEvent]) -> u32 {
     events
         .iter()
         .find_map(|event| match event {
-            BattleEvent::ExpGained(exp) => Some(*exp),
+            BattleEvent::ExpGained { amount, .. } => Some(*amount),
             _ => None,
         })
         .unwrap_or_else(|| panic!("the knockout awards experience: {events:?}"))
@@ -95,4 +95,27 @@ fn the_wild_bonus_can_cross_a_level_the_plain_award_does_not() {
 fn the_trainer_bonus_can_cross_a_level_the_plain_award_does_not() {
     assert_eq!(trainer_award(7, false), (DOMESTIC_TRAINER_AWARD, 7));
     assert_eq!(trainer_award(7, true), (TRADED_TRAINER_AWARD, 8));
+}
+
+/// `Cmd_getexp` buffers `STRINGID_ABOOSTED` exactly when the traded 150%
+/// applies (`src/battle_script_commands.c:3381`-`:3397`), so the award event
+/// reports that bonus for its narration.
+#[test]
+fn the_award_event_reports_whether_the_traded_bonus_applied() {
+    for traded in [false, true] {
+        let dex = Dex::new();
+        let player =
+            max_iv_mon(&dex, TREECKO, 50, vec![MoveId::SLASH]).with_traded_recipient(traded);
+        let enemy = nearly_fainted_treecko(&dex);
+        let mut rng = SequenceRng::new([0; 64]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        let boosted = events.iter().find_map(|event| match event {
+            BattleEvent::ExpGained { boosted, .. } => Some(*boosted),
+            _ => None,
+        });
+        assert_eq!(boosted, Some(traded), "{events:?}");
+    }
 }

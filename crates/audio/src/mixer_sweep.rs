@@ -108,7 +108,7 @@ fn a_frames_sweep_tick_buffer_never_has_to_grow() {
 
     assert_eq!(MAX_SWEEP_TICKS_PER_FRAME, 3);
 
-    let mut clock = FrameSequencer128Hz::default();
+    let mut clock = FrameSequencer::default();
     let mut ticks = Vec::new();
     let mut seen_three = false;
     for _ in 0..FRAMES_TO_SAMPLE {

@@ -714,7 +714,7 @@ impl OverworldPhase {
             movement_range_y: 0,
             trainer_type: assets::TrainerType::Normal,
             trainer_sight_or_berry_tree_id: "4",
-            script: "Route103_EventScript_Rhett",
+            script: Some(assets::ScriptRef::new("Route103_EventScript_Rhett")),
             flag: "0",
         };
         self.sight_approach = Some(SightApproach::new(
@@ -900,7 +900,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: assets::TrainerType::Normal,
             trainer_sight_or_berry_tree_id: "4",
-            script: "Route103_EventScript_Rhett",
+            script: Some(assets::ScriptRef::new("Route103_EventScript_Rhett")),
             flag: "0",
         };
         let mut approach = SightApproach::new(
