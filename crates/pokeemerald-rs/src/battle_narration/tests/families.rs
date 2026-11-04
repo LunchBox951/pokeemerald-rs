@@ -29,10 +29,12 @@ const SLOTS: &[(u16, &str)] = &[
     (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
     (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
+    (46, "{B_EFF_NAME_WITH_PREFIX} was burned!"),
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
     (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
     (51, "{B_ATK_NAME_WITH_PREFIX} is\nfrozen solid!"),
+    (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
@@ -218,6 +220,42 @@ fn a_frozen_user_prints_frozen_solid_and_a_thaw_names_the_move_that_caused_it() 
             "Foe RATTATA is\nfrozen solid!",
             "TORCHIC was\ndefrosted!",
             "TORCHIC was\ndefrosted by EMBER!"
+        ]
+    );
+}
+
+/// `STRINGID_PKMNWASBURNED` names the effect battler and
+/// `STRINGID_PKMNWASDEFROSTED` the defender, which is the move's target in
+/// both (`battle_message.c:94,101`).
+#[test]
+fn a_burn_and_a_fire_move_defrost_name_the_target_not_the_user() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Burned {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::Burned {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "Foe RATTATA was burned!",
+            "Foe RATTATA was\ndefrosted!",
+            "TORCHIC was burned!",
+            "TORCHIC was\ndefrosted!"
         ]
     );
 }

@@ -9,7 +9,10 @@ use std::collections::BTreeSet;
 use assets::bundled_overworld::{BUNDLED_LAYOUT_IDS, BUNDLED_TILESETS};
 use rom_import::profiles::bpee_rev0::EMERALD_US_REV0_ROOTS;
 
-use super::scope::{sprite_palette_ids, sprite_sheet_ids, LAYOUTS, TILESETS};
+use super::scope::{
+    sprite_palette_ids, sprite_sheet_ids, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, LAYOUTS,
+    TILESETS,
+};
 
 fn set<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     names.into_iter().collect()
@@ -59,4 +62,29 @@ fn the_committed_profile_roots_cover_exactly_the_manifest() {
         set(roots.sprites.palettes.iter().map(|palette| palette.id)),
         "sprite palettes"
     );
+}
+
+#[test]
+fn the_committed_profile_interface_roots_cover_exactly_the_manifest() {
+    let roots = &EMERALD_US_REV0_ROOTS.interface;
+    assert_eq!(
+        set(INTERFACE_IMAGE_IDS),
+        set(roots.images.iter().map(|image| image.id)),
+        "interface images"
+    );
+    assert_eq!(
+        set(INTERFACE_PALETTE_IDS),
+        set(roots.palettes.iter().map(|palette| palette.id)),
+        "interface palettes"
+    );
+}
+
+#[test]
+fn the_text_printer_down_arrow_is_pinned_in_the_manifest_and_the_profile() {
+    // A literal, so dropping the arrow from the manifest and the profile
+    // together still fails here.
+    assert!(INTERFACE_IMAGE_IDS.contains(&"interface/image/down_arrow"));
+    assert!(EMERALD_US_REV0_ROOTS
+        .images()
+        .any(|image| image.id == "interface/image/down_arrow"));
 }
