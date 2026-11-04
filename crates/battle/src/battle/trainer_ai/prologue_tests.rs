@@ -171,6 +171,8 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
     ];
     for move_id in moves {
         let effect = Dex::new().move_data(move_id).unwrap().effect;
@@ -184,6 +186,7 @@ fn the_audited_row_set_is_exact() {
     let effects = [
         MoveEffect::ABSORB,
         MoveEffect::POISON_HIT,
+        MoveEffect::THAW_HIT,
         MoveEffect::ALWAYS_HIT,
         MoveEffect::MULTI_HIT,
         MoveEffect::DRAGON_RAGE,
@@ -266,7 +269,12 @@ fn admission_is_flag_aware() {
         ),
         Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
     );
-    for move_id in [MoveId::SPLASH, MoveId::POISON_STING] {
+    for move_id in [
+        MoveId::SPLASH,
+        MoveId::POISON_STING,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
+    ] {
         assert_eq!(
             ensure_scoreable(
                 &dex,

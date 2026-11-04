@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.105.0] - 2026-11-04
+
+- Flame Wheel and Sacred Fire can now be used in battle: they may burn the target, a frozen user thaws as it uses them, and a Fire-type hit thaws a frozen target, as in the original game.
+
 ## [0.0.104.0] - 2026-11-04
 
 - Mud-Slap can now be used in battle and lowers the target's accuracy, so Mudkip fights with its real level-6 move as in the original game.
@@ -479,7 +483,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.104.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e88ad8b78d701a396b354fb72944edaaaa12b42e...dev
+[0.0.105.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f6bf3245569fa4d8b950ea850552bbc9999eabd...dev
+[0.0.104.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e88ad8b78d701a396b354fb72944edaaaa12b42e...8f6bf3245569fa4d8b950ea850552bbc9999eabd
 [0.0.103.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/edefb469ae667e0f72ace81c6b8e1d4a5bdb656a...e88ad8b78d701a396b354fb72944edaaaa12b42e
 [0.0.102.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2fe05ed008518da4f1bdcd677f063df29c15512b...edefb469ae667e0f72ace81c6b8e1d4a5bdb656a
 [0.0.101.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2d7d2cb92c6d6063bccd23184bd166e4d6cc1394...2fe05ed008518da4f1bdcd677f063df29c15512b

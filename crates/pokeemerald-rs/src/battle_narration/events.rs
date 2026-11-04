@@ -339,6 +339,14 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             id::PKMNWASPOISONED,
             base.user_vs_target(Side::user(by_player)),
         ),
+        BattleEvent::Burned { by_player, .. } => table(
+            id::PKMNWASBURNED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
+        BattleEvent::TargetDefrosted { by_player, .. } => table(
+            id::PKMNWASDEFROSTED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
         BattleEvent::ConfusionInflicted { by_player, .. } => table(
             id::PKMNWASCONFUSED,
             base.user_vs_target(Side::user(by_player)),
