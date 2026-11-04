@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.101.0] - 2026-11-04
+
+- The Oldale Pokémon Center escalators now carry you between floors, and you step off facing the counter as in the original game. The escalator ride animation is still being prepared.
+
 ## [0.0.100.0] - 2026-11-03
 
 - A Pokémon that was frozen when you saved now loads and battles: it thaws on a one-in-five chance each turn and Shed Skin can cure it, as in the original game.
@@ -463,7 +467,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.100.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/55e109fcfc69d2560f9893324e704aec1b9d84bb...dev
+[0.0.101.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2d7d2cb92c6d6063bccd23184bd166e4d6cc1394...dev
+[0.0.100.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/55e109fcfc69d2560f9893324e704aec1b9d84bb...2d7d2cb92c6d6063bccd23184bd166e4d6cc1394
 [0.0.99.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5e349caf800aa892d029bf3f121f00e5fcfb11b3...55e109fcfc69d2560f9893324e704aec1b9d84bb
 [0.0.98.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6872c03dbdd60dfd8998f990bf26b30208724363...5e349caf800aa892d029bf3f121f00e5fcfb11b3
 [0.0.97.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/bef9d280134cd25448aaae14fa68575a038c6e7c...6872c03dbdd60dfd8998f990bf26b30208724363
