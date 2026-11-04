@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.103.0] - 2026-11-04
 
-- General improvements in preparation for faithful Game Boy sound-channel note lengths: the wave channel now honours its programmed length like the square and noise channels.
+- Wave notes now play for their set length and hold their final sound when the length expires, as part of ongoing work to match the original Game Boy sound.
 
 ## [0.0.102.0] - 2026-11-04
 
