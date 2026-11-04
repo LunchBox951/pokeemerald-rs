@@ -154,6 +154,15 @@ impl ReportLine {
     }
 }
 
+/// The interface images and palettes.
+#[derive(Debug, Clone)]
+pub struct InterfacePlan {
+    /// Every `interface/image/*` sheet.
+    pub images: Vec<ImagePlan>,
+    /// Every `interface/palette/*` bank.
+    pub palettes: Vec<PalettePlan>,
+}
+
 /// An image root, owned.
 #[derive(Debug, Clone)]
 pub struct ImagePlan {
@@ -646,8 +655,8 @@ pub struct ProfilePlan {
     pub fonts: Vec<FontPlan>,
     /// Text-window frames and palettes.
     pub text_window: TextWindowPlan,
-    /// Interface palettes.
-    pub interface: Vec<PalettePlan>,
+    /// Interface images and palettes.
+    pub interface: InterfacePlan,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioPlan,
     /// The battle-message token table.
