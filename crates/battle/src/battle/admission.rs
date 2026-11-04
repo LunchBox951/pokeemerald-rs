@@ -10,8 +10,7 @@ use assets::{AbilityId, SpeciesId};
 const fn always_refused(ability: AbilityId) -> bool {
     matches!(
         ability,
-        AbilityId::TRUANT
-            | AbilityId::INTIMIDATE
+        AbilityId::INTIMIDATE
             | AbilityId::SPEED_BOOST
             | AbilityId::COLOR_CHANGE
             | AbilityId::TRACE
@@ -24,8 +23,8 @@ const fn always_refused(ability: AbilityId) -> bool {
 }
 
 /// Refuses a participant whose ability interaction the turn engine does not model:
-/// the move-end immunity cure (`battle_util.c:2873-2951`, which cures a Water Veil burn, an Immunity
-/// poisoning, and wakes an Insomnia or Vital Spirit sleeper), Truant (`:2086-2097`, `:2653-2655`),
+/// the move-end immunity cure (`battle_util.c:2873-2951`, which cures a Water Veil burn, a Magma Armor
+/// freeze, an Immunity poisoning, and wakes an Insomnia or Vital Spirit sleeper),
 /// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
 /// Speed Boost's end-turn Speed stage (`:2601-2652`), Color Change (`:2749-2766`),
 /// Trace's ability copy (`:2575-2580`, `:3017-3073`), Flame Body (`:2836-2850`; burn infliction by a contact hit is
@@ -46,6 +45,7 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
         AbilityId::LIMBER => status == Status1::Paralysed,
         AbilityId::IMMUNITY => status == Status1::Poisoned,
         AbilityId::WATER_VEIL => status == Status1::Burned,
+        AbilityId::MAGMA_ARMOR => status == Status1::Frozen,
         AbilityId::OWN_TEMPO => confused,
         AbilityId::LIQUID_OOZE => seeded,
         AbilityId::INSOMNIA | AbilityId::VITAL_SPIRIT => status.is_asleep(),

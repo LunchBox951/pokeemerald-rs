@@ -120,13 +120,29 @@ fn select_active_battler_surfaces_slot_0s_decode_error_when_nothing_is_usable() 
 #[test]
 fn an_unmodelled_status_slot_is_skipped_for_a_later_healthy_slot_and_left_untouched() {
     let dex = Dex::new();
+    let mut toxic = to_save_pokemon(&dex, &treecko_fixture());
+    toxic.status = 0x80;
+    let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
+    let party = [toxic, healthy];
+
+    let lead = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
+
+    assert_eq!(lead.slot(), 1);
+    assert_eq!(party[0].status, 0x80);
+}
+
+/// A living frozen first slot is modelled (`STATUS1_FREEZE`, `0x20`), so it
+/// is selected as the lead rather than skipped for a later slot.
+#[test]
+fn a_living_frozen_first_slot_is_selected_not_skipped() {
+    let dex = Dex::new();
     let mut frozen = to_save_pokemon(&dex, &treecko_fixture());
     frozen.status = 0x20;
     let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
     let party = [frozen, healthy];
 
-    let lead = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
+    let lead = LoadedLead::load(&dex, &party).expect("slot 0 is usable");
 
-    assert_eq!(lead.slot(), 1);
-    assert_eq!(party[0].status, 0x20);
+    assert_eq!(lead.slot(), 0);
+    assert_eq!(lead.battler().status1(), battle::Status1::Frozen);
 }

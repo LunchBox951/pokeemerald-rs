@@ -1,9 +1,10 @@
 //! What releases a series besides a miss: the cancellers that cancel
-//! (`data/battle_scripts_1.s:3777`, `:3802`), accepted sleep
+//! (`data/battle_scripts_1.s:3777`, `:3802`; `CANCELER_TRUANT`,
+//! `src/battle_util.c:2088`), accepted sleep
 //! (`src/battle_script_commands.c:2296`), and a faint.
 
 use super::*;
-use assets::AbilityId;
+use assets::{AbilityId, SpeciesId};
 use battle::{BattleOutcome, Status1};
 
 const FULL_PARALYSIS: u16 = 0;
@@ -116,6 +117,56 @@ fn snapping_out_of_confusion_keeps_the_series_going() {
     assert!(second.contains(&BattleEvent::SnappedOutOfConfusion { by_player: true }));
     assert!(player_hit_damage(&second) > player_hit_damage(&first));
     assert_eq!(player_lock(&battle), (Some(ROLLOUT), Some(3)));
+    rng.assert_exhausted();
+}
+
+#[test]
+fn a_truant_holder_that_loafs_mid_series_releases_the_lock_without_pp_or_draws() {
+    let dex = Dex::new();
+    let holder = crate::common::max_iv_mon(
+        &dex,
+        SpeciesId::SLAKOTH.0,
+        ATTACKER_LEVEL,
+        vec![ROLLOUT, SPLASH],
+    );
+    assert_eq!(holder.ability(), AbilityId::TRUANT);
+    let mut rng = SequenceRng::new(turn_script(&[
+        &CONSTRUCTION,
+        &WILD_TURN_OVERHEAD,
+        &LANDED,
+        // The loafing turn spends no move draw, only the turn overhead.
+        &WILD_TURN_OVERHEAD,
+        &WILD_TURN_OVERHEAD,
+    ]));
+    let mut battle = wild_battle(holder, target(WAILORD, &[SPLASH]), &mut rng);
+    take(&mut battle, PlayerAction::UseMove(0), &mut rng);
+    assert_eq!(player_lock(&battle), (Some(ROLLOUT), Some(4)));
+    assert!(battle.battler_state(BattlerSide::Player).truant_loafing());
+
+    let events = take(&mut battle, PlayerAction::UseMove(1), &mut rng);
+
+    assert!(
+        events.contains(&BattleEvent::LoafingAround {
+            by_player: true,
+            move_id: ROLLOUT,
+        }),
+        "the locked move loafs in place of the submitted slot: {events:?}"
+    );
+    assert_eq!(player_lock(&battle), (None, None));
+    assert_eq!(battle.player().moves()[0].pp, ROLLOUT_PP - 1);
+
+    // The turn after the loafing turn is a free selection.
+    let events = take(&mut battle, PlayerAction::UseMove(1), &mut rng);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            BattleEvent::NothingHappened {
+                by_player: true,
+                ..
+            }
+        )),
+        "Splash: {events:?}"
+    );
     rng.assert_exhausted();
 }
 
