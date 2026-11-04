@@ -42,7 +42,6 @@ impl ScriptedRng {
         }
     }
 
-    /// A script of `count` zero draws.
     fn zeros(count: usize) -> Self {
         Self::new(&vec![0; count])
     }
