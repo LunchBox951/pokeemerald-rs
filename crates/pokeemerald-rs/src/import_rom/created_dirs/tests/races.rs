@@ -502,6 +502,14 @@ fn undo_does_not_strand_contents_when_the_name_is_retaken_before_restoration() {
 #[test]
 fn a_populated_level_is_not_moved_when_its_listing_lacks_a_descriptor() {
     use std::cell::RefCell;
+    // Exhausting the descriptor table would starve every sibling test thread
+    // of the shared process, so the body runs in the pressure child alone.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::races::a_populated_level_is_not_moved_when_its_listing_lacks_a_descriptor",
+        );
+        return;
+    }
     let dir = TempDir::new("undo-emfile-populated");
     let outer = dir.join("a");
     let level = outer.join("b");
@@ -516,16 +524,7 @@ fn a_populated_level_is_not_moved_when_its_listing_lacks_a_descriptor() {
         &mut || {
             calls += 1;
             if calls == 2 {
-                let mut hog = hog.borrow_mut();
-                loop {
-                    match fs::File::open("/dev/null") {
-                        Ok(f) => hog.push(f),
-                        Err(e) => {
-                            assert_eq!(e.raw_os_error(), Some(24), "EMFILE expected: {e}");
-                            break;
-                        }
-                    }
-                }
+                *hog.borrow_mut() = fill_descriptor_table_leaving(0);
             }
         },
         &mut |stage, held| {
