@@ -69,7 +69,7 @@ fn the_span_is_scoped_to_the_tick_that_drew_the_glyph() {
 
 #[test]
 fn a_minimum_the_glyph_already_meets_erases_nothing() {
-    for minimum in [1, 4, NORMAL_A_ADVANCE as u8] {
+    for minimum in [1, 4, u8::try_from(NORMAL_A_ADVANCE).unwrap()] {
         let mut printer = normal_printer(&[
             EXT,
             MIN_SPACING,
