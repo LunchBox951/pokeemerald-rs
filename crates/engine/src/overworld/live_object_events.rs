@@ -105,6 +105,12 @@ impl ObjectEventCollection {
             ex == x && ey == y && elevations_compatible(entry.state.elevation(), elevation)
         })
     }
+
+    /// Iterates every entry in declaration order, the order upstream's
+    /// `gObjectEvents` slot scan visits them (`trainer_see.c:196-219`).
+    pub fn entries(&self) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter()
+    }
 }
 
 #[cfg(test)]
@@ -125,7 +131,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "SomeScript",
+            script: Some(assets::ScriptRef::new("SomeScript")),
             flag: "0",
         }
     }

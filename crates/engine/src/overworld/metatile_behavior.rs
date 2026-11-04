@@ -263,6 +263,14 @@ pub const fn is_warp_trigger(behavior: u8) -> bool {
     is_door(behavior)
 }
 
+/// Returns whether a behavior is plain tall grass: exactly [`MB_TALL_GRASS`],
+/// `MetatileBehavior_IsTallGrass` (`metatile_behavior.c:729-734`). Long grass
+/// and the other encounter-capable behaviors are not tall grass here.
+#[must_use]
+pub const fn is_tall_grass(behavior: u8) -> bool {
+    behavior == MB_TALL_GRASS
+}
+
 /// Returns whether a behavior permits land encounters.
 ///
 /// This contains the complete non-surfable encounter set; surfable encounter
@@ -656,6 +664,14 @@ mod tests {
         assert_eq!(MB_INDOOR_ENCOUNTER, 0x0B);
         assert_eq!(MB_ASHGRASS, 0x24);
         assert_eq!(MB_FOOTPRINTS, 0x25);
+    }
+
+    #[test]
+    fn tall_grass_is_exactly_the_tall_grass_behavior() {
+        for behavior in u8::MIN..=u8::MAX {
+            assert_eq!(is_tall_grass(behavior), behavior == 0x02, "{behavior:#04x}");
+        }
+        assert!(!is_tall_grass(MB_LONG_GRASS));
     }
 
     #[test]
