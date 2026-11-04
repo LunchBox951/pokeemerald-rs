@@ -59,10 +59,10 @@ use cfg::MidiCfgEntry;
 use manifest::{SongSource, VoiceGroupSource, CHECKPOINT_SONGS};
 use pack_format::PackWriter;
 
-/// The pack id of the one song the ROM profile locates (`mus_title`), which the manifest also
-/// carries. Crate-visible: `gen_rom_profile::audio` reuses this exact id as the one
-/// `audio/song/` entry it locates a ROM address for, the same reuse [`super::voicegroups`]'s
-/// `groups_by_label` documents for the voicegroup index.
+/// The pack id of the song that anchors the ROM profile (`mus_title`), which the manifest also
+/// carries. Crate-visible: `gen_rom_profile::audio` locates `gSongTable` once from this song's
+/// voicegroup and then plans every pack song from its own table entry, the same reuse
+/// [`super::voicegroups`]'s `groups_by_label` documents for the voicegroup index.
 pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 
 /// Upstream's voicegroup for a `midi.cfg` entry with no `-G` flag: `g_voiceGroup` starts as

@@ -23900,7 +23900,7 @@
           "reason": "sound/song_table.inc:1-8; asm/macros/m4a.inc:1-5. ROM-path producer for every checkpoint-manifest song (150 rows): the profile records each row's gSongTable index, SongHeader and tone pointer, derived by cargo xtask gen-rom-profile from the table the title song anchors, the row's MUS_/SE_ constant, and a byte-for-byte comparison of the decoded tracks with the checkout pack. The importer reads each entry's ms (the music player m4aSongNumStart indexes gMPlayTable with, m4a.c:107-114) and the header's priority, reverb and voicegroup, requires the header and its track count and tone pointer to be the profiled ones, and returns a typed ImportError (StructMismatch, UnresolvedPointer, Song) for a mismatch, an unrecorded voicegroup or a track it cannot follow. Not modelled: rows outside the manifest and Song.me. The parent file stays pending.",
           "rust_target": "crates/rom-import/src/domains/song.rs",
           "spec": "S-3",
-          "status": "ported"
+          "status": "stubbed"
         }
       },
       "category": "audio.misc",
