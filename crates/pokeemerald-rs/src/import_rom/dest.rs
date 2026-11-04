@@ -70,7 +70,9 @@ fn next_temp_name(sequence: &AtomicU64) -> OsString {
 
 /// Open `path` as a directory, pinned for real I/O -- in particular,
 /// `fsync` ([`Dest::publish`]), which an `O_PATH` handle cannot do. Needs
-/// read permission on `path`, like any ordinary read-mode `open(2)`.
+/// read permission on `path`, like any ordinary read-mode `open(2)`;
+/// [`Dest::open`] falls back to [`open_traversal_directory`] when that is
+/// refused.
 #[cfg(unix)]
 pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
@@ -289,7 +291,8 @@ pub(super) fn open_created_directory_at(
 /// and for [`Dest::open_pinned`]'s destination acquisition.
 /// Needs read permission `open_traversal_directory` did not, so a parent
 /// this run cannot read is a sync silently skipped, best-effort like
-/// [`Dest::publish`]'s own.
+/// [`Dest::publish`]'s own. [`Dest::open_pinned`] falls back to
+/// [`open_directory_at`] on the same refusal.
 #[cfg(unix)]
 pub(super) fn reopen_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::openat(
@@ -364,8 +367,14 @@ pub(super) fn restore_owner_access(_file: &File) -> io::Result<()> {
 /// changes nothing this handle can reach.
 #[cfg(unix)]
 pub(super) struct Dest {
-    /// The open directory. Held for the life of the import.
+    /// The open directory. Held for the life of the import. Opened for
+    /// reading when this user may read it, else for traversal only: the
+    /// basename-relative operations below need only search and write.
     dir: std::os::fd::OwnedFd,
+    /// Whether `dir` was opened for reading, and so can be `fsync`ed. A
+    /// destination this user may write and search but not read (mode
+    /// `0o300`) has no such handle, and its entries go unsynced.
+    syncable: bool,
     /// This destination's own temporary-name counter -- [`Self::temp_name`].
     temp_sequence: AtomicU64,
 }
@@ -374,38 +383,66 @@ pub(super) struct Dest {
 impl Dest {
     /// Acquire the directory `pin` is, with no path involved: reopen `"."`
     /// relative to the pinned descriptor for real I/O (a pin may be an
-    /// `O_PATH` or search-only handle, which `fsync` cannot use).
+    /// `O_PATH` or search-only handle, which `fsync` cannot use). A
+    /// directory this user may not read is held for traversal instead, as
+    /// [`Self::adopt`] says.
     ///
     /// # Errors
     ///
     /// Whatever `openat(2)` reports; `EMFILE` is the caller's cue to shed
     /// another cleanup pin and retry.
     pub(super) fn open_pinned(pin: &std::os::fd::OwnedFd) -> io::Result<Self> {
-        Ok(Self {
-            dir: reopen_for_sync(pin)?,
-            temp_sequence: AtomicU64::new(0),
+        Self::adopt(reopen_for_sync(pin), || {
+            open_directory_at(pin, OsStr::new("."))
         })
     }
 
     /// Open `dir` and keep it open.
     ///
     /// `O_DIRECTORY` is what makes the handle worth holding: a `dir` that
-    /// is not a directory fails here rather than at the first create.
+    /// is not a directory fails here rather than at the first create. A
+    /// directory this user may not read is held for traversal instead, as
+    /// [`Self::adopt`] says; `dir` is resolved a second time only then, and
+    /// only the handle that second open returns is kept.
     ///
     /// # Errors
     ///
     /// Whatever `open(2)` reports: the directory is gone, is not a
     /// directory, or is not searchable by this user.
     pub(super) fn open(dir: &Path) -> io::Result<Self> {
+        Self::adopt(open_directory(dir), || open_traversal_directory(dir))
+    }
+
+    /// Build a destination from `readable`, the read-mode open of the
+    /// directory, falling back to `traversal`, an open that needs no read
+    /// permission, when the directory refused reading.
+    ///
+    /// Creating, renaming, removing and stat'ing a basename need only
+    /// search and write on the directory, so a destination at mode `0o300`
+    /// is usable; what it lacks is a handle to `fsync`, and that sync is
+    /// best-effort anyway ([`Self::publish`]). Only a refused read falls
+    /// back: any other error, `EMFILE` above all, is the caller's to act on.
+    fn adopt(
+        readable: io::Result<std::os::fd::OwnedFd>,
+        traversal: impl FnOnce() -> io::Result<std::os::fd::OwnedFd>,
+    ) -> io::Result<Self> {
+        let (dir, syncable) = match readable {
+            Ok(dir) => (dir, true),
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => (traversal()?, false),
+            Err(err) => return Err(err),
+        };
         Ok(Self {
-            dir: open_directory(dir)?,
+            dir,
+            syncable,
             temp_sequence: AtomicU64::new(0),
         })
     }
 
-    /// This destination's own handle, for an `fsync` of its entries.
-    pub(super) fn handle(&self) -> &std::os::fd::OwnedFd {
-        &self.dir
+    /// This destination's own handle, for an `fsync` of its entries; `None`
+    /// when this user may not read the directory and the handle is
+    /// traversal-only.
+    pub(super) fn handle(&self) -> Option<&std::os::fd::OwnedFd> {
+        self.syncable.then_some(&self.dir)
     }
 
     /// This destination's device and inode, from its own handle.
@@ -525,7 +562,8 @@ impl Dest {
     ///
     /// The directory is `fsync`ed afterwards, which is what makes the
     /// rename itself outlive a power loss — the pinned descriptor is
-    /// already the handle to sync, so it costs no second open. Best-effort:
+    /// already the handle to sync, so it costs no second open; an
+    /// unreadable directory has none to sync. Best-effort:
     /// the pack's bytes are durable before this is reached (the caller
     /// syncs the temporary file), so a directory entry left in the page
     /// cache is not worth failing an otherwise finished import over.
@@ -535,7 +573,9 @@ impl Dest {
     /// Whatever `renameat(2)` reports.
     pub(super) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         rustix::fs::renameat(&self.dir, from, &self.dir, to)?;
-        let _ = rustix::fs::fsync(&self.dir);
+        if let Some(directory) = self.handle() {
+            let _ = rustix::fs::fsync(directory);
+        }
         Ok(())
     }
 

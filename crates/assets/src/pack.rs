@@ -22,6 +22,7 @@ mod paletted_image;
 mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
+mod text_printer;
 mod text_tokens;
 mod trainer_battler;
 mod trainer_pic;
@@ -58,6 +59,7 @@ pub use paletted_image::PalettedImage;
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
+pub use text_printer::TextPrinterDownArrow;
 
 pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;
