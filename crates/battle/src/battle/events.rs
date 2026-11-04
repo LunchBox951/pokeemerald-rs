@@ -66,6 +66,21 @@ pub enum BattleEvent {
         /// The move that was never attempted.
         move_id: MoveId,
     },
+    /// A flinched battler lost its action: `CANCELER_FLINCH` consumed the
+    /// flag and cancelled the chosen move before any PP was spent
+    /// (`BattleScript_MoveUsedFlinched`, `src/battle_util.c:2110`-`:2121`;
+    /// `STRINGID_PKMNFLINCHED`).
+    ///
+    /// Sleep, freeze and Truant are checked first; the confusion and
+    /// paralysis cancellers and every later draw do not run for the action.
+    /// `by_player` names the cancelled battler and `move_id` its cancelled
+    /// move, not the move that caused the flinch.
+    Flinched {
+        /// Whether the player's battler flinched.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
     /// A sleeping battler's duration reached zero this action, so it woke
     /// and its chosen move proceeds through the remaining cancellers
     /// (`BattleScript_MoveUsedWokeUp`, `src/battle_util.c:2045`-`:2053`).

@@ -1,8 +1,9 @@
 use super::{
-    ensure_admissible, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
-    is_speed_down_hit_effect, resolve_synchronize_poison_reflection, spend_effect_chance_draw,
-    trampoline_for_effect, SecondaryApplication, SynchronizePoisonReflectionOutcome,
-    EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT, SECONDARY_TRAMPOLINES,
+    ensure_admissible, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
+    is_secondary_effect, is_speed_down_hit_effect, resolve_synchronize_poison_reflection,
+    spend_effect_chance_draw, trampoline_for_effect, SecondaryApplication,
+    SynchronizePoisonReflectionOutcome, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
+    SECONDARY_TRAMPOLINES,
 };
 use crate::damage::STRUGGLE;
 use crate::dex::Dex;
@@ -943,6 +944,108 @@ fn a_serene_grace_attacker_is_refused_for_a_speed_down_hit_only_where_it_could_l
             ensure_admissible(&dex, CONSTRICT, &attacker, &mon(&dex, species)),
             Ok(()),
             "species {species}: the drop can never land, so the doubling is unobservable"
+        );
+    }
+}
+
+/// `SPECIES_ZUBAT`: Inner Focus in its only ability slot.
+const ZUBAT: u16 = 41;
+const FLINCH_MOVES: [MoveId; 3] = [MoveId::HEADBUTT, MoveId::BITE, MoveId::ASTONISH];
+
+#[test]
+fn only_the_two_non_minimized_flinch_wrappers_are_the_modelled_flinch_trampolines() {
+    let dex = Dex::new();
+    for move_id in FLINCH_MOVES {
+        assert!(
+            is_flinch_hit_effect(dex.move_data(move_id).unwrap().effect),
+            "{move_id:?}"
+        );
+    }
+    for move_id in [FAKE_OUT, MoveId::TWISTER, TACKLE] {
+        assert!(
+            !is_flinch_hit_effect(dex.move_data(move_id).unwrap().effect),
+            "{move_id:?}: shares MOVE_EFFECT_FLINCH or is not a flinch move"
+        );
+    }
+}
+
+#[test]
+fn a_flinch_move_reports_a_flinch_on_residues_29_and_not_30_and_draws_once() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON);
+    for move_id in FLINCH_MOVES {
+        for (roll, expected) in [
+            (29, SecondaryApplication::Flinch),
+            (30, SecondaryApplication::None),
+            (129, SecondaryApplication::Flinch),
+            (130, SecondaryApplication::None),
+        ] {
+            let mut rng = SequenceRng::new([roll]);
+            assert_eq!(
+                spend_effect_chance_draw(&dex, move_id, true, &defender, &mut rng),
+                Ok(expected),
+                "{move_id:?} roll {roll}"
+            );
+            assert_eq!(rng.draws(), 1);
+        }
+        let mut rng = SequenceRng::new([0]);
+        assert_eq!(
+            spend_effect_chance_draw(&dex, move_id, false, &defender, &mut rng),
+            Ok(SecondaryApplication::None),
+            "an ineffective hit never carries the secondary"
+        );
+        assert_eq!(rng.draws(), 1);
+    }
+}
+
+#[test]
+fn shield_dust_and_inner_focus_stop_the_flinch_but_still_draw() {
+    let dex = Dex::new();
+    for species in [WURMPLE, ZUBAT] {
+        let defender = mon(&dex, species);
+        assert!(
+            matches!(
+                defender.ability(),
+                AbilityId::SHIELD_DUST | AbilityId::INNER_FOCUS
+            ),
+            "species {species}"
+        );
+        for move_id in FLINCH_MOVES {
+            let mut rng = SequenceRng::new([0]);
+            assert_eq!(
+                spend_effect_chance_draw(&dex, move_id, true, &defender, &mut rng),
+                Ok(SecondaryApplication::None),
+                "species {species} {move_id:?}"
+            );
+            assert_eq!(rng.draws(), 1);
+        }
+    }
+}
+
+#[test]
+fn a_serene_grace_attacker_is_refused_for_a_flinch_move_only_where_it_could_land() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    for move_id in FLINCH_MOVES {
+        assert_eq!(
+            ensure_admissible(&dex, move_id, &attacker, &mon(&dex, ZIGZAGOON)),
+            Err(BattleError::UnportedAbilityInteraction(
+                AbilityId::SERENE_GRACE
+            )),
+            "{move_id:?}"
+        );
+        for species in [WURMPLE, ZUBAT] {
+            assert_eq!(
+                ensure_admissible(&dex, move_id, &attacker, &mon(&dex, species)),
+                Ok(()),
+                "{move_id:?} vs species {species}: the flinch can never land"
+            );
+        }
+        // A non-Serene-Grace attacker is always admitted.
+        assert_eq!(
+            ensure_admissible(&dex, move_id, &mon(&dex, ZIGZAGOON), &mon(&dex, ZIGZAGOON)),
+            Ok(()),
+            "{move_id:?}"
         );
     }
 }

@@ -249,8 +249,9 @@
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and
-//! [`secondary::EFFECT_SPEED_DOWN_HIT`] are the three resolved; the other 28
-//! are not, including
+//! [`secondary::EFFECT_SPEED_DOWN_HIT`] and the two non-Minimized flinch
+//! wrappers ([`secondary::is_flinch_hit_effect`]) are the five resolved; the
+//! other 26 are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
 //! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
@@ -328,9 +329,9 @@ pub use pokemon::{
     SPECIES_SHEDINJA,
 };
 pub use secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,
-    spend_effect_chance_draw, SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT,
-    EFFECT_POISON_HIT,
+    is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect, is_secondary_effect,
+    is_speed_down_hit_effect, spend_effect_chance_draw, SecondaryApplication, Trampoline,
+    EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

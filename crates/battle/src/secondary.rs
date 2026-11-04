@@ -156,6 +156,35 @@ pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_SPEED_DOWN_HIT
 }
 
+/// Returns whether `effect` is [`MoveEffect::FLINCH_HIT`] or
+/// [`MoveEffect::FLINCH_MINIMIZE_HIT`], the two [`SECONDARY_TRAMPOLINES`]
+/// entries [`spend_effect_chance_draw`] resolves as `MOVE_EFFECT_FLINCH`.
+///
+/// Dispatch is by effect ID, never by the trampoline's symbolic
+/// `"MOVE_EFFECT_FLINCH"` string: [`MoveEffect::FAKE_OUT`] (certain, gated on
+/// the first turn) and [`MoveEffect::TWISTER`] (airborne rule) share it and
+/// stay unported. [`MoveEffect::FLINCH_MINIMIZE_HIT`] is modelled only for
+/// its non-Minimized path, since no Minimized volatile exists
+/// (`BattleScript_EffectStomp`, `data/battle_scripts_1.s:1898`-`:1901`).
+#[must_use]
+pub fn is_flinch_hit_effect(effect: MoveEffect) -> bool {
+    effect == MoveEffect::FLINCH_HIT || effect == MoveEffect::FLINCH_MINIMIZE_HIT
+}
+
+/// `MOVE_EFFECT_FLINCH`'s silent ability guards on a secondary landing: Shield
+/// Dust blocks any chance-based effect whose byte is at most nine
+/// (`battle_script_commands.c:2253`-`:2255`), and Inner Focus refuses the
+/// flinch itself; with neither `primary` nor `certain` it says nothing
+/// (`:2547`-`:2559`). Safeguard's guard stops at byte seven, so it never
+/// applies.
+#[must_use]
+fn flinch_can_land(defender: &BattlePokemon) -> bool {
+    !matches!(
+        defender.ability(),
+        AbilityId::SHIELD_DUST | AbilityId::INNER_FOCUS
+    )
+}
+
 /// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
 /// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
 /// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
@@ -319,6 +348,11 @@ pub fn ensure_admissible(
     }
     let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
         confuse_hit_could_ever_land(defender)
+    } else if is_flinch_hit_effect(mv.effect) {
+        // Both abilities are immutable mid-battle, so reading them here stays
+        // sound at every checkpoint; the target's current action position and
+        // flinch state are execution-time facts deliberately not read.
+        flinch_can_land(defender)
     } else {
         is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
     };
@@ -359,6 +393,12 @@ pub enum SecondaryApplication {
     /// stage is left unchanged without a message
     /// (`battle_script_commands.c:7056-7059,7094-7095`).
     SpeedDown,
+    /// The caller must set the defender's flinch flag, subject to the
+    /// caller's post-damage faint check and to the defender not having acted
+    /// yet this turn (`GetBattlerTurnOrderNum(gEffectBattler) >
+    /// gCurrentTurnActionNumber`, `battle_script_commands.c:2561`-`:2565`).
+    /// Setting the flag draws nothing and emits no event.
+    Flinch,
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -371,8 +411,9 @@ pub enum SecondaryApplication {
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
-/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
+/// [`EFFECT_SPEED_DOWN_HIT`], [`MoveEffect::FLINCH_HIT`] or
+/// [`MoveEffect::FLINCH_MINIMIZE_HIT`], or Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -423,6 +464,14 @@ pub fn spend_effect_chance_draw(
     if is_speed_down_hit_effect(mv.effect) {
         return Ok(if speed_drop_can_land(defender) {
             SecondaryApplication::SpeedDown
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_flinch_hit_effect(mv.effect) {
+        return Ok(if flinch_can_land(defender) {
+            SecondaryApplication::Flinch
         } else {
             SecondaryApplication::None
         });

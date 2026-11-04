@@ -104,7 +104,9 @@ pub(super) fn requests(
 /// `gGotDefrostedStringIds` names the thaw-hit move for `B_MSG_DEFROSTED_BY_MOVE`
 /// (`src/battle_message.c:1102`-`:1106`). `BattleScript_MoveUsedLoafingAround`
 /// prints `gInobedientStringIds`'s `B_MSG_LOAFING` entry in place of the
-/// announcement (`:4232`-`:4240`).
+/// announcement (`:4232`-`:4240`). `BattleScript_MoveUsedFlinched` likewise
+/// prints `STRINGID_PKMNFLINCHED` in the cancelled battler's name
+/// (`:3780`-`:3783`).
 fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let (template, by_player, current_move) = match *event {
         BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player, None),
@@ -115,6 +117,7 @@ fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             (id::PKMNWASDEFROSTEDBY, by_player, Some(move_id))
         }
         BattleEvent::LoafingAround { by_player, .. } => (id::PKMNLOAFING, by_player, None),
+        BattleEvent::Flinched { by_player, .. } => (id::PKMNFLINCHED, by_player, None),
         _ => return None,
     };
     let mut context = narrator.context().user_vs_target(Side::user(by_player));

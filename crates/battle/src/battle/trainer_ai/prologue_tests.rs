@@ -170,6 +170,9 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::BITE,
+        MoveId::HEADBUTT,
+        MoveId::ASTONISH,
     ];
     for move_id in moves {
         let effect = Dex::new().move_data(move_id).unwrap().effect;
@@ -194,6 +197,8 @@ fn the_audited_row_set_is_exact() {
         MoveEffect::SPLASH,
         MoveEffect::QUICK_ATTACK,
         MoveEffect::CHARGE,
+        MoveEffect::FLINCH_HIT,
+        MoveEffect::FLINCH_MINIMIZE_HIT,
     ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected: Vec<u8> = UNCHANGED_AFTER_PROLOGUE_EFFECTS

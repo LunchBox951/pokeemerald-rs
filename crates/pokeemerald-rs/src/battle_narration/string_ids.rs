@@ -36,6 +36,7 @@ pub(super) const PKMNISCONFUSED: u16 = 65;
 pub(super) const PKMNHEALEDCONFUSION: u16 = 66;
 pub(super) const PKMNWASCONFUSED: u16 = 67;
 pub(super) const PKMNALREADYCONFUSED: u16 = 68;
+pub(super) const PKMNFLINCHED: u16 = 74;
 pub(super) const PKMNGETTINGPUMPED: u16 = 99;
 pub(super) const PKMNHITWITHRECOIL: u16 = 100;
 pub(super) const PKMNFASTASLEEP: u16 = 107;

@@ -625,6 +625,7 @@ impl Battle {
             SecondaryApplication::SpeedDown => {
                 self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
             }
+            SecondaryApplication::Flinch => self.apply_secondary_flinch(attacker_is_player),
         }
         poisoned_synchronize_holder
     }
@@ -660,6 +661,28 @@ impl Battle {
             new_stage,
             magnitude: 1,
         });
+    }
+
+    /// `MOVE_EFFECT_FLINCH` as a secondary effect: the target's flinch flag is
+    /// set silently, with no draw and no event; the observable message comes
+    /// only when the target reaches its cancelled action
+    /// ([`BattleEvent::Flinched`]). `SetMoveEffect` leads with an `hp == 0`
+    /// guard (`battle_script_commands.c:2261`-`:2264`) and the flag is set only
+    /// when the target's turn-order slot is still ahead
+    /// (`:2561`-`:2565`), modelled by [`Battle::acted_this_turn`]. Shield Dust
+    /// and Inner Focus never reach this point
+    /// ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_flinch(&mut self, attacker_is_player: bool) {
+        let target_acted = self.acted_this_turn[usize::from(attacker_is_player)];
+        let defender = if attacker_is_player {
+            &mut self.enemy
+        } else {
+            &mut self.player
+        };
+        if defender.is_fainted() || target_acted {
+            return;
+        }
+        defender.volatiles_mut().set_flinched();
     }
 
     /// Applies damage up to the target's remaining HP and returns the HP lost.
@@ -1145,8 +1168,8 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
-                131, 141, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103,
+                110, 131, 141, 150, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1312,5 +1335,91 @@ mod absorbing_ability_tests {
             })
             .collect();
         assert_eq!(boosted, [true, false]);
+    }
+}
+
+#[cfg(test)]
+mod flinch_adapter_tests {
+    use assets::{MoveId, SpeciesId};
+
+    use super::*;
+    use crate::pokemon::{BattlePokemon, Ivs};
+    use crate::script_rng::SequenceRng;
+
+    const MAX_IVS: Ivs = Ivs {
+        hp: 31,
+        attack: 31,
+        defense: 31,
+        speed: 31,
+        sp_attack: 31,
+        sp_defense: 31,
+    };
+
+    fn battle() -> Battle {
+        let mon = |species: u16| {
+            BattlePokemon::new(
+                &Dex::new(),
+                SpeciesId(species),
+                5,
+                MAX_IVS,
+                0,
+                vec![MoveId::TACKLE],
+            )
+            .unwrap()
+        };
+        let mut rng = SequenceRng::new([0, 0]);
+        Battle::new(Dex::new(), mon(19), mon(288), false, &mut rng).unwrap()
+    }
+
+    #[test]
+    fn a_landed_flinch_flags_a_target_whose_slot_is_still_ahead() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, false];
+        battle.apply_secondary_flinch(true);
+        assert!(battle.enemy.volatiles().flinched);
+        assert!(!battle.player.volatiles().flinched);
+
+        battle.acted_this_turn = [false, true];
+        battle.apply_secondary_flinch(false);
+        assert!(battle.player.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_target_that_already_acted_is_never_flagged() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, true];
+        battle.apply_secondary_flinch(true);
+        battle.apply_secondary_flinch(false);
+        assert!(!battle.enemy.volatiles().flinched);
+        assert!(!battle.player.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_fainted_target_is_never_flagged() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, false];
+        let max_hp = battle.enemy.stats().max_hp;
+        battle.enemy.apply_damage(max_hp);
+        assert!(battle.enemy.is_fainted());
+        battle.apply_secondary_flinch(true);
+        assert!(!battle.enemy.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_flinch_application_draws_nothing_and_emits_no_event() {
+        let mut battle = battle();
+        let mut events = Vec::new();
+        let mut rng = SequenceRng::new([]);
+        let poisoned = battle.apply_hit_secondary_effect(
+            true,
+            MoveId::HEADBUTT,
+            SecondaryApplication::Flinch,
+            &mut rng,
+            &mut events,
+        );
+        assert!(!poisoned);
+        assert!(events.is_empty());
+        assert!(battle.enemy.volatiles().flinched);
+        rng.assert_exhausted();
     }
 }
