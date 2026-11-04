@@ -1,6 +1,6 @@
 use super::fixture::*;
 use super::*;
-use crate::psg::FrameSequencer;
+use crate::psg::{FrameClocks, FrameSequencer};
 
 #[test]
 fn a_hardware_muted_square_keeps_its_duty_position_running() {
@@ -257,8 +257,12 @@ fn cgb_voice_render_is_chunk_boundary_invariant() {
 }
 
 #[test]
-fn square1_sweep_overflow_mutes_the_voice_mid_buffer_until_the_next_safe_trigger() {
-    // `mgba/src/gb/audio.c:667-672`, `:180-186`.
+fn square1_sweep_overflow_holds_the_last_rendered_level_until_the_next_safe_trigger() {
+    // mGBA's 128 Hz sweep step only clears `playingCh1` after catching the
+    // channel up (`gb/audio.c:667-672`), `GBAudioRun` then skips a channel that
+    // is not playing (`:493`), and `GBAudioSamplePSG` keeps mixing the untouched
+    // `ch1.sample` (`:745-754`): the voice holds the level it last rendered
+    // rather than dropping to silence. A trigger revives it (`:180-186`).
     let safe_key = 48;
     let mut voice = square_voice(
         CgbChannelNumber::Square1,
@@ -281,31 +285,140 @@ fn square1_sweep_overflow_mutes_the_voice_mid_buffer_until_the_next_safe_trigger
         acc[..first_tick].iter().any(|&(l, r)| l != 0 || r != 0),
         "samples before the overflowing tick must still be audible"
     );
+    let held = acc[first_tick - 1];
     assert!(
-        acc[first_tick..].iter().all(|&(l, r)| l == 0 && r == 0),
-        "samples from the overflowing tick onward must be silent, not just \
-         at the buffer end"
+        held != (0, 0),
+        "sanity: the last rendered level must be audible for the hold to differ from silence"
+    );
+    assert!(
+        acc[first_tick..].iter().all(|&level| level == held),
+        "samples from the overflowing tick onward must hold the last rendered \
+         level, not just at the buffer end"
     );
     assert!(
         voice.is_active(),
-        "the overflow mutes the hardware channel; the software voice lives on"
+        "the overflow stops the hardware channel; the software voice lives on"
     );
-    let mut still_muted = vec![(0i32, 0i32); 8];
+    let mut still_held = vec![(0i32, 0i32); 8];
     voice.begin_frame(false);
-    voice.render(&mut still_muted, &[]);
+    voice.render(&mut still_held, &[]);
     assert!(
-        still_muted.iter().all(|&(l, r)| l == 0 && r == 0),
-        "the mute holds across frames until a trigger rechecks the sweep"
+        still_held.iter().all(|&level| level == held),
+        "the hold persists across frames until a trigger rechecks the sweep"
     );
 
     voice.set_track_pitch(0, 0);
     voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
     voice.begin_frame(false);
+    assert!(
+        !voice.hardware_muted,
+        "a safe trigger must clear the sweep stop, not leave the hold in place"
+    );
     let mut revived = vec![(0i32, 0i32); 8];
     voice.render(&mut revived, &[]);
     assert!(
         revived.iter().any(|&(l, r)| l != 0 || r != 0),
         "a later safe trigger must revive the muted voice, not find it retired"
+    );
+}
+
+#[test]
+fn a_pitch_write_to_a_sweep_stopped_square_latches_its_pre_high_byte_sample() {
+    // `NR13`'s catch-up runs the stopped channel at the old rate, `NR14`'s at
+    // the intermediate (new low byte, old high bits) rate, and the latch lands
+    // before the high byte is stored; a `playingCh1` the sweep cleared does
+    // not stop that forced catch-up (`mgba/src/gb/audio.c:162-169,219-224,
+    // 493-501,916-918`). The write is not a trigger, so the channel stays
+    // stopped.
+    const HELD_FRAME_SAMPLES: usize = 37;
+    let mut relatched_cases = 0;
+    for key_shift in -24..=24 {
+        for held_frames in 0..20 {
+            let mut voice = square_voice(
+                CgbChannelNumber::Square1,
+                Some(upward_sweep(1, 1)),
+                TestNote::at_key(48),
+            );
+            voice.begin_frame(false);
+            let mut clock = FrameSequencer::default();
+            let ticks = clock.advance(300);
+            voice.render(&mut vec![(0i32, 0i32); 300], &ticks);
+            assert!(
+                voice.hardware_muted,
+                "sanity: the sweep must have overflowed"
+            );
+            for _ in 0..held_frames {
+                voice.begin_frame(false);
+                voice.render(&mut vec![(0i32, 0i32); HELD_FRAME_SAMPLES], &[]);
+            }
+            let held = voice.last_contribution;
+            let mut oracle = voice.square_oscillator().expect("a square voice").clone();
+            let old = oracle.frequency();
+
+            voice.set_track_pitch(key_shift, 0);
+            voice.begin_frame(false);
+            let new = voice
+                .square_oscillator()
+                .expect("a square voice")
+                .frequency();
+            oracle.retune_atomically((old & 0x700) | (new & 0xFF));
+            let expected =
+                (voice.frame_gain * i32::from(oracle.held_level()) * BIPOLAR_SAMPLE_SCALE)
+                    >> SAMPLE_GAIN_BITS;
+
+            assert_eq!(
+                voice.last_contribution, expected,
+                "key shift {key_shift}, {held_frames} held frames"
+            );
+            assert!(voice.hardware_muted, "a pitch write is not a trigger");
+            relatched_cases += usize::from(expected != held);
+        }
+    }
+    assert!(
+        relatched_cases > 0,
+        "sanity: some pitch write must move the held level off the pre-write sample"
+    );
+}
+
+#[test]
+fn a_length_expiry_after_a_sweep_overflow_leaves_the_held_level_untouched() {
+    // Neither the length step nor its expiry writes `ch1.sample`
+    // (`mgba/src/gb/audio.c:674-683`), so a counter running out on a channel
+    // the sweep already stopped keeps the held level audible.
+    const FRAME_SAMPLES: usize = 300;
+    const FIRST_EXPIRY_CLOCKS: u8 = 60;
+    let mut voice = square_voice(
+        CgbChannelNumber::Square1,
+        Some(upward_sweep(1, 1)),
+        TestNote::at_key(48),
+    )
+    .with_length(FIRST_EXPIRY_CLOCKS);
+    voice.begin_frame(false);
+
+    let mut sequencer = FrameSequencer::default();
+    let mut clocks = FrameClocks::with_capacity(4, 8);
+    sequencer.advance_clocks_into(FRAME_SAMPLES, &mut clocks);
+    let overflow = clocks.sweep[0];
+    assert!(
+        clocks
+            .length
+            .iter()
+            .filter(|&&clock| clock > overflow)
+            .count()
+            >= 3,
+        "sanity: the counter loads 3 and must run out after the overflow"
+    );
+    let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+    voice.render_clocked(&mut acc, &clocks.sweep, &clocks.length);
+
+    let held = acc[overflow - 1];
+    assert!(
+        held != (0, 0),
+        "sanity: the overflow follows an audible sample"
+    );
+    assert!(
+        acc[overflow..].iter().all(|&level| level == held),
+        "the expiry must not replace the level the sweep overflow held"
     );
 }
 
