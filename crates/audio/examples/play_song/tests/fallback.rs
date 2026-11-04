@@ -24,9 +24,9 @@ fn stale_timestamp_wait(
         || Some(progress(0, submitted.get())),
         || {
             if clock.borrow().duration_since(start) > std::time::Duration::from_millis(50) {
-                errors
+                (errors > 0).then_some(errors)
             } else {
-                0
+                None
             }
         },
         || *clock.borrow(),
@@ -81,7 +81,7 @@ fn callbacks_that_stall_partway_through_the_derived_tail_still_time_out() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -119,7 +119,7 @@ fn a_stalling_callback_does_not_hold_the_stream_past_max_wait() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -156,7 +156,7 @@ fn a_single_late_callback_does_not_prove_callbacks_alive() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -190,7 +190,7 @@ fn a_delayed_poll_past_max_wait_does_not_take_the_stale_tail_exit() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let elapsed = clock.borrow().duration_since(start);
@@ -229,7 +229,7 @@ fn slow_healthy_callbacks_still_take_the_derived_tail_fallback() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -262,7 +262,7 @@ fn a_derived_tail_equal_to_max_wait_still_takes_the_fallback() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -288,7 +288,7 @@ fn sleep_overshoot_at_the_capped_tail_still_takes_the_fallback() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             // Every sleep overshoots by 3 ms, so no poll lands exactly on
@@ -317,7 +317,7 @@ fn a_capped_tail_with_a_600_ms_callback_period_takes_the_fallback() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -359,7 +359,7 @@ fn repeated_phase_shifted_600_ms_callbacks_at_a_capped_tail_take_the_fallback() 
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -396,7 +396,7 @@ fn an_initial_idle_span_before_one_large_late_buffer_is_a_stall() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -434,7 +434,7 @@ fn an_initial_idle_span_hidden_by_an_oversleeping_first_poll_is_still_a_stall() 
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let step = if first.replace(false) {

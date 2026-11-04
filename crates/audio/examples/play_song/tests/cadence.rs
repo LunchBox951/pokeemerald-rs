@@ -23,7 +23,7 @@ fn cadence_wait(
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let elapsed = clock.borrow().duration_since(start).as_millis();
@@ -86,7 +86,7 @@ fn an_aggregate_advance_seen_at_a_late_poll_is_not_fresh() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let elapsed = clock.borrow().duration_since(start);
@@ -122,7 +122,7 @@ fn an_old_aggregate_advance_does_not_widen_the_later_cadence() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {
@@ -196,7 +196,7 @@ fn a_lone_aggregate_at_the_deadline_poll_is_judged_there() {
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {
@@ -225,7 +225,7 @@ fn resumed_tail_wait(max_wait_ms: u64, late_poll: bool) -> (Result<(), DrainErro
         48_000,
         &policy,
         || Some(progress(28_800, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let before = clock.borrow().duration_since(start).as_millis();
@@ -286,7 +286,7 @@ fn an_aggregate_from_a_polling_pause_does_not_excuse_the_silence_after_it() {
                 let ran = elapsed().min(pause_at + 500) / 10;
                 Some(progress(0, 4 + u64::try_from(ran).unwrap_or(0) * 480))
             },
-            || 0,
+            || None,
             || *clock.borrow(),
             |duration| {
                 let step = if elapsed() == pause_at {
@@ -328,7 +328,7 @@ fn late_poll_wait(
         48_000,
         &policy,
         || Some(progress(0, submitted.get())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |_| {
             let before =
@@ -375,7 +375,7 @@ fn a_cadence_seen_at_slow_polling_lapses_once_polling_is_prompt() {
             48_000,
             &policy,
             || Some(progress(0, 4 + ms().min(stop_ms) / 10 * 480)),
-            || 0,
+            || None,
             || *clock.borrow(),
             |_| {
                 let step = if ms() < 500 { 100 } else { 10 };

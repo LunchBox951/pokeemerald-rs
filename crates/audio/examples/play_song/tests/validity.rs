@@ -30,7 +30,7 @@ fn a_usable_then_stale_transition_keeps_the_capped_budget() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -70,7 +70,7 @@ fn a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -121,7 +121,7 @@ fn a_preempted_sounded_store_is_not_stale_evidence() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -174,7 +174,7 @@ fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time:
                 stamps.progress(sounded.get(), seen, usable.get(), *clock.borrow())
             })
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -241,7 +241,7 @@ fn usable_estimates_that_stay_flat_are_not_stale_timestamps() {
         48_000,
         &policy,
         || Some(stamps.progress(100, submitted.get(), usable.get(), *clock.borrow())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -280,7 +280,7 @@ fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
         48_000,
         &policy,
         || Some(stamps.progress(0, submitted.get(), usable.get(), *clock.borrow())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {
@@ -325,7 +325,7 @@ fn a_usable_mark_published_before_the_first_snapshot_is_not_stale_evidence() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -376,7 +376,7 @@ fn a_usable_mark_seen_before_its_submitted_advance_clears_stale_evidence() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -425,7 +425,7 @@ fn the_stale_suffix_of_a_mixed_aggregate_at_the_deadline_poll_is_evidence() {
                 start + std::time::Duration::from_millis(100),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {
@@ -478,7 +478,7 @@ fn late_usable_wait(delay_ms: u64) -> (Result<(), DrainError>, std::time::Durati
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -554,7 +554,7 @@ fn valid_then_stale_wait(
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -630,7 +630,7 @@ fn entry_reading_wait(
         48_000,
         &policy,
         || Some(progress_reading(sounded, frames.get(), mark, read_at)),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -718,7 +718,7 @@ fn a_usable_mark_one_stale_callback_behind_at_entry_still_owes_its_playback() {
                     .expect("the clock has run that long"),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -765,7 +765,7 @@ fn a_delayed_poll_does_not_backdate_a_usable_reading_past_its_callback() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let first = sleeps.get() == 0;
@@ -826,7 +826,7 @@ fn a_usable_reading_seen_by_a_delayed_poll_is_stamped_when_seen() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let first = sleeps.get() == 0;
@@ -887,7 +887,7 @@ fn a_larger_stale_buffer_after_a_usable_one_does_not_overstate_its_age() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let first = sleeps.get() == 0;
@@ -950,7 +950,7 @@ fn a_stale_buffer_past_the_tail_size_after_a_usable_one_does_not_overstate_its_a
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let first = sleeps.get() == 0;
@@ -1003,7 +1003,7 @@ fn a_queued_stale_callback_at_entry_is_not_elapsed_playback() {
         48_000,
         &policy,
         || Some(stamps.progress(24_000, submitted.get(), 48_000, *clock.borrow())),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -1052,7 +1052,7 @@ fn a_stale_burst_inside_one_poll_gap_is_not_elapsed_playback() {
                 *clock.borrow(),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             let before = clock.borrow().duration_since(start).as_millis();
@@ -1096,7 +1096,7 @@ fn startup_saturated_wait(max_wait_ms: u64) -> (Result<(), DrainError>, std::tim
         48_000,
         &policy,
         || Some(progress_started(0, frames.get(), 12_000, start, 12_000)),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -1160,7 +1160,7 @@ fn a_reading_seen_late_is_credited_from_its_callback_at_the_deadline() {
                 read_at,
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
@@ -1205,7 +1205,7 @@ fn starved_poll_wait(read_at_ms: u64) -> Result<(), DrainError> {
                 start + Duration::from_millis(read_at_ms),
             ))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {

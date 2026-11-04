@@ -77,7 +77,7 @@ fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
             push_calls.set(push_calls.get() + 1);
             0
         },
-        || u64::from(push_calls.get() > 0),
+        || (push_calls.get() > 0).then_some(1),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -113,7 +113,7 @@ fn a_stalled_ring_with_no_stream_error_gives_up_at_the_deadline() {
         &[0.0_f32; 2],
         &policy,
         |chunk| producer.push(chunk),
-        || output.stream_errors(),
+        || None,
         || *clock.borrow(),
         |duration| {
             sleeps.set(sleeps.get() + 1);
@@ -145,7 +145,7 @@ fn a_push_that_completes_before_the_deadline_succeeds() {
         &[0.0_f32; 4],
         &policy,
         |chunk| producer.push(chunk),
-        || output.stream_errors(),
+        || None,
         std::time::Instant::now,
         |_| panic!("plenty of room; must not need to retry"),
     );
@@ -164,7 +164,7 @@ fn wait_for_drain_succeeds_immediately_once_the_ring_is_already_empty() {
         4,
         &policy,
         || 4,
-        || 0,
+        || None,
         std::time::Instant::now,
         |_| panic!("an already-empty ring must not need to retry"),
     );
@@ -184,7 +184,7 @@ fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
         4,
         &policy,
         || 4,
-        || 1,
+        || Some(1),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -219,7 +219,7 @@ fn an_error_that_lands_exactly_as_the_ring_reports_empty_is_still_caught() {
             errors_probe.set(1);
             4
         },
-        move || errors.get(),
+        move || (errors.get() > 0).then(|| errors.get()),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -248,7 +248,7 @@ fn wait_for_drain_reports_a_stream_error_instead_of_waiting_out_the_deadline() {
         4,
         &policy,
         || 0,
-        || 1,
+        || Some(1),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -282,7 +282,7 @@ fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_er
         2,
         &policy,
         || producer.available_space(),
-        || output.stream_errors(),
+        || None,
         || *clock.borrow(),
         |duration| *clock.borrow_mut() += duration,
     );
@@ -295,8 +295,8 @@ fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_er
 }
 
 #[test]
-fn an_error_from_before_playback_does_not_fail_a_push_but_a_new_one_does() {
-    let output = AudioOutput::null(64);
+fn errors_from_before_and_during_playback_do_not_fail_a_push_on_a_recovering_transport() {
+    let mut output = AudioOutput::null(64);
     let producer = output.producer();
     let policy = RetryPolicy {
         interval: std::time::Duration::from_millis(1),
@@ -304,26 +304,24 @@ fn an_error_from_before_playback_does_not_fail_a_push_but_a_new_one_does() {
     };
     // A stream failed and the transport rebuilt it before playback began.
     output.record_stream_error_for_test();
-    let errors = ErrorBaseline::of(&output);
+    let mut health = PlaybackHealth::begin(&mut output);
 
-    let push = |output: &AudioOutput| {
+    let mut push = |output: &mut AudioOutput| {
         push_frame(
             &[0.0_f32; 4],
             &policy,
             |chunk| producer.push(chunk),
-            || errors.since(output),
+            || health.terminal_errors(output),
             std::time::Instant::now,
             |_| panic!("plenty of room; must not need to retry"),
         )
     };
-    assert!(push(&output).is_ok(), "a recovered transport plays");
+    assert!(push(&mut output).is_ok(), "a recovered transport plays");
 
+    // The null transport never detaches, so an error it counts is recovered.
     output.record_stream_error_for_test();
     assert!(
-        matches!(
-            push(&output),
-            Err(PushError::StreamStopped { errors: 1, .. })
-        ),
-        "an error during playback still stops it"
+        push(&mut output).is_ok(),
+        "an error the transport recovered from does not stop playback"
     );
 }
