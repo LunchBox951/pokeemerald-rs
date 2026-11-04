@@ -37,6 +37,8 @@ pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 #[cfg(test)]
 mod switch_tests;
+#[cfg(test)]
+mod thaw_hit_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
 #[cfg(test)]
