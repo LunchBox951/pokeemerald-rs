@@ -14,8 +14,9 @@
 //!
 //! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`),
 //! [`EFFECT_CONFUSE_HIT`] (the `status2` `MOVE_EFFECT_CONFUSION` case,
-//! `:2528-2544`) and [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
-//! case, `:2666-2683`) are the three ported trampolines.
+//! `:2528-2544`), [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
+//! case, `:2666-2683`) and [`EFFECT_ACCURACY_DOWN_HIT`] (its
+//! `MOVE_EFFECT_ACC_MINUS_1` sibling) are the four ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -28,6 +29,8 @@ use crate::pokemon::BattlePokemon;
 pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
 /// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
 pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
+/// Move effect shared by Mud-Slap and Octazooka.
+pub const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect::ACCURACY_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
 pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect::CONFUSE_HIT;
 
@@ -103,7 +106,7 @@ pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
         MoveEffect::SPECIAL_DEFENSE_DOWN_HIT,
         "MOVE_EFFECT_SP_DEF_MINUS_1",
     ),
-    chance_on_target(MoveEffect::ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
+    chance_on_target(EFFECT_ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
     chance_on_target(EFFECT_CONFUSE_HIT, "MOVE_EFFECT_CONFUSION"),
     chance_on_target(MoveEffect::THIEF, "MOVE_EFFECT_STEAL_ITEM"),
     chance_on_target(MoveEffect::THAW_HIT, "MOVE_EFFECT_BURN"),
@@ -156,6 +159,13 @@ pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_SPEED_DOWN_HIT
 }
 
+/// Returns whether `effect` is [`EFFECT_ACCURACY_DOWN_HIT`], the fourth
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_accuracy_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_ACCURACY_DOWN_HIT
+}
+
 /// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
 /// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
 /// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
@@ -168,6 +178,14 @@ fn speed_drop_can_land(defender: &BattlePokemon) -> bool {
         defender.ability(),
         AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
     )
+}
+
+/// `MOVE_EFFECT_ACC_MINUS_1`'s silent guards on a secondary landing: the same
+/// three as [`speed_drop_can_land`], plus Keen Eye, which refuses an Accuracy
+/// drop that is not `certain` (`battle_script_commands.c:6987-7020,7035-7037`).
+#[must_use]
+fn accuracy_drop_can_land(defender: &BattlePokemon) -> bool {
+    speed_drop_can_land(defender) && defender.ability() != AbilityId::KEEN_EYE
 }
 
 /// `SetMoveEffect`'s silent `STATUS1_POISON` guards
@@ -321,6 +339,7 @@ pub fn ensure_admissible(
         confuse_hit_could_ever_land(defender)
     } else {
         is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
+            || is_accuracy_down_hit_effect(mv.effect) && accuracy_drop_can_land(defender)
     };
     if status_could_ever_land
         && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
@@ -359,6 +378,12 @@ pub enum SecondaryApplication {
     /// stage is left unchanged without a message
     /// (`battle_script_commands.c:7056-7059,7094-7095`).
     SpeedDown,
+    /// The caller must lower the defender's Accuracy stage by one, subject to
+    /// the same post-damage faint check and silent stage floor as
+    /// [`SecondaryApplication::SpeedDown`]. Keen Eye, Clear Body, White Smoke
+    /// and Shield Dust never reach this point
+    /// (`battle_script_commands.c:6987-7037`).
+    AccuracyDown,
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -371,8 +396,9 @@ pub enum SecondaryApplication {
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
-/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
+/// [`EFFECT_SPEED_DOWN_HIT`] or [`EFFECT_ACCURACY_DOWN_HIT`], or Struggle's
+/// certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -428,6 +454,14 @@ pub fn spend_effect_chance_draw(
         });
     }
 
+    if is_accuracy_down_hit_effect(mv.effect) {
+        return Ok(if accuracy_drop_can_land(defender) {
+            SecondaryApplication::AccuracyDown
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
     Err(BattleError::UnportedSecondaryEffect(move_id))
 }
 
@@ -471,3 +505,7 @@ pub fn resolve_synchronize_poison_reflection(
 #[cfg(test)]
 #[path = "secondary/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "secondary/accuracy_down_tests.rs"]
+mod accuracy_down_tests;
