@@ -1,5 +1,8 @@
 //! `CANCELER_THAW` at the action boundary, driven through the private
-//! `run_action` seam because no constructor admits a thaw-hit move yet.
+//! `run_action` seam so the thaw's place among the cancellers is pinned
+//! without the accuracy, damage and chance draws a public turn spends;
+//! `tests/turn_engine/thaw_hit.rs` covers the same moves through a public
+//! `Battle`.
 
 use assets::{MoveId, SpeciesId};
 
