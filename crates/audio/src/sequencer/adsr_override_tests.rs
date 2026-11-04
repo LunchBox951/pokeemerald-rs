@@ -65,6 +65,7 @@ fn square_tone(adsr: CgbAdsr) -> Instrument {
         sweep: 0,
         adsr,
         fixed_rate: false,
+        length: 0,
     })
 }
 
