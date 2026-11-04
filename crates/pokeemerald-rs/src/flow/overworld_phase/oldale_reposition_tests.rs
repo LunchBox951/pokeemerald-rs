@@ -434,8 +434,6 @@ fn successful_warp_and_connection_replace_live_object_events() {
         &path,
         &["girl_3", "mart_employee", "maniac"],
     );
-    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
-
     let walk_footprints_man = |phase: &mut OverworldPhase| {
         let local_id = phase
             .object_events
@@ -474,13 +472,13 @@ fn successful_warp_and_connection_replace_live_object_events() {
     };
 
     let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
-    phase.pack_source = PackSource::Test(leaked_path);
+    phase.pack_source = PackSource::Explicit(path.as_path().into());
     let local_id = walk_footprints_man(&mut phase);
     phase.warp_to(OLDALE_TOWN, 0);
     assert_replaced(&phase, local_id, "the warp");
 
     let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
-    phase.pack_source = PackSource::Test(leaked_path);
+    phase.pack_source = PackSource::Explicit(path.as_path().into());
     let local_id = walk_footprints_man(&mut phase);
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
     assert_replaced(&phase, local_id, "the connection crossing");
@@ -531,9 +529,8 @@ fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
         &path,
         &["girl_3", "mart_employee", "maniac"],
     );
-    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
     let resumed = OverworldPhase::continue_saved_game(
-        PackSource::Test(leaked_path),
+        PackSource::Explicit(path.as_path().into()),
         saved.block1,
         saved.block2,
     )

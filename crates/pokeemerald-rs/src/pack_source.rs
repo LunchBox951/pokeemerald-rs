@@ -37,13 +37,6 @@ pub(crate) enum PackSource {
     /// [`AssetPack::load_repo`]: always this checkout's own extracted pack,
     /// regardless of environment or an installed user pack.
     Repo,
-    /// A fixed path, for a test that must drive a real pack load through
-    /// the production dialog-open path (`OverworldPhase::resolve_step_events`)
-    /// without touching [`Self::Runtime`]'s or [`Self::Repo`]'s real
-    /// resolved locations. The path must outlive the test: callers
-    /// `Box::leak` it once.
-    #[cfg(test)]
-    Test(&'static std::path::Path),
     /// A caller-owned pack at a fixed path ([`crate::App::new_headless_real_at`]):
     /// a checkout-extracted pack or a ROM-imported one the caller placed
     /// itself. Never consults the environment or any other location, so a
@@ -56,7 +49,7 @@ pub(crate) enum PackSource {
 impl PackSource {
     /// The path this source resolves to -- [`AssetPack::default_path`] for
     /// [`Self::Runtime`], [`AssetPack::repo_pack_path`] for [`Self::Repo`],
-    /// the carried path itself for [`Self::Test`]. Split out from
+    /// the carried path itself for [`Self::Explicit`]. Split out from
     /// [`Self::load`] so the resolution itself is checkable without a pack
     /// on disk (see this module's tests).
     #[must_use]
@@ -64,8 +57,6 @@ impl PackSource {
         match self {
             Self::Runtime => AssetPack::default_path(),
             Self::Repo => AssetPack::repo_pack_path(),
-            #[cfg(test)]
-            Self::Test(path) => path.to_path_buf(),
             Self::Explicit(path) => path.to_path_buf(),
         }
     }

@@ -406,14 +406,14 @@ fn title_music_start_failure_names_its_subsystem_once() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
-    let missing: &'static std::path::Path =
-        Box::leak(std::path::PathBuf::from("/nonexistent/birch/menu.pack").into_boxed_path());
     let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
         crate::app::compose_title_scene(title_scene, &mut save_slot),
         save_slot,
-        crate::pack_source::PackSource::Test(missing),
+        crate::pack_source::PackSource::Explicit(
+            std::path::Path::new("/nonexistent/birch/menu.pack").into(),
+        ),
     );
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
     let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
@@ -544,13 +544,12 @@ fn the_title_music_restarts_on_the_fifth_initializer_frame() {
     );
     let pack = assets::AssetPack::load(&path).expect("the synthetic pack loads");
     let title = crate::title::TitleScene::from_pack(&pack).expect("the synthetic title decodes");
-    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
     let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
         crate::app::compose_title_scene(title, &mut save_slot),
         save_slot,
-        crate::pack_source::PackSource::Test(leaked),
+        crate::pack_source::PackSource::Explicit(path.as_path().into()),
     );
     app.title_audio = crate::app::TitleAudio::Null;
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);

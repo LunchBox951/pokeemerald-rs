@@ -676,8 +676,7 @@ fn main_menu_confirm_on_option_fades_then_falls_back_when_the_screen_cannot_load
         saved: save_slot.load(),
     }));
     let pack_path = write_empty_scratch_pack("confirm-option");
-    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
-    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+    let pack_source = crate::pack_source::PackSource::Explicit(pack_path.as_path().into());
 
     let (scene, _frame) = advance_scene(
         scene,
@@ -698,10 +697,10 @@ fn main_menu_confirm_on_option_fades_then_falls_back_when_the_screen_cannot_load
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
 }
 
-/// I-3 regression (issue #1329): a fresh A on `NEW GAME` must enter
+/// I-3 regression: a fresh A on `NEW GAME` must enter
 /// `AppScene::MainMenuFadeWait` and ignore every button until the fade
 /// reports done, only then dispatching `intro::load`. Pack-free via
-/// `PackSource::Test` pointed at an entryless scratch pack, so the deferred
+/// `PackSource::Explicit` pointed at an entryless scratch pack, so the deferred
 /// dispatch still runs (and fails, falling back to the retained menu)
 /// without needing a real one.
 #[test]
@@ -715,11 +714,7 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     }));
 
     let pack_path = write_empty_scratch_pack("new-game-fade-wait");
-    // `PackSource::Test` needs a `'static` path -- leaked once, reclaimed
-    // only when the test process exits, matching
-    // `overworld_phase::step_tests`' identical `PackSource::Test` fixture.
-    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
-    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+    let pack_source = crate::pack_source::PackSource::Explicit(pack_path.as_path().into());
 
     let (mut scene, press_frame) = advance_scene(
         scene,
@@ -816,8 +811,7 @@ fn main_menu_fade_wait_frame_fades_palettes_before_the_highlight_darkening() {
         saved: save_slot.load(),
     }));
     let pack_path = write_empty_scratch_pack("menu-fade-wait-recompose");
-    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
-    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+    let pack_source = crate::pack_source::PackSource::Explicit(pack_path.as_path().into());
 
     let (scene, _press) = advance_scene(
         scene,

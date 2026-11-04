@@ -199,14 +199,13 @@ fn route101_phase_facing_a_forced_oldale_landing(
         &[((13, 19), behavior)],
         &sprites,
     );
-    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
     let mut phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(20, 20),
         ROUTE_101,
         PlayerState::new((LANDING_X, 0), 3, Direction::North),
         None,
     );
-    phase.pack_source = PackSource::Test(leaked);
+    phase.pack_source = PackSource::Explicit(path.as_path().into());
     (phase, path)
 }
 

@@ -381,22 +381,18 @@ fn reopening_keeps_every_pockets_position() {
 
 #[test]
 fn open_reads_the_pack_its_source_names() {
-    let path: &'static std::path::Path = Box::leak(
-        std::env::temp_dir()
-            .join(format!(
-                "pokeemerald-rs-bag-menu-source-{}.pack",
-                std::process::id()
-            ))
-            .into_boxed_path(),
-    );
-    std::fs::write(path, crate::pack_test_support::pack_bytes(entries())).unwrap();
-    let source = crate::pack_source::PackSource::Test(path);
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-bag-menu-source-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&path, crate::pack_test_support::pack_bytes(entries())).unwrap();
+    let source = crate::pack_source::PackSource::Explicit(path.as_path().into());
     let opened = open(
         &source,
         &sample_bag(),
         BagScreenRequest::new(BagScreenMode::Field),
     );
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&path);
     assert!(opened.is_ok());
 }
 
