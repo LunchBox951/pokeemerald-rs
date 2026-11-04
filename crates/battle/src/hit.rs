@@ -568,3 +568,27 @@ pub fn resolve_hit(
 #[cfg(test)]
 #[path = "hit/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "hit/test_fixtures.rs"]
+mod test_fixtures;
+
+#[cfg(test)]
+#[path = "hit/admission_tests.rs"]
+mod admission_tests;
+
+#[cfg(test)]
+#[path = "hit/secondary_effect_tests.rs"]
+mod secondary_effect_tests;
+
+#[cfg(test)]
+#[path = "hit/ability_immunity_tests.rs"]
+mod ability_immunity_tests;
+
+#[cfg(test)]
+#[path = "hit/ability_stat_tests.rs"]
+mod ability_stat_tests;
+
+#[cfg(test)]
+#[path = "hit/ability_accuracy_tests.rs"]
+mod ability_accuracy_tests;
