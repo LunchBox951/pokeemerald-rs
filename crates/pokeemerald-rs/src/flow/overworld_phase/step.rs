@@ -23,7 +23,7 @@ use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, StepOutcome,
     WarpTrigger,
 };
-use engine::save::Coords16;
+use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
@@ -426,6 +426,12 @@ impl OverworldPhase {
             .pending_landing
             .take_if(|_| !self.player.in_transit())
             .filter(|_| !self.player.field_input_suppressed());
+        // `tookStep` (`field_control_avatar.c:116-118`) bumps the counter
+        // ahead of `TryStartStepBasedScript`'s coord event, door warp and
+        // step scripts (`:155-163`), so a landing those then claim counts.
+        if stepped_onto.is_some() {
+            self.save1.game_stats.increment(GameStat::Steps);
+        }
         // A stationary turn's own tile-centre observation, taken once its
         // busy timer has drained (`field_player_avatar.c:901-915`). It
         // feeds only the encounter gate below -- never the coord-event,

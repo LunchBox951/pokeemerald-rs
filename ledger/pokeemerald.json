@@ -31444,7 +31444,7 @@
           "status": "rewritten"
         },
         "FieldGetPlayerInput": {
-          "reason": "Partially modeled by phase-owned field-input gates. Completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
+          "reason": "Partially modeled by phase-owned field-input gates. Completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling. tookStep also increments GAME_STAT_STEPS: OverworldPhase::step calls GameStats::increment(GameStat::Steps) on the completed, non-forced landing (the stepped_onto fact, which already drops a forced landing through field_input_suppressed) right before first_battle_trigger_ready, so a landing that then starts a coord event, door warp, step script or encounter still counts (field_control_avatar.c:89-122,155-163; overworld.c:433-445).",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -33287,6 +33287,12 @@
           "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
           "rust_target": "crates/engine/src/overworld/warp.rs",
           "spec": "I-3",
+          "status": "stubbed"
+        },
+        "IncrementGameStat": {
+          "reason": "Partially modeled as GameStats::increment: the stored word plus one, saturating at 0xFFFFFF, and a stored value already past the ceiling reads back as exactly 0xFFFFFF (overworld.c:433-445). It is reachable only for the GameStat slots the enum names (SavedGame, FirstHofPlayTime, Steps, EnteredHof, PokemonTrades, link and contest slots, CheckedPokedex); the remaining NUM_USED_GAME_STATS indices (e.g. GAME_STAT_TOTAL_BATTLES) have no variant yet and are added with their producers. The first producer is OverworldPhase::step bumping GameStat::Steps (GAME_STAT_STEPS, slot 5, game_stat.h:9) on each completed, non-forced step.",
+          "rust_target": "crates/engine/src/save/game_stats.rs",
+          "spec": "S-5",
           "status": "stubbed"
         },
         "LoadMapFromCameraTransition": {
