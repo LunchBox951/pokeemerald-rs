@@ -28702,6 +28702,14 @@
       "status": "pending"
     },
     "src/battle_bg.c": {
+      "artifacts": {
+        "LoadBattleTextboxAndBackground": {
+          "reason": "src/battle_bg.c:859-865. The battle textbox tile sheet, tilemap, and two palette banks compose under the message window; the B_WIN_MSG template (tilemap 2,15, 26x4 tiles, palette bank 0) bounds the text. The menu window graphics and the battle background are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/message_box.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -28737,10 +28745,22 @@
     },
     "src/battle_controller_player.c": {
       "artifacts": {
+        "CompleteOnInactiveTextPrinter2": {
+          "reason": "src/battle_controller_player.c:1339-1342. A print completes only when its message printer has finished; NarrationGate reports Complete once every earlier batch and every message of its own have printed, including pauses and button prompts.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/presenter.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
         "CopyPlayerMonData.status1": {
           "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. Modelled: party::from_save_pokemon decodes the save record status word into battle::Status1 -- healthy, ordinary poison (0x08), burn (0x10), freeze (0x20), paralysis (0x40), and sleep with 1-7 turns left -- and any other word fails closed with PartyError::UnsupportedStatus, leaving the record bytes untouched, so it is never read as healthy and erased on the next save. Deferred: bad poison (0x80 and its counter bits), and combined status words, which battle does not model and which therefore cannot be loaded into a battler.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-4",
+          "status": "stubbed"
+        },
+        "PlayerHandlePrintString": {
+          "reason": "src/battle_controller_player.c:2543-2554. Resolved narration requests enter the battle message queue and print through the shared text printer. Controller buffer transfer, BG0 offset reset, battle TV recording, and arena skill-point accounting are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/presenter.rs",
+          "spec": "S-6",
           "status": "stubbed"
         },
         "SetPlayerMonData.status1": {
@@ -28906,6 +28926,12 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BattlePutTextOnWindow": {
+          "reason": "src/battle_message.c:2958-3031. The normal single-battle B_WIN_MSG window prints each queued message after clearing the window, at the saved text speed with A/B speed-up enabled, at window origin 0,1 with body, shadow, and background palette indices 1, 6, and 15 (message_box.rs). Other windows, copy-to-VRAM flags, arena judgment text, and the link and recorded-battle speed and auto-scroll branches are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/battle_narration/presenter.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BattleStringExpandPlaceholders": {
           "reason": "battle_message.c:2312-:2764. Modelled for a single wild or trainer battle: the three buffers and string-variable copies, player and opponent nicknames, attacker, target, effect, active, and scripting battlers with the Foe or Wild prefix, current and original move (with the type-move fallback), last item and ability, battler abilities, trainer class, name, and defeat text (followed by the wait-for-input control), player name, and the Ally and Foe prefix selectors. A replacement is copied without being expanded again. Link, multi, double, frontier, Trainer Hill, e-Reader, secret-base, and partner selectors are refused with an error rather than printed empty.",
           "rust_target": "crates/pokeemerald-rs/src/battle_narration/expand.rs",
