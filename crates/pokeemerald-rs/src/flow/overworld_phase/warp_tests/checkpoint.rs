@@ -96,10 +96,11 @@ fn checkpoint_phase(map: MapId, position: (i32, i32), elevation: u8) -> Overworl
 fn expected_arrival_facing(behavior: u8) -> Direction {
     match behavior {
         MB_SOUTH_ARROW_WARP => Direction::North,
-        MB_ANIMATED_DOOR | MB_NON_ANIMATED_DOOR | MB_NORMAL => Direction::South,
-        // The default facing; upstream's escalator arrival callback then
-        // faces the player east and walks one tile off (not modelled).
-        MB_UP_ESCALATOR | MB_DOWN_ESCALATOR => Direction::South,
+        // An escalator arrival takes the default facing; upstream's arrival
+        // callback then faces the player east and walks one tile off (not
+        // modelled).
+        MB_ANIMATED_DOOR | MB_NON_ANIMATED_DOOR | MB_NORMAL | MB_UP_ESCALATOR
+        | MB_DOWN_ESCALATOR => Direction::South,
         other => panic!("unexpected arrival behavior {other:#04x}"),
     }
 }
