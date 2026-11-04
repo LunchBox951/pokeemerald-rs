@@ -61,6 +61,7 @@
 //! - `real_parties`: the four fighting trainers, cone to conclusion.
 //! - `live_selection`: selection from the live object-event collection.
 //! - `trigger`: cone geometry, refusals, honest cuts, real-pack terrain.
+//! - `party`: the saved party behind the lead, handed over and filed back.
 //! - `battle`: frame ownership, win/loss outcomes, the defeated flag, abort.
 //! - `approach_timing`: the approach's tile timing, handoff and icon frames.
 //! - `approach_handoff`: the intro speech and the handoff into the battle.
@@ -69,6 +70,7 @@ mod approach_handoff;
 mod approach_timing;
 mod battle;
 mod live_selection;
+mod party;
 mod real_parties;
 mod support;
 mod trigger;
