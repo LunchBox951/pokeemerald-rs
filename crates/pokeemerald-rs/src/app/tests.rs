@@ -11,6 +11,7 @@ use super::{describe_newly_pressed, App, AppError, AppState, SaveSlot};
 use platform::{ButtonState, Buttons};
 
 mod music_lifecycle;
+mod music_transport;
 mod subprocess_harness;
 
 /// The animated path's `frame()` contract (I-2): after every step,

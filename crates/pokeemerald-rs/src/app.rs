@@ -132,6 +132,7 @@
 //! and called `compose` on it, going through neither construction nor
 //! presentation.
 
+use platform::audio::TransportState;
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::flow::{self, AppScene, TitleInit};
@@ -624,7 +625,17 @@ impl App {
                 return None;
             }
         };
-        match MusicPlayer::start_from_pack_with_context(context, &pack, "mus_title", open_audio) {
+        // A transport that cannot even be opened still sequences: the title
+        // keeps its song position, fade and reverb context against the null
+        // output instead of losing the music for the whole title session.
+        let open_or_silent = || {
+            Ok(open_audio().unwrap_or_else(|err| {
+                eprintln!("{}", title_music_open_failure_message(&err));
+                platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES)
+            }))
+        };
+        match MusicPlayer::start_from_pack_with_context(context, &pack, "mus_title", open_or_silent)
+        {
             Ok(player) => Some(player),
             Err(err) => {
                 eprintln!("{}", title_music_start_failure_message(&err));
@@ -811,6 +822,13 @@ impl App {
     /// recovered, interactive title keeps its music instead of running
     /// down to silence for a screen the player never left.
     ///
+    /// Transport loss and recovery are reported here, once per transition,
+    /// and change nothing else: the fade, tail and drain below run on game
+    /// frames whether or not a device stream is attached, and the player is
+    /// never restarted for a recovery. Recovery plays on from the sequencer's
+    /// current position -- the platform discards what was queued while no
+    /// stream drained the ring.
+    ///
     /// A no-op throughout when [`Self::music`] is `None` (before the
     /// initializer's state 4, no pack/audio device, or a headless `App` that
     /// never requested one).
@@ -818,6 +836,7 @@ impl App {
         let Some(music) = &mut self.music else {
             return;
         };
+        report_transport(|| music.poll_transport(), |line| eprintln!("{line}"));
         if self.scene.as_ref().is_some_and(AppScene::holds_title_music) {
             music.cancel_fade();
         } else {
@@ -966,6 +985,31 @@ impl App {
         self.music.as_ref().map(MusicPlayer::underruns)
     }
 
+    /// Test-only: queue a transport transition for the attached player's next
+    /// [`Self::advance_music`], standing in for the device worker.
+    fn script_music_transport_for_test(
+        &mut self,
+        state: TransportState,
+        advertised: Option<usize>,
+        rate: u32,
+    ) {
+        if let Some(music) = &mut self.music {
+            music.script_transport_for_test(state, advertised, rate);
+        }
+    }
+
+    /// Test-only: the attached player's device-tail bound in game frames.
+    fn music_tail_bound_for_test(&self) -> Option<usize> {
+        self.music
+            .as_ref()
+            .map(MusicPlayer::max_device_tail_frames_for_test)
+    }
+
+    /// Test-only: whether the attached player's fade has reached silence.
+    fn music_fade_finished_for_test(&self) -> Option<bool> {
+        self.music.as_ref().map(MusicPlayer::fade_finished)
+    }
+
     /// Test-only: this session's ring free-space in samples, or `None` if no
     /// music is playing.
     fn music_ring_free_for_test(&self) -> Option<usize> {
@@ -1006,6 +1050,61 @@ fn describe_newly_pressed(state: ButtonState) -> Option<String> {
 /// the only caller.
 fn title_music_start_failure_message(err: &MusicError) -> String {
     format!("{err} -- the title screen will play without music")
+}
+
+/// Format the log line for the audio-output failure [`App::start_title_music`]
+/// survives by playing silently.
+///
+/// Kept pure (no I/O) so it is unit-testable; [`App::start_title_music`] is
+/// the only caller.
+fn title_music_open_failure_message(err: &PlatformError) -> String {
+    format!(
+        "music: audio output could not be opened ({err}) -- the title music will sequence silently"
+    )
+}
+
+/// Log line for one transport transition of the title music's output, or
+/// `None` for a change that needs no report.
+///
+/// Distinguishes a lost output (`Ready` -> `Unavailable`) from one that was
+/// never found (`Connecting` -> `Unavailable`), and a recovery from an
+/// ordinary first connection. Kept pure (no I/O) so it is unit-testable.
+fn title_music_transport_message(from: TransportState, to: TransportState) -> Option<String> {
+    let message = match (from, to) {
+        (TransportState::Ready, TransportState::Unavailable(why)) => format!(
+            "music: audio output lost ({why:?}) -- the title music keeps sequencing silently until it returns"
+        ),
+        (TransportState::Unavailable(_), TransportState::Unavailable(why)) => {
+            format!("music: audio output still unavailable ({why:?})")
+        }
+        (_, TransportState::Unavailable(why)) => format!(
+            "music: audio output unavailable ({why:?}) -- the title music sequences silently until one is found"
+        ),
+        (TransportState::Unavailable(_), TransportState::Ready) => {
+            "music: audio output recovered -- the title music plays on from its current position"
+                .to_owned()
+        }
+        (TransportState::Connecting, TransportState::Ready) => {
+            "music: audio output connected".to_owned()
+        }
+        _ => return None,
+    };
+    Some(message)
+}
+
+/// Reports every pending transport transition from `next` through `emit`.
+///
+/// Draining all of them each frame keeps the platform's bounded queue of
+/// unpolled transitions from dropping one.
+fn report_transport(
+    mut next: impl FnMut() -> Option<(TransportState, TransportState)>,
+    mut emit: impl FnMut(&str),
+) {
+    while let Some((from, to)) = next() {
+        if let Some(line) = title_music_transport_message(from, to) {
+            emit(&line);
+        }
+    }
 }
 
 #[cfg(test)]

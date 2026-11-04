@@ -12,3 +12,4 @@ mod playback;
 mod player_fade;
 mod player_output_tail;
 mod player_reverb_context;
+mod player_transport;
