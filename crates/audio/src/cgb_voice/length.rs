@@ -1,11 +1,27 @@
-//! The sound-length counter writes of a square or noise voice.
+//! The sound-length counter writes of a square, noise or wave voice.
 //!
 //! `CgbSound` loads the instrument's length into `NRx1` on a note's first pass
 //! and keeps `NRx4` bit 6 set only for a nonzero length
 //! (`pokeemerald/src/m4a.c:1001,1014-1018,1021-1028`). The counter then runs
-//! on the hardware's 256 Hz clock, and a trigger reloads it only from zero, so
-//! a long envelope outlives the counter until a later volume write retriggers
-//! it (`mgba/src/gb/audio.c:168-197,649-707`).
+//! on the hardware's 256 Hz clock and, on expiry, stops the channel without
+//! retiring the note (`mgba/src/gb/audio.c:168-197,649-707`).
+//!
+//! A square or noise voice (channels 1, 2 and 4) has a 64-step counter loaded
+//! from the low six bits of `NRx1`. A trigger reloads it only from zero, so a
+//! long envelope outlives the counter until a later envelope transition or
+//! live volume write retriggers the channel.
+//!
+//! A wave voice (channel 3) differs in four ways:
+//! - its counter is 256 steps wide and `NR31` loads `256 - length` from the
+//!   whole byte (`mgba/src/gb/audio.c:255-258`);
+//! - its first pitch block is the only trigger, because the volume block
+//!   clears `n4` bit 7 after the first pass, so later transitions and live
+//!   volume writes never revive an expired counter (`m4a.c:1013-1018,
+//!   1201-1216`);
+//! - `CgbOscOff(3)` writes `NR30` alone, leaving the count and enable bit
+//!   (`m4a.c:869-871`);
+//! - on expiry it presents the latch its last clock left
+//!   (`mgba/src/gb/audio.c:768-774`).
 
 use super::{CgbChannelNumber, CgbVoice};
 use crate::psg::{FrameSequencer, LengthWrite};
