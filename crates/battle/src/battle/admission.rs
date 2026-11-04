@@ -40,7 +40,7 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
     let confused = participant.volatiles().confused();
     let unported_interaction = match ability {
         AbilityId::LIMBER => status == Status1::Paralysed,
-        AbilityId::IMMUNITY => status == Status1::Poisoned,
+        AbilityId::IMMUNITY => status.is_poisoned_any(),
         AbilityId::WATER_VEIL => status == Status1::Burned,
         AbilityId::MAGMA_ARMOR => status == Status1::Frozen,
         AbilityId::OWN_TEMPO => confused,

@@ -535,6 +535,33 @@ fn a_cured_status_that_names_no_status_is_refused() {
     );
 }
 
+/// Shed Skin names the cured status through `STATUS1_POISON` for either
+/// poison (`pokeemerald/src/battle_util.c:2620-2638`), so a bad poison cure
+/// narrates exactly as an ordinary one, whatever its stored counter.
+#[test]
+fn a_shed_skin_bad_poison_cure_narrates_as_poison() {
+    for by_player in [true, false] {
+        let expected = narrator(BattleKind::Wild).requests(
+            &AssetNames,
+            &BattleEvent::ShedSkinCured {
+                by_player,
+                status: Status1::Poisoned,
+            },
+        );
+        assert!(expected.is_ok(), "{expected:?}");
+        for counter in [0, 5, 15] {
+            let toxic = narrator(BattleKind::Wild).requests(
+                &AssetNames,
+                &BattleEvent::ShedSkinCured {
+                    by_player,
+                    status: Status1::BadPoisoned { counter },
+                },
+            );
+            assert_eq!(toxic, expected, "counter {counter}, by_player {by_player}");
+        }
+    }
+}
+
 #[test]
 fn a_request_keeps_the_names_it_was_made_with() {
     let mut narrator = narrator(BattleKind::Wild);

@@ -8,6 +8,8 @@ mod common;
 mod absorbing_abilities;
 #[path = "turn_engine/announcement.rs"]
 mod announcement;
+#[path = "turn_engine/bad_poison.rs"]
+mod bad_poison;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]

@@ -47,11 +47,15 @@
 //! encoders write [`battle::BattlePokemon::status1`] into the record's status
 //! word, so an inflicted or cured condition reaches the save, and
 //! [`from_save_pokemon`] reads it back. Only healthy, ordinary poison,
-//! burn, freeze, paralysis, and sleep (`1..=7` turns left) are modelled
+//! burn, freeze, paralysis, bad poison with any of its sixteen counters
+//! (`0x80 | counter << 8`), and sleep (`1..=7` turns left) are modelled
 //! (`pokeemerald/include/constants/battle.h:114-125`); a record whose word is
-//! anything else -- bad poison, several conditions, or stray
-//! bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather than
-//! reading as healthy and losing the condition on the next save.
+//! anything else -- a counter without the toxic flag, several conditions, or
+//! stray bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather
+//! than reading as healthy and losing the condition on the next save.
+//! A bad-poison counter is the party's stored one: the battle's own advancing
+//! count is discarded with the battle copy, as upstream's residual never
+//! writes it back (`pokeemerald/src/battle_util.c:1536-1549`).
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -200,17 +204,36 @@ const STATUS1_POISON: u32 = 1 << 3;
 const STATUS1_BURN: u32 = 1 << 4;
 const STATUS1_FREEZE: u32 = 1 << 5;
 const STATUS1_PARALYSIS: u32 = 1 << 6;
+/// `STATUS1_TOXIC_POISON` and `STATUS1_TOXIC_COUNTER`, whose four bits
+/// `STATUS1_TOXIC_TURN(n)` shifts left by eight
+/// (`pokeemerald/include/constants/battle.h:117`, `:123`-`:125`). The counter is
+/// only meaningful beside the toxic flag.
+const STATUS1_TOXIC_POISON: u32 = 1 << 7;
+const STATUS1_TOXIC_COUNTER_SHIFT: u32 = 8;
+const STATUS1_TOXIC_COUNTER_MASK: u32 = 0xF << STATUS1_TOXIC_COUNTER_SHIFT;
 
 /// Decodes the save record's primary status word (`MON_DATA_STATUS`, copied
 /// into the battler by `CopyPlayerMonData`,
 /// `pokeemerald/src/battle_controller_player.c:1636-1640`) into the battle
 /// model's [`battle::Status1`].
 ///
-/// Exactly one modelled condition decodes; bad poison, any
-/// combination, the toxic counter bits, and anything above `STATUS1_ANY`
+/// Exactly one modelled condition decodes. Bad poison decodes with its
+/// counter, all sixteen values of it; a counter without the toxic flag, any
+/// combination, and anything above the counter's four bits
 /// (`battle.h:125`) fail closed rather than being masked into a neighbour.
 fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
     match word {
+        _ if word & STATUS1_TOXIC_POISON != 0
+            && word & !(STATUS1_TOXIC_POISON | STATUS1_TOXIC_COUNTER_MASK) == 0 =>
+        {
+            Ok(battle::Status1::BadPoisoned {
+                // Four bits, so at most fifteen.
+                counter: u8::try_from(
+                    (word & STATUS1_TOXIC_COUNTER_MASK) >> STATUS1_TOXIC_COUNTER_SHIFT,
+                )
+                .unwrap_or(u8::MAX),
+            })
+        }
         0 => Ok(battle::Status1::Healthy),
         1..=STATUS1_SLEEP_MASK => Ok(battle::Status1::Asleep {
             // At most seven: the mask above bounds it.
@@ -233,9 +256,10 @@ fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
 ///
 /// # Panics
 ///
-/// Panics if a sleep count exceeds the three bits the word holds; a modelled
-/// infliction draws two to five turns, so a larger one is a broken invariant
-/// that would otherwise corrupt the neighbouring status bits.
+/// Panics if a sleep count exceeds the three bits the word holds, or a toxic
+/// counter the four bits above bit 8; a modelled infliction draws two to five
+/// turns and a decoded counter is at most fifteen, so a larger one is a broken
+/// invariant that would otherwise corrupt the neighbouring status bits.
 fn status1_to_word(status1: battle::Status1) -> u32 {
     match status1.normalised() {
         battle::Status1::Healthy | battle::Status1::Asleep { turns: 0 } => 0,
@@ -243,6 +267,13 @@ fn status1_to_word(status1: battle::Status1) -> u32 {
         battle::Status1::Poisoned => STATUS1_POISON,
         battle::Status1::Burned => STATUS1_BURN,
         battle::Status1::Frozen => STATUS1_FREEZE,
+        battle::Status1::BadPoisoned { counter } => {
+            assert!(
+                counter <= battle::status1::TOXIC_COUNTER_MAX,
+                "a toxic counter of {counter} does not fit STATUS1_TOXIC_COUNTER's four bits"
+            );
+            STATUS1_TOXIC_POISON | u32::from(counter) << STATUS1_TOXIC_COUNTER_SHIFT
+        }
         battle::Status1::Asleep { turns } => {
             let word = u32::from(turns);
             assert!(

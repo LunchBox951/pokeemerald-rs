@@ -732,3 +732,74 @@ fn an_invalid_switch_does_not_cure_a_natural_cure_member() {
 
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
 }
+
+/// A badly poisoned member that has already ticked `ticks` times in battle:
+/// its stored word is `stored` and its battle copy is further along.
+fn toxic_after(mut mon: BattlePokemon, stored: u8, ticks: u8) -> BattlePokemon {
+    mon.set_status1(Status1::BadPoisoned { counter: stored });
+    for _ in 0..ticks {
+        mon.advance_toxic_turns().expect("badly poisoned");
+    }
+    mon
+}
+
+/// A switch-out discards the battle copy, and the switch-in reloads the
+/// party's stored word, so the next tick follows the stored counter:
+/// `SwitchInClearSetData` never writes `status1`
+/// (`pokeemerald/src/battle_main.c:3152`-`:3262`).
+#[test]
+fn a_trainer_bench_member_re_enters_with_its_stored_toxic_counter() {
+    for (stored, expected_next) in [(0, 1), (5, 6)] {
+        let mut rng = ScriptedRng::new(&[]);
+        let mut battle = four_mon_battle(&mut rng);
+        battle.enemy = toxic_after(battle.enemy.clone(), stored, 3);
+
+        let mut events = Vec::new();
+        battle.switch_enemy_to(1, &mut events).expect("voluntary");
+        battle.switch_enemy_to(0, &mut events).expect("back in");
+
+        assert_eq!(
+            battle.enemy().status1(),
+            Status1::BadPoisoned { counter: stored },
+            "the status stays and its stored counter is untouched"
+        );
+        assert_eq!(
+            battle.enemy.advance_toxic_turns(),
+            Some(expected_next),
+            "stored {stored}"
+        );
+    }
+}
+
+#[test]
+fn a_player_reserve_enters_with_its_stored_toxic_counter() {
+    for (stored, expected_next) in [(0, 1), (5, 6)] {
+        let dex = Dex::new();
+        let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE]);
+        let reserve = toxic_after(mon(&dex, PICHU, 5, &[MoveId::TACKLE]), stored, 3);
+        let party = vec![mon(&dex, TREECKO, 50, &[MoveId::TACKLE])];
+        let mut rng = ScriptedRng::new(&[]);
+        let mut battle = Battle::new_trainer_with_player_reserves(
+            dex,
+            player,
+            vec![reserve],
+            MAY_ROUTE_103_MUDKIP,
+            party,
+            &mut rng,
+        )
+        .expect("a valid battle");
+        battle.player.apply_damage(battle.player.stats().max_hp);
+
+        assert!(battle.send_out_next_player_reserve(&mut Vec::new()));
+
+        assert_eq!(
+            battle.player().status1(),
+            Status1::BadPoisoned { counter: stored }
+        );
+        assert_eq!(
+            battle.player.advance_toxic_turns(),
+            Some(expected_next),
+            "stored {stored}"
+        );
+    }
+}

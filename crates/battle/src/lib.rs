@@ -163,7 +163,7 @@
 //! `Random() % 5` draw after the sleep canceller and before confusion and
 //! paralysis ([`status1::draw_freeze_canceller`]); a frozen Magma Armor
 //! participant is refused at admission for the same unmodelled move-end cure. A burned participant with Water Veil
-//! is refused at admission, as a poisoned Immunity holder is, because the
+//! is refused at admission, as a poisoned or badly poisoned Immunity holder is, because the
 //! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
@@ -231,11 +231,13 @@
 //! and the secondary Speed drop) —
 //! the effect of any held item (a mon carries one, and [`ensure_held_item_playable`]
 //! refuses every item that has an effect), every primary status but [`status1::Status1::Paralysed`],
-//! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`],
+//! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
+//! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
-//! [`status1::Status1::Asleep`] (toxic — see [`status1`]'s module
-//! docs; no modelled move inflicts sleep, burn or freeze yet, so they arrive only
-//! through [`pokemon::BattlePokemon::set_status1`]), every
+//! [`status1::Status1::Asleep`] (a loaded bad poison ticks through
+//! [`status1::bad_poison_residual_damage`] between poison and burn — see
+//! [`status1`]'s module docs; no modelled move inflicts it, sleep, burn or freeze
+//! yet, so they arrive only through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
