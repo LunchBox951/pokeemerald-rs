@@ -123,6 +123,34 @@ fn battle_flow(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narration
     Some(requests)
 }
 
+/// `BattleScript_TraceActivates` prints `STRINGID_PKMNTRACED` for the holder,
+/// naming the copied-from battler (`gActiveBattler`) in buffer 1 and the
+/// ability in buffer 2 (`src/battle_util.c:3053`-`:3069`). The holder keeps
+/// the copied ability for the messages that follow.
+fn trace_copy(narrator: &mut Narrator, by_player: bool, ability: AbilityId) -> NarrationRequest {
+    let holder = Side::user(by_player);
+    let source = holder.other();
+    let (holder_battler, source_battler) = match holder {
+        Side::Player => (&mut narrator.scene.player, &narrator.scene.opponent),
+        Side::Opponent => (&mut narrator.scene.opponent, &narrator.scene.player),
+    };
+    let source_name = source_battler.name.clone();
+    holder_battler.ability = Some(ability);
+    let mut context = narrator
+        .context()
+        .with_buffer(
+            0,
+            BattleBuffer::Program(vec![BufferOp::MonNickWithPrefix {
+                side: source,
+                name: source_name,
+            }]),
+        )
+        .with_buffer(1, BattleBuffer::Program(vec![BufferOp::Ability(ability)]));
+    context.scripting = Some(holder);
+    context.active = Some(source);
+    table(id::PKMNTRACED, context)
+}
+
 /// Send-outs, experience, and move learning.
 fn party(
     narrator: &mut Narrator,
@@ -148,6 +176,9 @@ fn party(
                 template: TemplateId::Special(player_switch_in(narrator.scene().hp_scale)),
                 context,
             }])
+        }
+        BattleEvent::TracedAbility { by_player, ability } => {
+            Ok(vec![trace_copy(narrator, by_player, ability)])
         }
         BattleEvent::ExpGained { amount, boosted } => {
             // `Cmd_getexp` buffers " a boosted" for a traded recipient's award

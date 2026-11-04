@@ -322,6 +322,31 @@ fn the_any_slot_ability_screen_admits_both_truant_species() {
 }
 
 #[test]
+fn the_ability_screens_admit_every_trace_species() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::PORYGON,
+        SpeciesId::PORYGON2,
+        SpeciesId::RALTS,
+        SpeciesId::KIRLIA,
+        SpeciesId::GARDEVOIR,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
+fn ensure_wild_startable_admits_route_102_ralts() {
+    let dex = Dex::new();
+    assert_eq!(initial_moveset(SpeciesId::RALTS, 4), vec![GROWL]);
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::RALTS, 4), Ok(()));
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
@@ -332,11 +357,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::NINJASK, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::YANMA, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
-        (SpeciesId::PORYGON, assets::AbilityId::TRACE),
-        (SpeciesId::PORYGON2, assets::AbilityId::TRACE),
-        (SpeciesId::RALTS, assets::AbilityId::TRACE),
-        (SpeciesId::KIRLIA, assets::AbilityId::TRACE),
-        (SpeciesId::GARDEVOIR, assets::AbilityId::TRACE),
         (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),

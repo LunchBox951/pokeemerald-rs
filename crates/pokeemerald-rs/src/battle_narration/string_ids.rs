@@ -46,6 +46,7 @@ pub(super) const PKMNPREVENTSCONFUSIONWITH: u16 = 202;
 pub(super) const PKMNRAISEDFIREPOWERWITH: u16 = 203;
 pub(super) const PKMNPREVENTSSTATLOSSWITH: u16 = 206;
 pub(super) const PKMNHURTSWITH: u16 = 207;
+pub(super) const PKMNTRACED: u16 = 208;
 pub(super) const STATSHARPLY: u16 = 209;
 pub(super) const STATROSE: u16 = 210;
 pub(super) const STATHARSHLY: u16 = 211;
