@@ -70,3 +70,32 @@ fn a_fresh_l_advances_the_title_only_under_l_equals_a() {
         assert!(matches!(by_a, AppScene::TitleFadeWait(_)), "A is mode-free");
     }
 }
+
+/// Drives the production boot initializer (`TitleInit::boot`, which
+/// `compose_title_scene` calls) from a saved slot to the settled title, then
+/// presses L.
+#[test]
+fn production_boot_initializer_applies_the_saved_l_equals_a() {
+    for (mode, advances) in [(ButtonMode::LEqualsA, true), (ButtonMode::Normal, false)] {
+        let temp = TempSave::new("title-boot-init-l");
+        let mut slot = slot_saved_with(&temp, mode);
+        let (init, _) = super::TitleInit::boot(TitleScene::blank(), &mut slot);
+        let mut scene = AppScene::TitleInit(Box::new(init));
+        assert_eq!(scene.button_mode(), mode, "TitleInit");
+        let mut frames = 0;
+        while matches!(scene, AppScene::TitleInit(_)) {
+            scene = step(scene, &mut slot, Buttons::NONE);
+            frames += 1;
+            assert!(frames < 200, "the initializer settles");
+        }
+        assert!(matches!(scene, AppScene::Title(_)));
+        let mut scene = step(scene, &mut slot, Buttons::NONE);
+        assert_eq!(scene.button_mode(), mode, "settled Title");
+        scene = step(scene, &mut slot, Buttons::L);
+        assert_eq!(
+            matches!(scene, AppScene::TitleFadeWait(_)),
+            advances,
+            "L under {mode:?}"
+        );
+    }
+}
