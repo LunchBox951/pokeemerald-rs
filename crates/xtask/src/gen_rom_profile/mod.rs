@@ -24,6 +24,7 @@
 mod audio;
 mod bag;
 mod battle_anims;
+mod battle_environment;
 mod battle_interface;
 mod battle_messages;
 mod battlers;
@@ -186,6 +187,7 @@ fn locate_profile(
         naming_screen: naming_screen::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
+        battle_environment: battle_environment::locate(ctx, lines)?,
         trainer_front,
         trainer_battlers,
     })

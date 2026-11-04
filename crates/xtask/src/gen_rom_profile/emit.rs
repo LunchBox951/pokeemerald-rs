@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+mod battle_environment;
 mod poke_ball;
 
 use rom_import::Encoding;
@@ -73,12 +74,12 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
-    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    BattleEnvironmentRoot, BattleEnvironmentRoots, BattleInterfaceRoots, BattleMessageRoots,
+    BattlerRoot, BattlerRoots, BlobRoot, CryRoots, Encoding, EvolutionSceneRoots, FieldMessageRoot,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots,
+    OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -145,6 +146,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
+    battle_environment::battle_environment_roots(&mut out, &plan.battle_environment);
 
     trainer_front_roots(&mut out, &plan.trainer_front);
 
@@ -1223,6 +1225,15 @@ mod bag_field_tests {
         assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
     }
 
+    fn assert_ball_and_environment_roots(module: &str) {
+        for field in [
+            "    poke_ball: PokeBallRoots {",
+            "    battle_environment: BattleEnvironmentRoots {",
+        ] {
+            assert!(module.contains(field), "{field} missing from {module}");
+        }
+    }
+
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -1295,6 +1306,7 @@ mod bag_field_tests {
             opening_scene: scene_plan(),
             evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
+            battle_environment: super::battle_environment::tests::plan(),
             battle_interface: interface_plan(),
             naming_screen: naming_plan(),
         };
@@ -1302,10 +1314,7 @@ mod bag_field_tests {
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
         assert_evolution_roots(&module);
-        assert!(
-            module.contains("    poke_ball: PokeBallRoots {"),
-            "{module}"
-        );
+        assert_ball_and_environment_roots(&module);
         assert_interface_roots(&module);
         assert_naming_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");

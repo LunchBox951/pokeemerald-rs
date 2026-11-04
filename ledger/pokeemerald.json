@@ -12543,6 +12543,68 @@
       "status": "pending"
     },
     "graphics/battle_environment": {
+      "artifacts": {
+        "building/anim_map.bin": {
+          "reason": "anim_map.bin: the 2048-byte one-screenblock entry tilemap the plain environment aliases (BattleBackground.entryTilemap), battle-environment/raw/building/anim_map; the checkout supplies it as a source file and the ROM stores it as a .lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "building/anim_tiles.png": {
+          "reason": "anim_tiles.png: the 128x128 4bpp entry tile sheet the plain environment aliases (BattleBackground.entryTileset), battle-environment/image/building/anim_tiles; the checkout supplies it as a source file and the ROM stores it as a .4bpp.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "building/map.bin": {
+          "reason": "map.bin: the 4096-byte 64x32 main tilemap the plain environment aliases (BattleBackground.tilemap), battle-environment/raw/building/map; the checkout supplies it as a source file and the ROM stores it as a .lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "building/tiles.png": {
+          "reason": "tiles.png: the 128x128 4bpp main-background tile sheet the plain environment aliases from the building row (BattleBackground.tileset), battle-environment/image/building/tiles; the checkout supplies it as a source file and the ROM stores it as a .4bpp.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "plain/palette.pal": {
+          "reason": "palette.pal: the 48-colour palette of BATTLE_ENVIRONMENT_PLAIN (BattleBackground.palette), battle-environment/palette/plain; the checkout supplies it as a source file and the ROM stores it as a .gbapal.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tall_grass/anim_map.bin": {
+          "reason": "anim_map.bin: the 2048-byte one-screenblock 32x32 entry tilemap (BattleBackground.entryTilemap), battle-environment/raw/tall_grass/anim_map; the checkout supplies it as a source file and the ROM stores it as a .lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tall_grass/anim_tiles.png": {
+          "reason": "anim_tiles.png: the 128x128 4bpp entry-background tile sheet (BattleBackground.entryTileset), battle-environment/image/tall_grass/anim_tiles; the checkout supplies it as a source file and the ROM stores it as a .4bpp.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tall_grass/map.bin": {
+          "reason": "map.bin: the 4096-byte 64x32 little-endian main tilemap (BattleBackground.tilemap), battle-environment/raw/tall_grass/map; the checkout supplies it as a source file and the ROM stores it as a .lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tall_grass/palette.pal": {
+          "reason": "palette.pal: the 48-colour palette (BattleBackground.palette), battle-environment/palette/tall_grass; the checkout supplies it as a source file and the ROM stores it as a .gbapal.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tall_grass/tiles.png": {
+          "reason": "tiles.png: the 128x128 4bpp main-background tile sheet (BattleBackground.tileset), battle-environment/image/tall_grass/tiles; the checkout supplies it as a source file and the ROM stores it as a .4bpp.lz stream; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.battle",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -28684,6 +28746,20 @@
       "status": "pending"
     },
     "src/battle_bg.c": {
+      "artifacts": {
+        "sBattleEnvironmentTable[BATTLE_ENVIRONMENT_GRASS]": {
+          "reason": "sBattleEnvironmentTable[BATTLE_ENVIRONMENT_GRASS]: the tall-grass row of the 20-byte BattleBackground table (tall_grass). The ROM importer requires its five pointers (tileset, tilemap, entryTileset, entryTilemap, palette) to hold the addresses the profile records before reading the ten-entry battle-environment/* family (crates/rom-import/src/domains/battle_environment.rs), and gen-rom-profile pins the table by both rows; the checkout pack supplies the same members from graphics/battle_environment (crates/xtask/src/extract/battle_environment.rs), and tests/equivalence.rs requires identical entries. The other eight rows, environment selection, drawing and the entry animation stay pending, so the file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sBattleEnvironmentTable[BATTLE_ENVIRONMENT_PLAIN]": {
+          "reason": "sBattleEnvironmentTable[BATTLE_ENVIRONMENT_PLAIN]: the plain row of the 20-byte BattleBackground table (plain, whose tileset, tilemap, entryTileset and entryTilemap are the building art). The ROM importer requires its five pointers (tileset, tilemap, entryTileset, entryTilemap, palette) to hold the addresses the profile records before reading the ten-entry battle-environment/* family (crates/rom-import/src/domains/battle_environment.rs), and gen-rom-profile pins the table by both rows; the checkout pack supplies the same members from graphics/battle_environment (crates/xtask/src/extract/battle_environment.rs), and tests/equivalence.rs requires identical entries. The other eight rows, environment selection, drawing and the entry animation stay pending, so the file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29845,6 +29921,68 @@
       "status": "pending"
     },
     "src/data/graphics/battle_environment.h": {
+      "artifacts": {
+        "gBattleEnvironmentAnimTilemap_Building": {
+          "reason": "gBattleEnvironmentAnimTilemap_Building: the 2048-byte one-screenblock entry tilemap the plain environment aliases (BattleBackground.entryTilemap) (.lz INCGFX of graphics/battle_environment/building/anim_map.bin), battle-environment/raw/building/anim_map; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentAnimTilemap_TallGrass": {
+          "reason": "gBattleEnvironmentAnimTilemap_TallGrass: the 2048-byte one-screenblock 32x32 entry tilemap (BattleBackground.entryTilemap) (.lz INCGFX of graphics/battle_environment/tall_grass/anim_map.bin), battle-environment/raw/tall_grass/anim_map; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentAnimTiles_Building": {
+          "reason": "gBattleEnvironmentAnimTiles_Building: the 128x128 4bpp entry tile sheet the plain environment aliases (BattleBackground.entryTileset) (.4bpp.lz INCGFX of graphics/battle_environment/building/anim_tiles.png), battle-environment/image/building/anim_tiles; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentAnimTiles_TallGrass": {
+          "reason": "gBattleEnvironmentAnimTiles_TallGrass: the 128x128 4bpp entry-background tile sheet (BattleBackground.entryTileset) (.4bpp.lz INCGFX of graphics/battle_environment/tall_grass/anim_tiles.png), battle-environment/image/tall_grass/anim_tiles; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentPalette_Plain": {
+          "reason": "gBattleEnvironmentPalette_Plain: the 48-colour palette of BATTLE_ENVIRONMENT_PLAIN (BattleBackground.palette) (.gbapal.lz INCGFX of graphics/battle_environment/plain/palette.pal), battle-environment/palette/plain; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentPalette_TallGrass": {
+          "reason": "gBattleEnvironmentPalette_TallGrass: the 48-colour palette (BattleBackground.palette) (.gbapal.lz INCGFX of graphics/battle_environment/tall_grass/palette.pal), battle-environment/palette/tall_grass; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentTilemap_Building": {
+          "reason": "gBattleEnvironmentTilemap_Building: the 4096-byte 64x32 main tilemap the plain environment aliases (BattleBackground.tilemap) (.lz INCGFX of graphics/battle_environment/building/map.bin), battle-environment/raw/building/map; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentTilemap_TallGrass": {
+          "reason": "gBattleEnvironmentTilemap_TallGrass: the 4096-byte 64x32 little-endian main tilemap (BattleBackground.tilemap) (.lz INCGFX of graphics/battle_environment/tall_grass/map.bin), battle-environment/raw/tall_grass/map; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentTiles_Building": {
+          "reason": "gBattleEnvironmentTiles_Building: the 128x128 4bpp main-background tile sheet the plain environment aliases from the building row (BattleBackground.tileset) (.4bpp.lz INCGFX of graphics/battle_environment/building/tiles.png), battle-environment/image/building/tiles; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleEnvironmentTiles_TallGrass": {
+          "reason": "gBattleEnvironmentTiles_TallGrass: the 128x128 4bpp main-background tile sheet (BattleBackground.tileset) (.4bpp.lz INCGFX of graphics/battle_environment/tall_grass/tiles.png), battle-environment/image/tall_grass/tiles; it reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_environment.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/battle_environment.rs). tests/equivalence.rs requires identical entries, and AssetPack::battle_environment resolves equal handles from both packs. Only the tall-grass and plain closure is covered; the other environments' art, selection, layer drawing, palette loading and the entry animation stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_environment.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"

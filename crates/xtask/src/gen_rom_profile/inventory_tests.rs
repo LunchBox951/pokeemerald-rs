@@ -7,16 +7,16 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
-    field_messages, fonts, inventory, layouts, locate_profile, naming_screen, opening_scene,
-    poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    bag, battle_anims, battle_environment, battle_interface, battle_messages, battlers,
+    evolution_scene, field_messages, fonts, inventory, layouts, locate_profile, naming_screen,
+    opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
-    healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
-    poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_environment_ids, battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id,
+    healthbox_element_ids, healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids,
+    opening_scene_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
+    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS,
+    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -51,6 +51,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
+        .chain(battle_environment_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -93,6 +94,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             naming_screen::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
             poke_ball::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_environment" {
+            battle_environment::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
@@ -153,6 +156,7 @@ fn the_fixed_inventory_ids_are_unique() {
         battle_interface_ids(),
         naming_screen_ids(),
         poke_ball_ids(),
+        battle_environment_ids(),
         trainer_battler_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -807,5 +811,13 @@ fn a_pack_missing_a_poke_ball_entry_is_refused() {
     for id in poke_ball_ids() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "poke_ball");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_battle_environment_entry_is_refused() {
+    for id in battle_environment_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "battle_environment");
     }
 }

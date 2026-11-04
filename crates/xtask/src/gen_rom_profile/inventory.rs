@@ -3,10 +3,10 @@
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
-    layout_ids, naming_screen_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids,
-    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
-    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    battle_environment_ids, battle_interface_ids, evolution_scene_ids, healthbox_element_ids,
+    healthbox_frame_ids, layout_ids, naming_screen_ids, opening_scene_ids, poke_ball_ids,
+    sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -207,6 +207,29 @@ pub fn require_poke_ball(pack: &PackSource) -> Result<(), GenRomProfileError> {
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the four battle-environment tile
+/// sheets, two palettes, and four tilemaps are all present, and with
+/// [`GenRomProfileError::StructMismatch`] for a pack `battle-environment/` entry outside the fixed
+/// inventory, which the locator, reading only the inventory, would otherwise silently leave out
+/// of the profile.
+pub fn require_battle_environment(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = battle_environment_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("battle-environment/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's battle-environment inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every naming-screen image,
 /// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
 /// `naming-screen/` entry outside the fixed inventory, which the locator, reading only the
@@ -325,6 +348,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_opening_scene(pack)?;
     require_evolution_scene(pack)?;
     require_poke_ball(pack)?;
+    require_battle_environment(pack)?;
     require_battle_interface(pack)?;
     require_naming_screen(pack)?;
     require_trainer_front(pack)?;

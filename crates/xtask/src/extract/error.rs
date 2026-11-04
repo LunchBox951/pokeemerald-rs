@@ -170,6 +170,13 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A battle-environment source differs from its upstream graphic's shape.
+    BattleEnvironmentAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A Poké Ball source differs from its upstream graphic's shape.
     PokeBallAssetMismatch {
         /// Source path.
@@ -467,6 +474,9 @@ impl fmt::Display for ExtractError {
             ),
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
+            }
+            Self::BattleEnvironmentAssetMismatch { path, detail } => {
+                write!(f, "battle-environment asset `{}` {detail}", path.display())
             }
             Self::PokeBallAssetMismatch { path, detail } => {
                 write!(f, "poke-ball asset `{}` {detail}", path.display())

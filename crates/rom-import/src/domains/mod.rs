@@ -26,6 +26,7 @@
 pub(crate) mod audio;
 pub(crate) mod bag;
 pub(crate) mod battle_anim;
+pub(crate) mod battle_environment;
 pub(crate) mod battle_interface;
 pub(crate) mod battle_messages;
 pub(crate) mod battlers;
@@ -82,6 +83,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battlers::write,
     naming_screen::write,
     poke_ball::write,
+    battle_environment::write,
     trainer_front::write,
     trainer_battlers::write,
 ];

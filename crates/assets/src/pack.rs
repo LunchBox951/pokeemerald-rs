@@ -7,6 +7,7 @@
 
 mod bag;
 mod battle_effect;
+mod battle_environment;
 mod battle_interface;
 mod battle_message;
 mod battler;
@@ -35,6 +36,7 @@ use crate::pokedex::PokedexData;
 
 pub use bag::{BagAssets, MenuInfoAssets, MenuInfoIcon, MenuInfoLabel};
 pub use battle_effect::{BattleEffectHandle, BattleEffectRecord};
+pub use battle_environment::{BattleEnvironment, BattleEnvironmentHandle};
 pub use battle_interface::{
     BattleBarHandle, BattleInterfaceHandle, BattleTextboxHandle, HealthboxElement,
     HealthboxElementsHandle,

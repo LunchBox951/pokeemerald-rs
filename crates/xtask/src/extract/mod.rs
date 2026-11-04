@@ -88,6 +88,7 @@
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `poke-ball/{image,palette}/<name>`
+//! - `battle-environment/{image,palette,raw}/<source-dir>/<name>`
 //! - `field-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `battle-anim/catalog`
@@ -100,6 +101,7 @@ mod audio_samples;
 mod bag;
 mod battle_anim;
 mod battle_effect;
+pub(crate) mod battle_environment;
 mod battle_interface;
 mod battle_message;
 mod battler;
@@ -227,6 +229,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    battle_environment::extract_battle_environment(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

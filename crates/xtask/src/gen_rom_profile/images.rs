@@ -140,6 +140,18 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         return vec![format!("gNamingScreen{name}_Gfx")];
     }
     match id {
+        "battle-environment/image/tall_grass/tiles" => {
+            return vec!["gBattleEnvironmentTiles_TallGrass".to_owned()];
+        }
+        "battle-environment/image/tall_grass/anim_tiles" => {
+            return vec!["gBattleEnvironmentAnimTiles_TallGrass".to_owned()];
+        }
+        "battle-environment/image/building/tiles" => {
+            return vec!["gBattleEnvironmentTiles_Building".to_owned()];
+        }
+        "battle-environment/image/building/anim_tiles" => {
+            return vec!["gBattleEnvironmentAnimTiles_Building".to_owned()];
+        }
         "poke-ball/image/poke" => return vec!["gBallGfx_Poke".to_owned()],
         "poke-ball/image/open" => return vec!["gOpenPokeballGfx".to_owned()],
         "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
