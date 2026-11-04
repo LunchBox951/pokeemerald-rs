@@ -9,12 +9,24 @@
 //! The fade and the ride (`DoEscalatorWarp`, `StartEscalatorWarp`) are not
 //! modelled, only that facing and step. The step reaches
 //! [`PlayerState::step`] as an east poll in place of the next frame's buttons,
-//! so collision, the walk animation and the landing's field events all take the
-//! normal path.
+//! so collision and the walk animation take the normal path; the landing's
+//! field events do not, as below.
+//!
+//! The step is *held* movement, not a keypad step: it bypasses `PlayerStep`'s
+//! keypad movement (`field_player_avatar.c:353-379`), so `runningState` stays
+//! `NOT_MOVING` and `FieldGetPlayerInput` never sets `tookStep`
+//! (`field_control_avatar.c:118-119`). Its landing therefore runs none of the
+//! `tookStep` consumers (the coordinate event, the door-shaped warp, the
+//! step-count script and its poison counter, `field_control_avatar.c:155-161`),
+//! while `checkStandardWildEncounter` needs only `T_TILE_CENTER`
+//! (`:120-121`) and still observes the tile. `runningState` staying
+//! `NOT_MOVING` also means a held direction other than east turns before it
+//! steps (`CheckMovementInputNotOnBike`, `:587-595`). See
+//! [`OverworldPhase::escalator_walk_off_landing`].
 
 use assets::MapId;
 use engine::overworld::metatile_behavior::is_escalator;
-use engine::overworld::{Direction, MapRuntime, TilePos};
+use engine::overworld::{Direction, MapRuntime, StepOutcome, TilePos};
 use platform::{ButtonState, Buttons};
 
 use super::OverworldPhase;
@@ -27,6 +39,43 @@ pub(super) fn landed_on_escalator(runtime: &MapRuntime<'_>, landed: Option<TileP
 }
 
 impl OverworldPhase {
+    /// The completed step the frame's `tookStep` consumers may see: the tile
+    /// the last step landed on, once the player is at rest.
+    ///
+    /// `in_transit` is read before this call's own movement, which is what
+    /// defers a completed step to the call after the one that drained its
+    /// animation (`step`'s "Frame shape" section owns the derivation).
+    /// `field_input_suppressed` withholds a forced landing from every
+    /// completed-step consumer, per upstream's `tookStep`/
+    /// `checkStandardWildEncounter` exclusion
+    /// (`field_control_avatar.c:116-122`).
+    ///
+    /// The arrival's east step is held movement
+    /// (`FieldCallback_EscalatorWarpIn`, `field_effect.c:1813-1818`), which
+    /// bypasses the keypad movement that sets `runningState` MOVING
+    /// (`field_player_avatar.c:353-379`), so its landing never sets `tookStep`
+    /// (`field_control_avatar.c:118-119`). It is withheld from every `tookStep`
+    /// consumer (the coord event, door-shaped warp and step-count script of
+    /// `TryStartStepBasedScript`, `:155-161`) and queued as a tile-centre
+    /// observation for the encounter gate instead, as a stationary turn's is,
+    /// since `checkStandardWildEncounter` needs only `T_TILE_CENTER`
+    /// (`:120-121`). `runningState` staying `NOT_MOVING` also makes a held
+    /// direction other than east turn before it steps
+    /// (`CheckMovementInputNotOnBike`, `:587-595`), so the keypad's moving
+    /// streak ends here.
+    pub(super) fn take_stepped_onto(&mut self) -> Option<TilePos> {
+        let stepped_onto = self
+            .pending_landing
+            .take_if(|_| !self.player.in_transit())
+            .filter(|_| !self.player.field_input_suppressed());
+        if self.player.in_transit() || self.escalator_walk_off_landing.take().is_none() {
+            return stepped_onto;
+        }
+        self.player.end_movement_streak();
+        self.pending_turn = stepped_onto;
+        None
+    }
+
     /// Starts the arrival of the frame's warp when `escalator_warp` says an
     /// escalator fired it and it left `departed_from`: the player faces east,
     /// and the next frame's input is the one east step. A warp that failed
@@ -39,15 +88,46 @@ impl OverworldPhase {
         self.escalator_arrival_walk = Some(Direction::East);
     }
 
+    /// Latches the arrival step's landing tile when `walk_off_step` says the
+    /// frame's input was that step and its `outcome` began it; a blocked or preempted step has no landing.
+    pub(super) fn latch_escalator_walk_off_landing(
+        &mut self,
+        walk_off_step: bool,
+        outcome: &StepOutcome,
+    ) {
+        if let (true, StepOutcome::Advanced { to, .. }) = (walk_off_step, outcome) {
+            self.escalator_walk_off_landing = Some(*to);
+        }
+    }
+
+    /// Whether the call's completed step is the arrival's east step, taken
+    /// once the player is at rest (where `pending_landing` is consumed too).
+    ///
+    /// That step is held movement (`FieldCallback_EscalatorWarpIn`,
+    /// `field_effect.c:1813-1818`), which bypasses the keypad movement that
+    /// sets `runningState` MOVING (`field_player_avatar.c:353-379`), so its
+    /// landing never sets `tookStep` (`field_control_avatar.c:118-119`).
+    /// [`super::OverworldPhase::step`] withholds it from every `tookStep`
+    /// consumer (the coord event, door-shaped warp and step-count script of
+    /// `TryStartStepBasedScript`, `:155-161`) but not from the encounter gate,
+    /// whose `checkStandardWildEncounter` needs only `T_TILE_CENTER`
+    /// (`:120-121`). `runningState` staying `NOT_MOVING` also makes a held
+    /// direction other than east turn before it steps
+    /// (`CheckMovementInputNotOnBike`, `:587-595`), so the keypad's moving
+    /// streak ends here.
     /// The buttons the frame's input pipeline reads: `buttons`, unless an
     /// escalator arrival's step is due, which holds its direction instead.
-    pub(super) fn escalator_arrival_buttons(&mut self, buttons: ButtonState) -> ButtonState {
+    /// The flag is whether this frame's input is that step.
+    pub(super) fn escalator_arrival_buttons(
+        &mut self,
+        buttons: ButtonState,
+    ) -> (ButtonState, bool) {
         let Some(Direction::East) = self.escalator_arrival_walk.take() else {
-            return buttons;
+            return (buttons, false);
         };
         let mut walk_east = ButtonState::new();
         walk_east.update(Buttons::RIGHT);
         walk_east.update(Buttons::RIGHT);
-        walk_east
+        (walk_east, true)
     }
 }

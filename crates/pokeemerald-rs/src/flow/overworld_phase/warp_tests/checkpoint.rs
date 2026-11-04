@@ -390,3 +390,140 @@ fn walking_onto_each_pokemon_center_escalator_warps_and_walks_off_east() {
     }
     assert_eq!(escalators, 2, "one escalator on each floor");
 }
+
+/// The arrival's east step is held movement, not a keypad step: it runs
+/// `ObjectEventSetHeldMovement(GetWalkNormalMovementAction(DIR_EAST))`
+/// (`field_effect.c:1813-1818`) and so bypasses `PlayerStep`
+/// (`field_player_avatar.c:353-379`), leaving `runningState` at `NOT_MOVING`.
+/// `tookStep` needs `runningState == MOVING`
+/// (`field_control_avatar.c:118-119`), so the landing runs no step-based
+/// script and advances no step counter: `VAR_POISON_STEP_COUNTER` stays put
+/// across the walk-off, while the next ordinary step advances it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn escalator_arrival_walk_off_is_not_a_took_step() {
+    use platform::Buttons;
+    // `VAR_POISON_STEP_COUNTER` (`pokeemerald/include/constants/vars.h:61`).
+    const VAR_POISON_STEP_COUNTER: u16 = 0x402B;
+    let counter = |phase: &OverworldPhase| {
+        phase
+            .save1
+            .event_data
+            .var_get(VAR_POISON_STEP_COUNTER)
+            .unwrap()
+    };
+    let mut escalators = 0;
+    for edge in edges() {
+        let (x, y) = (i32::from(edge.warp.x), i32::from(edge.warp.y));
+        let start = (x + 1, y);
+        let mut phase = checkpoint_phase(edge.source, start, 0);
+        let (behavior, standing) = {
+            let runtime = phase.scene.runtime();
+            (
+                runtime.metatile_behavior(x, y).unwrap(),
+                runtime.arrival_elevation(start.0, start.1).unwrap(),
+            )
+        };
+        if !matches!(behavior, MB_UP_ESCALATOR | MB_DOWN_ESCALATOR) {
+            continue;
+        }
+        escalators += 1;
+        phase.player = PlayerState::new(start, standing, Direction::West);
+        let _ = phase.save1.event_data.var_set(VAR_POISON_STEP_COUNTER, 0);
+
+        for _ in 0..40 {
+            if phase.map_id != edge.source {
+                break;
+            }
+            phase.step(super::super::test_support::held(Buttons::LEFT));
+        }
+        assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
+        // The step onto the escalator is a warp step, which skips the count.
+        assert_eq!(counter(&phase), 0, "{:?}: warp step", edge.source);
+
+        let arrival = phase.player.position();
+        assert_eq!(
+            walk_off_the_escalator(&mut phase),
+            (arrival.0 + 1, arrival.1),
+            "{:?}: walked one tile east",
+            edge.source
+        );
+        assert_eq!(
+            counter(&phase),
+            0,
+            "{:?}: the walk-off is held movement, not a took-step",
+            edge.source
+        );
+
+        // Control: an ordinary step off the walk-off tile counts.
+        let walked_off = phase.player.position();
+        phase.player = PlayerState::new(walked_off, phase.player.elevation(), Direction::East);
+        for _ in 0..40 {
+            phase.step(super::super::test_support::held(Buttons::RIGHT));
+        }
+        assert_ne!(phase.player.position(), walked_off, "{:?}", edge.source);
+        assert!(
+            counter(&phase) > 0,
+            "{:?}: an ordinary step advances the counter",
+            edge.source
+        );
+    }
+    assert_eq!(escalators, 2, "one escalator on each floor");
+}
+
+/// Holding LEFT through the whole arrival: the walk-off is held movement, so
+/// `runningState` is `NOT_MOVING` when it ends and the first LEFT poll after it
+/// is a `TURN_DIRECTION` (`CheckMovementInputNotOnBike`,
+/// `field_player_avatar.c:587-595`), not an immediate step west.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn escalator_arrival_walk_off_ends_not_moving_so_held_input_turns_first() {
+    use platform::Buttons;
+    let mut escalators = 0;
+    for edge in edges() {
+        let (x, y) = (i32::from(edge.warp.x), i32::from(edge.warp.y));
+        let start = (x + 1, y);
+        let mut phase = checkpoint_phase(edge.source, start, 0);
+        let (behavior, standing) = {
+            let runtime = phase.scene.runtime();
+            (
+                runtime.metatile_behavior(x, y).unwrap(),
+                runtime.arrival_elevation(start.0, start.1).unwrap(),
+            )
+        };
+        if !matches!(behavior, MB_UP_ESCALATOR | MB_DOWN_ESCALATOR) {
+            continue;
+        }
+        escalators += 1;
+        phase.player = PlayerState::new(start, standing, Direction::West);
+        for _ in 0..40 {
+            if phase.map_id != edge.source {
+                break;
+            }
+            phase.step(super::super::test_support::held(Buttons::LEFT));
+        }
+        assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
+        let arrival = phase.player.position();
+        let walked_off = (arrival.0 + 1, arrival.1);
+
+        // LEFT stays held; wait for the east step to land.
+        for _ in 0..40 {
+            if phase.player.position() == walked_off && !phase.player.in_transit() {
+                break;
+            }
+            phase.step(super::super::test_support::held(Buttons::LEFT));
+        }
+        assert_eq!(phase.player.position(), walked_off, "{:?}", edge.source);
+        // The next held-LEFT frames turn in place before any step west.
+        phase.step(super::super::test_support::held(Buttons::LEFT));
+        assert_eq!(phase.player.facing(), Direction::West, "{:?}", edge.source);
+        assert_eq!(
+            phase.player.position(),
+            walked_off,
+            "{:?}: the turn comes before the step",
+            edge.source
+        );
+        assert!(!phase.player.in_transit(), "{:?}", edge.source);
+    }
+    assert_eq!(escalators, 2, "one escalator on each floor");
+}

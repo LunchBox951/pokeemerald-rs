@@ -193,6 +193,10 @@ pub(crate) struct OverworldPhase {
     /// An escalator warp just landed and its arrival's east step is still
     /// due ([`escalator_arrival`]); consumed by the next field frame.
     escalator_arrival_walk: Option<engine::overworld::Direction>,
+    /// The tile the arrival's east step is walking onto, until its landing is
+    /// consumed: that landing is held movement, not a took-step
+    /// ([`escalator_arrival`]).
+    escalator_walk_off_landing: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -604,6 +608,7 @@ impl OverworldPhase {
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -753,6 +758,7 @@ impl OverworldPhase {
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),

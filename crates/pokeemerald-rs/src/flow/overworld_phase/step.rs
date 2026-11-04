@@ -405,8 +405,9 @@ impl OverworldPhase {
             return;
         }
 
-        let buttons = self.escalator_arrival_buttons(buttons);
+        let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
+        let stepped_onto = self.take_stepped_onto();
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
@@ -416,18 +417,6 @@ impl OverworldPhase {
         // object events the scene draws.
         let runtime = self.scene.runtime().with_object_events(&self.object_events);
 
-        // `in_transit` read before this call's own movement, which is
-        // what defers a completed step to the call after the one that
-        // drained its animation (the "Frame shape" section above owns
-        // the derivation).
-        //
-        // `field_input_suppressed` withholds a forced landing from every
-        // completed-step consumer below, per upstream's `tookStep`/
-        // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
-        let stepped_onto = self
-            .pending_landing
-            .take_if(|_| !self.player.in_transit())
-            .filter(|_| !self.player.field_input_suppressed());
         // A stationary turn's own tile-centre observation, taken once its
         // busy timer has drained (`field_player_avatar.c:901-915`). It
         // feeds only the encounter gate below -- never the coord-event,
@@ -567,6 +556,8 @@ impl OverworldPhase {
                 || pre.interaction.is_some()
                 || pre.start_menu.is_some(),
         );
+
+        self.latch_escalator_walk_off_landing(walk_off_step, &outcome);
 
         // `DoGroundEffects_OnBeginStep` runs from the step's first movement
         // update (`event_object_movement.c:5354-5357`), so the grass it
