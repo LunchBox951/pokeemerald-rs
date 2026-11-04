@@ -1,8 +1,9 @@
-//! The 64-step sound-length counter of CGB channels 1, 2 and 4.
+//! The sound-length counter of the CGB channels: 64 steps on channels 1, 2 and
+//! 4, 256 on channel 3.
 //!
 //! The counter is a register-write machine: `NRx1` loads it, `NRx4` bit 6
 //! enables it and bit 7 triggers, and the frame sequencer's even steps clock
-//! it (`mgba/src/gb/audio.c:147-151,168-197,649-707`).
+//! it (`mgba/src/gb/audio.c:147-151,168-197,255-258,290-313,649-707`).
 
 /// What an `NRx4` write did to the channel's playing state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,20 +17,49 @@ pub enum LengthWrite {
 }
 
 /// A sound-length counter and its `NRx4` length-enable bit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LengthCounter {
-    remaining: u8,
+    remaining: u16,
+    /// The counter's width in 256 Hz clocks, a power of two.
+    max: u16,
     enabled: bool,
 }
 
+impl Default for LengthCounter {
+    fn default() -> Self {
+        Self::sixty_four_step()
+    }
+}
+
 impl LengthCounter {
-    /// The longest a counter runs, in 256 Hz clocks.
-    pub const MAX: u8 = 64;
-    const REGISTER_MASK: u8 = Self::MAX - 1;
+    /// Channels 1, 2 and 4: a 6-bit `NRx1` length (`mgba/src/gb/audio.c:151,343`).
+    const SQUARE_NOISE_STEPS: u16 = 64;
+    /// Channel 3: the full `NR31` byte (`mgba/src/gb/audio.c:257`).
+    const WAVE_STEPS: u16 = 256;
+
+    /// A counter of channels 1, 2 and 4.
+    #[must_use]
+    pub fn sixty_four_step() -> Self {
+        Self::with_steps(Self::SQUARE_NOISE_STEPS)
+    }
+
+    /// A counter of channel 3.
+    #[must_use]
+    pub fn two_hundred_fifty_six_step() -> Self {
+        Self::with_steps(Self::WAVE_STEPS)
+    }
+
+    fn with_steps(max: u16) -> Self {
+        Self {
+            remaining: 0,
+            max,
+            enabled: false,
+        }
+    }
 
     /// Steps left before the channel stops.
     #[must_use]
-    pub fn remaining(self) -> u8 {
+    pub fn remaining(self) -> u16 {
         self.remaining
     }
 
@@ -39,11 +69,12 @@ impl LengthCounter {
         self.enabled
     }
 
-    /// An `NRx1` write: the low six bits load `64 - length` and a zero field
-    /// loads the full 64 (`mgba/src/gb/audio.c:148-151`). It neither enables
-    /// nor triggers the channel.
+    /// An `NRx1` write: the low bits (six, or all eight for channel 3) load
+    /// `steps - length` and a zero field loads the full width
+    /// (`mgba/src/gb/audio.c:148-151,257`). It neither enables nor triggers
+    /// the channel.
     pub fn load(&mut self, register: u8) {
-        self.remaining = Self::MAX - (register & Self::REGISTER_MASK);
+        self.remaining = self.max - (u16::from(register) & (self.max - 1));
     }
 
     /// An `NRx4` write with the length-enable bit `enable` and trigger bit
@@ -53,7 +84,7 @@ impl LengthCounter {
     /// Switching the enable bit on while the counter is nonzero clocks it
     /// once at once, and a counter reaching zero stops the channel
     /// (`mgba/src/gb/audio.c:172-178`). A trigger then reloads a zero counter
-    /// to 64, or to 63 when the channel is length-enabled and that extra
+    /// to the full width, or one less when the channel is length-enabled and that extra
     /// clock is owed (`:187-192`).
     pub fn write_control(
         &mut self,
@@ -71,7 +102,7 @@ impl LengthCounter {
         }
         if trigger {
             if self.remaining == 0 {
-                self.remaining = Self::MAX;
+                self.remaining = self.max;
                 if enable && skips_length {
                     self.remaining -= 1;
                 }
@@ -96,8 +127,20 @@ impl LengthCounter {
 mod tests {
     use super::*;
 
-    fn counter(remaining: u8, enabled: bool) -> LengthCounter {
-        LengthCounter { remaining, enabled }
+    fn counter(remaining: u16, enabled: bool) -> LengthCounter {
+        LengthCounter {
+            remaining,
+            enabled,
+            ..LengthCounter::default()
+        }
+    }
+
+    fn wave_counter(remaining: u16, enabled: bool) -> LengthCounter {
+        LengthCounter {
+            remaining,
+            enabled,
+            ..LengthCounter::two_hundred_fifty_six_step()
+        }
     }
 
     #[test]
@@ -202,6 +245,76 @@ mod tests {
         assert!(!length.clock());
         assert!(length.clock());
         assert!(!length.clock(), "an expired counter stays at zero");
+        assert_eq!(length.remaining(), 0);
+    }
+
+    #[test]
+    fn nr31_loads_two_hundred_fifty_six_minus_the_whole_byte() {
+        // `mgba/src/gb/audio.c:257`.
+        for (register, loaded) in [(0, 256), (1, 255), (64, 192), (240, 16), (255, 1)] {
+            let mut length = LengthCounter::two_hundred_fifty_six_step();
+            length.load(register);
+            assert_eq!(length.remaining(), loaded, "NR31 {register}");
+            assert!(!length.is_enabled(), "a load does not enable the counter");
+        }
+    }
+
+    #[test]
+    fn the_wave_enable_edge_clocks_once_and_can_stop_the_channel() {
+        let mut odd = wave_counter(1, false);
+        assert_eq!(
+            odd.write_control(true, false, false),
+            LengthWrite::Unchanged
+        );
+        assert_eq!(odd.remaining(), 1);
+
+        let mut even = wave_counter(1, false);
+        assert_eq!(even.write_control(true, false, true), LengthWrite::Expired);
+        assert_eq!(even.remaining(), 0);
+
+        let mut running = wave_counter(200, true);
+        running.write_control(true, false, true);
+        assert_eq!(running.remaining(), 200, "enable 1 -> 1 is not an edge");
+    }
+
+    #[test]
+    fn a_wave_trigger_reloads_a_zero_counter_to_256_or_255() {
+        // `mgba/src/gb/audio.c:308-313`.
+        for (enabled, skips_length, reloaded) in [
+            (false, true, 256),
+            (false, false, 256),
+            (true, false, 256),
+            (true, true, 255),
+        ] {
+            let mut length = wave_counter(0, enabled);
+            assert_eq!(
+                length.write_control(enabled, true, skips_length),
+                LengthWrite::Triggered
+            );
+            assert_eq!(length.remaining(), reloaded);
+        }
+        let mut running = wave_counter(100, true);
+        running.write_control(true, true, true);
+        assert_eq!(running.remaining(), 100, "a nonzero counter is left alone");
+    }
+
+    #[test]
+    fn an_enable_edge_that_empties_a_wave_counter_is_reloaded_by_its_trigger() {
+        let mut length = wave_counter(1, false);
+        assert_eq!(
+            length.write_control(true, true, true),
+            LengthWrite::Triggered
+        );
+        assert_eq!(length.remaining(), 255);
+    }
+
+    #[test]
+    fn a_wave_counter_counts_all_256_steps() {
+        let mut length = wave_counter(256, true);
+        for _ in 0..255 {
+            assert!(!length.clock());
+        }
+        assert!(length.clock());
         assert_eq!(length.remaining(), 0);
     }
 }
