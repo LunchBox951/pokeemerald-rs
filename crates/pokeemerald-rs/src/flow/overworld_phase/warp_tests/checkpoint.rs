@@ -6,11 +6,12 @@
 use super::super::OverworldPhase;
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 use engine::overworld::metatile_behavior::{
-    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_NORMAL, MB_SOUTH_ARROW_WARP,
+    MB_ANIMATED_DOOR, MB_DOWN_ESCALATOR, MB_NON_ANIMATED_DOOR, MB_NORMAL, MB_SOUTH_ARROW_WARP,
+    MB_UP_ESCALATOR,
 };
 use engine::overworld::{
-    trigger_animated_door_warp, trigger_arrow_warp, trigger_door_warp, Direction, PlayerState,
-    WarpTrigger,
+    trigger_animated_door_warp, trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp,
+    Direction, PlayerState, WarpTrigger,
 };
 
 /// The checkpoint maps that declare warps between one another. Route 101,
@@ -31,10 +32,6 @@ const CHECKPOINT_MAPS: [MapId; 12] = [
     MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F"),
     MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_2F"),
 ];
-
-/// `MB_UP_ESCALATOR` and `MB_DOWN_ESCALATOR` (`metatile_behaviors.h`): the two
-/// Pokemon Center escalator edges, which `is_warp_trigger` does not accept.
-const ESCALATOR_BEHAVIORS: [u8; 2] = [0x6A, 0x6B];
 
 struct Edge {
     source: MapId,
@@ -100,7 +97,9 @@ fn expected_arrival_facing(behavior: u8) -> Direction {
     match behavior {
         MB_SOUTH_ARROW_WARP => Direction::North,
         MB_ANIMATED_DOOR | MB_NON_ANIMATED_DOOR | MB_NORMAL => Direction::South,
-        other if ESCALATOR_BEHAVIORS.contains(&other) => Direction::South,
+        // The default facing; upstream's escalator arrival callback then
+        // faces the player east and walks one tile off (not modelled).
+        MB_UP_ESCALATOR | MB_DOWN_ESCALATOR => Direction::South,
         other => panic!("unexpected arrival behavior {other:#04x}"),
     }
 }
@@ -126,8 +125,8 @@ fn the_checkpoint_set_declares_twenty_seven_internal_edges_in_four_shapes() {
             (MB_NON_ANIMATED_DOOR, 4),
             (MB_SOUTH_ARROW_WARP, 14),
             (MB_ANIMATED_DOOR, 7),
-            (0x6A, 1),
-            (0x6B, 1),
+            (MB_UP_ESCALATOR, 1),
+            (MB_DOWN_ESCALATOR, 1),
         ]),
         "7 animated doors, 14 south-arrow exits, 4 staircases, 2 escalators"
     );
@@ -137,15 +136,15 @@ fn the_checkpoint_set_declares_twenty_seven_internal_edges_in_four_shapes() {
 /// through [`engine::overworld::MapRuntime`], [`OverworldPhase::warp_to`]
 /// lands there, and the phase, scene and save agree on the arrival.
 ///
-/// The two escalator edges have no production trigger: `is_warp_trigger`
-/// accepts only door behaviors, and upstream's completed-step escalator warp
-/// (`field_control_avatar.c:702-714`) is unmodelled, so they are asserted
-/// untriggerable here rather than driven around their missing trigger.
+/// The two escalator edges trigger on the arrived tile like a door
+/// (`field_control_avatar.c:702-714`); the transition animation upstream plays
+/// (`DoEscalatorWarp`) and its arrival walk-off
+/// (`FieldCallback_EscalatorWarpIn`) are not modelled, so the player lands on
+/// the destination escalator tile.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
     let mut driven = 0;
-    let mut untriggerable = Vec::new();
     for edge in edges() {
         let (x, y, elevation) = (
             i32::from(edge.warp.x),
@@ -168,19 +167,10 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
                 MB_SOUTH_ARROW_WARP => {
                     trigger_arrow_warp(&runtime, x, y, elevation, Direction::South)
                 }
-                other => {
-                    assert!(
-                        ESCALATOR_BEHAVIORS.contains(&other),
-                        "{label}: behavior {other:#04x}"
-                    );
-                    assert_eq!(
-                        trigger_door_warp(&runtime, x, y, elevation),
-                        None,
-                        "{label}: an escalator has no door-shaped trigger"
-                    );
-                    untriggerable.push(label);
-                    continue;
+                MB_UP_ESCALATOR | MB_DOWN_ESCALATOR => {
+                    trigger_escalator_warp(&runtime, x, y, elevation)
                 }
+                other => panic!("{label}: behavior {other:#04x}"),
             }
         };
         assert_eq!(
@@ -244,8 +234,7 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
         );
         driven += 1;
     }
-    assert_eq!(driven, 25);
-    assert_eq!(untriggerable.len(), 2, "{untriggerable:?}");
+    assert_eq!(driven, 27);
 }
 
 /// Walking north into each of Oldale Town's four animated doors through
@@ -292,4 +281,58 @@ fn holding_north_at_each_oldale_door_enters_its_building() {
             edge.destination
         );
     }
+}
+
+/// Walking west onto each Oldale Pokemon Center escalator through
+/// [`OverworldPhase::step`] warps to the other floor's escalator: the
+/// completed-step warp check (`TryStartWarpEventScript`,
+/// `field_control_avatar.c:702-714`) sits beside the door check and, unlike an
+/// arrow warp, needs no held direction once the step lands.
+///
+/// The tile east of each escalator is the transition-elevation floor the
+/// escalator cell (elevation 4) can be entered from; the neighbours to its
+/// north and south sit at elevation 3 and mismatch it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_onto_each_pokemon_center_escalator_warps_to_the_other_floor() {
+    use platform::Buttons;
+    let mut escalators = 0;
+    for edge in edges() {
+        let (x, y) = (i32::from(edge.warp.x), i32::from(edge.warp.y));
+        let start = (x + 1, y);
+        let mut phase = checkpoint_phase(edge.source, start, 0);
+        let (behavior, standing) = {
+            let runtime = phase.scene.runtime();
+            (
+                runtime.metatile_behavior(x, y).unwrap(),
+                runtime.arrival_elevation(start.0, start.1).unwrap(),
+            )
+        };
+        if !matches!(behavior, MB_UP_ESCALATOR | MB_DOWN_ESCALATOR) {
+            continue;
+        }
+        escalators += 1;
+        phase.player = PlayerState::new(start, standing, Direction::West);
+
+        for _ in 0..40 {
+            if phase.map_id != edge.source {
+                break;
+            }
+            phase.step(super::super::test_support::held(Buttons::LEFT));
+        }
+
+        let arrival = assets::MapEventsTable::new()
+            .resolve(edge.destination)
+            .unwrap()
+            .warp_events[usize::from(edge.destination_warp)];
+        assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
+        assert_eq!(
+            phase.player.position(),
+            (i32::from(arrival.x), i32::from(arrival.y)),
+            "{:?}",
+            edge.source
+        );
+        assert_eq!(phase.player.facing(), Direction::South, "{:?}", edge.source);
+    }
+    assert_eq!(escalators, 2, "one escalator on each floor");
 }

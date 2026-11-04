@@ -2,6 +2,7 @@
 //!
 //! Door and arrow triggers are separate because callers poll doors after a
 //! completed step and arrows while the player holds their facing direction.
+//! Escalators ([`trigger_escalator_warp`]) are polled with the doors.
 //! Animated doors are polled pre-movement against the tile the player
 //! *faces* ([`trigger_animated_door_warp`], `TryDoorWarp` at
 //! `pokeemerald/src/field_control_avatar.c:170-178`, `:833-856`): every
@@ -12,7 +13,7 @@ use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::{
-    is_east_arrow_warp, is_north_arrow_warp, is_south_arrow_warp, is_warp_trigger,
+    is_east_arrow_warp, is_escalator, is_north_arrow_warp, is_south_arrow_warp, is_warp_trigger,
     is_west_arrow_warp, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_NON_ANIMATED_DOOR,
     MB_PETALBURG_GYM_DOOR, MB_WATER_DOOR,
 };
@@ -56,6 +57,32 @@ pub fn trigger_door_warp(
 ) -> Option<WarpTrigger> {
     let behavior = runtime.metatile_behavior(x, y)?;
     if !is_warp_trigger(behavior) {
+        return None;
+    }
+    let warp = runtime.warp_event_at(x, y, elevation)?;
+    Some(resolve_warp_event(warp))
+}
+
+/// Resolves an escalator warp at `(x, y, elevation)`.
+///
+/// Callers check escalators after a step completes, on the tile the player
+/// arrived on, beside [`trigger_door_warp`]: both are `TryStartWarpEventScript`
+/// branches (`pokeemerald/src/field_control_avatar.c:702-714`) reached through
+/// `IsWarpMetatileBehavior` (`:753-765`), and neither is gated on the held or
+/// facing direction. The escalator's transition animation
+/// (`DoEscalatorWarp`) and its arrival walk-off
+/// (`FieldCallback_EscalatorWarpIn`) are not modelled; the warp resolves
+/// immediately like every other warp here. Missing tiles, non-escalator behaviors, and absent
+/// or elevation-mismatched events return `None`.
+#[must_use]
+pub fn trigger_escalator_warp(
+    runtime: &MapRuntime<'_>,
+    x: i32,
+    y: i32,
+    elevation: u8,
+) -> Option<WarpTrigger> {
+    let behavior = runtime.metatile_behavior(x, y)?;
+    if !is_escalator(behavior) {
         return None;
     }
     let warp = runtime.warp_event_at(x, y, elevation)?;
@@ -166,14 +193,13 @@ mod tests {
     use super::super::collision::ELEVATION_MULTI_LEVEL;
     use super::*;
     use crate::overworld::metatile_behavior::{
-        MB_EAST_ARROW_WARP, MB_NORMAL, MB_NORTH_ARROW_WARP, MB_SHOAL_CAVE_ENTRANCE,
-        MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WATER_SOUTH_ARROW_WARP,
-        MB_WEST_ARROW_WARP,
+        MB_DOWN_ESCALATOR, MB_EAST_ARROW_WARP, MB_NORMAL, MB_NORTH_ARROW_WARP,
+        MB_SHOAL_CAVE_ENTRANCE, MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
+        MB_UP_ESCALATOR, MB_WATER_SOUTH_ARROW_WARP, MB_WEST_ARROW_WARP,
     };
     use assets::{MapConnection, MapEvents, MapHeader, MetatileAttributeTable, MetatileCell};
 
     const MB_LADDER: u8 = 0x61;
-    const MB_UP_ESCALATOR: u8 = 0x6A;
 
     fn cell_bytes(width: u16, height: u16, id_at: impl Fn(u16, u16) -> u16) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
@@ -284,6 +310,62 @@ mod tests {
                 warp_id: 2,
             })
         );
+    }
+
+    /// `TryStartWarpEventScript` accepts an escalator tile through
+    /// `IsWarpMetatileBehavior` with no direction gate
+    /// (`field_control_avatar.c:702-714,753-765`), so both escalator
+    /// behaviors resolve the warp event on the arrived tile.
+    #[test]
+    fn both_escalator_behaviors_trigger_a_resolved_warp_without_a_direction() {
+        for escalator in [MB_UP_ESCALATOR, MB_DOWN_ESCALATOR] {
+            let runtime = runtime_with_warp_behavior(escalator, sample_warp());
+            assert_eq!(
+                trigger_escalator_warp(&runtime, 1, 0, 0),
+                Some(WarpTrigger::Resolved {
+                    map: MapId("MAP_DEST"),
+                    warp_id: 2,
+                }),
+                "behavior {escalator:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escalator_trigger_needs_an_escalator_tile_and_a_matching_event() {
+        let door = runtime_with_warp_behavior(MB_NON_ANIMATED_DOOR, sample_warp());
+        assert_eq!(trigger_escalator_warp(&door, 1, 0, 0), None);
+        let elsewhere = runtime_with_warp_behavior(MB_UP_ESCALATOR, sample_warp());
+        assert_eq!(trigger_escalator_warp(&elsewhere, 0, 0, 0), None);
+        assert_eq!(trigger_escalator_warp(&elsewhere, 9, 9, 0), None);
+        let raised = runtime_with_warp_behavior(
+            MB_DOWN_ESCALATOR,
+            assets::WarpEvent {
+                elevation: 3,
+                ..sample_warp()
+            },
+        );
+        assert_eq!(trigger_escalator_warp(&raised, 1, 0, 5), None);
+    }
+
+    #[test]
+    fn the_door_and_arrow_entry_points_never_fire_on_an_escalator() {
+        for escalator in [MB_UP_ESCALATOR, MB_DOWN_ESCALATOR] {
+            let runtime = runtime_with_warp_behavior(escalator, sample_warp());
+            assert_eq!(trigger_door_warp(&runtime, 1, 0, 0), None);
+            assert_eq!(
+                trigger_animated_door_warp(&runtime, 1, 0, 0, Direction::North),
+                None
+            );
+            for direction in [
+                Direction::North,
+                Direction::South,
+                Direction::East,
+                Direction::West,
+            ] {
+                assert_eq!(trigger_arrow_warp(&runtime, 1, 0, 0, direction), None);
+            }
+        }
     }
 
     #[test]

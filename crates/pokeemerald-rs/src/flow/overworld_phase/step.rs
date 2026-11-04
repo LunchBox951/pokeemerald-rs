@@ -20,8 +20,8 @@
 
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
-    trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, StepOutcome,
-    WarpTrigger,
+    trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp, Direction, MapRuntime,
+    PlayerState, StepOutcome, WarpTrigger,
 };
 use engine::save::Coords16;
 use engine::text::render::TextSpeed;
@@ -448,8 +448,15 @@ impl OverworldPhase {
         let landed = stepped_onto.filter(|_| !first_battle_triggered);
         // Retained previous elevation, not collision -- contract noted at
         // `resolve_pre_movement_field_input`'s `previous_elevation` local.
-        let door_warp = landed
-            .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.previous_elevation()));
+        // The escalator is the other `TryStartWarpEventScript` branch the
+        // arrived tile can fire (`:702-714`), checked beside the door and
+        // under the same claims, so everything keyed on `door_warp` below
+        // treats it as one completed-step warp.
+        let door_warp = landed.and_then(|(x, y)| {
+            let elevation = self.player.previous_elevation();
+            trigger_door_warp(&runtime, x, y, elevation)
+                .or_else(|| trigger_escalator_warp(&runtime, x, y, elevation))
+        });
         // `TryStartStepCountScript` runs inside `TryStartStepBasedScript`
         // after the coord event and the door-shaped warp, ahead of the
         // wild-encounter roll (`field_control_avatar.c:155-163,543-553`), so

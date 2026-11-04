@@ -31515,6 +31515,12 @@
           "spec": "I-3",
           "status": "stubbed"
         },
+        "TryStartWarpEventScript": {
+          "reason": "The completed-step door and escalator branches (field_control_avatar.c:702-714, with IsWarpMetatileBehavior :753-765). engine::overworld::warp::trigger_door_warp and trigger_escalator_warp resolve GetWarpEventAtMapPosition on the arrived tile, with no direction gate; OverworldPhase::step (crates/pokeemerald-rs/src/flow/overworld_phase/step.rs) polls both at the retained previous elevation as one completed-step warp, ahead of the wild-encounter roll and the arrow poll. Pinned for both Oldale Pokemon Center escalators (1F warp 2 to 2F warp 0, and back) by the checkpoint regressions in flow/overworld_phase/warp_tests/checkpoint.rs. Not modelled: StoreInitialPlayerAvatarState, SetupWarp's escape-warp bookkeeping, and the ladder, Lavaridge, Aqua Hideout, Union Room, Mt. Pyre and Mossdeep branches (:715-745), whose behaviors is_warp_trigger does not accept.",
+          "rust_target": "crates/engine/src/overworld/warp.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "UpdatePoisonStepCounter": {
           "reason": "field_control_avatar.c:637-659. OverworldPhase::update_poison_step_counter advances VAR_POISON_STEP_COUNTER (a saved event var, so Save and Continue keep the cycle) modulo four with u16 wraparound on each completed step outside a Secret Base and the Union Room, runs DoPoisonFieldEffect on the wrap, and claims the frame only for a faint (FLDPSN_FNT), so an ordinary poison tick leaves the wild-encounter roll, arrow warp, and interaction to the same frame. It sits after the coord event and door warp and before the encounter roll, and is skipped on forced-movement tiles (field_control_avatar.c:155-163,543-553). Not modelled: EventScript_FieldPoison itself (data/scripts/field_poison.inc:1-17) -- the port routes the faint through a typed phase call because the TryFieldPoisonWhiteOut special has no script callback -- and the other TryStartStepCountScript step counters (rematch, friendship, Faraway Island, egg hatch, abnormal weather).",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
@@ -31532,6 +31538,14 @@
       "status": "pending"
     },
     "src/field_effect.c": {
+      "artifacts": {
+        "FieldCallback_EscalatorWarpIn": {
+          "reason": "Not modelled. The arrival callback (field_effect.c:1690-1702, Task_EscalatorWarpIn :1707-1722,1800-1818) locks field controls, faces the player east and, once controls unlock, walks the player one tile east off the escalator. The port lands the player on the destination warp tile with GetAdjustedInitialDirection's default south facing (overworld.c:929-951) and no east step, through OverworldPhase::warp_to, like every other warp. The same gap as the DoEscalatorWarp ride-out.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31756,6 +31770,14 @@
       "status": "pending"
     },
     "src/field_screen_effect.c": {
+      "artifacts": {
+        "DoEscalatorWarp": {
+          "reason": "Not modelled. DoEscalatorWarp (field_screen_effect.c:528-532) locks the player's field controls and starts StartEscalatorWarp, the escalator ride animation, before the warp. The port resolves the escalator warp at once through engine::overworld::warp::trigger_escalator_warp and OverworldPhase::warp_to, like every other warp, with no ride animation and no input lock.",
+          "rust_target": "crates/engine/src/overworld/warp.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -32740,6 +32762,12 @@
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsEscalator": {
+          "reason": "Reimplemented as metatile_behavior::is_escalator, exactly MB_UP_ESCALATOR (0x6A) or MB_DOWN_ESCALATOR (0x6B) (metatile_behavior.c:237-243). Consumed by engine::overworld::warp::trigger_escalator_warp, the escalator branch of TryStartWarpEventScript; is_warp_trigger stays door-only.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "I-3",
           "status": "rewritten"
         },
         "MetatileBehavior_IsForcedMovementTile": {
