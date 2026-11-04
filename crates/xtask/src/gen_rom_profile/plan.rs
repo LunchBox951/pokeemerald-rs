@@ -6,6 +6,10 @@
 
 use rom_import::Encoding;
 
+mod battle_effect;
+
+pub use battle_effect::{BattleEffectPlan, BattleEffectRecordPlan};
+
 /// How a located root's address was settled, for the report and the `--map`
 /// cross-check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,6 +676,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
+    /// The battle-effect sheets and palettes the animation catalog loads.
+    pub battle_effects: BattleEffectPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.

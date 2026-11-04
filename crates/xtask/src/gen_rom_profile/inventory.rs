@@ -328,5 +328,6 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battle_interface(pack)?;
     require_naming_screen(pack)?;
     require_trainer_front(pack)?;
-    require_trainer_battlers(pack)
+    require_trainer_battlers(pack)?;
+    super::battle_effect::expected_records(pack).map(|_| ())
 }

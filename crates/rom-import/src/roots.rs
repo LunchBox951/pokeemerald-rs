@@ -29,8 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod battle_effect;
 mod poke_ball;
 
+pub use battle_effect::{BattleEffectRoot, BattleEffectRoots};
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
 
 /// How a root's bytes sit in the ROM.
@@ -725,6 +727,8 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
+    /// The battle-effect sheets and palettes the animation catalog loads.
+    pub battle_effects: BattleEffectRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -778,6 +782,7 @@ impl Roots {
         naming_screen: NamingScreenRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
+        battle_effects: BattleEffectRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -815,6 +820,12 @@ impl Roots {
                     .iter()
                     .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
+            .chain(
+                self.battle_effects
+                    .records
+                    .iter()
+                    .map(|effect| &effect.sheet),
+            )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
                 self.trainer_battlers
@@ -848,6 +859,12 @@ impl Roots {
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
             .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
+            .chain(
+                self.battle_effects
+                    .records
+                    .iter()
+                    .map(|effect| &effect.palette),
+            )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers

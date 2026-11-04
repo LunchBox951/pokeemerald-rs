@@ -201,7 +201,7 @@ fn probe_image_tiles(
 }
 
 /// The byte length of `tiles` without its trailing all-zero tiles.
-fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
+pub(super) fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
     let mut kept = tiles.len();
     while kept >= bytes_per_tile
         && tiles[kept - bytes_per_tile..kept]

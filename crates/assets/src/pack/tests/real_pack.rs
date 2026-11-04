@@ -1,6 +1,8 @@
 use super::super::AssetPack;
 use crate::audio::{SampleId, SongEvent, VoiceGroupId};
 
+mod battle_effect;
+
 const EXPECTED_PALETTE_COLOR_COUNT: u16 = 16;
 const EXPECTED_PALETTE_COLOR_COUNT_USIZE: usize = 16;
 const SPACE_GLYPH_INDEX: u16 = 0;
