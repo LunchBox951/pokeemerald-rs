@@ -323,6 +323,79 @@ fn square1_sweep_overflow_holds_the_last_rendered_level_until_the_next_safe_trig
 }
 
 #[test]
+fn adjudicator_sweep_overflow_holds_the_level_at_the_overflow_tick() {
+    // mGBA catches ch1 up to the frame-sequencer step before the sweep clears
+    // `playingCh1` (`mgba/src/gb/audio.c:657,667-672`), so the held `ch1.sample`
+    // is the duty level at the overflow tick, not the last rendered sample: a
+    // duty transition landing on that boundary moves it.
+    const SAMPLES: usize = 2500;
+    let mut overflows = 0;
+    let mut moved_off_previous_sample = 0;
+    for shift in 1..=7 {
+        for key in 0..=127 {
+            let mut voice = square_voice(
+                CgbChannelNumber::Square1,
+                Some(upward_sweep(1, shift)),
+                TestNote::at_key(key),
+            );
+            if voice.hardware_muted {
+                continue;
+            }
+            voice.begin_frame(false);
+            let ticks = FrameSequencer::default().advance(SAMPLES);
+
+            // Oracle: replay a copy up to each sweep tick without the tick, read
+            // the duty level it would render at that tick, then apply the tick.
+            let mut probe = voice.clone();
+            let mut rendered = 0;
+            let mut overflow_tick = None;
+            for &tick in &ticks {
+                probe.render(&mut vec![(0i32, 0i32); tick - rendered], &[]);
+                let level = probe
+                    .square_oscillator()
+                    .expect("a square voice")
+                    .clone()
+                    .sample();
+                let previous = probe.last_contribution;
+                probe.render(&mut [(0i32, 0i32)], &[0]);
+                rendered = tick + 1;
+                if probe.sweep_held {
+                    let expected = (probe.frame_gain * i32::from(level) * BIPOLAR_SAMPLE_SCALE)
+                        >> SAMPLE_GAIN_BITS;
+                    overflow_tick = Some((tick, expected, previous));
+                    break;
+                }
+            }
+            let Some((tick, expected, previous)) = overflow_tick else {
+                continue;
+            };
+            overflows += 1;
+            moved_off_previous_sample += usize::from(expected != previous);
+
+            let mut acc = vec![(0i32, 0i32); SAMPLES];
+            voice.render(&mut acc, &ticks);
+            let mut expected_output = (0i32, 0i32);
+            voice.routing.accumulate(expected, &mut expected_output);
+            assert!(voice.sweep_held, "shift {shift} key {key}");
+            assert_eq!(
+                voice.last_contribution, expected,
+                "shift {shift} key {key}: the held level is the duty level at tick {tick}"
+            );
+            assert_eq!(
+                (acc[tick], acc[SAMPLES - 1]),
+                (expected_output, expected_output),
+                "shift {shift} key {key}"
+            );
+        }
+    }
+    assert!(overflows > 0, "sanity: some sweep must overflow mid-buffer");
+    assert!(
+        moved_off_previous_sample > 0,
+        "sanity: some overflow tick must land on a duty transition"
+    );
+}
+
+#[test]
 fn a_pitch_write_to_a_sweep_stopped_square_latches_its_pre_high_byte_sample() {
     // `NR13`'s catch-up runs the stopped channel at the old rate, `NR14`'s at
     // the intermediate (new low byte, old high bits) rate, and the latch lands

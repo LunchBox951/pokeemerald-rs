@@ -832,10 +832,28 @@ impl CgbVoice {
             }
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
+                // mGBA runs the channel up to the sequencer step before the
+                // sweep can clear `playingCh1`, so an overflow holds the duty
+                // level at this tick, read before the sweep's write-back
+                // retunes it (`mgba/src/gb/audio.c:657,667-672`).
+                // A length-stopped square keeps its catch-up deferred for the next
+                // register write, so only a running channel is read here.
+                let level_at_tick = (!self.hardware_muted && !self.length_stopped)
+                    .then(|| match &mut self.oscillator {
+                        Oscillator::Square(square) => Some(square.held_level()),
+                        Oscillator::Wave { .. } | Oscillator::Noise(_) => None,
+                    })
+                    .flatten();
                 if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
                     self.hardware_muted = true;
                     if !self.length_stopped {
                         self.sweep_held = true;
+                        if let Some(held) = level_at_tick.and_then(|level| {
+                            self.oscillator
+                                .relatched_square_contribution(level, self.frame_gain)
+                        }) {
+                            self.last_contribution = held;
+                        }
                         self.oscillator.advance_silently(frame_len - sample_offset);
                         self.clock_length_silently(lengths);
                         held_from = Some(sample_offset);
