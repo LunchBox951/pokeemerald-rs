@@ -361,6 +361,10 @@ fn a_sprite_past_the_tables_is_refused() {
 
 #[test]
 fn ids_that_do_not_follow_the_sprite_index_are_refused() {
+    const WRONG_PALETTE: &[BattleEffectRoot] = &[BattleEffectRoot {
+        palette: palette("battle-effect/135/image", at(IMPACT_PALETTE)),
+        ..IMPACT_RECORD
+    }];
     const WRONG_SHEET: &[BattleEffectRoot] = &[BattleEffectRoot {
         sheet: sheet("battle-effect/269/image", at(IMPACT_SHEET)),
         ..IMPACT_RECORD
@@ -369,10 +373,6 @@ fn ids_that_do_not_follow_the_sprite_index_are_refused() {
         written(&rom_of(fixture()), &roots_of(WRONG_SHEET)),
         "BattleEffectRoot.sheet.id",
     );
-    const WRONG_PALETTE: &[BattleEffectRoot] = &[BattleEffectRoot {
-        palette: palette("battle-effect/135/image", at(IMPACT_PALETTE)),
-        ..IMPACT_RECORD
-    }];
     assert_mismatch(
         written(&rom_of(fixture()), &roots_of(WRONG_PALETTE)),
         "BattleEffectRoot.palette.id",

@@ -1,5 +1,6 @@
 //! A synthetic catalog, pack and checkout for the battle-effect locator tests.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use assets::{
@@ -102,16 +103,19 @@ pub(in crate::gen_rom_profile) fn checkout_files(
     let mut palettes =
         String::from("const struct CompressedSpritePalette gBattleAnimPaletteTable[] =\n{\n");
     for index in 0..rows {
-        constants.push_str(&format!(
-            "#define ANIM_TAG_T{index} (ANIM_SPRITES_START + {index})\n"
-        ));
-        sheets.push_str(&format!(
-            "    {{gBattleAnimSpriteGfx_T{index}, {:#06x}, ANIM_TAG_T{index}}},\n",
+        let _ = writeln!(
+            constants,
+            "#define ANIM_TAG_T{index} (ANIM_SPRITES_START + {index})"
+        );
+        let _ = writeln!(
+            sheets,
+            "    {{gBattleAnimSpriteGfx_T{index}, {:#06x}, ANIM_TAG_T{index}}},",
             sheet_bytes(index)
-        ));
-        palettes.push_str(&format!(
-            "    {{gBattleAnimSpritePal_T{index}, ANIM_TAG_T{index}}},\n"
-        ));
+        );
+        let _ = writeln!(
+            palettes,
+            "    {{gBattleAnimSpritePal_T{index}, ANIM_TAG_T{index}}},"
+        );
     }
     sheets.push_str("};\n\n");
     palettes.push_str("};\n");

@@ -154,7 +154,7 @@ pub fn locate(
         let registration = &registrations[&record.sprite().get()];
         planned.push(record_plan(
             ctx,
-            record,
+            *record,
             registration,
             (sheet_table, palette_table),
             (sheet, palette),
@@ -274,7 +274,7 @@ fn find_table(
 /// The plan of one record, its art taken from its table rows.
 fn record_plan(
     ctx: &Context<'_>,
-    record: &BattleEffectRecord,
+    record: BattleEffectRecord,
     registration: &Registration,
     (sheet_table, palette_table): (u32, u32),
     (sheet, palette): (&SheetMatches, &[u32]),
