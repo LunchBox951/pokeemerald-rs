@@ -1,4 +1,4 @@
-//! Checks the planned voicegroups against the pack.
+//! Checks the planned audio against the pack and against itself.
 
 use assets::audio::VoiceGroup;
 
@@ -8,7 +8,8 @@ use crate::gen_rom_profile::Context;
 
 use super::ADDRESSABLE_SLOTS;
 
-/// Requires the pack's voicegroups to be exactly the planned ones, each equal
+/// Requires the plan's roots to be distinct places, and the pack's voicegroups
+/// to be exactly the planned ones, each equal
 /// to what `rom_import::decode_voicegroup_payload` decodes at its planned root.
 ///
 /// A pack voicegroup the plan does not reach is rejected: the importer would
@@ -22,10 +23,12 @@ use super::ADDRESSABLE_SLOTS;
 /// [`GenRomProfileError::WrongPackEntryKind`] or
 /// [`GenRomProfileError::EntryShape`] when a planned group's pack entry is
 /// absent, not raw, or not a voicegroup.
-pub(super) fn check_voicegroups(
-    ctx: &Context<'_>,
-    plan: &AudioPlan,
-) -> Result<(), GenRomProfileError> {
+pub(super) fn check_plan(ctx: &Context<'_>, plan: &AudioPlan) -> Result<(), GenRomProfileError> {
+    check_distinct_addresses(plan)?;
+    check_voicegroups(ctx, plan)
+}
+
+fn check_voicegroups(ctx: &Context<'_>, plan: &AudioPlan) -> Result<(), GenRomProfileError> {
     let unplanned: Vec<String> = ctx
         .pack
         .ids_with_prefix("audio/voicegroup/")
@@ -67,7 +70,81 @@ pub(super) fn check_voicegroups(
     Ok(())
 }
 
-fn leak_str(text: &str) -> &'static str {
+/// Requires every song header, voicegroup, key-split table and sample to be
+/// its own place: two ids at one address, or two samples or tables whose bytes
+/// overlap, mean one of the derivations picked the wrong copy.
+///
+/// Voicegroups are exempt from the overlap rule: a biased group's address is an
+/// alias before its first declared slot, and a child may be the tail of a
+/// linked neighbour, so only their addresses must differ.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::StructMismatch`] naming the second of the two roots.
+fn check_distinct_addresses(plan: &AudioPlan) -> Result<(), GenRomProfileError> {
+    distinct(
+        "song header",
+        plan.songs
+            .iter()
+            .map(|song| (song.id.clone(), song.header, 1)),
+    )?;
+    distinct(
+        "voicegroup",
+        plan.voicegroups
+            .iter()
+            .map(|group| (group.id.clone(), group.addr, 1)),
+    )?;
+    distinct(
+        "key-split table",
+        plan.keysplits.iter().map(|table| {
+            (
+                format!("keysplit_{}", table.label),
+                table.addr + u32::from(table.starting_note),
+                u32::from(table.len),
+            )
+        }),
+    )?;
+    let samples = plan
+        .direct_sound
+        .iter()
+        .chain(&plan.programmable_wave)
+        .map(|sample| {
+            // The PCM is followed by wav2agb's interpolation-guard byte.
+            let guard = u32::from(sample.header_len != 0);
+            (
+                sample.id.clone(),
+                sample.addr,
+                sample.header_len + sample.data_len + guard,
+            )
+        });
+    distinct("sample", samples)
+}
+
+/// Requires `roots` (id, address, byte length) to occupy disjoint ranges.
+fn distinct(
+    what: &str,
+    roots: impl Iterator<Item = (String, u32, u32)>,
+) -> Result<(), GenRomProfileError> {
+    let mut sorted: Vec<(String, u32, u32)> = roots.collect();
+    sorted.sort_by_key(|(_, addr, _)| *addr);
+    for pair in sorted.windows(2) {
+        let [(first, start, len), (second, next, _)] = pair else {
+            continue;
+        };
+        if next < &(start + len.max(&1)) {
+            return Err(GenRomProfileError::StructMismatch {
+                id: second.clone(),
+                reason: format!(
+                    "the {what} at {next:08X} overlaps {first}, which holds {start:08X}..{:08X}",
+                    start + len
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn leak_str(text: &str) -> &'static str {
     Box::leak(text.to_owned().into_boxed_str())
 }
 

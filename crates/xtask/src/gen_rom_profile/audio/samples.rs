@@ -4,8 +4,8 @@ use assets::audio::{DirectSoundSample, ProgrammableWave, Sample};
 
 use crate::extract::cry::SAMPLE_ID_PREFIX as CRY_SAMPLE_PREFIX;
 use crate::gen_rom_profile::error::GenRomProfileError;
-use crate::gen_rom_profile::locate::{exactly_one, u16_at_addr, u32_at_addr};
-use crate::gen_rom_profile::plan::{ReportLine, SamplePlan};
+use crate::gen_rom_profile::locate::{to_addr, u16_at_addr, u32_at_addr};
+use crate::gen_rom_profile::plan::{ReportLine, Resolution, SamplePlan};
 use crate::gen_rom_profile::Context;
 
 use super::{
@@ -13,16 +13,48 @@ use super::{
     PROGRAMMABLE_WAVE_SYMBOL, WAVE_HEADER_BYTES, WAVE_STATUS_LOOP, WAVE_TABLE_BYTES,
 };
 
+/// A pack sample and every ROM address that holds its bytes.
+///
+/// A sample can be stored more than once; which copy is the instrument is
+/// decided by the voicegroup slot that points at it (`closure`), never here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SampleCandidates {
+    /// The pack id.
+    pub id: String,
+    /// The `WaveData` header length, `0` for a programmable wave.
+    pub header_len: u32,
+    /// The PCM payload length: the sample count, or 16 for a wave.
+    pub data_len: u32,
+    /// Every address a voicegroup slot may point at, ascending.
+    pub addrs: Vec<u32>,
+}
+
+impl SampleCandidates {
+    /// The plan for this sample once a voicegroup slot chose `addr`.
+    pub(super) fn at(&self, addr: u32) -> SamplePlan {
+        SamplePlan {
+            id: self.id.clone(),
+            addr,
+            header_len: self.header_len,
+            data_len: self.data_len,
+        }
+    }
+}
+
 /// Locate every instrument `DirectSound` sample by its PCM, then check its header.
 ///
 /// Cry samples under [`CRY_SAMPLE_PREFIX`] are not instruments: the ROM stores
 /// them DPCM-compressed (`wav2agb -c`, a nonzero `WaveData` type), so their
 /// expanded PCM never occurs in the ROM and this uncompressed locator cannot
 /// place them. They are left to a dedicated cry locator.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::NotFound`] when no copy has a header that agrees
+/// with the pack, otherwise the first copy's header disagreement.
 pub(super) fn locate_direct_sound(
     ctx: &Context<'_>,
-    report: &mut Vec<ReportLine>,
-) -> Result<Vec<SamplePlan>, GenRomProfileError> {
+) -> Result<Vec<SampleCandidates>, GenRomProfileError> {
     let ids = instrument_ids(ctx);
     let mut samples = Vec::with_capacity(ids.len());
     let mut needles = Vec::with_capacity(ids.len());
@@ -33,40 +65,58 @@ pub(super) fn locate_direct_sound(
     }
     let hits = ctx.raw.find_all(&needles);
 
-    let mut plans = Vec::with_capacity(ids.len());
+    let mut found = Vec::with_capacity(ids.len());
     for (index, id) in ids.iter().enumerate() {
-        let pcm_addr = exactly_one(id, &hits[index])?;
-        let addr = pcm_addr.checked_sub(WAVE_HEADER_BYTES).ok_or_else(|| {
-            GenRomProfileError::StructMismatch {
-                id: id.clone(),
-                reason: "the PCM starts before a header could fit".to_owned(),
-            }
-        })?;
         let sample = &samples[index];
-        check_wave_header(ctx, id, addr, sample)?;
-        // The needle is the buffer the canonical schema retains: `data_len`
-        // logical samples (`sample.sample_count()`) plus one
-        // interpolation-guard byte wav2agb's payload writer always emits
-        // (`crates/xtask/src/extract/wav.rs`'s module docs).
-        let buffer_len = u32::try_from(needles[index].len()).expect("a sample fits in u32");
-        let data_len = sample.sample_count();
-        let symbol = format!(
-            "{DIRECT_SOUND_SYMBOL}{}",
-            id.trim_start_matches(DIRECT_SOUND_PREFIX)
-        );
-        report.push(
-            ReportLine::unique(id, addr, WAVE_HEADER_BYTES + buffer_len)
-                .symbol(symbol)
-                .note("PCM matched; WaveData header checked"),
-        );
-        plans.push(SamplePlan {
+        let mut addrs = Vec::new();
+        let mut refusal = None;
+        for &hit in &hits[index] {
+            let candidate = to_addr(hit).checked_sub(WAVE_HEADER_BYTES).ok_or_else(|| {
+                GenRomProfileError::StructMismatch {
+                    id: id.clone(),
+                    reason: "the PCM starts before a header could fit".to_owned(),
+                }
+            });
+            match candidate.and_then(|addr| check_wave_header(ctx, id, addr, sample).map(|()| addr))
+            {
+                Ok(addr) => addrs.push(addr),
+                Err(err) => {
+                    refusal.get_or_insert(err);
+                }
+            }
+        }
+        if addrs.is_empty() {
+            return Err(refusal.unwrap_or_else(|| GenRomProfileError::NotFound { id: id.clone() }));
+        }
+        found.push(SampleCandidates {
             id: id.clone(),
-            addr,
             header_len: WAVE_HEADER_BYTES,
-            data_len,
+            data_len: sample.sample_count(),
+            addrs,
         });
     }
-    Ok(plans)
+    Ok(found)
+}
+
+/// The report line for a located `DirectSound` sample.
+///
+/// The ROM holds `data_len` logical samples plus one interpolation-guard byte
+/// wav2agb's payload writer always emits (`crates/xtask/src/extract/wav.rs`'s
+/// module docs).
+pub(super) fn direct_sound_line(plan: &SamplePlan, copies: usize) -> ReportLine {
+    let symbol = format!(
+        "{DIRECT_SOUND_SYMBOL}{}",
+        plan.id.trim_start_matches(DIRECT_SOUND_PREFIX)
+    );
+    let line =
+        ReportLine::unique(&plan.id, plan.addr, plan.header_len + plan.data_len + 1).symbol(symbol);
+    if copies > 1 {
+        line.with(Resolution::StructDerived).note(format!(
+            "{copies} copies; the voicegroup slot pointer chose this one"
+        ))
+    } else {
+        line.note("PCM matched; WaveData header checked")
+    }
 }
 
 /// The pack's `DirectSound` ids, without the cry samples.
@@ -186,10 +236,13 @@ fn programmable_wave_of(
 }
 
 /// Locate every programmable-wave table by its 16 bytes.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::NotFound`] for a table that occurs nowhere.
 pub(super) fn locate_programmable_wave(
     ctx: &Context<'_>,
-    report: &mut Vec<ReportLine>,
-) -> Result<Vec<SamplePlan>, GenRomProfileError> {
+) -> Result<Vec<SampleCandidates>, GenRomProfileError> {
     let ids = ctx.pack.ids_with_prefix(PROGRAMMABLE_WAVE_PREFIX);
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
@@ -197,306 +250,39 @@ pub(super) fn locate_programmable_wave(
     }
     let hits = ctx.raw.find_all(&needles);
 
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        // The pack pads the index to two digits; upstream does not.
-        let number = id
-            .trim_start_matches(PROGRAMMABLE_WAVE_PREFIX)
-            .trim_start_matches('0');
-        report.push(
-            ReportLine::unique(id, addr, wave_table_len())
-                .symbol(format!("{PROGRAMMABLE_WAVE_SYMBOL}{number}")),
-        );
-        plans.push(SamplePlan {
-            id: id.clone(),
-            addr,
-            header_len: 0,
-            data_len: wave_table_len(),
-        });
+    ids.into_iter()
+        .zip(hits)
+        .map(|(id, hits)| {
+            if hits.is_empty() {
+                return Err(GenRomProfileError::NotFound { id });
+            }
+            Ok(SampleCandidates {
+                id,
+                header_len: 0,
+                data_len: wave_table_len(),
+                addrs: hits.into_iter().map(to_addr).collect(),
+            })
+        })
+        .collect()
+}
+
+/// The report line for a located programmable-wave table.
+pub(super) fn programmable_wave_line(plan: &SamplePlan, copies: usize) -> ReportLine {
+    // The pack pads the index to two digits; upstream does not.
+    let number = plan
+        .id
+        .trim_start_matches(PROGRAMMABLE_WAVE_PREFIX)
+        .trim_start_matches('0');
+    let line = ReportLine::unique(&plan.id, plan.addr, wave_table_len())
+        .symbol(format!("{PROGRAMMABLE_WAVE_SYMBOL}{number}"));
+    if copies > 1 {
+        line.with(Resolution::StructDerived).note(format!(
+            "{copies} copies; the voicegroup slot pointer chose this one"
+        ))
+    } else {
+        line
     }
-    Ok(plans)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{locate_direct_sound, locate_programmable_wave, WAVE_STATUS_LOOP};
-    use crate::gen_rom_profile::plan::{ReportLine, SamplePlan};
-    use crate::gen_rom_profile::tests::with_context;
-    use assets::audio::{ProgrammableWave, Sample};
-    use rom_import::fixture::RomFixture;
-
-    /// PCM distinctive enough to occur exactly once in a fixture image.
-    fn pcm() -> Vec<u8> {
-        (0..64u32)
-            .map(|index| u8::try_from((index * 37 + 11) % 251).expect("modulo 251 fits in u8"))
-            .collect()
-    }
-
-    /// A distinctive byte appended past `data`'s declared count: the
-    /// retained interpolation guard `wav.rs` always keeps (module docs).
-    const GUARD_SAMPLE: u8 = 0xA5;
-
-    /// `data` with [`GUARD_SAMPLE`] appended, matching the buffer `wav.rs`
-    /// and the ROM importer both retain past the logical sample count.
-    fn with_guard(data: &[u8]) -> Vec<u8> {
-        let mut out = data.to_vec();
-        out.push(GUARD_SAMPLE);
-        out
-    }
-
-    /// A `DirectSound` pack payload: kind, freq, loop flag, loop start,
-    /// logical sample count, PCM, and the retained guard byte.
-    fn direct_sound_payload(freq: u32, loop_start: Option<u32>, data: &[u8]) -> Vec<u8> {
-        let mut payload = vec![0u8];
-        payload.extend_from_slice(&freq.to_le_bytes());
-        payload.push(u8::from(loop_start.is_some()));
-        payload.extend_from_slice(&loop_start.unwrap_or_default().to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(data.len())
-                .expect("a sample fits in u32")
-                .to_le_bytes(),
-        );
-        payload.extend_from_slice(&with_guard(data));
-        payload
-    }
-
-    /// A ROM `WaveData` header: type, status, freq, loop start, size (the
-    /// logical sample count).
-    fn wave_header(wave_type: u16, status: u16, freq: u32, loop_start: u32, size: u32) -> Vec<u8> {
-        let mut header = Vec::with_capacity(16);
-        header.extend_from_slice(&wave_type.to_le_bytes());
-        header.extend_from_slice(&status.to_le_bytes());
-        header.extend_from_slice(&freq.to_le_bytes());
-        header.extend_from_slice(&loop_start.to_le_bytes());
-        header.extend_from_slice(&size.to_le_bytes());
-        header
-    }
-
-    /// Plant one sample at `0x10_0000` and locate it against a one-entry
-    /// pack. `data` is the logical PCM; the retained guard byte is appended
-    /// to what lands in the ROM.
-    fn locate_one(
-        name: &str,
-        header: &[u8],
-        payload: Vec<u8>,
-        data: &[u8],
-    ) -> Result<(), crate::gen_rom_profile::GenRomProfileError> {
-        let rom = RomFixture::new()
-            .emerald_header()
-            .write(0x10_0000, header)
-            .write(0x10_0010, &with_guard(data))
-            .finish();
-        let entry = pack_format::raw_entry("audio/sample/direct-sound/test".to_owned(), payload);
-        with_context(name, &rom, vec![entry], |ctx| {
-            let mut report = Vec::new();
-            locate_direct_sound(ctx, &mut report).map(|_| ())
-        })
-    }
-
-    #[test]
-    fn a_wave_header_whose_loop_status_disagrees_with_the_pack_is_rejected() {
-        let data = pcm();
-        let freq = 1 << 20;
-        let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        // All currently checked fields agree: both numeric loop starts are
-        // zero. Only the ROM status says the sample loops.
-        let header = wave_header(0, WAVE_STATUS_LOOP, freq, 0, size);
-        let payload = direct_sound_payload(freq, None, &data);
-
-        let err = locate_one("loop-status-mismatch", &header, payload, &data).unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                crate::gen_rom_profile::GenRomProfileError::StructMismatch { id, .. }
-                    if id == "audio/sample/direct-sound/test"
-            ),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_wave_header_with_a_nonzero_type_is_rejected() {
-        let data = pcm();
-        let freq = 1 << 20;
-        let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        let header = wave_header(1, 0, freq, 0, size);
-        let payload = direct_sound_payload(freq, None, &data);
-
-        let err = locate_one("nonzero-wave-type", &header, payload, &data).unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                crate::gen_rom_profile::GenRomProfileError::StructMismatch { id, .. }
-                    if id == "audio/sample/direct-sound/test"
-            ),
-            "{err}"
-        );
-    }
-
-    /// A cry sample's expanded PCM is absent from the ROM, which stores it
-    /// DPCM-compressed, so the instrument locator must not search for it.
-    #[test]
-    fn cry_samples_are_left_out_of_the_instrument_locator() {
-        let data = pcm();
-        let freq = 1 << 20;
-        let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        let rom = RomFixture::new()
-            .emerald_header()
-            .write(0x10_0000, &wave_header(0, 0, freq, 0, size))
-            .write(0x10_0010, &with_guard(&data))
-            .finish();
-        let absent: Vec<u8> = data.iter().rev().map(|byte| byte ^ 0x5A).collect();
-        let entries = vec![
-            pack_format::raw_entry(
-                "audio/sample/direct-sound/test".to_owned(),
-                direct_sound_payload(freq, None, &data),
-            ),
-            pack_format::raw_entry(
-                "audio/sample/direct-sound/cry/groudon".to_owned(),
-                direct_sound_payload(freq, None, &absent),
-            ),
-        ];
-        let plans = with_context("cry-sample-excluded", &rom, entries, |ctx| {
-            let mut report = Vec::new();
-            locate_direct_sound(ctx, &mut report)
-        })
-        .expect("the instrument locates and the cry is not searched for");
-        let ids: Vec<&str> = plans.iter().map(|plan| plan.id.as_str()).collect();
-        assert_eq!(ids, ["audio/sample/direct-sound/test"]);
-    }
-
-    #[test]
-    fn a_pack_sample_whose_declared_count_disagrees_with_its_pcm_is_rejected() {
-        let data = pcm();
-        let freq = 1 << 20;
-        let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        let header = wave_header(0, 0, freq, 0, size);
-        let mut payload = direct_sound_payload(freq, None, &data);
-        // Corrupt only the serialized sample_count (bytes 10..14). The
-        // canonical decoder (`assets::audio::Sample::decode`) requires it
-        // to agree with the retained PCM and rejects this payload before
-        // the generator ever searches the ROM for it.
-        payload[10..14].copy_from_slice(&(size + 7).to_le_bytes());
-
-        let err = locate_one("declared-count-too-large", &header, payload, &data).unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. }
-                    if id == "audio/sample/direct-sound/test"
-            ),
-            "a non-canonical sample payload located successfully: {err}"
-        );
-    }
-
-    #[test]
-    fn a_pack_sample_with_trailing_bytes_past_its_declared_count_is_rejected() {
-        let data = pcm();
-        let freq = 1 << 20;
-        let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        let header = wave_header(0, 0, freq, 0, size);
-        let mut payload = direct_sound_payload(freq, None, &data);
-        // Shrink the declared sample_count so the retained buffer holds
-        // bytes past what the canonical schema's `expect_eof` allows.
-        payload[10..14].copy_from_slice(&(size - 1).to_le_bytes());
-
-        let err = locate_one("declared-count-too-small", &header, payload, &data).unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. }
-                    if id == "audio/sample/direct-sound/test"
-            ),
-            "a non-canonical sample payload located successfully: {err}"
-        );
-    }
-
-    const WAVE_ID: &str = "audio/sample/programmable-wave/01";
-    const WAVE_TABLE: [u8; 16] = [
-        0x13, 0x57, 0x9B, 0xDF, 0x24, 0x68, 0xAC, 0xE0, 0x31, 0x75, 0xB9, 0xFD, 0x42, 0x86, 0xCA,
-        0x0E,
-    ];
-
-    fn programmable_wave_payload() -> Vec<u8> {
-        Sample::ProgrammableWave(ProgrammableWave { table: WAVE_TABLE }).encode()
-    }
-
-    fn locate_one_wave(
-        name: &str,
-        payload: Vec<u8>,
-        planted: &[u8],
-    ) -> Result<(Vec<SamplePlan>, Vec<ReportLine>), crate::gen_rom_profile::GenRomProfileError>
-    {
-        let rom = RomFixture::new()
-            .emerald_header()
-            .write(0x10_0000, planted)
-            .finish();
-        let entry = pack_format::raw_entry(WAVE_ID.to_owned(), payload);
-        with_context(name, &rom, vec![entry], |ctx| {
-            let mut report = Vec::new();
-            locate_programmable_wave(ctx, &mut report).map(|plans| (plans, report))
-        })
-    }
-
-    fn assert_wave_entry_shape(name: &str, payload: Vec<u8>, planted: &[u8]) {
-        let err = locate_one_wave(name, payload, planted)
-            .expect_err("a non-canonical programmable-wave entry must be refused");
-        assert!(
-            matches!(
-                &err,
-                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. } if id == WAVE_ID
-            ),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_valid_programmable_wave_table_locates() {
-        let (plans, report) =
-            locate_one_wave("wave-valid", programmable_wave_payload(), &WAVE_TABLE)
-                .expect("a valid table locates");
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].id, WAVE_ID);
-        assert_eq!(plans[0].addr, 0x0810_0000);
-        assert_eq!(plans[0].header_len, 0);
-        assert_eq!(plans[0].data_len, 16);
-        assert_eq!(report.len(), 1);
-        assert_eq!(report[0].addr, 0x0810_0000);
-        assert_eq!(report[0].len, 16);
-    }
-
-    #[test]
-    fn a_programmable_wave_payload_with_a_wrong_kind_tag_is_rejected() {
-        for (name, tag) in [("wave-ds-tag", 0), ("wave-unknown-tag", u8::MAX)] {
-            let mut payload = programmable_wave_payload();
-            payload[0] = tag;
-            assert_wave_entry_shape(name, payload, &WAVE_TABLE);
-        }
-    }
-
-    #[test]
-    fn a_direct_sound_sample_under_a_programmable_wave_id_is_rejected() {
-        let payload = direct_sound_payload(1 << 20, None, &pcm());
-        let planted = payload[1..17].to_vec();
-        assert_wave_entry_shape("wave-wrong-variant", payload, &planted);
-    }
-
-    #[test]
-    fn a_programmable_wave_payload_with_trailing_bytes_is_rejected() {
-        let mut payload = programmable_wave_payload();
-        payload.push(0xA5);
-        assert_wave_entry_shape("wave-trailing", payload, &WAVE_TABLE);
-    }
-
-    #[test]
-    fn a_programmable_wave_payload_with_a_malformed_length_is_rejected() {
-        // Short payloads were already refused by the raw slice; this pins that
-        // refusal through the canonical decoder (the oversized case is the
-        // trailing-bytes test, which is the regression).
-        let mut payload = programmable_wave_payload();
-        payload.pop();
-        assert_wave_entry_shape("wave-truncated", payload, &WAVE_TABLE);
-        assert_wave_entry_shape("wave-empty", Vec::new(), &WAVE_TABLE);
-    }
-}
+mod tests;

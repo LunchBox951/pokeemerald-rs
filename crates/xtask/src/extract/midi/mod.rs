@@ -55,13 +55,14 @@ use std::path::{Path, PathBuf};
 pub(crate) use error::MidiError;
 
 use super::{read_file, read_text, ExtractError};
+use cfg::MidiCfgEntry;
 use manifest::{SongSource, VoiceGroupSource, CHECKPOINT_SONGS};
 use pack_format::PackWriter;
 
-/// The pack id of the one song the ROM profile locates (`mus_title`), which the manifest also
-/// carries. Crate-visible: `gen_rom_profile::audio` reuses this exact id as the one
-/// `audio/song/` entry it locates a ROM address for, the same reuse [`super::voicegroups`]'s
-/// `groups_by_label` documents for the voicegroup index.
+/// The pack id of the song that anchors the ROM profile (`mus_title`), which the manifest also
+/// carries. Crate-visible: `gen_rom_profile::audio` locates `gSongTable` once from this song's
+/// voicegroup and then plans every pack song from its own table entry, the same reuse
+/// [`super::voicegroups`]'s `groups_by_label` documents for the voicegroup index.
 pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 
 /// Upstream's voicegroup for a `midi.cfg` entry with no `-G` flag: `g_voiceGroup` starts as
@@ -90,6 +91,28 @@ impl SongSources {
         })
     }
 
+    /// `source`'s `midi.cfg` entry, with upstream's default voicegroup applied when the manifest
+    /// allows it, and whether that default was applied.
+    fn cfg_entry(&self, source: &SongSource) -> Result<(MidiCfgEntry, bool), ExtractError> {
+        let in_cfg = |error| ExtractError::MidiCfg(self.cfg_path.clone(), error);
+        let filename = source.midi_filename();
+        match source.voicegroup {
+            VoiceGroupSource::Configured => Ok((
+                cfg::parse_entry_for(&self.cfg_text, &filename).map_err(in_cfg)?,
+                false,
+            )),
+            VoiceGroupSource::DefaultWhenSilent => {
+                let mut entry =
+                    cfg::parse_entry_flags(&self.cfg_text, &filename).map_err(in_cfg)?;
+                let defaulted = entry.voicegroup_label.is_empty();
+                if defaulted {
+                    DEFAULT_VOICEGROUP_LABEL.clone_into(&mut entry.voicegroup_label);
+                }
+                Ok((entry, defaulted))
+            }
+        }
+    }
+
     /// Encodes `source` from its `.mid`, `midi.cfg` line, and song-table row.
     fn encode(&self, source: &SongSource) -> Result<Vec<u8>, ExtractError> {
         let in_table = |error| ExtractError::Midi(self.table_path.clone(), error);
@@ -102,22 +125,8 @@ impl SongSources {
             }));
         }
 
-        let in_cfg = |error| ExtractError::MidiCfg(self.cfg_path.clone(), error);
         let filename = source.midi_filename();
-        let (mut entry, defaulted_group) = match source.voicegroup {
-            VoiceGroupSource::Configured => (
-                cfg::parse_entry_for(&self.cfg_text, &filename).map_err(in_cfg)?,
-                false,
-            ),
-            VoiceGroupSource::DefaultWhenSilent => {
-                let entry = cfg::parse_entry_flags(&self.cfg_text, &filename).map_err(in_cfg)?;
-                let defaulted = entry.voicegroup_label.is_empty();
-                (entry, defaulted)
-            }
-        };
-        if defaulted_group {
-            DEFAULT_VOICEGROUP_LABEL.clone_into(&mut entry.voicegroup_label);
-        }
+        let (entry, defaulted_group) = self.cfg_entry(source)?;
 
         let midi_path = self.midi_dir.join(&filename);
         let in_midi = |error| ExtractError::Midi(midi_path.clone(), error);
@@ -130,6 +139,30 @@ impl SongSources {
             source,
         })
     }
+}
+
+/// The voicegroup label of every [`CHECKPOINT_SONGS`] song, each once, in manifest order.
+///
+/// A song whose `midi.cfg` line has no `-G` flag takes upstream's default group, as
+/// [`extract_songs`] does; this reader does not decide whether that song may use it.
+///
+/// # Errors
+///
+/// [`ExtractError::ReadFailed`] if `midi.cfg` or `song_table.inc` is missing,
+/// [`ExtractError::Midi`] if the manifest is malformed, and [`ExtractError::MidiCfg`] if a
+/// song's `midi.cfg` entry is absent, duplicated, or malformed.
+pub(crate) fn manifest_voicegroup_labels(upstream: &Path) -> Result<Vec<String>, ExtractError> {
+    let files = SongSources::read(upstream)?;
+    manifest::check_manifest(&CHECKPOINT_SONGS)
+        .map_err(|error| ExtractError::Midi(files.table_path.clone(), error))?;
+    let mut labels = Vec::new();
+    for source in &CHECKPOINT_SONGS {
+        let (entry, _) = files.cfg_entry(source)?;
+        if !labels.contains(&entry.voicegroup_label) {
+            labels.push(entry.voicegroup_label);
+        }
+    }
+    Ok(labels)
 }
 
 /// Compile every [`CHECKPOINT_SONGS`] source into its normalized [`event::SongEvent`] streams
@@ -167,8 +200,66 @@ fn extract_listed_songs(
 #[cfg(test)]
 mod tests {
     use super::event::SongEvent;
-    use super::{extract_songs, SONG_PACK_ID};
+    use super::{extract_songs, manifest_voicegroup_labels, SongSources, SONG_PACK_ID};
+    use super::{SongSource, VoiceGroupSource};
     use pack_format::PackWriter;
+
+    fn configured(symbol: &'static str) -> SongSource {
+        SongSource {
+            symbol,
+            player: 0,
+            voicegroup: VoiceGroupSource::Configured,
+        }
+    }
+
+    fn sources_with_cfg(cfg_text: &str) -> SongSources {
+        SongSources {
+            cfg_path: "midi.cfg".into(),
+            cfg_text: cfg_text.to_owned(),
+            table_path: "song_table.inc".into(),
+            table_text: String::new(),
+            midi_dir: "midi".into(),
+        }
+    }
+
+    #[test]
+    fn a_configured_song_takes_its_cfg_voicegroup() {
+        let sources = sources_with_cfg("mus_a.mid: -E -G012 -P1\n");
+        let (entry, defaulted) = sources.cfg_entry(&configured("mus_a")).unwrap();
+        assert_eq!(entry.voicegroup_label, "012");
+        assert!(!defaulted);
+    }
+
+    #[test]
+    fn a_configured_song_without_a_voicegroup_flag_is_rejected() {
+        let sources = sources_with_cfg("mus_a.mid: -E\n");
+        assert!(sources.cfg_entry(&configured("mus_a")).is_err());
+    }
+
+    #[test]
+    fn a_silent_default_song_takes_the_dummy_voicegroup() {
+        let sources = sources_with_cfg("mus_dummy.mid: -E\n");
+        let (entry, defaulted) = sources
+            .cfg_entry(&SongSource {
+                voicegroup: VoiceGroupSource::DefaultWhenSilent,
+                ..configured("mus_dummy")
+            })
+            .unwrap();
+        assert_eq!(entry.voicegroup_label, "dummy");
+        assert!(defaulted);
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn manifest_voicegroup_labels_are_distinct_and_cover_title_and_dummy() {
+        use super::super::{repo_root, upstream_present};
+        assert!(upstream_present(), "run ./init.sh first");
+        let labels = manifest_voicegroup_labels(&repo_root().join("pokeemerald")).unwrap();
+        let distinct: std::collections::BTreeSet<_> = labels.iter().collect();
+        assert_eq!(distinct.len(), labels.len());
+        assert!(labels.iter().any(|label| label == "title"));
+        assert!(labels.iter().any(|label| label == "dummy"));
+    }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]

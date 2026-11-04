@@ -235,7 +235,7 @@ fn a_bias_with_too_few_or_unlinked_predecessors_is_a_hard_error() {
 }
 
 #[test]
-fn an_aliased_indirection_record_under_an_indirection_target_is_rejected() {
+fn an_aliased_indirection_record_under_an_indirection_target_stays_silent() {
     let raw = groups(vec![
         raw_group(
             "top",
@@ -253,17 +253,21 @@ fn an_aliased_indirection_record_under_an_indirection_target_is_rejected() {
         ),
         raw_group("child", 1, vec![direct_sound("own")]),
     ]);
-    let err = resolve_voice_groups_with_link_order(
+    // `top` is unlinked, so it borrows no successor slots.
+    let resolved = resolve_voice_groups_with_link_order(
         "top",
         &raw,
         &no_keysplit_tables(),
-        &link_order(&["top", "before", "child"]),
-    );
-    // `before` links ahead of `child`, so the aliased record is its rhythm slot.
-    assert!(matches!(
-        err,
-        Err(VoiceGroupError::NestedIndirection { .. })
-    ));
+        &link_order(&["before", "child"]),
+    )
+    .unwrap();
+    // `before` links ahead of `child`, so the aliased record is its rhythm slot. Upstream's
+    // `ply_note` aborts on a nested indirection record, so the slot stays empty and `top`,
+    // which that record would name, is not reached through it.
+    let child = resolved.iter().find(|g| g.label == "child").unwrap();
+    assert_eq!(child.slots[0], VoiceSlot::Empty);
+    assert!(matches!(child.slots[1], VoiceSlot::DirectSound { .. }));
+    assert_eq!(resolved.len(), 2);
 }
 
 #[test]

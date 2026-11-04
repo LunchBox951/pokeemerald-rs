@@ -223,4 +223,6 @@ pub(crate) fn len_usize(len: u32) -> usize {
 }
 
 #[cfg(test)]
+mod closure_tests;
+#[cfg(test)]
 mod tests;

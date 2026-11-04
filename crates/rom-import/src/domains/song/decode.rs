@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use super::fold::fold_equivalent_contexts;
 use super::{step, ImportError, RomReader, SongEvent, SongFault, Step, Track, CMD_VOICE, CMD_WAIT};
 use crate::GbaPtr;
 
@@ -11,7 +12,7 @@ const DECODE_LIMIT: usize = 1 << 20;
 // command-pointer changes (pokeemerald/src/m4a_1.s:832-884,1232-1244,1556-1574).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Context {
-    at: usize,
+    pub(super) at: usize,
     pub(super) running_status: Option<u8>,
     pub(super) key: u8,
     pub(super) velocity: u8,
@@ -39,6 +40,9 @@ fn decode_with_limit(
         id,
         index,
         events: Vec::new(),
+        points: Vec::new(),
+        command: (start.offset(), Vec::new()),
+        tails: Vec::new(),
         state: Context {
             at: start.offset(),
             running_status: None,
@@ -48,12 +52,24 @@ fn decode_with_limit(
         },
     };
     let mut visited = BTreeMap::new();
+    decode_reachable(&mut track, &mut visited, limit)?;
+    decode_tails(&mut track, &mut visited, limit);
+    Ok(fold_equivalent_contexts(&track.events, &track.points))
+}
+
+/// Everything execution can reach from the track's current state, every
+/// conditional path included.
+fn decode_reachable(
+    track: &mut Track<'_, '_>,
+    visited: &mut BTreeMap<Context, usize>,
+    limit: usize,
+) -> Result<(), ImportError> {
     let mut pending = Vec::new();
     loop {
-        decode_path(&mut track, &mut visited, &mut pending, limit)?;
+        decode_path(track, visited, &mut pending, limit)?;
         loop {
             let Some((branch, state)) = pending.pop() else {
-                return Ok(track.events);
+                return Ok(());
             };
             let existing = visited.get(&state).copied();
             let target = existing.unwrap_or(track.events.len());
@@ -65,6 +81,32 @@ fn decode_with_limit(
                 track.state = state;
                 break;
             }
+        }
+    }
+}
+
+/// The bytes after each executed `GOTO`, which execution never reaches.
+///
+/// `tools/mid2agb` writes the loop's trailing rests and `FINE` there and the
+/// checkout compiler emits the same, so the pack keeps them. They are decoded
+/// as far as they go; bytes that do not decode were never a command stream
+/// and leave no events.
+fn decode_tails(track: &mut Track<'_, '_>, visited: &mut BTreeMap<Context, usize>, limit: usize) {
+    let mut next = 0;
+    while let Some(tail) = track.tails.get(next).cloned() {
+        next += 1;
+        if visited.contains_key(&tail) {
+            continue;
+        }
+        let events = track.events.len();
+        let tails = track.tails.len();
+        let seen = visited.clone();
+        track.state = tail;
+        if decode_reachable(track, visited, limit).is_err() {
+            track.events.truncate(events);
+            track.points.truncate(events);
+            track.tails.truncate(tails);
+            *visited = seen;
         }
     }
 }
@@ -88,6 +130,7 @@ fn decode_path(
         }
         visited.insert(track.state.clone(), track.events.len());
         let at = track.state.at;
+        track.command = (at, track.state.patterns.clone());
         let byte = track.reader.u8(at)?;
         let (cmd, operands) = if byte < CMD_WAIT {
             let status = track
@@ -131,6 +174,101 @@ mod tests {
             GbaPtr::at(ROM_BASE),
             limit,
         )
+    }
+
+    /// `decode`d bytes at `ROM_BASE`, with `ptr(n)` the pointer to offset `n`.
+    fn ptr(offset: u32) -> [u8; 4] {
+        (ROM_BASE + offset).to_le_bytes()
+    }
+
+    fn note(key: u8) -> SongEvent {
+        SongEvent::Note {
+            key,
+            velocity: 100,
+            gate: 1,
+        }
+    }
+
+    #[test]
+    fn a_loops_second_lap_folds_back_when_it_never_reads_the_state_that_differs() {
+        // VOICE 1, then the loop `VOL 5; N01 60 100; W01; GOTO loop; FINE`. The
+        // second lap arrives with a note's running status and key the first
+        // lacked, but the body sets both before reading them.
+        let mut bytes = vec![0xBD, 1, 0xBE, 5, 0xD0, 60, 100, 0x81, 0xB2];
+        bytes.extend(ptr(2));
+        bytes.push(0xB1);
+        assert_eq!(
+            decode(&bytes, 64).unwrap(),
+            vec![
+                SongEvent::Voice(1),
+                SongEvent::Volume(5),
+                note(60),
+                SongEvent::Wait(1),
+                SongEvent::Goto(1),
+                SongEvent::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_loops_second_lap_stays_apart_when_an_elided_operand_reads_the_state() {
+        // The loop opens on a note with no key or velocity: the first lap plays
+        // the engine's initial 0/0, the second the key the body ended on.
+        let mut bytes = vec![0xBD, 1, 0xD0, 0xD0, 60, 100, 0x81, 0xB2];
+        bytes.extend(ptr(2));
+        bytes.push(0xB1);
+        assert_eq!(
+            decode(&bytes, 64).unwrap(),
+            vec![
+                SongEvent::Voice(1),
+                SongEvent::Note {
+                    key: 0,
+                    velocity: 0,
+                    gate: 1
+                },
+                note(60),
+                SongEvent::Wait(1),
+                note(60),
+                SongEvent::Goto(2),
+                SongEvent::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repeated_phrase_at_another_address_is_not_folded_into_the_first() {
+        // `VOL 5; N01 60 100; W01` twice, looping on the second: the two
+        // phrases behave alike but are different commands.
+        let mut bytes = vec![
+            0xBE, 5, 0xD0, 60, 100, 0x81, 0xBE, 5, 0xD0, 60, 100, 0x81, 0xB2,
+        ];
+        bytes.extend(ptr(6));
+        bytes.push(0xB1);
+        assert_eq!(
+            decode(&bytes, 64).unwrap(),
+            vec![
+                SongEvent::Volume(5),
+                note(60),
+                SongEvent::Wait(1),
+                SongEvent::Volume(5),
+                note(60),
+                SongEvent::Wait(1),
+                SongEvent::Goto(3),
+                SongEvent::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn bytes_after_a_goto_that_are_not_commands_leave_no_events() {
+        let mut bytes = vec![0x81, 0xB2];
+        bytes.extend(ptr(0));
+        // PORT, a named command this importer does not model.
+        bytes.push(0xCC);
+        assert_eq!(
+            decode(&bytes, 64).unwrap(),
+            vec![SongEvent::Wait(1), SongEvent::Goto(0)]
+        );
     }
 
     #[test]
@@ -194,6 +332,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(decode(&bytes, 8).unwrap().len(), 8);
+        // The budget counts the unfolded stream; the repeated `VOL` then folds away.
+        assert_eq!(decode(&bytes, 8).unwrap().len(), 6);
     }
 }

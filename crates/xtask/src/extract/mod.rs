@@ -46,8 +46,8 @@
 //!   and PP text palettes;
 //! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
 //!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
-//! - every checkpoint song in the song manifest (`midi::manifest`), plus
-//!   `mus_title`'s transitive voicegroup tree and every sample that tree
+//! - every checkpoint song in the song manifest (`midi::manifest`), plus the
+//!   transitive voicegroup closure of those songs and every sample that closure
 //!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
 //!   templates `BufferStringBattle` selects); and
@@ -216,9 +216,9 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
     battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
-    audio_samples::extract_audio_samples(&upstream, &mut writer)?;
+    let sample_ids = voicegroups::extract_voicegroups(&upstream, &mut writer)?;
+    audio_samples::extract_audio_samples(&upstream, &sample_ids, &mut writer)?;
     cry::extract_cries(&upstream, &mut writer)?;
-    voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
