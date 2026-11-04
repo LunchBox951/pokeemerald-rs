@@ -462,7 +462,7 @@ mod tests {
             lotad.moves()
         );
         assert_eq!(
-            battle.trainer().map(|trainer| trainer.bench_len()),
+            battle.trainer().map(battle::TrainerContext::bench_len),
             Some(1),
             "the level-6 Shroomish waits in reserve"
         );
