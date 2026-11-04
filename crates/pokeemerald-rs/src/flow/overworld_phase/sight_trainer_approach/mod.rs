@@ -10,7 +10,7 @@
 //! (`data/scripts/trainer_battle.inc:95-110`), which is where upstream's
 //! `dotrainerbattle` finally starts the fight. Everything before that
 //! handoff is here; the fight itself stays with the trigger module, whose
-//! [`OverworldPhase::advance_sight_trainer_battle_frame`] drives it.
+//! [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_battle_frame`] drives it.
 //!
 //! # Frames, not pixels
 //!
@@ -18,7 +18,7 @@
 //! modelled by its **timing** rather than drawn: its own sixty-frame
 //! animation ([`EXCLAMATION_ICON_FRAMES`]) is spent exactly where upstream
 //! spends it. The trainer's walk is committed to the active map's live
-//! object-event collection ([`OverworldPhase::object_events`]) a tile at a
+//! object-event collection ([`crate::flow::overworld_phase::OverworldPhase::object_events`]) a tile at a
 //! time, sixteen frames per tile ([`WALK_FRAMES_PER_TILE`]), with its tile,
 //! facing, movement type and template write-back all really updated *there*
 //! -- the [`SightApproach`] holds only the entry's local ID -- so the stopped
@@ -47,7 +47,7 @@
 //!   only `TRAINER_TYPE_NORMAL` object events exist in this port's bundled
 //!   data.
 //! - **`FreezeObjectEvents`/`LockPlayerFieldControls`.** The approach owns
-//!   every frame it runs on ([`SightTrainerOutcome::owns_frame`]), which is
+//!   every frame it runs on ([`super::sight_trainer_trigger::SightTrainerOutcome::owns_frame`]), which is
 //!   the observable half of both; there are no other moving object events to
 //!   freeze, and the one control this port's own lock does not reach -- the
 //!   start menu -- is [`super::start_menu`]'s to gate, not this module's.
@@ -146,11 +146,11 @@ enum ApproachStage {
 /// One sight trainer's in-progress approach: which live object event is being
 /// walked, the speech it will give, and the battle waiting at the end of it.
 ///
-/// Owned by [`OverworldPhase`] (one field, `Option`-shaped, exactly like the
+/// Owned by [`crate::flow::overworld_phase::OverworldPhase`] (one field, `Option`-shaped, exactly like the
 /// battles it hands off to), constructed by
-/// [`OverworldPhase::begin_sight_trainer_approach_if_seen`], and driven one
+/// [`crate::flow::overworld_phase::OverworldPhase::begin_sight_trainer_approach_if_seen`], and driven one
 /// frame at a time by
-/// [`OverworldPhase::advance_sight_trainer_approach_frame`].
+/// [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_approach_frame`].
 ///
 /// The [`battle::Battle`] is built at trigger time and carried here rather
 /// than built at the end -- see that trigger method's own docs for why
@@ -160,7 +160,7 @@ enum ApproachStage {
 pub(super) struct SightApproach {
     /// The local ID of the active map's live collection entry that was
     /// selected: every walk, turn and write-back of this approach lands on
-    /// that entry ([`OverworldPhase::object_events`]), so the stopped trainer
+    /// that entry ([`crate::flow::overworld_phase::OverworldPhase::object_events`]), so the stopped trainer
     /// outlives the approach.
     local_id: u8,
     /// `InitTrainerApproachTask`'s `range` argument, `approachDistance - 1`
@@ -172,7 +172,7 @@ pub(super) struct SightApproach {
     /// The already-constructed fight (struct docs).
     battle: battle::Battle,
     /// Which trainer that fight is against, for the defeated flag
-    /// [`OverworldPhase::advance_sight_trainer_battle_frame`] sets on a win.
+    /// [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_battle_frame`] sets on a win.
     trainer_id: TrainerId,
     /// Where in the sequence this approach currently is.
     stage: ApproachStage,
@@ -181,7 +181,7 @@ pub(super) struct SightApproach {
 impl SightApproach {
     /// Start `trainer`'s approach: the icon goes up once the player stands
     /// still (`TrainerExclamationMark`'s `FieldEffectStart`, gated behind
-    /// `lockfortrainer` -- [`OverworldPhase`]'s driver holds the countdown
+    /// `lockfortrainer` -- [`crate::flow::overworld_phase::OverworldPhase`]'s driver holds the countdown
     /// while a step is in flight) and the walk-up begins when it comes down.
     pub(super) const fn new(
         local_id: u8,
@@ -233,7 +233,7 @@ impl SightApproach {
     /// is whether the player's step was still in flight *before* this frame's
     /// animation ran: the freeze task polls the state the previous frame left,
     /// so the frame a step drains on is still a moving frame -- the trigger
-    /// frame included, which [`OverworldPhase::step`] reports itself.
+    /// frame included, which [`crate::flow::overworld_phase::OverworldPhase::step`] reports itself.
     pub(super) fn advance_lock_handoff(&mut self, player_was_moving: bool) {
         let ApproachStage::LockHandoff { frames_left } = self.stage else {
             return;
@@ -348,7 +348,7 @@ impl SightApproach {
     ///
     /// Returns the direction the player must turn to meet it --
     /// `GetOppositeDirection(trainerObj->facingDirection)` (`:526`) --
-    /// which only [`OverworldPhase`] can apply.
+    /// which only [`crate::flow::overworld_phase::OverworldPhase`] can apply.
     ///
     /// Advances to [`ApproachStage::PlayerFaceWait`] -- that variant's own
     /// docs say why not straight to `IntroMessage`.

@@ -1,4 +1,4 @@
-//! [`OverworldPhase`]'s frame driver for the approach: the lock handoff, the
+//! [`crate::flow::overworld_phase::OverworldPhase`]'s frame driver for the approach: the lock handoff, the
 //! per-frame stage dispatch that applies each step to the live object-event
 //! collection, the intro speech and the handoff into the battle.
 
@@ -16,8 +16,8 @@ impl OverworldPhase {
     /// the latched-landing bookkeeping that goes with it -- the pair that
     /// runs on **every** frame the approach owns, whether that is the
     /// trigger frame which starts the approach
-    /// ([`super::step::OverworldPhase::step`]'s early return on
-    /// [`SightTrainerOutcome::owns_frame`]) or one of the cutscene frames
+    /// ([`crate::flow::overworld_phase::OverworldPhase::step`]'s early return on
+    /// [`super::super::sight_trainer_trigger::SightTrainerOutcome::owns_frame`]) or one of the cutscene frames
     /// after it ([`Self::advance_sight_trainer_approach_frame`]). One
     /// method is shared by both call sites so the two cannot drift apart.
     ///
@@ -33,14 +33,14 @@ impl OverworldPhase {
     /// `CheckForTrainersWantingBattle` returns `TRUE` and the lock engages
     /// on (`src/overworld.c:1447-1449`) still animates the player's
     /// in-flight step afterwards -- which is why this runs unconditionally,
-    /// exactly as [`super::input::advance_or_skip_for_preempt`] ticks on a
+    /// exactly as [`super::super::input::advance_or_skip_for_preempt`] ticks on a
     /// preempted frame it already knows the tick is a no-op on, to keep the
     /// same "the walk-animation timer always advances" contract whole.
     ///
     /// # That drained step's tile is owed nothing
     ///
     /// A step that finishes under the lock finishes *unobserved* upstream,
-    /// so [`super::step`]'s latched `pending_landing` is dropped here
+    /// so [`super::super::step`]'s latched `pending_landing` is dropped here
     /// rather than carried across the cutscene. Upstream derives
     /// `input->tookStep` and `input->checkStandardWildEncounter` from the
     /// *current* frame's `gPlayerAvatar.tileTransitionState`
@@ -60,7 +60,7 @@ impl OverworldPhase {
     /// this port can be wrong, and *which* one it got would turn on nothing
     /// more than whether a direction happened to still be held when the
     /// fight ended: with one held, the next ordinary frame's
-    /// [`super::input::advance_or_skip_for_preempt`] silently overwrites
+    /// [`super::super::input::advance_or_skip_for_preempt`] silently overwrites
     /// the stale tile with the new step's; with none held, that frame fires
     /// the old tile's warp/encounter/coordinate event a whole cutscene
     /// late. It would also break the "at rest implies no latched landing"
@@ -87,14 +87,14 @@ impl OverworldPhase {
 
     /// Play one frame of an in-progress sight-trainer approach, if there is
     /// one -- `None` when there is not, so
-    /// [`super::step::OverworldPhase::step`] can fall through to the rest of
+    /// [`crate::flow::overworld_phase::OverworldPhase::step`] can fall through to the rest of
     /// the frame.
     ///
     /// An approach that *is* running owns the frame outright, from the
     /// exclamation mark to the battle handoff: no movement, no warp, no
     /// encounter roll, no interaction, and no ordinary dialog tick (this
     /// method ticks its own intro box, ahead of
-    /// [`OverworldPhase::advance_dialog_frame`]'s generic one). That is
+    /// [`crate::flow::overworld_phase::OverworldPhase::advance_dialog_frame`]'s generic one). That is
     /// upstream's `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
     /// `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
     /// (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
@@ -106,7 +106,7 @@ impl OverworldPhase {
     /// [`Self::begin_sight_trainer_approach_if_seen`] reads the player's
     /// *post-movement* tile ([`engine::overworld::PlayerState::position`],
     /// updated the instant a step is committed -- that method's own call
-    /// site in [`super::step::OverworldPhase::step`]), so the cone can
+    /// site in [`crate::flow::overworld_phase::OverworldPhase::step`]), so the cone can
     /// reach the player on the very frame after they step onto the tile it
     /// covers, while their own held walk is still mid-tile
     /// ([`engine::overworld::PlayerState::in_transit`]). Upstream does not
@@ -235,12 +235,12 @@ impl OverworldPhase {
     /// therefore runs on the confirm frame itself, with no intervening clear
     /// and no post-clear reveal delay, exactly as upstream goes straight from
     /// `waitbuttonpress` to `dotrainerbattle`. The intro strings carry no
-    /// trailing `{P}` for the same reason ([`super::sight_trainer_trigger`]'s
+    /// trailing `{P}` for the same reason ([`super::super::sight_trainer_trigger`]'s
     /// `SightTrainer::intro` docs).
     ///
     /// `ShowTrainerIntroSpeech` -> `ShowFieldMessage`
     /// (`pokeemerald/src/battle_setup.c:1378-1401`), so the box opens at
-    /// [`super::OverworldPhase::field_dialog_text_speed`]'s own cadence, not
+    /// [`crate::flow::overworld_phase::OverworldPhase::field_dialog_text_speed`]'s own cadence, not
     /// a fixed one.
     ///
     /// `special TryPrepareSecondApproachingTrainer` sits between the two
@@ -286,9 +286,9 @@ impl OverworldPhase {
     }
 
     /// `dotrainerbattle` (`trainer_battle.inc:110`): the approach ends
-    /// and the fight [`OverworldPhase::begin_sight_trainer_approach_if_seen`]
+    /// and the fight [`crate::flow::overworld_phase::OverworldPhase::begin_sight_trainer_approach_if_seen`]
     /// already built becomes
-    /// [`OverworldPhase::advance_sight_trainer_battle_frame`]'s to drive.
+    /// [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_battle_frame`]'s to drive.
     ///
     /// This is where the lead is finally lent -- not
     /// at trigger time (module docs on the mid-approach save).
@@ -319,7 +319,7 @@ impl OverworldPhase {
     /// This module's own `impl OverworldPhase` block is where
     /// [`Self::sight_approach`] is written from production code, but the
     /// module itself (`overworld_phase::sight_trainer_approach`) is private
-    /// to [`super::OverworldPhase`]'s own module, so a sibling test module
+    /// to [`crate::flow::overworld_phase::OverworldPhase`]'s own module, so a sibling test module
     /// such as [`crate::flow::start_menu_tests`] cannot reach a bare
     /// constructor the way this module's own tests do (`approaching_from`,
     /// below) -- only a method on `OverworldPhase` itself, which method
