@@ -1,5 +1,5 @@
 //! The approach's write-back lands on the active map's live object-event
-//! collection (I-5, #790), so what the player sees on returning from the
+//! collection, so what the player sees on returning from the
 //! battle is the trainer where and how it stopped: the same tile, facing and
 //! movement type (`PlayerFaceApproachingTrainer`'s `SetTrainerMovementType`
 //! and the template overrides, `trainer_see.c:517-519`), blocking and seeing

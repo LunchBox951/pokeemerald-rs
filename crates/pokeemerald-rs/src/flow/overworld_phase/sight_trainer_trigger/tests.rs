@@ -48,8 +48,8 @@ fn every_sight_trainer_id_resolves_with_the_expected_double_battle_flag() {
 }
 
 /// Every transcribed intro speech is real, printable text: non-empty,
-/// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and --
-/// since issue #410 -- carrying *no* trailing `{P}`, exactly like the
+/// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and
+/// carrying *no* trailing `{P}`, exactly like the
 /// upstream strings it transcribes ([`SightTrainer::intro`]'s own docs).
 ///
 /// The button wait is the script's, not the text's: `waitbuttonpress`
@@ -226,8 +226,7 @@ fn only_a_refusal_leaves_the_frame_alone() {
 /// ([`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s "Refusals
 /// cost nothing, forever").
 ///
-/// The **exact** refusal is pinned per trainer, not merely "it fails"
-/// (issue #264 review): the reason a trainer is unreachable is the
+/// The **exact** refusal is pinned per trainer, not merely "it fails": the reason a trainer is unreachable is the
 /// interesting fact, and naming the offending move id is what forces a
 /// future move-coverage slice to come back here -- scoring a
 /// trainer's refusing move leaves one who fails on the next one, and a
