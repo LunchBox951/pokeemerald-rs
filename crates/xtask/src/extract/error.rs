@@ -294,6 +294,27 @@ pub enum ExtractError {
         /// Decoder failure.
         WavError,
     ),
+    /// A voicegroup references a sample id that names no canonical sample source.
+    MalformedSampleId(
+        /// The referenced pack id.
+        String,
+    ),
+    /// A sample definitions file does not parse as the pinned upstream shape.
+    SampleDefinitions {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A voicegroup references a sample symbol its definitions file does not define.
+    UndefinedSample {
+        /// The assembler label the voicegroup references.
+        label: String,
+        /// The definitions file that lacks it.
+        path: PathBuf,
+    },
     /// A programmable-wave source is not the required 16 bytes.
     ProgrammableWaveWrongSize {
         /// Source path.
@@ -516,6 +537,18 @@ impl fmt::Display for ExtractError {
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())
             }
+            Self::MalformedSampleId(id) => write!(
+                f,
+                "voicegroups reference sample id `{id}`, which names no sample source"
+            ),
+            Self::SampleDefinitions { path, line, detail } => {
+                write!(f, "sample definitions `{}` line {line}: {detail}", path.display())
+            }
+            Self::UndefinedSample { label, path } => write!(
+                f,
+                "a voicegroup references sample `{label}`, which `{}` does not define",
+                path.display()
+            ),
             Self::ProgrammableWaveWrongSize { path, actual } => write!(
                 f,
                 "programmable-wave source `{}` is {actual} bytes: expected exactly 16",

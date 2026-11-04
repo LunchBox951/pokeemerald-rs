@@ -99,6 +99,18 @@ pub(crate) enum VoiceGroupError {
         id_len: usize,
     },
     UnindexedLinkOrderFile(String),
+    /// Two song roots resolve the same group to different records at one slot.
+    ConflictingClosureSlot {
+        group: String,
+        slot: usize,
+        root: String,
+    },
+    /// A resolved key-split or rhythm slot names a child group the closure
+    /// does not hold.
+    UnresolvedClosureEdge {
+        group: String,
+        target: String,
+    },
     /// `assets` rejected a resolved slot as outside the pack schema's domain
     /// when the group was encoded.
     InvalidAssetSchema {
@@ -279,6 +291,17 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "sound/voice_groups.inc links `sound/voicegroups/{path}`, but no parsed \
                  voicegroup declares that file (directory walk vs. linker order mismatch)"
+            ),
+            Self::ConflictingClosureSlot { group, slot, root } => write!(
+                f,
+                "voicegroup `{group}`: resolving song root `{root}` fills slot {slot} with a \
+                 different record than an earlier root did, so one linked group would have two \
+                 contents"
+            ),
+            Self::UnresolvedClosureEdge { group, target } => write!(
+                f,
+                "voicegroup `{group}` references `{target}`, which the resolved closure does not \
+                 hold"
             ),
             Self::InvalidAssetSchema { group, source } => write!(
                 f,

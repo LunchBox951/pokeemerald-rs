@@ -24,7 +24,9 @@
 //! records before its first declared one, so slots `0..starting_note` are the
 //! physically preceding linked records (see
 //! `Resolver::collect_alias_predecessors`). A missing or insufficient
-//! predecessor is an error, never silent empty slots.
+//! predecessor is an error, never silent empty slots. A predecessor's key-split
+//! or rhythm record is the one exception: an indirection target that aliases
+//! it keeps the slot empty, because upstream's `ply_note` aborts there.
 
 use std::collections::HashMap;
 
@@ -33,8 +35,15 @@ use super::parser::{
 };
 use super::{IndexedLinkOrderItem, VOICE_SLOT_COUNT};
 
-const DIRECT_SOUND_SAMPLE_PREFIX: &str = "DirectSoundWaveData_";
-const PROGRAMMABLE_WAVE_SAMPLE_PREFIX: &str = "ProgrammableWaveData_";
+/// Pack id prefix of a `DirectSound` sample, ahead of the sample's name.
+pub(in crate::extract) const DIRECT_SOUND_ID_PREFIX: &str = "audio/sample/direct-sound/";
+/// Pack id prefix of a programmable-wave sample, ahead of its two-digit number.
+pub(in crate::extract) const PROGRAMMABLE_WAVE_ID_PREFIX: &str = "audio/sample/programmable-wave/";
+
+/// Assembler symbol prefix of a `DirectSound` sample, ahead of the sample's name.
+pub(in crate::extract) const DIRECT_SOUND_SYMBOL_PREFIX: &str = "DirectSoundWaveData_";
+/// Assembler symbol prefix of a programmable-wave sample, ahead of its number.
+pub(in crate::extract) const PROGRAMMABLE_WAVE_SYMBOL_PREFIX: &str = "ProgrammableWaveData_";
 
 /// One fully-resolved voicegroup slot: every reference (sample, child
 /// group) has been turned into a stable pack id. The shape mirrors
@@ -110,25 +119,25 @@ fn checked_pack_id(id: String, group: &str) -> Result<String, VoiceGroupError> {
 
 fn direct_sound_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGroupError> {
     let id = symbol
-        .strip_prefix(DIRECT_SOUND_SAMPLE_PREFIX)
+        .strip_prefix(DIRECT_SOUND_SYMBOL_PREFIX)
         .filter(|name| !name.is_empty())
-        .map(|name| format!("audio/sample/direct-sound/{name}"))
+        .map(|name| format!("{DIRECT_SOUND_ID_PREFIX}{name}"))
         .ok_or_else(|| VoiceGroupError::MalformedReference {
             group: group.to_owned(),
             reference: symbol.to_owned(),
-            expected_prefix: DIRECT_SOUND_SAMPLE_PREFIX,
+            expected_prefix: DIRECT_SOUND_SYMBOL_PREFIX,
         })?;
     checked_pack_id(id, group)
 }
 
 fn programmable_wave_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGroupError> {
     let suffix = symbol
-        .strip_prefix(PROGRAMMABLE_WAVE_SAMPLE_PREFIX)
+        .strip_prefix(PROGRAMMABLE_WAVE_SYMBOL_PREFIX)
         .filter(|name| !name.is_empty())
         .ok_or_else(|| VoiceGroupError::MalformedReference {
             group: group.to_owned(),
             reference: symbol.to_owned(),
-            expected_prefix: PROGRAMMABLE_WAVE_SAMPLE_PREFIX,
+            expected_prefix: PROGRAMMABLE_WAVE_SYMBOL_PREFIX,
         })?;
     let index: u32 =
         suffix
@@ -137,7 +146,7 @@ fn programmable_wave_sample_id(symbol: &str, group: &str) -> Result<String, Voic
                 group: group.to_owned(),
                 reference: symbol.to_owned(),
             })?;
-    checked_pack_id(format!("audio/sample/programmable-wave/{index:02}"), group)
+    checked_pack_id(format!("{PROGRAMMABLE_WAVE_ID_PREFIX}{index:02}"), group)
 }
 
 pub(super) fn voice_group_pack_id(label: &str) -> String {
@@ -192,6 +201,10 @@ pub(super) fn resolve_voice_groups_with_link_order(
     link_order: &[IndexedLinkOrderItem],
 ) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
     Resolver::new(raw_groups, keysplit_tables, link_order).resolve(top_label)
+}
+
+fn is_indirection(slot: &RawSlot) -> bool {
+    matches!(slot, RawSlot::KeySplit { .. } | RawSlot::Rhythm { .. })
 }
 
 fn convert_leaf_slot(raw_slot: &RawSlot, group_label: &str) -> Result<VoiceSlot, VoiceGroupError> {
@@ -451,7 +464,10 @@ impl<'a> Resolver<'a> {
     /// slots `0..N` are the `N` physically preceding linked records, never
     /// empty positions. Predecessor groups contribute their raw declared
     /// records; borrowed ones keep their source group's label for diagnostics
-    /// and the borrower's origin for the nested-indirection rule.
+    /// and the borrower's origin for the nested-indirection rule. An
+    /// indirection target aliasing a predecessor's key-split or rhythm record
+    /// leaves that slot [`VoiceSlot::Empty`]: upstream's `ply_note` aborts on
+    /// such a record rather than recursing, so the note stays silent.
     fn collect_alias_predecessors(
         &mut self,
         group: &RawVoiceGroup,
@@ -504,7 +520,12 @@ impl<'a> Resolver<'a> {
         records.reverse();
         records
             .into_iter()
-            .map(|(label, slot)| self.resolve_slot(label, slot_origin, slot))
+            .map(|(label, slot)| {
+                if slot_origin == SlotOrigin::IndirectionTarget && is_indirection(slot) {
+                    return Ok(VoiceSlot::Empty);
+                }
+                self.resolve_slot(label, slot_origin, slot)
+            })
             .collect()
     }
 
@@ -544,7 +565,7 @@ impl<'a> Resolver<'a> {
                 break;
             };
             cursor = index + 1;
-            if matches!(raw_slot, RawSlot::KeySplit { .. } | RawSlot::Rhythm { .. }) {
+            if is_indirection(raw_slot) {
                 continue;
             }
             let leaf = convert_leaf_slot(raw_slot, group_label)?;
