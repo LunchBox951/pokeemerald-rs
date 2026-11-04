@@ -11,7 +11,7 @@ fn a_stream_error_during_the_device_tail_is_not_a_successful_finish() {
         std::time::Duration::from_millis(200),
         || {
             errors_seen += 1;
-            errors_seen
+            Some(errors_seen)
         },
         |d| slept.push(d),
     );
@@ -25,7 +25,7 @@ fn a_stream_error_during_the_device_tail_is_not_a_successful_finish() {
 
 #[test]
 fn a_clean_device_tail_finishes_successfully() {
-    let result = wait_for_device_tail(std::time::Duration::from_millis(200), || 0, |_| {});
+    let result = wait_for_device_tail(std::time::Duration::from_millis(200), || None, |_| {});
 
     assert!(result.is_ok());
 }
@@ -89,9 +89,14 @@ fn the_orchestrator_prefers_the_measured_target_when_available() {
         48_000,
         &policy,
         || Some(progress(4, 4)),
-        || 0,
+        || None,
         std::time::Instant::now,
-        |_| panic!("the measured target is already reached; must not sleep"),
+        |duration| {
+            assert_eq!(
+                duration, SUPERVISION_GRACE,
+                "the reached target needs only the final look for an unpublished loss"
+            );
+        },
     );
 
     assert!(result.is_ok());
@@ -113,7 +118,7 @@ fn the_orchestrator_falls_back_to_the_derived_tail_with_no_measured_target() {
         48_000,
         &policy,
         || panic!("the measured path must not be consulted once no target is available"),
-        || 0,
+        || None,
         std::time::Instant::now,
         move |d| slept_sleep.borrow_mut().push(d),
     );
@@ -121,7 +126,11 @@ fn the_orchestrator_falls_back_to_the_derived_tail_with_no_measured_target() {
     assert!(result.is_ok());
     assert_eq!(
         *slept.borrow(),
-        vec![std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN],
-        "the fallback must sleep the single derived tail duration, not poll"
+        vec![
+            std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN,
+            SUPERVISION_GRACE
+        ],
+        "the fallback must sleep the single derived tail duration, not poll, then outwait \
+         the worker's supervision"
     );
 }

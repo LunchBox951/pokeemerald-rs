@@ -15,7 +15,7 @@ fn measured_wait_succeeds_immediately_once_the_target_is_already_reached() {
         48_000,
         &policy,
         || Some(progress(4, 4)),
-        || 0,
+        || None,
         std::time::Instant::now,
         |_| panic!("the target is already reached; must not sleep"),
     );
@@ -37,7 +37,7 @@ fn measured_wait_reports_a_stream_error_before_the_target_is_reached() {
         48_000,
         &policy,
         || Some(progress(0, 0)),
-        || 1,
+        || Some(1),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -63,7 +63,7 @@ fn measured_wait_reports_a_stalled_target_at_the_deadline() {
         48_000,
         &policy,
         || Some(progress(0, 0)),
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             sleeps.set(sleeps.get() + 1);
@@ -106,7 +106,7 @@ fn a_poll_landing_on_the_deadline_is_the_last() {
             let late = *clock.borrow() > started + policy.max_wait;
             Some(progress(if late { 4 } else { 0 }, 0))
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             sleeps.set(sleeps.get() + 1);
@@ -158,7 +158,7 @@ fn overslept_measured_reading(callback_ms: u64, reading_frames: u64) -> Result<(
                 progress_reading(0, 1_000, 1_000, started)
             })
         },
-        || 0,
+        || None,
         || *clock.borrow(),
         |duration| {
             sleeps.set(sleeps.get() + 1);

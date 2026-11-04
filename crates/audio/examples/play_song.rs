@@ -8,6 +8,7 @@
 //!
 //! Run with: `cargo run -p audio --example play_song`.
 
+use std::cell::RefCell;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,7 +20,7 @@ use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 #[path = "play_song/transport_wait.rs"]
 mod transport_wait;
 
-use transport_wait::settle_transport;
+use transport_wait::{settle_transport, PlaybackHealth};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -76,9 +77,9 @@ fn main() -> ExitCode {
     if let Some(code) = settle_transport(&mut output) {
         return code;
     }
-    // `stream_errors` counts every stream the transport has built; only an
-    // error during this playback fails the run.
-    let errors = ErrorBaseline::of(&output);
+    // `stream_errors` counts every stream the transport has built and every
+    // error it recovered from; only one that ended this playback fails the run.
+    let mut health = PlaybackHealth::begin(&mut output);
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     // Pace at the real game-frame period, the same cadence the output's
@@ -117,7 +118,7 @@ fn main() -> ExitCode {
             &buffer,
             &policy,
             |chunk| producer.push(chunk),
-            || errors.since(&output),
+            || health.terminal_errors(&mut output),
             Instant::now,
             std::thread::sleep,
         );
@@ -136,7 +137,7 @@ fn main() -> ExitCode {
         ring_capacity_samples,
         &policy,
         || producer.available_space(),
-        || errors.since(&output),
+        || health.terminal_errors(&mut output),
         Instant::now,
         std::thread::sleep,
     ) {
@@ -156,14 +157,18 @@ fn main() -> ExitCode {
             output.playback_settle_margin_frames(),
         )
     });
-    let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
+    let device_sample_rate = output.device_sample_rate();
+    let derived_tail = device_tail_wait(output.max_callback_frames(), device_sample_rate);
+    // The progress and health hooks share the output; each borrows it only
+    // for its own look.
+    let output = RefCell::new(output);
     let tail_result = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
-        output.device_sample_rate(),
+        device_sample_rate,
         &policy,
-        || output.playback_progress(),
-        || errors.since(&output),
+        || output.borrow().playback_progress(),
+        || health.terminal_errors(&mut output.borrow_mut()),
         Instant::now,
         std::thread::sleep,
     );
@@ -172,22 +177,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
-}
-
-/// The lifetime [`AudioOutput::stream_errors`] count when playback began, so
-/// an error a since-replaced stream reported earlier does not fail it.
-#[derive(Clone, Copy, Debug)]
-struct ErrorBaseline(u64);
-
-impl ErrorBaseline {
-    fn of(output: &AudioOutput) -> Self {
-        Self(output.stream_errors())
-    }
-
-    /// Stream errors reported since the baseline was taken.
-    fn since(self, output: &AudioOutput) -> u64 {
-        output.stream_errors().saturating_sub(self.0)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -279,12 +268,21 @@ enum PushError {
     DeadlineExceeded { dropped: usize },
 }
 
+/// What a terminal transport failure with `errors` stream errors reports. A
+/// stream the transport lost without any callback error still ends playback.
+fn stream_failure(errors: u64) -> String {
+    match errors {
+        0 => "the transport detached its stream with no asynchronous stream error reported".into(),
+        errors => format!("{errors} asynchronous stream error(s) reported"),
+    }
+}
+
 impl PushError {
     fn describe(&self) -> String {
         match *self {
             PushError::StreamStopped { errors, dropped } => format!(
-                "{errors} asynchronous stream error(s) reported; {dropped} sample(s) from the \
-                 current frame were not queued"
+                "{}; {dropped} sample(s) from the current frame were not queued",
+                stream_failure(errors)
             ),
             PushError::DeadlineExceeded { dropped } => format!(
                 "no progress queuing the ring buffer before the {:.1}s retry deadline; \
@@ -298,19 +296,21 @@ impl PushError {
 /// Push all of `samples`, retrying a full ring within `policy`.
 ///
 /// The retry budget covers the whole frame; partial progress does not renew it.
+/// `terminal_errors` reports the stream errors that ended the playback
+/// ([`PlaybackHealth::terminal_errors`]); an error the transport recovered
+/// from reports `None` and the push carries on.
 fn push_frame(
     samples: &[f32],
     policy: &RetryPolicy,
     mut push: impl FnMut(&[f32]) -> usize,
-    mut stream_errors: impl FnMut() -> u64,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), PushError> {
     let deadline = now() + policy.max_wait;
     let mut queued = 0;
     loop {
-        let errors = stream_errors();
-        if errors > 0 {
+        if let Some(errors) = terminal_errors() {
             return Err(PushError::StreamStopped {
                 errors,
                 dropped: samples.len() - queued,
@@ -321,8 +321,7 @@ fn push_frame(
             return Ok(());
         }
         // An asynchronous stream failure is more informative than retry expiry.
-        let errors = stream_errors();
-        if errors > 0 {
+        if let Some(errors) = terminal_errors() {
             return Err(PushError::StreamStopped {
                 errors,
                 dropped: samples.len() - queued,
@@ -355,13 +354,13 @@ fn wait_for_frame_deadline(
 /// `remaining` may be zero even on a stream failure.
 #[derive(Clone, Copy)]
 enum DrainError {
-    /// `AudioOutput::stream_errors` went nonzero while samples were still
-    /// queued and unplayed.
+    /// The transport ended the playback with stream errors reported while
+    /// samples were still queued and unplayed.
     StreamStopped { errors: u64, remaining: usize },
     /// `RetryPolicy::max_wait` elapsed with no stream error reported.
     DeadlineExceeded { remaining: usize },
-    /// `AudioOutput::stream_errors` went nonzero after the ring emptied,
-    /// while the device was still playing its final buffer.
+    /// The transport ended the playback with stream errors reported after the
+    /// ring emptied, while the device was still playing its final buffer.
     StreamStoppedDuringTail { errors: u64 },
     /// `RetryPolicy::max_wait` elapsed with the device's measured playback
     /// position still short of the submitted target and no stream error
@@ -373,12 +372,12 @@ impl DrainError {
     fn describe(&self) -> String {
         match *self {
             DrainError::StreamStopped { errors, remaining } => format!(
-                "{errors} asynchronous stream error(s) reported while {remaining} sample(s) were \
-                 still queued and unplayed"
+                "{} while {remaining} sample(s) were still queued and unplayed",
+                stream_failure(errors)
             ),
             DrainError::StreamStoppedDuringTail { errors } => format!(
-                "{errors} asynchronous stream error(s) reported while the device played its \
-                 final buffer"
+                "{} while the device played its final buffer",
+                stream_failure(errors)
             ),
             DrainError::DeadlineExceeded { remaining } => format!(
                 "no drain progress before the {:.1}s retry deadline; {remaining} sample(s) were \
@@ -402,7 +401,7 @@ fn wait_for_drain(
     capacity: usize,
     policy: &RetryPolicy,
     mut available_space: impl FnMut() -> usize,
-    mut stream_errors: impl FnMut() -> u64,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
@@ -411,8 +410,7 @@ fn wait_for_drain(
         // An empty-ring observation must not be paired with an older
         // healthy-stream observation.
         let remaining = capacity.saturating_sub(available_space());
-        let errors = stream_errors();
-        if errors > 0 {
+        if let Some(errors) = terminal_errors() {
             return Err(DrainError::StreamStopped { errors, remaining });
         }
         if remaining == 0 {
@@ -449,17 +447,39 @@ fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32)
     }
 }
 
-/// Sleeps `tail`, then fails if `stream_errors` is nonzero: a device error
+/// Sleeps `tail`, then fails if the playback ended: a terminal device error
 /// during the tail means the last buffer never played.
 fn wait_for_device_tail(
     tail: Duration,
-    mut stream_errors: impl FnMut() -> u64,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
     sleep(tail);
-    match stream_errors() {
-        0 => Ok(()),
-        errors => Err(DrainError::StreamStoppedDuringTail { errors }),
+    finish_unless_lost(&mut terminal_errors, &mut sleep)
+}
+
+/// How long the final look waits for the transport worker to publish a loss
+/// that no callback error counted (a refused `play`, a default output that
+/// changed). Unlike a fatal callback error, which
+/// [`PlaybackHealth::terminal_errors`] sees the moment it is counted, such a
+/// loss is visible only once the worker publishes it, and the platform offers
+/// no acknowledgement that it has looked: this wait is best effort.
+const SUPERVISION_GRACE: Duration = Duration::from_millis(100);
+
+/// The success decision at the end of the tail. A fatal callback error is
+/// already terminal in the first look; the look repeated after
+/// [`SUPERVISION_GRACE`] is for a loss only the worker can report.
+fn finish_unless_lost(
+    terminal_errors: &mut impl FnMut() -> Option<u64>,
+    sleep: &mut impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    if let Some(errors) = terminal_errors() {
+        return Err(DrainError::StreamStoppedDuringTail { errors });
+    }
+    sleep(SUPERVISION_GRACE);
+    match terminal_errors() {
+        None => Ok(()),
+        Some(errors) => Err(DrainError::StreamStoppedDuringTail { errors }),
     }
 }
 
@@ -574,7 +594,7 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 ///   can exceed `max_wait` by one sleep's actual duration, which
 ///   `std::thread::sleep` only bounds from below.
 ///
-/// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
+/// `progress`, `terminal_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`]; [`MeasuredTail`] owns the per-snapshot decisions.
 #[expect(
     clippy::too_many_arguments,
@@ -586,7 +606,7 @@ fn wait_for_measured_tail(
     device_sample_rate: u32,
     policy: &RetryPolicy,
     mut progress: impl FnMut() -> Option<PlaybackProgress>,
-    mut stream_errors: impl FnMut() -> u64,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
@@ -600,8 +620,7 @@ fn wait_for_measured_tail(
     );
     loop {
         let snapshot = progress();
-        let errors = stream_errors();
-        if errors > 0 {
+        if let Some(errors) = terminal_errors() {
             return Err(DrainError::StreamStoppedDuringTail { errors });
         }
         let Some(snapshot) = snapshot else {
@@ -939,7 +958,7 @@ impl MeasuredTail {
 /// With a `submitted_target`, it runs [`wait_for_measured_tail`], whose
 /// contract covers stale timestamps, live callbacks, and the deadline. Without
 /// one it sleeps `derived_tail` via [`wait_for_device_tail`], ignoring
-/// `policy`; stream errors fail both. Hooks are injected as in [`push_frame`].
+/// `policy`; a terminal stream error fails both. Hooks are injected as in [`push_frame`].
 #[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
@@ -950,9 +969,9 @@ fn wait_for_device_tail_or_measured(
     device_sample_rate: u32,
     policy: &RetryPolicy,
     progress: impl FnMut() -> Option<PlaybackProgress>,
-    stream_errors: impl FnMut() -> u64,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     now: impl FnMut() -> Instant,
-    sleep: impl FnMut(Duration),
+    mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
     if let Some(target) = submitted_target {
         wait_for_measured_tail(
@@ -961,12 +980,13 @@ fn wait_for_device_tail_or_measured(
             device_sample_rate,
             policy,
             progress,
-            stream_errors,
+            &mut terminal_errors,
             now,
-            sleep,
-        )
+            &mut sleep,
+        )?;
+        finish_unless_lost(&mut terminal_errors, &mut sleep)
     } else {
-        wait_for_device_tail(derived_tail, stream_errors, sleep)
+        wait_for_device_tail(derived_tail, terminal_errors, sleep)
     }
 }
 

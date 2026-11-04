@@ -108,6 +108,7 @@ fn a_lost_device_after_the_query_stays_an_audio_error() {
             &config,
             Source::Direct(consumer),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
             Arc::new(StreamHealth::default()),
             Arc::new(PlaybackClock::new()),
         ) else {
@@ -316,6 +317,7 @@ fn null_backend_reports_the_m4a_mixer_rate() {
     assert!(!output.is_running());
     // The null backend owns no cpal stream, so it never records errors.
     assert_eq!(output.stream_errors(), 0);
+    assert_eq!(output.fatal_stream_errors(), 0);
 }
 
 #[test]

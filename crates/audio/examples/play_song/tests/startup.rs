@@ -261,3 +261,24 @@ fn a_transport_still_connecting_at_the_timeout_is_a_setup_failure() {
         TransportOutcome::SetupFailure(TransportState::Connecting)
     );
 }
+
+#[test]
+fn a_transport_with_no_output_ends_the_run_as_expected_headless() {
+    use platform::audio::{TransportFailure, TransportState};
+    let no_output = TransportState::Unavailable(TransportFailure::NoOutput);
+    let mut transport = FakeTransport {
+        queued: [TransportState::Connecting, no_output].into(),
+        current: no_output,
+        publish_on_drain: None,
+    };
+    assert_eq!(
+        await_transport_with(
+            &mut transport,
+            FakeTransport::poll,
+            |t| t.current,
+            std::time::Duration::ZERO,
+        ),
+        TransportOutcome::ExpectedHeadless,
+        "no output before playback began is the headless success, not a stream failure"
+    );
+}

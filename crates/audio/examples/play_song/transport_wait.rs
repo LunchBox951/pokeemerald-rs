@@ -1,6 +1,8 @@
-//! Settling the output transport after `open`, which returns before any
-//! device is discovered: follow its transitions until one decides whether
-//! playback goes on, ends as the expected headless case, or fails setup.
+//! The output transport's lifecycle around playback. After `open`, which
+//! returns before any device is discovered, follow its transitions until one
+//! decides whether playback goes on, ends as the expected headless case, or
+//! fails setup. Once playback runs, [`PlaybackHealth`] tells a stream error
+//! the transport recovered from apart from one that ended the playback.
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -95,4 +97,98 @@ pub(super) fn settle_transport_once<O>(
 ) -> Option<TransportOutcome> {
     while poll(output).is_some() {}
     classify_transport(current(output))
+}
+
+fn is_unavailable(state: TransportState) -> bool {
+    matches!(state, TransportState::Unavailable(_))
+}
+
+/// Tells a recovered stream error from a terminal one while a song plays.
+///
+/// [`AudioOutput::stream_errors`] counts every error the callback reports,
+/// including an XRUN the backend re-prepares and carries on from, so a rise
+/// alone does not mean playback stopped. An error is terminal once it left
+/// its stream unusable ([`AudioOutput::fatal_stream_errors`], which the
+/// callback counts itself, so no worker poll has to confirm it first) or the
+/// transport has been unavailable since playback began: it detached the
+/// stream, and a later rebuild does not return the audio queued meanwhile.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PlaybackHealth {
+    /// The lifetime error count when playback began, so an error a
+    /// since-replaced stream reported earlier does not fail it.
+    baseline: u64,
+    /// The lifetime count of errors that left their stream unusable when
+    /// playback began.
+    fatal_baseline: u64,
+    /// The transport reported itself unavailable since playback began.
+    interrupted: bool,
+}
+
+impl PlaybackHealth {
+    /// Starts watching `output`, discarding the transitions it published
+    /// before playback began.
+    pub(super) fn begin(output: &mut AudioOutput) -> Self {
+        Self::begin_with(
+            output,
+            AudioOutput::poll_transport_state,
+            AudioOutput::stream_errors,
+            AudioOutput::fatal_stream_errors,
+        )
+    }
+
+    /// [`Self::begin`] over any `poll`/`errors`/`fatal` triple.
+    pub(super) fn begin_with<O>(
+        output: &mut O,
+        mut poll: impl FnMut(&mut O) -> Option<TransportState>,
+        errors: impl FnOnce(&O) -> u64,
+        fatal: impl FnOnce(&O) -> u64,
+    ) -> Self {
+        while poll(output).is_some() {}
+        Self {
+            // The total is read after the fatal count: the callback counts
+            // the total first, so a fatal error is never missing from it.
+            fatal_baseline: fatal(output),
+            baseline: errors(output),
+            interrupted: false,
+        }
+    }
+
+    /// The stream errors reported since playback began (possibly none, for a
+    /// stream lost without a callback error) once the transport has ended the
+    /// playback, else `None`: an error it recovered from is not one.
+    pub(super) fn terminal_errors(&mut self, output: &mut AudioOutput) -> Option<u64> {
+        self.terminal_errors_with(
+            output,
+            AudioOutput::poll_transport_state,
+            AudioOutput::transport_state,
+            AudioOutput::stream_errors,
+            AudioOutput::fatal_stream_errors,
+        )
+    }
+
+    /// [`Self::terminal_errors`] over any `poll`/`state`/`errors`/`fatal`
+    /// quadruple.
+    ///
+    /// The transitions and current state are read before the counts, so an
+    /// error counted after them is judged by the next look. A fatal error is
+    /// terminal as soon as the callback counts it, whether or not the worker
+    /// has retired the stream and published the loss yet. The reading stays
+    /// terminal once it has been.
+    pub(super) fn terminal_errors_with<O>(
+        &mut self,
+        output: &mut O,
+        mut poll: impl FnMut(&mut O) -> Option<TransportState>,
+        state: impl FnOnce(&O) -> TransportState,
+        errors: impl FnOnce(&O) -> u64,
+        fatal: impl FnOnce(&O) -> u64,
+    ) -> Option<u64> {
+        while let Some(published) = poll(output) {
+            self.interrupted |= is_unavailable(published);
+        }
+        self.interrupted |= is_unavailable(state(output));
+        // Fatal before the total, which the callback counts first.
+        self.interrupted |= fatal(output) > self.fatal_baseline;
+        let since = errors(output).saturating_sub(self.baseline);
+        self.interrupted.then_some(since)
+    }
 }

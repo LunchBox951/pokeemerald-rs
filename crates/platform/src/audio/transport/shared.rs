@@ -57,6 +57,9 @@ pub(in crate::audio) struct Shared {
     pub(super) starts: AtomicU64,
     pub(in crate::audio) shutdown: AtomicBool,
     pub(in crate::audio) stream_errors: Arc<AtomicU64>,
+    /// How many of [`Self::stream_errors`] left their stream unusable, counted
+    /// by the callback itself rather than the worker.
+    pub(in crate::audio) fatal_stream_errors: Arc<AtomicU64>,
     pub(in crate::audio) playback_clock: Arc<PlaybackClock>,
     pub(in crate::audio) device_sample_rate: AtomicU32,
     /// `0` when no concrete range is advertised.
@@ -79,6 +82,7 @@ impl Shared {
             starts: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
+            fatal_stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
             device_sample_rate: AtomicU32::new(device_sample_rate),
             max_callback_frames: AtomicUsize::new(0),

@@ -11,8 +11,12 @@ fn a_fatal_stream_error_rebuilds_on_the_current_default() {
     assert_eq!(rig.events(), [TransportState::Ready]);
 
     raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    // Nothing happens on the audio thread beyond the flag.
+    // Nothing happens on the audio thread beyond the flag and the counts,
+    // which are visible before the worker has supervised.
     assert_eq!(with(&w).builds, 1);
+    assert_eq!(rig.shared.stream_errors.load(Ordering::Relaxed), 1);
+    assert_eq!(rig.shared.fatal_stream_errors.load(Ordering::Acquire), 1);
+    assert_eq!(rig.events(), []);
     let next = rig.transport.step(MS(20));
     assert_eq!(next, MS(120));
     assert_eq!(
@@ -42,6 +46,11 @@ fn recoverable_stream_errors_are_counted_but_do_not_rebuild() {
     assert_eq!(rig.events(), []);
     assert_eq!(with(&w).builds, 1);
     assert_eq!(rig.shared.stream_errors.load(Ordering::Relaxed), 3);
+    assert_eq!(
+        rig.shared.fatal_stream_errors.load(Ordering::Acquire),
+        0,
+        "an error the stream carries on from is not a loss"
+    );
 }
 
 #[test]

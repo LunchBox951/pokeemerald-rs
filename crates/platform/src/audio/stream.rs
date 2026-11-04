@@ -166,7 +166,9 @@ impl OutputDevice for cpal::Device {
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
 /// the counter [`AudioOutput::stream_errors`](super::AudioOutput::stream_errors) reads;
-/// an error that leaves the stream unusable also raises `health.lost`, which
+/// an error that leaves the stream unusable also bumps `fatal_stream_errors`
+/// (read by [`AudioOutput::fatal_stream_errors`](super::AudioOutput::fatal_stream_errors))
+/// and raises `health.lost`, which
 /// the transport worker polls to rebuild it, and an automatic reroute raises
 /// `health.follows_default`. Every callback also
 /// records its device-frame count and the host's callback timestamp into
@@ -178,6 +180,7 @@ pub(super) fn build_stream<D: OutputDevice>(
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
+    fatal_stream_errors: Arc<AtomicU64>,
     health: Arc<StreamHealth>,
     playback_clock: Arc<PlaybackClock>,
 ) -> Result<D::Stream, PlatformError> {
@@ -192,6 +195,9 @@ pub(super) fn build_stream<D: OutputDevice>(
     let err_fn = move |err: cpal::Error| {
         stream_errors.fetch_add(1, Ordering::Relaxed);
         if error_requires_rebuild(err.kind()) {
+            // After the total, so a reader that sees this count has the total
+            // that includes it.
+            fatal_stream_errors.fetch_add(1, Ordering::Release);
             health.lost.store(true, Ordering::Release);
         } else if err.kind() == cpal::ErrorKind::DeviceChanged {
             health.follows_default.store(true, Ordering::Release);
