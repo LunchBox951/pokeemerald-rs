@@ -66,13 +66,47 @@ fn the_seed_connects_on_a_ninety_percent_roll_and_misses_on_the_next() {
         &seeding_draws(90),
     );
     rng.assert_exhausted();
-    assert!(events.contains(&BattleEvent::Missed {
-        by_player: true,
-        move_id: LEECH_SEED,
-    }));
+    assert!(
+        events.contains(&BattleEvent::LeechSeedEvaded {
+            by_player: true,
+            move_id: LEECH_SEED,
+        }),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::Missed { .. })),
+        "`B_MSG_LEECH_SEED_MISS` replaces the generic miss: {events:?}"
+    );
     assert!(!miss.enemy().volatiles().seeded());
     assert!(!has_sap(&events), "{events:?}");
     assert_eq!(miss.player().moves()[0].pp, 9);
+}
+
+#[test]
+fn a_missed_seed_still_leaves_no_landed_move() {
+    // The slower Wurmple seeds last, so Rattata's Splash cannot overwrite
+    // the record; `Cmd_setseeded` keeps `MOVE_RESULT_MISSED` on a miss
+    // (`src/battle_script_commands.c:6720`-`:6724`).
+    let (battle, events, rng) = wild_turn(
+        mon(WURMPLE, &[LEECH_SEED]),
+        mon(RATTATA, &[SPLASH]),
+        &seeding_draws(90),
+    );
+
+    rng.assert_exhausted();
+    assert!(
+        events.contains(&BattleEvent::LeechSeedEvaded {
+            by_player: true,
+            move_id: LEECH_SEED,
+        }),
+        "{events:?}"
+    );
+    assert_eq!(
+        battle.battler_state(BattlerSide::Enemy).last_landed_move(),
+        LastLandedMove::Unavailable
+    );
 }
 
 #[test]
@@ -114,10 +148,16 @@ fn a_reseed_fails_after_the_accuracy_draw_and_keeps_the_original_drain() {
 
     rng.assert_exhausted();
     assert!(
-        events.contains(&BattleEvent::Missed {
+        events.contains(&BattleEvent::LeechSeedEvaded {
             by_player: true,
             move_id: LEECH_SEED,
         }),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::Missed { .. })),
         "{events:?}"
     );
     assert!(!events

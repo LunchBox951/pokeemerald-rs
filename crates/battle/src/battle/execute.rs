@@ -58,6 +58,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
         matches!(
             event,
             BattleEvent::Missed { .. }
+                | BattleEvent::LeechSeedEvaded { .. }
                 | BattleEvent::NoEffect { .. }
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
@@ -1040,9 +1041,10 @@ impl Battle {
 
     /// `BattleScript_EffectLeechSeed`'s `setseeded` (`Cmd_setseeded`,
     /// `src/battle_script_commands.c:6718`-`:6738`). An accuracy miss and an
-    /// already-seeded target both report the generic [`BattleEvent::Missed`]
-    /// (their shared `B_MSG_LEECH_SEED_MISS`), and a Grass-type target
-    /// reports [`BattleEvent::NoEffect`] (`B_MSG_LEECH_SEED_FAIL`).
+    /// already-seeded target both report [`BattleEvent::LeechSeedEvaded`]
+    /// (their shared `B_MSG_LEECH_SEED_MISS`, which names the target rather
+    /// than the attacker's generic miss), and a Grass-type target reports
+    /// [`BattleEvent::NoEffect`] (`B_MSG_LEECH_SEED_FAIL`).
     fn execute_leech_seed_move(
         &mut self,
         attacker_is_player: bool,
@@ -1056,7 +1058,7 @@ impl Battle {
         };
         match outcome {
             LeechSeedOutcome::Miss | LeechSeedOutcome::AlreadySeeded => {
-                events.push(BattleEvent::Missed {
+                events.push(BattleEvent::LeechSeedEvaded {
                     by_player: attacker_is_player,
                     move_id,
                 });

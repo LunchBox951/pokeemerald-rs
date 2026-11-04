@@ -631,15 +631,28 @@ pub enum BattleEvent {
         damage: u32,
     },
     /// Leech Seed took hold of its target (`STRINGID_PKMNSEEDED`,
-    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss,
-    /// an already-seeded target, and a Grass-type target report
-    /// [`BattleEvent::Missed`], [`BattleEvent::Missed`], and
-    /// [`BattleEvent::NoEffect`] instead (`gLeechSeedStringIds`,
-    /// `src/battle_message.c:960`-`:967`).
+    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss
+    /// or an already-seeded target reports [`BattleEvent::LeechSeedEvaded`],
+    /// and a Grass-type target [`BattleEvent::NoEffect`], instead
+    /// (`gLeechSeedStringIds`, `src/battle_message.c:960`-`:967`).
     Seeded {
         /// Whether the player used the move.
         by_player: bool,
         /// The move that planted the seed.
+        move_id: MoveId,
+    },
+    /// Leech Seed missed its accuracy check or found its target already
+    /// seeded (`B_MSG_LEECH_SEED_MISS`, `Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6720`-`:6724`). Unlike
+    /// [`BattleEvent::Missed`], this names the target:
+    /// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+    /// `BattleScript_DoLeechSeed` on a miss too (`data/battle_scripts_1.s:1163`),
+    /// so both failures print `gLeechSeedStringIds`' `STRINGID_PKMNEVADEDATTACK`
+    /// (`src/battle_message.c:963`). Marks `MOVE_RESULT_MISSED` like a miss.
+    LeechSeedEvaded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that failed.
         move_id: MoveId,
     },
     /// `STRINGID_PKMNSAPPEDBYLEECHSEED` (`data/battle_scripts_1.s:3265`-

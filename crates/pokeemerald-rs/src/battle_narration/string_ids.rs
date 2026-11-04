@@ -39,6 +39,7 @@ pub(super) const PKMNALREADYCONFUSED: u16 = 68;
 pub(super) const PKMNGETTINGPUMPED: u16 = 99;
 pub(super) const PKMNHITWITHRECOIL: u16 = 100;
 pub(super) const PKMNSEEDED: u16 = 104;
+pub(super) const PKMNEVADEDATTACK: u16 = 105;
 pub(super) const PKMNSAPPEDBYLEECHSEED: u16 = 106;
 pub(super) const PKMNFASTASLEEP: u16 = 107;
 pub(super) const PKMNWOKEUP: u16 = 108;

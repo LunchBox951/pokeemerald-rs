@@ -32,6 +32,7 @@ const SLOTS: &[(u16, &str)] = &[
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
     (104, "{B_DEF_NAME_WITH_PREFIX} was seeded!"),
+    (105, "{B_DEF_NAME_WITH_PREFIX} evaded\nthe attack!"),
     (106, "{B_ATK_NAME_WITH_PREFIX}'s health is\nsapped by LEECH SEED!"),
     (298, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_LAST_ITEM}\nrestored health!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
@@ -411,6 +412,37 @@ fn leech_seed_and_oran_berry_print_their_own_messages() {
             "Wild RATTATA was seeded!",
             "Wild RATTATA's health is\nsapped by LEECH SEED!",
             "TORCHIC's ORAN BERRY\nrestored health!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed` on a miss (`data/battle_scripts_1.s:1163`), and
+/// `Cmd_setseeded` picks `B_MSG_LEECH_SEED_MISS` for that miss and for an
+/// already-seeded target alike (`src/battle_script_commands.c:6720`-`:6724`),
+/// so either failure names the target (`gLeechSeedStringIds`,
+/// `src/battle_message.c:963`) rather than the attacker's generic miss.
+#[test]
+fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::LeechSeedEvaded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::LeechSeedEvaded {
+                    by_player: false,
+                    move_id: MoveId::LEECH_SEED,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA evaded\nthe attack!",
+            "TORCHIC evaded\nthe attack!",
         ]
     );
 }

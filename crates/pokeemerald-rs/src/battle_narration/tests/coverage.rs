@@ -154,6 +154,7 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             damage: 1,
         },
         BattleEvent::Seeded { by_player, move_id },
+        BattleEvent::LeechSeedEvaded { by_player, move_id },
         BattleEvent::SappedByLeechSeed {
             by_player,
             damage: 1,
@@ -216,7 +217,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 74;
+const VARIANTS: usize = 75;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -297,6 +298,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::SappedByLeechSeed { .. } => 71,
         BattleEvent::LeechSeedHealed { .. } => 72,
         BattleEvent::ItemRestoredHealth { .. } => 73,
+        BattleEvent::LeechSeedEvaded { .. } => 74,
     }
 }
 

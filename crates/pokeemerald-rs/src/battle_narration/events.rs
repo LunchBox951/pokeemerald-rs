@@ -78,6 +78,9 @@ pub(super) fn requests(
     if let Some(requests) = announcements(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = setseeded_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = sleep_results(narrator, event) {
         return Ok(requests);
     }
@@ -94,6 +97,23 @@ pub(super) fn requests(
         return Ok(requests);
     }
     lifecycle::requests(narrator, names, event)
+}
+
+/// `BattleScript_DoLeechSeed`'s `printfromtable gLeechSeedStringIds`
+/// (`data/battle_scripts_1.s:1164`-`:1170`), with the user as attacker and
+/// the seeded or evading battler as target: the set entry, and the miss
+/// entry that both an accuracy miss (`accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed`, `:1163`) and a reseed select, which names the
+/// target (`src/battle_message.c:962`-`:963`) where a generic miss names the
+/// attacker.
+fn setseeded_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let (template, by_player) = match *event {
+        BattleEvent::Seeded { by_player, .. } => (id::PKMNSEEDED, by_player),
+        BattleEvent::LeechSeedEvaded { by_player, .. } => (id::PKMNEVADEDATTACK, by_player),
+        _ => return None,
+    };
+    let context = narrator.context().user_vs_target(Side::user(by_player));
+    Some(vec![table(template, context)])
 }
 
 /// The sleep, freeze and Truant cancellers' messages, in the user's own
@@ -146,11 +166,6 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         }
         BattleEvent::Missed { by_player, .. } => {
             table(id::ATTACKMISSED, base.user_vs_target(Side::user(by_player)))
-        }
-        // `gLeechSeedStringIds`'s set entry, printed by `BattleScript_DoLeechSeed`
-        // for the seeded target (`data/battle_scripts_1.s:1164`-`:1170`).
-        BattleEvent::Seeded { by_player, .. } => {
-            table(id::PKMNSEEDED, base.user_vs_target(Side::user(by_player)))
         }
         BattleEvent::FailedNoPp { .. } => table(id::BUTNOPPLEFT, base),
         BattleEvent::SnappedOutOfConfusion { by_player } => table(
