@@ -141,17 +141,18 @@ pub(super) fn undo_created_directories_with_capture_hooks(
                 match level_holds_entries(dir) {
                     Ok(false) => {}
                     Ok(true) => {
-                        leave_occupied(parent, dir);
+                        leave_unmoved(
+                            parent,
+                            dir,
+                            "it holds entries",
+                            "it holds entries, so rollback did not move it into a cleanup directory",
+                        );
                         break;
                     }
                     Err(err) => {
-                        warn_left_standing(
-                            dir,
-                            format_args!(
-                                "it could not be listed: {}; the levels above it are left too",
-                                std::io::Error::from(err)
-                            ),
-                        );
+                        let unlisted =
+                            format!("it could not be listed: {}", std::io::Error::from(err));
+                        leave_unmoved(parent, dir, &unlisted, &unlisted);
                         break;
                     }
                 }
@@ -224,22 +225,22 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     }
 }
 
-/// Reports that `dir` holds entries and is not moved. The listing read the
-/// held original, so if another writer moved it since the name was
-/// validated, it is reported where it stands now, not under its old name.
-fn leave_occupied(parent: &OwnedFd, dir: &CreatedDirectory) {
+/// Reports that `dir` is not moved because of `state` (it holds entries, or
+/// could not be listed). The check read the held original, so if another
+/// writer moved it since the name was validated, it is reported where it
+/// stands now, not under its old name. `in_place` is the reason given when
+/// the original is still at its name.
+fn leave_unmoved(parent: &OwnedFd, dir: &CreatedDirectory, state: &str, in_place: &str) {
     match holds_this_level(parent.as_fd(), &dir.name, dir) {
         Ok(true) => warn_left_standing(
             dir,
-            format_args!(
-                "it holds entries, so rollback did not move it into a cleanup directory; the levels above it are left too"
-            ),
+            format_args!("{in_place}; the levels above it are left too"),
         ),
         Ok(false) => {
             warn_left_standing(
                 dir,
                 format_args!(
-                    "it holds entries and another entry has taken its name; the levels above it are left too"
+                    "{state} and another entry has taken its name; the levels above it are left too"
                 ),
             );
             warn_if_moved_away(dir);
@@ -247,7 +248,7 @@ fn leave_occupied(parent: &OwnedFd, dir: &CreatedDirectory) {
         Err(err) => warn_left_standing(
             dir,
             format_args!(
-                "it holds entries and could not be examined under its name: {}; the levels above it are left too",
+                "{state} and could not be examined under its name: {}; the levels above it are left too",
                 std::io::Error::from(err)
             ),
         ),

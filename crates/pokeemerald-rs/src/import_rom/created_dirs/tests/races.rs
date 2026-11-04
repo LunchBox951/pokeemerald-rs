@@ -547,3 +547,37 @@ fn a_populated_level_is_not_moved_when_its_listing_lacks_a_descriptor() {
         "populated level a was renamed into the quarantine after its listing hit EMFILE"
     );
 }
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_moved_level_whose_listing_fails_is_reported_where_it_went() {
+    // The level is moved after validation and gains an entry, then the
+    // table fills so its listing fails: it is left standing, and the
+    // warning must name where the held original now is, not its old name.
+    use std::cell::RefCell;
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::races::a_moved_level_whose_listing_fails_is_reported_where_it_went",
+        );
+        assert!(
+            stderr.contains("it could not be listed"),
+            "listing did not fail; stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "original at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-moved-unlistable");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    let hog: RefCell<Vec<fs::File>> = RefCell::new(Vec::new());
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&level, &moved).unwrap();
+        fs::write(moved.join("keep"), b"x").unwrap();
+        *hog.borrow_mut() = fill_descriptor_table_leaving(0);
+    });
+    hog.borrow_mut().clear();
+    assert!(moved.join("keep").is_file());
+    mark_path("original at: ", &moved);
+}
