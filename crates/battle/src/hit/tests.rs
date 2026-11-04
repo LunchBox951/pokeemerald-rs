@@ -1689,3 +1689,74 @@ fn levitate_blocked_mud_shot_applies_no_speed_drop() {
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
     assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
 }
+
+/// `MOVE_HEADBUTT` and `MOVE_BITE` (`EFFECT_FLINCH_HIT`) and `MOVE_ASTONISH`
+/// (`EFFECT_FLINCH_MINIMIZE_HIT`), each with a 30% secondary chance.
+const FLINCH_MOVES: [MoveId; 3] = [MoveId::HEADBUTT, MoveId::BITE, MoveId::ASTONISH];
+
+#[test]
+fn the_flinch_wrappers_are_admitted_though_not_ordinary() {
+    let dex = Dex::new();
+    for move_id in FLINCH_MOVES {
+        let effect = dex.move_data(move_id).unwrap().effect;
+        assert!(!is_ordinary_hit_effect(effect), "{move_id:?}");
+        assert_eq!(ensure_resolvable(&dex, move_id), Ok(()), "{move_id:?}");
+    }
+}
+
+#[test]
+fn fake_out_and_twister_stay_rejected_despite_sharing_the_flinch_byte() {
+    let dex = Dex::new();
+    for move_id in [MoveId::FAKE_OUT, MoveId::TWISTER] {
+        assert!(dex.move_data(move_id).unwrap().power > 0, "{move_id:?}");
+        let attacker = mon(&dex, BULBASAUR, 10, vec![move_id]);
+        let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            ensure_resolvable(&dex, move_id),
+            Err(BattleError::UnsupportedMoveEffect(move_id))
+        );
+        assert_eq!(
+            resolve_hit(&dex, move_id, &attacker, &defender, false, &mut rng),
+            Err(BattleError::UnsupportedMoveEffect(move_id)),
+            "{move_id:?}"
+        );
+        assert_eq!(rng.draws(), 0, "{move_id:?}");
+    }
+}
+
+#[test]
+fn a_landed_flinch_hit_spends_four_draws_and_residues_29_and_30_split_apply_from_no_apply() {
+    let dex = Dex::new();
+    for move_id in FLINCH_MOVES {
+        let attacker = mon(&dex, BULBASAUR, 10, vec![move_id]);
+        let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+        assert_eq!(dex.move_data(move_id).unwrap().secondary_effect_chance, 30);
+        // 129 and 130 wrap onto the same residues as 29 and 30.
+        for (chance, expected) in [
+            (29, SecondaryApplication::Flinch),
+            (30, SecondaryApplication::None),
+            (129, SecondaryApplication::Flinch),
+            (130, SecondaryApplication::None),
+        ] {
+            let mut rng = SequenceRng::new([
+                ACCURACY_HIT_DRAW,
+                ORDINARY_NO_CRIT_DRAW,
+                BEST_DAMAGE_DRAW,
+                chance,
+            ]);
+            let resolution =
+                resolve_hit(&dex, move_id, &attacker, &defender, false, &mut rng).unwrap();
+            assert!(
+                matches!(resolution.outcome, HitOutcome::Hit { .. }),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                resolution.secondary_effect, expected,
+                "{move_id:?} {chance}"
+            );
+            assert_eq!(rng.draws(), 4, "{move_id:?} {chance}");
+            rng.assert_exhausted();
+        }
+    }
+}

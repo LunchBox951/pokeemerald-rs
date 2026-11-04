@@ -123,6 +123,13 @@ pub struct Battle {
     /// Move history, Perish Song and Truant state per battler, `[player, enemy]`,
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
+    /// Whether each battler's turn-order slot has begun this turn,
+    /// `[player, enemy]`: the singles adapter for upstream's
+    /// `GetBattlerTurnOrderNum(target) > gCurrentTurnActionNumber` flinch
+    /// guard (`battle_script_commands.c:2561`-`:2565`). A switch, run attempt
+    /// or move action all count, whether or not a canceller then stopped it.
+    /// Cleared by [`Battle::start_turn`].
+    acted_this_turn: [bool; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +357,7 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            acted_this_turn: [false; 2],
         })
     }
 
@@ -494,6 +502,7 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            acted_this_turn: [false; 2],
         })
     }
 
@@ -841,6 +850,7 @@ impl Battle {
             self.turn_counter = self.turn_counter.saturating_add(1);
         }
         self.turn_has_started = true;
+        self.acted_this_turn = [false; 2];
         self.random_turn_number = rng.next_u16();
     }
 
@@ -872,6 +882,7 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        self.acted_this_turn[0] = true;
         // Run Away escapes with no draw and no `run_tries` increment
         // (`pokeemerald/src/battle_util.c:427`-`:447`, `:475`).
         let success = if self.player.ability() == AbilityId::RUN_AWAY {
@@ -1000,6 +1011,11 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
         rng: &mut impl BattleRng,
     ) -> Result<(), BattleError> {
+        // `HandleEndTurn_ContinueBattle` clears every battler's flinch before
+        // `BattleTurnPassed` runs the residual pass, whether or not a canceller
+        // consumed it (`src/battle_main.c:3941`-`:3945`).
+        self.player.volatiles_mut().take_flinched();
+        self.enemy.volatiles_mut().take_flinched();
         if self.outcome.is_some() {
             return Ok(());
         }
@@ -1393,7 +1409,7 @@ impl Battle {
     }
 
     /// Runs one battler's turn-order slot: the sleep decrement, the frozen
-    /// draw, the Truant loafing gate, the confusion decrement, the
+    /// draw, the Truant loafing gate, the flinch cancel, the confusion decrement, the
     /// full-paralysis draw, the thaw-hit thaw, the Soundproof block, PP
     /// handling, then
     /// execution.
@@ -1413,6 +1429,7 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        self.acted_this_turn[BattlerSide::from_is_player(player_is_attacker).index()] = true;
         if self.tick_attacker_sleep(player_is_attacker, move_id, events)? {
             return Ok(());
         }
@@ -1422,6 +1439,13 @@ impl Battle {
             return Ok(());
         };
         if self.cancels_for_truant(player_is_attacker, move_id, events)? {
+            return Ok(());
+        }
+        // `CANCELER_FLINCH` follows Truant and precedes confusion
+        // (`src/battle_util.c:2086`-`:2121`): it consumes the flag, draws
+        // nothing, and ends the action before confusion's decrement and
+        // coin or paralysis's draw.
+        if self.cancels_for_flinch(player_is_attacker, move_id, events)? {
             return Ok(());
         }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
@@ -1557,6 +1581,31 @@ impl Battle {
         }
     }
 
+    /// `CANCELER_FLINCH` (`src/battle_util.c:2110`-`:2121`): a flinched
+    /// attacker loses its action and the flag is consumed. Reports whether
+    /// the move was cancelled.
+    fn cancels_for_flinch(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if !attacker.volatiles_mut().take_flinched() {
+            return Ok(false);
+        }
+        events.push(BattleEvent::Flinched {
+            by_player: player_is_attacker,
+            move_id,
+        });
+        self.record_cancelled_move(player_is_attacker, move_id)?;
+        Ok(true)
+    }
+
     /// `CANCELER_THAW` thaws a battler whose thaw-hit move got past the
     /// confusion and paralysis cancellers, with no further draw
     /// (`src/battle_util.c:2250`-`:2262`).
@@ -1685,7 +1734,10 @@ impl Battle {
             // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
             // `:1139`, `:100`-`:104`).
             EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
-            EnemyAction::Switch(slot) => self.switch_enemy_to(slot, events),
+            EnemyAction::Switch(slot) => {
+                self.acted_this_turn[1] = true;
+                self.switch_enemy_to(slot, events)
+            }
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
@@ -1778,6 +1830,7 @@ mod tests {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            acted_this_turn: [false; 2],
         };
         (battle, player_max_hp, player_move_max_pp)
     }

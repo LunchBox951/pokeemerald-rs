@@ -133,6 +133,28 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 
     let dex = Dex::new();
     for wild_slot in &land_encounters.mons {
+        // The driver's standing Run selection is refused by a trapping
+        // opponent (`battle::escape::ensure_admissible`), which would silently
+        // drop an ongoing encounter, so a table that can roll one is not
+        // fightable yet either.
+        if let Some(trapper) = dex.species(wild_slot.species).ok().and_then(|species| {
+            species.abilities.into_iter().find(|ability| {
+                matches!(
+                    *ability,
+                    assets::AbilityId::SHADOW_TAG
+                        | assets::AbilityId::ARENA_TRAP
+                        | assets::AbilityId::MAGNET_PULL
+                )
+            })
+        }) {
+            eprintln!(
+                "wild encounter: {}'s land table can roll species {:?} with {trapper:?}, \
+                 whose trap refuses the driver's Run -- no encounters will roll on this map",
+                map.name(),
+                wild_slot.species,
+            );
+            return false;
+        }
         for level in wild_slot.min_level..=wild_slot.max_level {
             if let Err(error) = battle::ensure_wild_startable(&dex, wild_slot.species, level) {
                 eprintln!(

@@ -13,6 +13,12 @@
 //! `STATUS3_CHARGED_UP` in lockstep with `chargeTimer`
 //! (`src/battle_script_commands.c:9102`; `src/battle_util.c:1743`).
 //!
+//! The flinch flag (`STATUS2_FLINCHED`) is a one-turn latch rather than a
+//! duration: a landed flinch secondary sets it, `CANCELER_FLINCH` consumes it,
+//! and `HandleEndTurn_ContinueBattle` clears it for every battler at the end of
+//! the turn (`src/battle_main.c:3941`-`:3945`); a switch clears it with the
+//! rest of the scratch.
+//!
 //! Confusion decrements once per attacker action, not once per end-of-turn
 //! tick like Charge (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
 //! [`Volatiles::tick_confusion`] reports only the terminal zero transition;
@@ -37,6 +43,12 @@ pub struct Volatiles {
     /// own Fire moves (`RESOURCE_FLAG_FLASH_FIRE`, `src/battle_util.c:2703-2726`).
     /// Cleared with the rest of the battle scratch on switch or faint.
     pub flash_fire: bool,
+    /// Whether this battler flinched this turn (`STATUS2_FLINCHED`): a
+    /// one-turn latch, set by a landed flinch secondary and consumed by
+    /// `CANCELER_FLINCH` (`src/battle_util.c:2110`-`:2121`) or cleared for
+    /// every battler at the end of the turn (`HandleEndTurn_ContinueBattle`,
+    /// `src/battle_main.c:3941`-`:3945`).
+    pub flinched: bool,
 }
 
 impl Volatiles {
@@ -67,6 +79,19 @@ impl Volatiles {
         let first = !self.flash_fire;
         self.flash_fire = true;
         first
+    }
+
+    /// Latches the flinch flag.
+    pub const fn set_flinched(&mut self) {
+        self.flinched = true;
+    }
+
+    /// Clears the flinch flag, reporting whether it was set. Both the
+    /// canceller that consumes it and the end-of-turn clear use this.
+    pub const fn take_flinched(&mut self) -> bool {
+        let was_set = self.flinched;
+        self.flinched = false;
+        was_set
     }
 
     /// Activates or refreshes Charge.
@@ -166,6 +191,19 @@ mod tests {
         assert!(!volatiles.defense_curl);
         assert!(!volatiles.confused());
         assert_eq!(volatiles.confusion_turns, 0);
+        assert!(!volatiles.flinched);
+    }
+
+    #[test]
+    fn flinch_latches_once_and_is_consumed_by_take() {
+        let mut volatiles = Volatiles::default();
+        assert!(!volatiles.take_flinched(), "nothing to consume yet");
+        volatiles.set_flinched();
+        volatiles.set_flinched();
+        assert!(volatiles.flinched);
+        assert!(volatiles.take_flinched());
+        assert!(!volatiles.flinched);
+        assert!(!volatiles.take_flinched(), "consumed exactly once");
     }
 
     #[test]

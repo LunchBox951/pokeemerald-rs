@@ -457,3 +457,29 @@ fn build_wild_pokemon_with_a_losing_synchronize_flip_draws_six_times() {
 }
 
 mod cute_charm;
+
+#[test]
+fn the_flinch_learners_are_startable_with_their_real_level_up_movesets() {
+    let dex = Dex::new();
+    for (species, level, flinch_move) in [
+        // Route 102's level-3 and level-4 Lotad (`wild_encounters.json:108-141`).
+        (SpeciesId::LOTAD, 3, MoveId::ASTONISH),
+        (SpeciesId::LOTAD, 4, MoveId::ASTONISH),
+        // Haley's level-6 Lotad (`trainer_parties.h:8007-8017`).
+        (SpeciesId::LOTAD, 6, MoveId::ASTONISH),
+        (ZIGZAGOON, 9, HEADBUTT),
+        (POOCHYENA, 13, MoveId::BITE),
+    ] {
+        assert!(
+            initial_moveset(species, level).contains(&flinch_move),
+            "species {} at level {level} must know {flinch_move:?}",
+            species.0
+        );
+        assert_eq!(
+            ensure_wild_startable(&dex, species, level),
+            Ok(()),
+            "species {} at level {level} must be startable",
+            species.0
+        );
+    }
+}
