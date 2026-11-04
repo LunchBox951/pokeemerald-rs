@@ -8,7 +8,11 @@
 //! Apple), a level is made instead under a private name no other account
 //! can predict, opened by that name so its identity is read from a
 //! descriptor, and only then renamed (no-replace) into place; a name someone
-//! else took meanwhile is theirs, and the private directory is removed. The
+//! else took meanwhile is theirs, and the private directory is moved aside
+//! and removed only if it is still the one checked, never unlinked by a name
+//! that could have been swapped since. A
+//! level whose name already resolves to a directory is never claimed at all:
+//! the walk goes through it, as it needs no write access to the parent. The
 //! reopen that follows compares the name against that identity, so a swap
 //! after the claim is refused too. Elsewhere a level is made at its final
 //! name and a same-user replacement in the gap cannot be told apart.
@@ -95,10 +99,10 @@ impl ClaimError {
 /// private name after that leaves `name` holding a directory other than the
 /// identity returned, which the reopen refuses. A `name` that is already
 /// taken is [`ClaimError::Taken`], as `mkdirat` would have said, and the
-/// private directory is removed if it is still the one that was verified;
-/// one that fails verification is left untouched, since it may be someone
-/// else's. Elsewhere there is no such rename, so the directory is made at
-/// `name` and stat'ed there, which a same-user writer can race.
+/// private directory is removed by [`discard_private`], which only removes
+/// what it finds to be the one that was verified; one that fails
+/// verification is left untouched, since it may be someone else's. Elsewhere
+/// there is no such rename, so the directory is made at `name` and stat'ed there, which a same-user writer can race.
 #[cfg(all(
     unix,
     any(target_os = "linux", target_os = "android", target_vendor = "apple")
@@ -112,6 +116,82 @@ pub(super) fn claim_level(
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<rustix::fs::Stat, ClaimError> {
+    let private = fresh_private_name(created, pin_from, sync_reopen)?;
+    // Chosen now, while a descriptor can still be shed for it: cleanup runs
+    // with the verified directory held open and must not fail for lack of one.
+    let aside = fresh_private_name(created, pin_from, sync_reopen)?;
+    mkdir_level(created, pin_from, parent, &private, sync_reopen)
+        .map_err(|errno| ClaimError::Failed(errno.into()))?;
+    after_mkdir();
+    let (identity, held) = identity_of(created, pin_from, parent, &private, owner, sync_reopen)
+        .map_err(ClaimError::Failed)?;
+    match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
+        Ok(()) => Ok(identity),
+        Err(errno) => {
+            if !discard_private(parent, &private, &aside, &held, &mut || {}) {
+                eprintln!(
+                    "warning: could not remove the empty directory {} made while \
+                     creating {}; it is safe to delete",
+                    std::path::Path::new(&private).display(),
+                    std::path::Path::new(name).display()
+                );
+            }
+            Err(ClaimError::from_errno(errno))
+        }
+    }
+}
+
+/// Removes the empty directory this run made as `private` in `parent`,
+/// which `held` is open on, without ever unlinking a name that was only
+/// checked a moment ago: the entry is first renamed (no-replace) to a fresh
+/// unguessable name, and only what is found there to be `held` is removed.
+/// Anything else was put at `private` by someone else after it was vouched
+/// for; it is renamed back if `private` is still free, else left where it
+/// is. `aside` is that fresh name, chosen by the caller so no descriptor is
+/// needed here. Answers whether the directory is gone; a directory left
+/// standing is empty and harmless, and the caller says so. `before_move` is
+/// the test seam that runs just before the entry is moved aside.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+pub(super) fn discard_private(
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    private: &OsStr,
+    aside: &OsStr,
+    held: &std::os::fd::OwnedFd,
+    before_move: &mut dyn FnMut(),
+) -> bool {
+    before_move();
+    if take_back::rename_without_replacing(&**parent, private, &**parent, aside).is_err() {
+        return false;
+    }
+    let ours = match (
+        rustix::fs::fstat(held),
+        rustix::fs::statat(&**parent, aside, rustix::fs::AtFlags::SYMLINK_NOFOLLOW),
+    ) {
+        (Ok(ours), Ok(found)) => same_directory_identity(&found, &ours),
+        _ => false,
+    };
+    if ours {
+        rustix::fs::unlinkat(&**parent, aside, rustix::fs::AtFlags::REMOVEDIR).is_ok()
+    } else {
+        let _ = take_back::rename_without_replacing(&**parent, aside, &**parent, private);
+        false
+    }
+}
+
+/// A fresh private name in a directory others can write, shedding a pin
+/// and retrying while descriptors run out.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn fresh_private_name(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> Result<std::ffi::OsString, ClaimError> {
     let hex = loop {
         match take_back::unguessable_hex() {
             Err(source)
@@ -120,38 +200,7 @@ pub(super) fn claim_level(
             result => break result.map_err(ClaimError::Failed)?,
         }
     };
-    let private = std::ffi::OsString::from(format!(".import-{hex}"));
-    mkdir_level(created, pin_from, parent, &private, sync_reopen)
-        .map_err(|errno| ClaimError::Failed(errno.into()))?;
-    after_mkdir();
-    let identity = identity_of(created, pin_from, parent, &private, owner, sync_reopen)
-        .map_err(ClaimError::Failed)?;
-    match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
-        Ok(()) => Ok(identity),
-        Err(errno) => {
-            remove_if_unchanged(parent, &private, &identity);
-            Err(ClaimError::from_errno(errno))
-        }
-    }
-}
-
-/// Removes the empty directory `name` in `parent` if it is still the one
-/// with `identity`; best effort, since a directory left under a private name
-/// is empty and harmless and the failure being reported is the real one.
-#[cfg(all(
-    unix,
-    any(target_os = "linux", target_os = "android", target_vendor = "apple")
-))]
-fn remove_if_unchanged(
-    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
-    name: &OsStr,
-    identity: &rustix::fs::Stat,
-) {
-    let unchanged = rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-        .is_ok_and(|found| same_directory_identity(&found, identity));
-    if unchanged {
-        let _ = rustix::fs::unlinkat(&**parent, name, rustix::fs::AtFlags::REMOVEDIR);
-    }
+    Ok(std::ffi::OsString::from(format!(".import-{hex}")))
 }
 
 /// [`claim_level`] where there is no no-replace rename: the directory is made
@@ -183,8 +232,8 @@ pub(super) fn claim_level(
 }
 
 /// The identity of the directory `name` in `parent`, read through a
-/// descriptor opened by that name and dropped again, so no descriptor is
-/// held across the rename that follows.
+/// descriptor opened by that name, which is handed back so the entry can be
+/// recognised again by [`discard_private`].
 #[cfg(all(
     unix,
     any(target_os = "linux", target_os = "android", target_vendor = "apple")
@@ -196,7 +245,7 @@ fn identity_of(
     name: &OsStr,
     owner: u32,
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> io::Result<rustix::fs::Stat> {
+) -> io::Result<(rustix::fs::Stat, std::os::fd::OwnedFd)> {
     let held = loop {
         match dest::open_created_directory_at(parent, name) {
             Err(source)
@@ -205,7 +254,8 @@ fn identity_of(
             result => break result?,
         }
     };
-    vouch_owned_by(rustix::fs::fstat(&held)?, owner)
+    let identity = vouch_owned_by(rustix::fs::fstat(&held)?, owner)?;
+    Ok((identity, held))
 }
 
 /// `identity` if it is a directory of `owner`'s, else the refusal.

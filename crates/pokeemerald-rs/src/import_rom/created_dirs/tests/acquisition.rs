@@ -162,6 +162,124 @@ fn a_level_is_made_under_a_private_name_until_it_is_claimed() {
 }
 
 #[test]
+fn an_existing_level_under_a_read_only_parent_is_walked_through() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Walking through a level that is already there asks nothing of its
+    // parent: `dev` opened it, and a claim that first made a private entry
+    // in that parent failed with `EACCES` under a parent this user cannot
+    // write. Only the new level below it needs a writable directory. The
+    // walk lists `read-only/existing` as missing because `new/..` does not
+    // exist yet when the list is made, so it reaches both by name.
+    let dir = TempDir::new("existing-under-read-only");
+    let parent = dir.join("read-only");
+    let existing = parent.join("existing");
+    let target = dir
+        .join("new")
+        .join("..")
+        .join("read-only")
+        .join("existing")
+        .join("c");
+    fs::create_dir_all(&existing).expect("the existing levels are created");
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).expect("the parent closes");
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert.
+    let writable = fs::create_dir(parent.join("probe")).is_ok();
+    let owner = rustix::process::geteuid().as_raw();
+    let created = create_as(&target, owner, &mut || {});
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
+
+    if writable {
+        eprintln!(
+            "an_existing_level_under_a_read_only_parent_is_walked_through: \
+             skipped -- running privileged, 0o555 did not close the parent off"
+        );
+        return;
+    }
+    let created = created
+        .map_err(|(_, source)| source)
+        .expect("an existing level is walked through whatever its parent allows");
+    assert_eq!(
+        created
+            .created
+            .iter()
+            .map(|level| level.name.clone())
+            .collect::<Vec<_>>(),
+        ["new", "c"],
+        "only the levels that were missing are recorded"
+    );
+    assert!(existing.join("c").is_dir());
+}
+
+/// A private directory in `dir` as `claim_level` leaves one after a lost
+/// rename: its name, the parent it is in, and a descriptor open on it.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+fn private_directory_in(
+    dir: &std::path::Path,
+) -> (
+    std::rc::Rc<std::os::fd::OwnedFd>,
+    std::ffi::OsString,
+    std::os::fd::OwnedFd,
+) {
+    let parent = std::rc::Rc::new(dest::open_traversal_directory(dir).unwrap());
+    let name = std::ffi::OsString::from(".import-0123456789abcdef");
+    fs::create_dir(dir.join(&name)).unwrap();
+    let held = dest::open_created_directory_at(&parent, &name).unwrap();
+    (parent, name, held)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_private_directory_that_is_still_the_verified_one_is_removed() {
+    let dir = TempDir::new("discard-unchanged");
+    let (parent, name, held) = private_directory_in(&dir.path);
+
+    let aside = std::ffi::OsString::from(".import-fedcba9876543210");
+    let removed = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {});
+
+    assert!(removed, "the verified directory was not removed");
+    assert_eq!(entry_names(&dir.path), Vec::<String>::new());
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() {
+    // Removing the private directory used to be a check of its identity and
+    // then an unlink of the same name, two steps a writer of the parent
+    // could come between to have its own directory deleted. The seam is
+    // that gap: the verified directory is moved away and another put at the
+    // name, which must come out of the cleanup where it was.
+    let dir = TempDir::new("discard-replaced");
+    let (parent, name, held) = private_directory_in(&dir.path);
+    let moved = dir.join("moved");
+    let replacement = dir.path.join(&name);
+    let mut swapped = 0;
+
+    let aside = std::ffi::OsString::from(".import-fedcba9876543210");
+    let removed = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {
+        swapped += 1;
+        fs::rename(&replacement, &moved).unwrap();
+        fs::create_dir(&replacement).unwrap();
+    });
+
+    assert_eq!(swapped, 1, "the replacement was put in place once");
+    assert!(moved.is_dir(), "the verified directory was removed");
+    assert!(
+        !removed,
+        "the verified directory is gone, so nothing was removed"
+    );
+    assert!(
+        replacement.is_dir(),
+        "the empty replacement was removed or left under another name"
+    );
+    assert_eq!(
+        entry_names(&dir.path),
+        [".import-0123456789abcdef", "moved"]
+    );
+}
+
+#[test]
 fn only_a_directory_of_the_given_user_is_made_by_that_user() {
     let dir = TempDir::new("made-by");
     let owner = rustix::process::geteuid().as_raw();

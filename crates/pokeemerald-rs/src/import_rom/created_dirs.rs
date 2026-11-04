@@ -436,15 +436,24 @@ fn create_directories_pinned_after_mkdir(
             };
             continue;
         };
-        let claimed = claim_level(
-            &mut created,
-            &mut pin_from,
-            &parent_fd,
-            &name,
-            owner,
-            after_mkdir,
-            sync_reopen,
-        );
+        // A name that already resolves is walked through, never claimed:
+        // creating means making an entry in `parent`, which an existing
+        // level under a parent this user cannot write must not need. A name
+        // that appears after this look is still caught by the claim itself.
+        let claimed =
+            if rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok() {
+                Err(ClaimError::Taken(rustix::io::Errno::EXIST.into()))
+            } else {
+                claim_level(
+                    &mut created,
+                    &mut pin_from,
+                    &parent_fd,
+                    &name,
+                    owner,
+                    after_mkdir,
+                    sync_reopen,
+                )
+            };
         match claimed {
             Ok(identity) => {
                 match create_missing_level(
