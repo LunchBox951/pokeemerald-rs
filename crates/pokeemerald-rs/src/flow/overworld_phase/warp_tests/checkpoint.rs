@@ -96,9 +96,8 @@ fn checkpoint_phase(map: MapId, position: (i32, i32), elevation: u8) -> Overworl
 fn expected_arrival_facing(behavior: u8) -> Direction {
     match behavior {
         MB_SOUTH_ARROW_WARP => Direction::North,
-        // An escalator arrival takes the default facing; upstream's arrival
-        // callback then faces the player east and walks one tile off (not
-        // modelled).
+        // An escalator arrival takes the default facing here; its arrival
+        // callback then faces the player east (asserted separately).
         MB_ANIMATED_DOOR | MB_NON_ANIMATED_DOOR | MB_NORMAL | MB_UP_ESCALATOR
         | MB_DOWN_ESCALATOR => Direction::South,
         other => panic!("unexpected arrival behavior {other:#04x}"),
@@ -138,15 +137,17 @@ fn the_checkpoint_set_declares_twenty_seven_internal_edges_in_four_shapes() {
 /// lands there, and the phase, scene and save agree on the arrival.
 ///
 /// The two escalator edges trigger on the arrived tile like a door
-/// (`field_control_avatar.c:702-714`); the transition animation upstream plays
-/// (`DoEscalatorWarp`) and its arrival walk-off
-/// (`FieldCallback_EscalatorWarpIn`) are not modelled, so the player lands on
-/// the destination escalator tile.
+/// (`field_control_avatar.c:702-714`). Their arrival then faces the player
+/// east and walks one tile east off the escalator
+/// (`FieldCallback_EscalatorWarpIn`, `field_effect.c:1690-1702,1800-1818`),
+/// asserted after the landing agreement; the ride animation
+/// (`DoEscalatorWarp`) is not modelled.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
     let mut driven = 0;
     for edge in edges() {
+        let mut escalator_edge = false;
         let (x, y, elevation) = (
             i32::from(edge.warp.x),
             i32::from(edge.warp.y),
@@ -169,6 +170,7 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
                     trigger_arrow_warp(&runtime, x, y, elevation, Direction::South)
                 }
                 MB_UP_ESCALATOR | MB_DOWN_ESCALATOR => {
+                    escalator_edge = true;
                     trigger_escalator_warp(&runtime, x, y, elevation)
                 }
                 other => panic!("{label}: behavior {other:#04x}"),
@@ -233,6 +235,9 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
             expected_arrival_facing(arrival_behavior),
             "{label}: warp-in facing"
         );
+        if escalator_edge {
+            assert_escalator_arrival_walks_off(&mut phase, arrival, edge.source, &label);
+        }
         driven += 1;
     }
     assert_eq!(driven, 27);
@@ -284,18 +289,56 @@ fn holding_north_at_each_oldale_door_enters_its_building() {
     }
 }
 
+/// An escalator-triggered arrival faces the player east and walks them one
+/// tile east of the destination warp tile (`FieldCallback_EscalatorWarpIn`).
+fn assert_escalator_arrival_walks_off(
+    phase: &mut OverworldPhase,
+    arrival: WarpEvent,
+    departed_from: MapId,
+    label: &str,
+) {
+    phase.begin_escalator_arrival(true, departed_from);
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "{label}: faces east"
+    );
+    assert_eq!(
+        walk_off_the_escalator(phase),
+        (i32::from(arrival.x) + 1, i32::from(arrival.y)),
+        "{label}: one tile east of the destination escalator"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "{label}: walked east"
+    );
+}
+
+/// Idle frames until an escalator arrival's east step has landed, then the
+/// player's tile.
+fn walk_off_the_escalator(phase: &mut OverworldPhase) -> (i32, i32) {
+    for _ in 0..40 {
+        phase.step(platform::ButtonState::new());
+    }
+    phase.player.position()
+}
+
 /// Walking west onto each Oldale Pokemon Center escalator through
 /// [`OverworldPhase::step`] warps to the other floor's escalator: the
 /// completed-step warp check (`TryStartWarpEventScript`,
 /// `field_control_avatar.c:702-714`) sits beside the door check and, unlike an
-/// arrow warp, needs no held direction once the step lands.
+/// arrow warp, needs no held direction once the step lands. The arrival then
+/// faces the player east and walks one tile east off the destination
+/// escalator (`FieldCallback_EscalatorWarpIn`, `field_effect.c:1690-1702,
+/// 1800-1818`), whatever buttons are held.
 ///
 /// The tile east of each escalator is the transition-elevation floor the
 /// escalator cell (elevation 4) can be entered from; the neighbours to its
 /// north and south sit at elevation 3 and mismatch it.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn walking_onto_each_pokemon_center_escalator_warps_to_the_other_floor() {
+fn walking_onto_each_pokemon_center_escalator_warps_and_walks_off_east() {
     use platform::Buttons;
     let mut escalators = 0;
     for edge in edges() {
@@ -333,7 +376,17 @@ fn walking_onto_each_pokemon_center_escalator_warps_to_the_other_floor() {
             "{:?}",
             edge.source
         );
-        assert_eq!(phase.player.facing(), Direction::South, "{:?}", edge.source);
+        // The arrival callback has already turned the player east.
+        assert_eq!(phase.player.facing(), Direction::East, "{:?}", edge.source);
+
+        assert_eq!(
+            walk_off_the_escalator(&mut phase),
+            (i32::from(arrival.x) + 1, i32::from(arrival.y)),
+            "{:?}: one tile east of the destination escalator",
+            edge.source
+        );
+        assert_eq!(phase.player.facing(), Direction::East, "{:?}", edge.source);
+        assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
     }
     assert_eq!(escalators, 2, "one escalator on each floor");
 }

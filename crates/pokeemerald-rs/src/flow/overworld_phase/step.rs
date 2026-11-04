@@ -32,6 +32,7 @@ use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
+use super::escalator_arrival::landed_on_escalator;
 use super::input::{advance_or_skip_for_preempt, held_direction, observe_tile, settle_outcome};
 pub(super) use super::interaction::InteractionOutcome;
 use super::sight_trainer_trigger::SightTrainerOutcome;
@@ -404,6 +405,7 @@ impl OverworldPhase {
             return;
         }
 
+        let buttons = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
@@ -457,6 +459,7 @@ impl OverworldPhase {
             trigger_door_warp(&runtime, x, y, elevation)
                 .or_else(|| trigger_escalator_warp(&runtime, x, y, elevation))
         });
+        let escalator_warp = door_warp.is_some() && landed_on_escalator(&runtime, landed);
         // `TryStartStepCountScript` runs inside `TryStartStepBasedScript`
         // after the coord event and the door-shaped warp, ahead of the
         // wild-encounter roll (`field_control_avatar.c:155-163,543-553`), so
@@ -588,6 +591,7 @@ impl OverworldPhase {
 
         // Warp, interaction, battle, then the START menu, in upstream's
         // `ProcessPlayerFieldInput` order.
+        let departed_from = self.map_id;
         self.resolve_step_events(
             warp_trigger,
             encounter,
@@ -596,6 +600,7 @@ impl OverworldPhase {
             pre.interaction,
             pre.start_menu,
         );
+        self.begin_escalator_arrival(escalator_warp, departed_from);
 
         // Map-edge connection crossing (issue #177): deferred to here,
         // `runtime`'s last use above (method docs' own section on this).

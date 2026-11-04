@@ -70,9 +70,10 @@ pub fn trigger_door_warp(
 /// branches (`pokeemerald/src/field_control_avatar.c:702-714`) reached through
 /// `IsWarpMetatileBehavior` (`:753-765`), and neither is gated on the held or
 /// facing direction. The escalator's transition animation
-/// (`DoEscalatorWarp`) and its arrival walk-off
-/// (`FieldCallback_EscalatorWarpIn`) are not modelled; the warp resolves
-/// immediately like every other warp here. Missing tiles, non-escalator behaviors, and absent
+/// (`DoEscalatorWarp`'s ride) is not modelled; the warp resolves
+/// immediately like every other warp here. The arrival's face-east and east
+/// step (`FieldCallback_EscalatorWarpIn`) belong to the caller, after the
+/// warp lands. Missing tiles, non-escalator behaviors, and absent
 /// or elevation-mismatched events return `None`.
 #[must_use]
 pub fn trigger_escalator_warp(
