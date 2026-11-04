@@ -21482,6 +21482,14 @@
       "status": "pending"
     },
     "include/constants/pokedex.h": {
+      "artifacts": {
+        "NATIONAL_DEX": {
+          "reason": "The National Dex enum of include/constants/pokedex.h (NATIONAL_DEX_NONE through NATIONAL_DEX_DEOXYS, then NATIONAL_DEX_OLD_UNOWN_B through NATIONAL_DEX_OLD_UNOWN_Z) and its KANTO_DEX_COUNT, JOHTO_DEX_COUNT and NATIONAL_DEX_COUNT aliases resolve every entry key and order member in xtask::extract::pokedex; the closure parser refuses any other count or alias value. The parent header stays pending for the authority sweep.",
+          "rust_target": "crates/xtask/src/extract/pokedex/mod.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -30411,16 +30419,40 @@
       "status": "ported"
     },
     "src/data/pokemon/pokedex_entries.h": {
+      "artifacts": {
+        "gPokedexEntries": {
+          "reason": "gPokedexEntries (src/data/pokemon/pokedex_entries.h) is read by xtask::extract::pokedex::extract_pokedex through the closure parser: one designated row per National Dex number from NATIONAL_DEX_NONE through NATIONAL_DEX_DEOXYS (387 rows), each carrying categoryName, height, weight, description, pokemonScale, pokemonOffset, trainerScale and trainerOffset, with the offsets read signed. The rows are encoded into the single pokedex/data raw pack entry that AssetPack::pokedex_data opens. The parent header stays pending for the authority sweep.",
+          "rust_target": "crates/xtask/src/extract/pokedex/mod.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon/pokedex_orders.h": {
+      "artifacts": {
+        "gPokedexOrder_*": {
+          "reason": "gPokedexOrder_Alphabetical (411 identities, opening with the 25 old-Unown constants), gPokedexOrder_Weight and gPokedexOrder_Height (386 species each, ascending) in src/data/pokemon/pokedex_orders.h are parsed by the closure parser in xtask::extract::pokedex and carried in the pokedex/data payload as National Dex identities. The parent header stays pending for the authority sweep.",
+          "rust_target": "crates/xtask/src/extract/pokedex/mod.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon/pokedex_text.h": {
+      "artifacts": {
+        "g*PokedexText": {
+          "reason": "gDummyPokedexText and every g*PokedexText definition (src/data/pokemon/pokedex_text.h) are resolved by name from each gPokedexEntries row's description by the closure parser in xtask::extract::pokedex, so the pokedex/data payload carries the page prose with its \\n line breaks and no unresolved or duplicate text. The parent header stays pending for the authority sweep.",
+          "rust_target": "crates/xtask/src/extract/pokedex/mod.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
