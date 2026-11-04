@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the ten pipelines
+//! one of the battle scripts this crate reproduces — the eleven pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -42,6 +42,7 @@
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
 //! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
+//! | [`rollout`] | `BattleScript_EffectRollout` ([`rollout::is_rollout_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -243,7 +244,7 @@
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing, and Leech Seed's defender against Liquid Ooze, whose inverted
 //! drain is unmodelled) —
-//! and the move effects the ten
+//! and the move effects the eleven
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and
@@ -281,6 +282,7 @@ pub mod multi_hit;
 pub mod nature;
 pub mod paralyze;
 pub mod pokemon;
+pub mod rollout;
 pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
@@ -329,6 +331,9 @@ pub use pokemon::{
     MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
     Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
     SPECIES_SHEDINJA,
+};
+pub use rollout::{
+    is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,
 };
 pub use secondary::{
     is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,

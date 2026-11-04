@@ -26,6 +26,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/oran_berry.rs"]
+mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
 mod paralysis;
 #[path = "turn_engine/participant_admission.rs"]
@@ -48,6 +50,8 @@ mod poison_synchronize;
 mod poison_trainer_aftermath;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
+#[path = "turn_engine/rollout/mod.rs"]
+mod rollout;
 #[path = "turn_engine/rough_skin_contact.rs"]
 mod rough_skin_contact;
 #[path = "turn_engine/shed_skin.rs"]
