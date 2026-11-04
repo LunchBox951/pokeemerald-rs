@@ -736,7 +736,7 @@ impl CgbVoice {
         }
         // A stopped channel's envelope timer is not clocked
         // (`mgba/src/gb/audio.c:711-732`), though a store still latches.
-        let stepped = if self.length_stopped && !(hardware_write || initial_trigger) {
+        let stepped = if self.is_stopped_square() && !(hardware_write || initial_trigger) {
             false
         } else {
             self.hardware_envelope_volume.end_frame(
@@ -779,6 +779,7 @@ impl CgbVoice {
     /// (`mgba/src/gb/audio.c:493-503,948-954`).
     fn is_dead_at_zero(&self) -> bool {
         matches!(self.oscillator, Oscillator::Square(_))
+            && !self.sweep_held
             && self.envelope.is_active()
             && self.frame_gain == 0
             && self.hardware_envelope_volume.volume() == 0

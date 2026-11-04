@@ -381,6 +381,50 @@ fn a_pitch_write_to_a_sweep_stopped_square_latches_its_pre_high_byte_sample() {
 }
 
 #[test]
+fn a_sweep_held_square_does_not_step_its_hardware_envelope() {
+    // `mgba/src/gb/audio.c:711-717`: the envelope step runs only while
+    // `playingCh1`; the sweep overflow cleared it.
+    let mut voice = square_voice_with_adsr(
+        CgbChannelNumber::Square1,
+        Some(upward_sweep(1, 1)),
+        CgbAdsr {
+            attack: 0,
+            decay: 1,
+            sustain: 0,
+            release: 0,
+        },
+        TestNote::at_key(48),
+    );
+    voice.begin_frame(false);
+    let mut clock = FrameSequencer::default();
+    let ticks = clock.advance(300);
+    let mut acc = vec![(0i32, 0i32); 300];
+    voice.render(&mut acc, &ticks);
+    assert!(voice.sweep_held, "sanity: the sweep must have overflowed");
+    let held = *acc.last().expect("a rendered frame");
+    assert_ne!(held, (0, 0), "sanity: an audible hold");
+    let held_hardware_volume = voice.hardware_envelope_volume.volume();
+    for frame in 0..40 {
+        voice.begin_frame(false);
+        if !voice.sweep_held {
+            break;
+        }
+        assert_eq!(
+            voice.hardware_envelope_volume.volume(),
+            held_hardware_volume,
+            "frame {frame}: a stopped channel's envelope must not step"
+        );
+        let mut out = vec![(0i32, 0i32); 37];
+        voice.render(&mut out, &[]);
+        assert!(
+            out.iter().all(|&level| level == held),
+            "frame {frame}: the held level must persist, got {:?}",
+            out[0]
+        );
+    }
+}
+
+#[test]
 fn a_length_expiry_after_a_sweep_overflow_leaves_the_held_level_untouched() {
     // Neither the length step nor its expiry writes `ch1.sample`
     // (`mgba/src/gb/audio.c:674-683`), so a counter running out on a channel
