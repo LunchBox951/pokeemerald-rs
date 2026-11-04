@@ -197,11 +197,19 @@ fn party_events() -> Vec<BattleEvent> {
             move_id,
             ability: AbilityId::WATER_ABSORB,
         },
+        BattleEvent::Intimidated {
+            by_player,
+            new_stage: StatStage::new(-1).unwrap(),
+        },
+        BattleEvent::IntimidatePrevented {
+            by_player,
+            ability: AbilityId::CLEAR_BODY,
+        },
     ]
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 70;
+const VARIANTS: usize = 72;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -278,6 +286,8 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FrozenSolid { .. } => 67,
         BattleEvent::Thawed { .. } => 68,
         BattleEvent::ThawedByMove { .. } => 69,
+        BattleEvent::Intimidated { .. } => 70,
+        BattleEvent::IntimidatePrevented { .. } => 71,
     }
 }
 

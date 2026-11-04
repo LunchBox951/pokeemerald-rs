@@ -247,14 +247,14 @@ fn an_entering_reserve_merges_into_its_own_slot() {
     assert_eq!(phase.save1.money, 2001);
 }
 
-/// A reserve the battle engine cannot play yet (an Intimidate Mightyena) is left out of the roster
+/// A reserve the battle engine cannot play yet (a Speed Boost Ninjask) is left out of the roster
 /// rather than refusing the encounter the playable lead can fight, and keeps its bytes.
 #[test]
 fn an_unplayable_reserve_is_left_out_without_refusing_the_battle() {
     let lead = healthy_treecko(0);
-    let mightyena = player_mon(assets::SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
-    assert!(battle::ensure_participant_admissible(&mightyena).is_err());
-    let records = [saved(&lead), saved(&mightyena)];
+    let ninjask = player_mon(assets::SpeciesId::NINJASK.0, 50, vec![MoveId::SCRATCH]);
+    assert!(battle::ensure_participant_admissible(&ninjask).is_err());
+    let records = [saved(&lead), saved(&ninjask)];
     let mut phase = phase_with_party(&records, 0, lead);
 
     walk_into_the_battle(&mut phase);
@@ -294,8 +294,8 @@ fn a_reserve_beyond_the_stored_count_enters() {
 #[test]
 fn a_lead_faint_with_only_an_unplayable_member_left_does_not_white_out() {
     let lead = frail_shuckle();
-    let mightyena = player_mon(assets::SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
-    let records = [saved(&lead), saved(&mightyena)];
+    let ninjask = player_mon(assets::SpeciesId::NINJASK.0, 50, vec![MoveId::SCRATCH]);
+    let records = [saved(&lead), saved(&ninjask)];
     let mut phase = phase_with_party(&records, 0, lead);
 
     walk_into_the_battle(&mut phase);

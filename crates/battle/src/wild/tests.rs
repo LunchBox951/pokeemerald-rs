@@ -322,13 +322,29 @@ fn the_any_slot_ability_screen_admits_both_truant_species() {
 }
 
 #[test]
+fn ensure_wild_startable_admits_intimidate_slots() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::TAUROS,
+        SpeciesId::SNUBBULL,
+        SpeciesId::MAWILE,
+        SpeciesId::EKANS,
+        SpeciesId::MIGHTYENA,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+    assert_eq!(initial_moveset(SpeciesId::TAUROS, 1), vec![TACKLE]);
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::TAUROS, 1), Ok(()));
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
-        (SpeciesId::TAUROS, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
         (SpeciesId::NINJASK, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::YANMA, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),

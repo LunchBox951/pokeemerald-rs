@@ -44,6 +44,7 @@ pub(super) const PKMNRESTOREDHPUSING: u16 = 197;
 pub(super) const PKMNPREVENTSPARALYSISWITH: u16 = 199;
 pub(super) const PKMNPREVENTSCONFUSIONWITH: u16 = 202;
 pub(super) const PKMNRAISEDFIREPOWERWITH: u16 = 203;
+pub(super) const PKMNCUTSATTACKWITH: u16 = 205;
 pub(super) const PKMNPREVENTSSTATLOSSWITH: u16 = 206;
 pub(super) const PKMNHURTSWITH: u16 = 207;
 pub(super) const STATSHARPLY: u16 = 209;
@@ -77,6 +78,7 @@ pub(super) const EMPTYSTRING4: u16 = 329;
 pub(super) const ABOOSTED: u16 = 330;
 pub(super) const PKMNMAKESGROUNDMISS: u16 = 332;
 pub(super) const PKMNFLEDUSING: u16 = 339;
+pub(super) const PREVENTEDFROMWORKING: u16 = 341;
 pub(super) const PKMNSXPREVENTSYSZ: u16 = 355;
 pub(super) const PKMNSXHADNOEFFECTONY: u16 = 362;
 /// `STRINGID_TRAINER1LOSETEXT`, the first table slot.

@@ -10,8 +10,7 @@ use assets::{AbilityId, SpeciesId};
 const fn always_refused(ability: AbilityId) -> bool {
     matches!(
         ability,
-        AbilityId::INTIMIDATE
-            | AbilityId::SPEED_BOOST
+        AbilityId::SPEED_BOOST
             | AbilityId::COLOR_CHANGE
             | AbilityId::TRACE
             | AbilityId::FLAME_BODY
@@ -25,7 +24,6 @@ const fn always_refused(ability: AbilityId) -> bool {
 /// Refuses a participant whose ability interaction the turn engine does not model:
 /// the move-end immunity cure (`battle_util.c:2873-2951`, which cures a Water Veil burn, a Magma Armor
 /// freeze, an Immunity poisoning, and wakes an Insomnia or Vital Spirit sleeper),
-/// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
 /// Speed Boost's end-turn Speed stage (`:2601-2652`), Color Change (`:2749-2766`),
 /// Trace's ability copy (`:2575-2580`, `:3017-3073`), Flame Body (`:2836-2850`; burn infliction by a contact hit is
 /// unmodelled), Cute Charm (`:2851-2870`; infatuation is unmodelled), or the switch-in weather setters
