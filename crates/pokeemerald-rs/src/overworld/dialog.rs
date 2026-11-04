@@ -201,12 +201,6 @@ impl NpcDialog {
         if self.printer.cleared_window() {
             self.ops.clear();
         }
-        // Polled right after `tick`: a positive `CLEAR`/`CLEAR_TO` always
-        // ends the frame as `TickEvent::Idle` (`Printer::cleared_span`), so
-        // this never competes with a same-tick glyph.
-        if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
-        }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
@@ -231,6 +225,13 @@ impl NpcDialog {
             | TickEvent::PressAccepted
             | TickEvent::Paused
             | TickEvent::PauseFinished => {}
+        }
+        // Polled right after `tick`. Upstream draws a glyph before clearing the
+        // minimum-spacing gap behind it (`text.c:1146-1156`), so the span goes
+        // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
+        // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
+        if let Some(span) = self.printer.cleared_span() {
+            self.ops.push(WindowOp::ClearSpan(span));
         }
 
         if self.state == DialogState::Closed {
@@ -842,6 +843,60 @@ mod tests {
             fb.pixel(still_glyph_x, still_glyph_y),
             Some(OPAQUE_GLYPH_COLOR),
             "pixels past the target column belong to the same glyph and must stay visible"
+        );
+    }
+
+    #[test]
+    fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
+        // `0x14` is `EXT_CTRL_CODE_MIN_LETTER_SPACING`; upstream copies the
+        // glyph and only then clears the gap up to the minimum
+        // (`pokeemerald/src/text.c:1146-1156`), so the opaque glyph's pixels
+        // inside the gap must show the window's background.
+        const MINIMUM: u8 = 12;
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: 0x14,
+                args: vec![MINIMUM],
+            },
+            Token::Char('A'),
+            Token::End,
+        ]);
+
+        assert_eq!(
+            dialog.tick(NO_INPUT),
+            DialogOutcome::Continue,
+            "reveals 'A'"
+        );
+        assert!(
+            matches!(
+                dialog.ops.as_slice(),
+                [WindowOp::Glyph(_), WindowOp::ClearSpan(_)]
+            ),
+            "the gap span follows the glyph in the same tick"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+        let probe = |x: i32| {
+            let (x, y) = box_pixel((
+                textbox::STANDARD_PRINTER_ORIGIN.0 + x,
+                textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+            ));
+            fb.pixel(x, y)
+        };
+        assert_eq!(
+            probe(2),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the glyph's own advance stays"
+        );
+        assert_eq!(
+            probe(NORMAL_A_ADVANCE_WIDTH + 2),
+            Some(FRAME_INTERIOR_COLOR),
+            "the gap up to the minimum is erased after the glyph draws"
+        );
+        assert_eq!(
+            probe(i32::from(MINIMUM) + 1),
+            Some(OPAQUE_GLYPH_COLOR),
+            "pixels past the minimum are untouched"
         );
     }
 
