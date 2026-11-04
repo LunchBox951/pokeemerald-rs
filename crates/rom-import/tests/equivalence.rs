@@ -83,6 +83,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "evolution-scene/",
     "poke-ball/",
     "naming-screen/",
+    "battle-environment/",
 ];
 
 /// The species whose static battler art both backends must carry: the
@@ -528,6 +529,77 @@ fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
     assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
 }
 
+/// Both battle environments resolve through the typed handle from both packs,
+/// and the handles are equal. The handle requires each of its five members, so
+/// a member both backends drop together still fails here.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_battle_environment_handles_are_equal_from_the_rom_and_the_checkout() {
+    use assets::BattleEnvironment;
+
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-battle-environment-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+    let imported = AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+
+    for environment in [BattleEnvironment::TallGrass, BattleEnvironment::Plain] {
+        let ours = imported
+            .battle_environment(environment)
+            .expect("the imported record");
+        let theirs = checkout
+            .battle_environment(environment)
+            .expect("the checkout record");
+        for (ours, theirs) in [
+            (ours.tiles, theirs.tiles),
+            (ours.entry_tiles, theirs.entry_tiles),
+        ] {
+            assert_eq!((ours.width, ours.height, ours.bit_depth), (128, 128, 4));
+            assert_eq!(
+                (ours.width, ours.height, ours.bit_depth, ours.pixels),
+                (theirs.width, theirs.height, theirs.bit_depth, theirs.pixels)
+            );
+        }
+        assert_eq!(ours.tilemap.len(), 4096);
+        assert_eq!(ours.tilemap, theirs.tilemap);
+        assert_eq!(ours.entry_tilemap.len(), 2048);
+        assert_eq!(ours.entry_tilemap, theirs.entry_tilemap);
+        assert_eq!(ours.palette.color_count, 48);
+        assert!(ours.palette.colors().eq(theirs.palette.colors()));
+        assert_eq!(ours.tilemap_dimensions(), (64, 32));
+        assert_eq!(ours.entry_tilemap_dimensions(), (32, 32));
+    }
+    let grass = imported
+        .battle_environment(BattleEnvironment::TallGrass)
+        .unwrap();
+    let plain = imported
+        .battle_environment(BattleEnvironment::Plain)
+        .unwrap();
+    assert_ne!(grass.tiles.pixels, plain.tiles.pixels);
+    assert_ne!(
+        grass.palette.colors().collect::<Vec<_>>(),
+        plain.palette.colors().collect::<Vec<_>>()
+    );
+}
+
 /// The cries, named by id: the `audio/cry/table` entry, exactly
 /// [`CRY_TABLE_LEN`] distinct samples in the table, and an entry for each.
 ///
@@ -733,6 +805,57 @@ fn the_naming_screen_profile_roots_are_the_manifest_ids() {
         .collect();
     profiled.sort_unstable();
     assert_eq!(profiled, expected);
+}
+
+/// The profile's battle-environment roots are exactly the checkout manifest's
+/// ten ids with the shapes and encodings upstream builds them with, so the
+/// complete `battle-environment/` prefix cannot pass by both backends dropping
+/// the same entry. The ROM stores all ten as LZ77, the palettes included.
+#[test]
+fn the_battle_environment_profile_roots_are_the_manifest_ids() {
+    use rom_import::{BattleEnvironmentRoot, Encoding};
+
+    let roots = &rom_import::EMERALD_US_REV0.roots.battle_environment;
+    let (Some(grass), Some(plain)) = (&roots.tall_grass, &roots.plain) else {
+        panic!("the profile carries both environments");
+    };
+    let mut ids = Vec::new();
+    let mut check = |record: &BattleEnvironmentRoot| {
+        for sheet in [&record.tiles, &record.entry_tiles] {
+            assert_eq!(sheet.encoding, Encoding::Lz77, "{}", sheet.id);
+            assert_eq!((sheet.rom_bit_depth, sheet.pack_bit_depth), (4, 4));
+            assert_eq!((sheet.width, sheet.height), (128, 128));
+            assert_eq!((sheet.metatile_width, sheet.metatile_height), (1, 1));
+            assert_eq!(sheet.tile_count, 256, "{}", sheet.id);
+            ids.push(sheet.id);
+        }
+        for (map, len) in [(&record.tilemap, 4096), (&record.entry_tilemap, 2048)] {
+            assert_eq!(map.encoding, Encoding::Lz77, "{}", map.id);
+            assert_eq!(map.len, len, "{}", map.id);
+            ids.push(map.id);
+        }
+        assert_eq!(record.palette.encoding, Encoding::Lz77);
+        assert_eq!(record.palette.color_count, 48);
+        ids.push(record.palette.id);
+    };
+    check(grass);
+    check(plain);
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [
+            "battle-environment/image/building/anim_tiles",
+            "battle-environment/image/building/tiles",
+            "battle-environment/image/tall_grass/anim_tiles",
+            "battle-environment/image/tall_grass/tiles",
+            "battle-environment/palette/plain",
+            "battle-environment/palette/tall_grass",
+            "battle-environment/raw/building/anim_map",
+            "battle-environment/raw/building/map",
+            "battle-environment/raw/tall_grass/anim_map",
+            "battle-environment/raw/tall_grass/map",
+        ]
+    );
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

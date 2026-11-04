@@ -580,3 +580,21 @@ fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
     assert_eq!((ball.open_sheet.width, ball.open_sheet.height), (16, 16));
     assert_eq!(ball.open_sheet.pixels.len(), 16 * 16);
 }
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_battle_environments_have_both_records_and_their_dimensions() {
+    use super::super::BattleEnvironment;
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    for environment in [BattleEnvironment::TallGrass, BattleEnvironment::Plain] {
+        let record = pack.battle_environment(environment).expect("the record");
+        assert_eq!((record.tiles.width, record.entry_tiles.height), (128, 128));
+        assert_eq!(
+            (record.tilemap.len(), record.entry_tilemap.len()),
+            (4096, 2048)
+        );
+        assert_eq!(record.palette.color_count, 48);
+        assert_eq!(record.tilemap_dimensions(), (64, 32));
+        assert_eq!(record.entry_tilemap_dimensions(), (32, 32));
+    }
+}

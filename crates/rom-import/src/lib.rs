@@ -47,6 +47,8 @@
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
 //!   evolution scene's background and sparkle (`evolution-scene/*`), the
+//!   tall-grass and plain battle environments (`battle-environment/*`, behind
+//!   `sBattleEnvironmentTable`), the
 //!   battle textbox with the two menu text palettes (`battle-interface/*`), the
 //!   naming screen's sheets, palettes and tilemaps (`naming-screen/*`), the
 //!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
@@ -131,12 +133,12 @@ pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
-    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    BattleEnvironmentRoot, BattleEnvironmentRoots, BattleInterfaceRoots, BattleMessageRoots,
+    BattlerRoot, BattlerRoots, BlobRoot, CryRoots, Encoding, EvolutionSceneRoots, FieldMessageRoot,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots,
+    OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};

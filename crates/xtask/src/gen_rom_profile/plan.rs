@@ -557,6 +557,32 @@ pub struct PokeBallPlan {
     pub open_sheet: ImagePlan,
 }
 
+/// One battle environment's `BattleBackground` members, owned.
+#[derive(Debug, Clone)]
+pub struct BattleEnvironmentRecordPlan {
+    /// `tileset`.
+    pub tiles: ImagePlan,
+    /// `tilemap`.
+    pub tilemap: BlobPlan,
+    /// `entryTileset`.
+    pub entry_tiles: ImagePlan,
+    /// `entryTilemap`.
+    pub entry_tilemap: BlobPlan,
+    /// `palette`.
+    pub palette: PalettePlan,
+}
+
+/// The tall-grass and plain battle environments' roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattleEnvironmentPlan {
+    /// `sBattleEnvironmentTable`.
+    pub table: u32,
+    /// `BATTLE_ENVIRONMENT_GRASS`.
+    pub tall_grass: BattleEnvironmentRecordPlan,
+    /// `BATTLE_ENVIRONMENT_PLAIN`.
+    pub plain: BattleEnvironmentRecordPlan,
+}
+
 /// One trainer front picture's roots, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPicPlan {
@@ -672,6 +698,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
+    /// The tall-grass and plain battle environments.
+    pub battle_environment: BattleEnvironmentPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.

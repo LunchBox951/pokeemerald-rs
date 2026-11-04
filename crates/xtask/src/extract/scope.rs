@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_environment::pack_ids as battle_environment_pack_ids;
 use super::battle_interface::healthbox_battle_bar_pack_id;
 use super::battle_interface::healthbox_element_pack_ids;
 use super::battle_interface::healthbox_frame_pack_ids;
@@ -711,6 +712,12 @@ pub(crate) fn evolution_scene_ids() -> Vec<String> {
 /// palette, and the opened-ball sheet.
 pub(crate) fn poke_ball_ids() -> Vec<String> {
     poke_ball_pack_ids()
+}
+
+/// Every `battle-environment/` pack id extraction emits: four tile sheets, two
+/// palettes, and four tilemaps.
+pub(crate) fn battle_environment_ids() -> Vec<String> {
+    battle_environment_pack_ids()
 }
 
 /// Where the naming screen's sources live, relative to the checkout.
