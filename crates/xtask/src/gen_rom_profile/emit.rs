@@ -1204,6 +1204,31 @@ mod bag_field_tests {
         assert!(!module.contains("StarterChooserRoots::NONE"), "{module}");
     }
 
+    fn down_arrow_plan(base: u32) -> InterfacePlan {
+        InterfacePlan {
+            images: vec![ImagePlan {
+                id: "interface/image/down_arrow".to_owned(),
+                addr: base + 0x2E_968C,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 8,
+                height: 48,
+                metatile_width: 1,
+                metatile_height: 6,
+                tile_count: 6,
+            }],
+            palettes: vec![],
+        }
+    }
+
+    fn assert_down_arrow_root(module: &str) {
+        assert!(
+            module.contains("ImageRoot { id: \"interface/image/down_arrow\", addr: GbaPtr::at(0x082E_968C), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 8, height: 48,"),
+            "{module}"
+        );
+    }
+
     fn assert_scene_roots(module: &str) {
         assert!(
             module.contains("    opening_scene: OpeningSceneRoots {"),
@@ -1247,21 +1272,7 @@ mod bag_field_tests {
                 palettes: vec![],
                 window_palettes: base,
             },
-            interface: InterfacePlan {
-                images: vec![ImagePlan {
-                    id: "interface/image/down_arrow".to_owned(),
-                    addr: base + 0x2E_968C,
-                    encoding: Encoding::Raw,
-                    rom_bit_depth: 4,
-                    pack_bit_depth: 4,
-                    width: 8,
-                    height: 48,
-                    metatile_width: 1,
-                    metatile_height: 6,
-                    tile_count: 6,
-                }],
-                palettes: vec![],
-            },
+            interface: down_arrow_plan(base),
             audio: AudioPlan {
                 song_table: base,
                 songs: vec![],
@@ -1322,10 +1333,7 @@ mod bag_field_tests {
             "{module}"
         );
         assert_interface_roots(&module);
-        assert!(
-            module.contains("ImageRoot { id: \"interface/image/down_arrow\", addr: GbaPtr::at(0x082E_968C), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4, width: 8, height: 48,"),
-            "{module}"
-        );
+        assert_down_arrow_root(&module);
         assert_naming_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
