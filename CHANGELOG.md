@@ -4,15 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-<<<<<<< HEAD
 ## [0.0.102.0] - 2026-11-04
 
 - Fixed-facing townsfolk now run on the overworld frame: they hold their authored facing, keep any turn a script gave them until they leave the screen, and face their authored way again when they come back into view or after a warp.
-=======
+
 ## [0.0.101.0] - 2026-11-04
 
 - General improvements in preparation for the page-prompt arrow in message boxes: both pack sources now carry the text printer's down-arrow graphic.
->>>>>>> origin/dev
 
 ## [0.0.100.0] - 2026-11-03
 
@@ -473,11 +471,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-<<<<<<< HEAD
 [0.0.102.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2fe05ed008518da4f1bdcd677f063df29c15512b...dev
-=======
-[0.0.101.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2d7d2cb92c6d6063bccd23184bd166e4d6cc1394...dev
->>>>>>> origin/dev
+[0.0.101.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2d7d2cb92c6d6063bccd23184bd166e4d6cc1394...2fe05ed008518da4f1bdcd677f063df29c15512b
 [0.0.100.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/55e109fcfc69d2560f9893324e704aec1b9d84bb...2d7d2cb92c6d6063bccd23184bd166e4d6cc1394
 [0.0.99.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5e349caf800aa892d029bf3f121f00e5fcfb11b3...55e109fcfc69d2560f9893324e704aec1b9d84bb
 [0.0.98.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6872c03dbdd60dfd8998f990bf26b30208724363...5e349caf800aa892d029bf3f121f00e5fcfb11b3
