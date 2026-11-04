@@ -252,27 +252,107 @@ fn no_route_101_object_event_stands_beside_the_rescue_trigger_tiles() {
     }
 }
 
-/// Route 101's coord events never stack, so real data never gives `first_battle_trigger_at` more
-/// than one candidate; the stacked-scan tests below fabricate stacks.
+/// Whether two coord events can both be candidates for one `coord_events_at` query.
+///
+/// Mirrors `MapRuntime::coord_events_at`'s match domain: same `(x, y)`, and the elevations either
+/// agree or one is the stored `ELEVATION_TRANSITION` wildcard (which matches every query
+/// elevation). Comparing full `(x, y, elevation)` tuples would miss a stored-0 event stacked on a
+/// real-elevation one.
+fn coord_events_can_stack(a: &assets::CoordEvent, b: &assets::CoordEvent) -> bool {
+    a.x == b.x
+        && a.y == b.y
+        && (a.elevation == b.elevation
+            || a.elevation == engine::overworld::collision::ELEVATION_TRANSITION
+            || b.elevation == engine::overworld::collision::ELEVATION_TRANSITION)
+}
+
+/// Every pair of `events` that `coord_events_can_stack`, as `(first, second)` indices.
+fn stacked_coord_event_pairs(events: &[assets::CoordEvent]) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (i, a) in events.iter().enumerate() {
+        for (j, b) in events.iter().enumerate().skip(i + 1) {
+            if coord_events_can_stack(a, b) {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
+/// Route 101's coord events never stack -- no two can match the same `coord_events_at` query,
+/// counting a stored elevation 0 as matching every elevation at its `(x, y)` -- so real data never
+/// gives `first_battle_trigger_at` more than one candidate; the stacked-scan tests below fabricate
+/// stacks.
 #[test]
 fn route_101_coord_events_all_sit_at_distinct_positions() {
     let events = assets::MapEventsTable::new()
         .resolve(MapId("MAP_ROUTE101"))
         .expect("Route 101 always has a static events entry");
-    let mut positions: Vec<(i16, i16, u8)> = events
-        .coord_events
-        .iter()
-        .map(|e| (e.x, e.y, e.elevation))
-        .collect();
-    let total = positions.len();
-    positions.sort_unstable();
-    positions.dedup();
-    assert_eq!(
-        positions.len(),
-        total,
-        "two coord events now share a tile -- review this module's \
-         single-candidate reachability arguments, which assumed they never would"
+    let stacked = stacked_coord_event_pairs(events.coord_events);
+    assert!(
+        stacked.is_empty(),
+        "coord events {stacked:?} can now match the same tile and elevation query -- review this \
+         module's single-candidate reachability arguments, which assumed they never would"
     );
+}
+
+fn fabricated_coord_event(x: i16, y: i16, elevation: u8) -> assets::CoordEvent {
+    assets::CoordEvent {
+        x,
+        y,
+        elevation,
+        kind: assets::CoordEventKind::Trigger {
+            var: "VAR_ROUTE101_STATE",
+            var_value: 1,
+            script: assets::ScriptRef::new("Route101_EventScript_Fabricated"),
+        },
+    }
+}
+
+/// The guard's predicate itself: a stored-0 event stacks with any elevation on its tile, which
+/// full-tuple dedup missed (#3074); distinct ordinary elevations and distinct tiles do not stack.
+#[test]
+fn the_stacked_event_predicate_counts_a_stored_wildcard_elevation_as_overlapping() {
+    let wildcard = engine::overworld::collision::ELEVATION_TRANSITION;
+    // The #3074 case: a stored-0 event on the rescue tile plus the real elevation-3 event.
+    let stack = [
+        fabricated_coord_event(10, 19, wildcard),
+        fabricated_coord_event(10, 19, ROUTE_101_TRIGGER_ELEVATION),
+    ];
+    assert_eq!(stacked_coord_event_pairs(&stack), vec![(0, 1)]);
+    // Order does not matter.
+    assert_eq!(
+        stacked_coord_event_pairs(&[stack[1], stack[0]]),
+        vec![(0, 1)]
+    );
+    // Equal elevations stack, including two wildcards.
+    assert_eq!(
+        stacked_coord_event_pairs(&[
+            fabricated_coord_event(4, 5, 3),
+            fabricated_coord_event(4, 5, 3)
+        ]),
+        vec![(0, 1)]
+    );
+    assert_eq!(
+        stacked_coord_event_pairs(&[
+            fabricated_coord_event(4, 5, wildcard),
+            fabricated_coord_event(4, 5, wildcard)
+        ]),
+        vec![(0, 1)]
+    );
+    // Two different ordinary elevations on one tile are never both candidates for one query.
+    assert!(stacked_coord_event_pairs(&[
+        fabricated_coord_event(4, 5, 1),
+        fabricated_coord_event(4, 5, 3)
+    ])
+    .is_empty());
+    // A wildcard on another tile does not stack.
+    assert!(stacked_coord_event_pairs(&[
+        fabricated_coord_event(4, 5, wildcard),
+        fabricated_coord_event(4, 6, 3),
+        fabricated_coord_event(5, 5, 3)
+    ])
+    .is_empty());
 }
 
 // Stacked coord-event scan: fabricated stacks driven through `first_battle_trigger_ready`,
