@@ -6,6 +6,8 @@ mod common;
 
 #[path = "turn_engine/absorbing_abilities.rs"]
 mod absorbing_abilities;
+#[path = "turn_engine/accuracy_down_hit.rs"]
+mod accuracy_down_hit;
 #[path = "turn_engine/announcement.rs"]
 mod announcement;
 #[path = "turn_engine/burn.rs"]

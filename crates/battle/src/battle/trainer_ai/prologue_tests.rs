@@ -165,6 +165,7 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::DRAGON_RAGE,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::CONFUSION,
         MoveId::VITAL_THROW,
         MoveId::SPLASH,
@@ -191,6 +192,7 @@ fn the_audited_row_set_is_exact() {
         MoveEffect::DRAGON_RAGE,
         MoveEffect::HIGH_CRITICAL,
         MoveEffect::SPEED_DOWN_HIT,
+        MoveEffect::ACCURACY_DOWN_HIT,
         MoveEffect::EVASION_DOWN_HIT,
         MoveEffect::CONFUSE_HIT,
         MoveEffect::VITAL_THROW,
@@ -226,6 +228,7 @@ fn admission_is_flag_aware() {
         MoveId::SWIFT,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::VITAL_THROW,
         MoveId::QUICK_ATTACK,
         MoveId::SPLASH,
@@ -248,6 +251,16 @@ fn admission_is_flag_aware() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         );
     }
+    // `AI_CheckViability` has no `EFFECT_ACCURACY_DOWN_HIT` branch
+    // (`data/battle_ai_scripts.s:655-743`), unlike Speed Down Hit's at `:706`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::MUD_SLAP,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
     assert_eq!(
         ensure_scoreable(
             &dex,

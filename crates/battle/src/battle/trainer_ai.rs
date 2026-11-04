@@ -100,7 +100,7 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant. Any
 /// other effect is never an implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 14] = [
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 15] = [
     MoveEffect::ABSORB,
     MoveEffect::POISON_HIT,
     MoveEffect::THAW_HIT,
@@ -109,6 +109,7 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 14] = [
     MoveEffect::DRAGON_RAGE,
     MoveEffect::HIGH_CRITICAL,
     MoveEffect::SPEED_DOWN_HIT,
+    MoveEffect::ACCURACY_DOWN_HIT,
     MoveEffect::EVASION_DOWN_HIT,
     MoveEffect::CONFUSE_HIT,
     MoveEffect::VITAL_THROW,

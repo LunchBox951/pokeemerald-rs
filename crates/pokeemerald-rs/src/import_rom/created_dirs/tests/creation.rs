@@ -139,6 +139,49 @@ fn a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable() {
     }
 }
 
+// Same platform boundary as the tests above; this pins
+// `Dest::open_pinned` reaching a destination its pin cannot read.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_destination_acquired_from_a_pin_on_a_writable_but_not_readable_directory_takes_a_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = TempDir::new("pinned-unreadable-destination");
+    let drop_box = dir.join("drop-box");
+    fs::create_dir(&drop_box).expect("the destination is created");
+
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o300))
+        .expect("the destination closes");
+    // A privileged user ignores directory permissions; see the tests above.
+    let unreadable = fs::read_dir(&drop_box).is_err();
+    let acquired = super::dest::open_traversal_directory(&drop_box)
+        .and_then(|pin| super::dest::Dest::open_pinned(&pin));
+    let created = acquired
+        .as_ref()
+        .map(|dest| dest.create_new(std::ffi::OsStr::new("probe")));
+    let syncable = acquired.as_ref().is_ok_and(|dest| dest.handle().is_some());
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o755))
+        .expect("the destination reopens");
+
+    if unreadable {
+        created
+            .expect("pinning and acquiring need only write and search")
+            .expect("a writable, searchable destination takes a new name");
+        assert!(drop_box.join("probe").is_file());
+        assert!(!syncable, "an unreadable directory has no handle to sync");
+    } else {
+        eprintln!(
+            "a_destination_acquired_from_a_pin_on_a_writable_but_not_readable_directory_takes_a_file: \
+             skipped -- running privileged, 0o300 did not close the destination off"
+        );
+    }
+}
+
 #[test]
 fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
     // The overlong component trips the create after `new/` is on disk, and

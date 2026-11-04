@@ -250,8 +250,8 @@
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
-//! [`secondary::EFFECT_SPEED_DOWN_HIT`] and [`secondary::EFFECT_THAW_HIT`]
-//! are the four resolved; the other 27
+//! [`secondary::EFFECT_SPEED_DOWN_HIT`], [`secondary::EFFECT_ACCURACY_DOWN_HIT`]
+//! and [`secondary::EFFECT_THAW_HIT`] are the five resolved; the other 26
 //! are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
@@ -330,9 +330,9 @@ pub use pokemon::{
     SPECIES_SHEDINJA,
 };
 pub use secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,
-    is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication, Trampoline,
-    EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
+    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+    Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

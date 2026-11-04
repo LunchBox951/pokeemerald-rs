@@ -18,7 +18,7 @@
 //! No ROM bytes leave this tool: the table carries offsets, lengths,
 //! dimensions, counts, and names, plus the whole-file SHA-1 `rom_import`
 //! already ships, and no other hash of ROM data. A pack missing the whole
-//! fixed asset domain (fonts, tilesets, layouts, interface palettes) is
+//! fixed asset domain (fonts, tilesets, layouts, interface images and palettes) is
 //! refused.
 
 mod audio;
@@ -33,6 +33,7 @@ mod evolution_scene;
 mod field_messages;
 mod fonts;
 mod images;
+mod interface;
 mod inventory;
 mod layouts;
 mod locate;
@@ -173,7 +174,7 @@ fn locate_profile(
         layouts: layouts::locate(ctx, lines)?,
         fonts: fonts::locate(ctx, lines)?,
         text_window: text_window::locate(ctx, lines)?,
-        interface: locate_interface_palettes(ctx, lines)?,
+        interface: interface::locate(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
         field_messages: field_messages::locate(ctx, lines)?,
