@@ -15,9 +15,9 @@
 //! [`from_save_pokemon`] reads the growth substructure's held item
 //! (`MON_DATA_HELD_ITEM`, `pokeemerald/src/pokemon.c:3833`) onto the battler
 //! through [`battle::BattlePokemon::with_held_item`], whatever its id.
-//! `battle` carries the item but models none of its effects, so
+//! `battle` models Oran Berry's end-turn heal and no other hold effect, so
 //! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
-//! item has one; each flow's refusal is documented where it is made. The battler
+//! item has any other one; each flow's refusal is documented where it is made. The battler
 //! owns the item afterwards: [`to_save_pokemon`] and
 //! [`merge_into_save_pokemon`] both file [`battle::BattlePokemon::held_item`],
 //! so a Berry consumed in battle leaves the save, as `Cmd_removeitem`'s
