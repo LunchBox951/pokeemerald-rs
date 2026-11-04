@@ -31772,7 +31772,7 @@
     "src/field_screen_effect.c": {
       "artifacts": {
         "DoEscalatorWarp": {
-          "reason": "Partly modelled (field_screen_effect.c:528-532). engine::overworld::warp::trigger_escalator_warp is the typed shell for the warp DoEscalatorWarp starts: OverworldPhase::step polls it on the arrived tile and warps through OverworldPhase::warp_to at once, then runs the arrival's face-east and east step (see FieldCallback_EscalatorWarpIn). Not modelled: LockPlayerFieldControls and StartEscalatorWarp's ride (the Task_EscalatorWarpOut screen fade and the diagonal ride animation, field_effect.c), so the warp is instant with no input lock. Deferred: the escalator ride animation, to be filed as its own issue.",
+          "reason": "Partly modelled (field_screen_effect.c:528-532). engine::overworld::warp::trigger_escalator_warp is the typed shell for the warp DoEscalatorWarp starts: OverworldPhase::step polls it on the arrived tile and warps through OverworldPhase::warp_to at once, then runs the arrival's face-east and east step (see FieldCallback_EscalatorWarpIn). Not modelled: LockPlayerFieldControls and StartEscalatorWarp's ride (the Task_EscalatorWarpOut screen fade and the diagonal ride animation, field_effect.c), so the warp is instant with no input lock. Deferred: the escalator ride animation, tracked by issue #3033.",
           "rust_target": "crates/engine/src/overworld/warp.rs",
           "spec": "I-3",
           "status": "stubbed"

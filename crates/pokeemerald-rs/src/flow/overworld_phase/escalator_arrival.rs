@@ -100,24 +100,11 @@ impl OverworldPhase {
         }
     }
 
-    /// Whether the call's completed step is the arrival's east step, taken
-    /// once the player is at rest (where `pending_landing` is consumed too).
-    ///
-    /// That step is held movement (`FieldCallback_EscalatorWarpIn`,
-    /// `field_effect.c:1813-1818`), which bypasses the keypad movement that
-    /// sets `runningState` MOVING (`field_player_avatar.c:353-379`), so its
-    /// landing never sets `tookStep` (`field_control_avatar.c:118-119`).
-    /// [`super::OverworldPhase::step`] withholds it from every `tookStep`
-    /// consumer (the coord event, door-shaped warp and step-count script of
-    /// `TryStartStepBasedScript`, `:155-161`) but not from the encounter gate,
-    /// whose `checkStandardWildEncounter` needs only `T_TILE_CENTER`
-    /// (`:120-121`). `runningState` staying `NOT_MOVING` also makes a held
-    /// direction other than east turn before it steps
-    /// (`CheckMovementInputNotOnBike`, `:587-595`), so the keypad's moving
-    /// streak ends here.
     /// The buttons the frame's input pipeline reads: `buttons`, unless an
     /// escalator arrival's step is due, which holds its direction instead.
-    /// The flag is whether this frame's input is that step.
+    /// The flag is whether this frame's input is that step; its landing is
+    /// then held movement, which [`Self::take_stepped_onto`] withholds from
+    /// the `tookStep` consumers.
     pub(super) fn escalator_arrival_buttons(
         &mut self,
         buttons: ButtonState,
