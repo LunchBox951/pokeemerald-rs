@@ -1021,9 +1021,8 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
 
-    // Every draw is `u16::MAX`: non-critical, minimum-roll hits that land. The
-    // script is exactly upstream's 34 draws; `resolve_move_learn` adds none.
-    // Per turn: turn seed battle_main.c:3923/:4013, AI simulated damage per slot
+    // `u16::MAX` draws give non-critical, minimum-roll hits that land. Draw
+    // sites per turn: turn seed battle_main.c:3923/:4013, AI simulated damage per slot
     // battle_ai_script_commands.c:341, pick :445, then each move's accuracy
     // battle_script_commands.c:1176 (damaging moves add crit :1282, variance
     // :1641, secondary chance :2923). Leer's `AI_CV_DefenseDown2` roll
@@ -1129,12 +1128,9 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
         .is_none());
     let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
 
-    // Every draw is `u16::MAX`. The script is exactly upstream's 38 draws over
-    // three turns (draw sites as in the deferred send-out fixture above); the
-    // four answers and the deferred victory add none. On turn 2 the hurt
-    // Treecko's Leer rolls under `AI_CV_DefenseDown2`
-    // (battle_ai_scripts.s:1125-1128), the AI then picks Pound, and Pound
-    // lands: 15 draws; turns 1 and 3 are 11 each, plus 1 for construction.
+    // On turn 2 the hurt Treecko's Leer rolls under `AI_CV_DefenseDown2`
+    // (battle_ai_scripts.s:1125-1128), so the AI picks Pound and Pound lands;
+    // the four answers and the deferred victory draw nothing.
     let mut rng = SequenceRng::new(script(&[
         &[MAX_DRAW],    // construction turn seed
         &[MAX_DRAW],    // turn 1: turn-start seed
