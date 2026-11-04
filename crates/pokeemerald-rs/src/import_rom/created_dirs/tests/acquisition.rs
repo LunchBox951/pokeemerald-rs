@@ -1,5 +1,7 @@
 //! Claiming a level right after `mkdirat` made it, where a writer of the
-//! parent may take its name.
+//! parent may take its name. Where the platform can rename without
+//! replacing, a level is made under a private name first; elsewhere it is
+//! made at its final name, and the tests say which contract they check.
 
 use super::*;
 
@@ -22,6 +24,7 @@ fn create_as(
     )
 }
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 /// The names in `dir` the creation made privately.
 fn private_entries(dir: &std::path::Path) -> Vec<String> {
     if !dir.is_dir() {
@@ -33,6 +36,7 @@ fn private_entries(dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_replacement_put_at_a_levels_name_after_mkdir_is_not_claimed() {
     // The hook runs right after `mkdirat` succeeded, before anything looks
@@ -76,10 +80,13 @@ fn a_replacement_put_at_a_levels_name_after_mkdir_is_not_claimed() {
 }
 
 #[test]
-fn a_level_of_another_user_is_refused_and_leaves_nothing_behind() {
+fn a_level_it_cannot_vouch_for_is_refused_and_left_untouched() {
     // Swapping in a directory of another user needs root, so the walk is
     // told to expect a different user instead: what is refused is a
-    // directory it cannot vouch is its user's.
+    // directory it cannot vouch is its user's. Whatever failed once the
+    // directory was made is the creation's failure: the name is not taken
+    // for an existing level, nothing is recorded or descended into, and the
+    // directory is not removed, since it was never shown to be ours.
     let dir = TempDir::new("level-of-another-user");
     let target = dir.join("a").join("b");
     let owner = rustix::process::geteuid().as_raw();
@@ -92,9 +99,41 @@ fn a_level_of_another_user_is_refused_and_leaves_nothing_behind() {
         panic!("a level of another user was accepted as the level `mkdirat` made");
     };
     assert!(created.is_empty(), "the level was recorded");
-    assert_eq!(entry_names(&dir.path), Vec::<String>::new());
+    assert!(!target.exists(), "a level was created inside it");
+    assert_eq!(
+        entry_names(&dir.path).len(),
+        1,
+        "the unvouched directory was removed or another was made"
+    );
 }
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_private_directory_replaced_before_it_is_vouched_for_is_not_removed() {
+    // The seam moves the directory `mkdirat` made away and puts another at
+    // its private name. The walk cannot vouch for either, so cleanup must
+    // not delete what it never verified.
+    let dir = TempDir::new("private-replaced");
+    let target = dir.join("a").join("b");
+    let moved = dir.join("moved");
+    let owner = rustix::process::geteuid().as_raw();
+
+    let result = create_as(&target, owner.wrapping_add(1), &mut || {
+        let private = dir.join(&private_entries(&dir.path)[0]);
+        fs::rename(&private, &moved).unwrap();
+        fs::create_dir(&private).unwrap();
+    });
+
+    assert!(result.is_err(), "an unvouched directory was accepted");
+    assert!(moved.is_dir(), "the directory `mkdirat` made was removed");
+    assert_eq!(
+        private_entries(&dir.path).len(),
+        1,
+        "the replacement under the private name was removed"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_level_is_made_under_a_private_name_until_it_is_claimed() {
     let dir = TempDir::new("after-mkdir-seam");
@@ -140,4 +179,25 @@ fn only_a_directory_of_the_given_user_is_made_by_that_user() {
         !super::acquire::made_by(&file, owner),
         "a file was vouched for as a level"
     );
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+#[test]
+fn a_level_is_made_at_its_final_name_where_no_rename_can_refuse_to_replace() {
+    // The fallback contract: the directory is made at the name itself, so
+    // the seam sees it there and nothing is made privately. What it does not
+    // give is protection from a same-user writer replacing it in the gap.
+    let dir = TempDir::new("final-name");
+    let first = dir.join("a");
+    let target = first.join("b");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut seen = Vec::new();
+
+    let creation = create_as(&target, owner, &mut || {
+        seen.push(entry_names(&dir.path));
+    })
+    .expect("both levels are created");
+
+    assert_eq!(creation.created.len(), 2);
+    assert_eq!(seen[0], ["a"], "the level is already at its final name");
 }

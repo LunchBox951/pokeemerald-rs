@@ -26,9 +26,11 @@
 use std::ffi::OsStr;
 use std::io;
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+use super::take_back;
 use super::{
     dest, is_out_of_descriptors, is_out_of_descriptors_io, same_directory_identity,
-    sync_and_shed_outermost_pinned_level, take_back, CreatedDirectory,
+    sync_and_shed_outermost_pinned_level, CreatedDirectory,
 };
 
 /// `mkdirat`s `name` in `parent`, shedding a pin and retrying while
@@ -55,6 +57,31 @@ pub(super) fn mkdir_level(
     }
 }
 
+/// Why [`claim_level`] did not make a level of its own.
+#[cfg(unix)]
+pub(super) enum ClaimError {
+    /// `name` was already taken, by a directory, a symlink or a file: not
+    /// this run's to record, and the caller decides whether it can be walked
+    /// through.
+    Taken(io::Error),
+    /// Anything else, including everything that went wrong once a directory
+    /// was made: the caller must not take the name for an existing level.
+    Failed(io::Error),
+}
+
+#[cfg(unix)]
+impl ClaimError {
+    /// `errno` as [`Self::Taken`] if it says the name exists, else
+    /// [`Self::Failed`].
+    fn from_errno(errno: rustix::io::Errno) -> Self {
+        if errno == rustix::io::Errno::EXIST {
+            Self::Taken(errno.into())
+        } else {
+            Self::Failed(errno.into())
+        }
+    }
+}
+
 /// Makes the level `name` in `parent` and answers with the identity of the
 /// directory this call made, owned by `owner`. `after_mkdir` runs once the
 /// directory is made and before anything looks at it, where a test replaces
@@ -67,9 +94,11 @@ pub(super) fn mkdir_level(
 /// the identity is taken, since it cannot know the name, and a swap of the
 /// private name after that leaves `name` holding a directory other than the
 /// identity returned, which the reopen refuses. A `name` that is already
-/// taken fails the call as `mkdirat` would have, and the private directory
-/// is removed. Elsewhere there is no such rename, so the directory is made
-/// at `name` and stat'ed there, which a same-user writer can race.
+/// taken is [`ClaimError::Taken`], as `mkdirat` would have said, and the
+/// private directory is removed if it is still the one that was verified;
+/// one that fails verification is left untouched, since it may be someone
+/// else's. Elsewhere there is no such rename, so the directory is made at
+/// `name` and stat'ed there, which a same-user writer can race.
 #[cfg(all(
     unix,
     any(target_os = "linux", target_os = "android", target_vendor = "apple")
@@ -82,30 +111,47 @@ pub(super) fn claim_level(
     owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> io::Result<rustix::fs::Stat> {
+) -> Result<rustix::fs::Stat, ClaimError> {
     let hex = loop {
         match take_back::unguessable_hex() {
             Err(source)
                 if is_out_of_descriptors_io(&source)
                     && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            result => break result?,
+            result => break result.map_err(ClaimError::Failed)?,
         }
     };
     let private = std::ffi::OsString::from(format!(".import-{hex}"));
-    mkdir_level(created, pin_from, parent, &private, sync_reopen)?;
+    mkdir_level(created, pin_from, parent, &private, sync_reopen)
+        .map_err(|errno| ClaimError::Failed(errno.into()))?;
     after_mkdir();
-    let claimed =
-        identity_of(created, pin_from, parent, &private, owner, sync_reopen).and_then(|identity| {
-            take_back::rename_without_replacing(&**parent, &private, &**parent, name)
-                .map(|()| identity)
-                .map_err(io::Error::from)
-        });
-    if claimed.is_err() {
-        // Best effort: a directory left under the private name is empty and
-        // harmless, and the failure being reported is the real one.
-        let _ = rustix::fs::unlinkat(&**parent, &private, rustix::fs::AtFlags::REMOVEDIR);
+    let identity = identity_of(created, pin_from, parent, &private, owner, sync_reopen)
+        .map_err(ClaimError::Failed)?;
+    match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
+        Ok(()) => Ok(identity),
+        Err(errno) => {
+            remove_if_unchanged(parent, &private, &identity);
+            Err(ClaimError::from_errno(errno))
+        }
     }
-    claimed
+}
+
+/// Removes the empty directory `name` in `parent` if it is still the one
+/// with `identity`; best effort, since a directory left under a private name
+/// is empty and harmless and the failure being reported is the real one.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn remove_if_unchanged(
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    identity: &rustix::fs::Stat,
+) {
+    let unchanged = rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .is_ok_and(|found| same_directory_identity(&found, identity));
+    if unchanged {
+        let _ = rustix::fs::unlinkat(&**parent, name, rustix::fs::AtFlags::REMOVEDIR);
+    }
 }
 
 /// [`claim_level`] where there is no no-replace rename: the directory is made
@@ -122,18 +168,18 @@ pub(super) fn claim_level(
     owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> io::Result<rustix::fs::Stat> {
-    mkdir_level(created, pin_from, parent, name, sync_reopen)?;
+) -> Result<rustix::fs::Stat, ClaimError> {
+    mkdir_level(created, pin_from, parent, name, sync_reopen).map_err(ClaimError::from_errno)?;
     after_mkdir();
     let found = loop {
         match rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
             Err(err)
                 if is_out_of_descriptors(err)
                     && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            result => break result?,
+            result => break result.map_err(|errno| ClaimError::Failed(errno.into()))?,
         }
     };
-    vouch_owned_by(found, owner)
+    vouch_owned_by(found, owner).map_err(ClaimError::Failed)
 }
 
 /// The identity of the directory `name` in `parent`, read through a

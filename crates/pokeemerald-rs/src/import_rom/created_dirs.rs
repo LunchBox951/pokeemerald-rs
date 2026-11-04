@@ -464,7 +464,7 @@ fn create_directories_pinned_after_mkdir(
             }
             // An existing directory is no failure and not this run's to
             // record; a final symlink to one counts, as for `Path::is_dir`.
-            Err(mkdir_err) => {
+            Err(ClaimError::Taken(mkdir_err)) => {
                 let already_a_directory =
                     rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
                         |stat| {
@@ -491,6 +491,7 @@ fn create_directories_pinned_after_mkdir(
                     return Err((created, mkdir_err));
                 }
             }
+            Err(ClaimError::Failed(source)) => return Err((created, source)),
         }
     }
     // The last level made already is this descriptor's owner; a second
@@ -562,7 +563,7 @@ mod sync;
 mod take_back;
 
 #[cfg(unix)]
-use acquire::{claim_level, reopen_created_level, ReopenedLevel};
+use acquire::{claim_level, reopen_created_level, ClaimError, ReopenedLevel};
 
 #[cfg(unix)]
 use sync::sync_and_shed_outermost_pinned_level;
