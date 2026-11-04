@@ -53,6 +53,9 @@ use assets::{AssetPack, CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 use rom_import::FIELD_MESSAGE_PACK_ID;
 
+#[path = "equivalence/battle_effect.rs"]
+mod battle_effect;
+
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
 
@@ -83,6 +86,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "evolution-scene/",
     "poke-ball/",
     "naming-screen/",
+    "battle-effect/",
 ];
 
 /// The species whose static battler art both backends must carry: the
@@ -385,6 +389,18 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
+
+    // `battle-effect/` is complete by prefix; the catalog also names the pairs.
+    differences.extend(battle_effect::differences(
+        "the ROM backend",
+        &rom_bytes,
+        &imported,
+    ));
+    differences.extend(battle_effect::differences(
+        "the checkout pack",
+        &checkout_bytes,
+        &checkout,
+    ));
 
     differences.extend(field_message_differences(
         (&rom_bytes, &imported),

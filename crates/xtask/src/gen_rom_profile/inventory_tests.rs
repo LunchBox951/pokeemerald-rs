@@ -7,7 +7,7 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
+    bag, battle_anims, battle_effect, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, inventory, layouts, locate_profile, naming_screen, opening_scene,
     poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
@@ -20,9 +20,10 @@ use crate::extract::scope::{
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
-/// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
+/// One placeholder entry per fixed root and per bag id, which the preflight checks for presence
+/// only, and a real catalog with its battle-effect pairs, which it checks the shape of.
 fn complete_inventory() -> Vec<PackEntry> {
-    TILESETS
+    let placeholders: Vec<PackEntry> = TILESETS
         .iter()
         .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name))
         .chain(tileset_animation_ids())
@@ -38,7 +39,6 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
             rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
-            rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
@@ -52,6 +52,10 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
         .map(|id| raw_entry(id, vec![0]))
+        .collect();
+    placeholders
+        .into_iter()
+        .chain(battle_effect::fixture::entries(&[3, 7]))
         .collect()
 }
 
@@ -808,4 +812,32 @@ fn a_pack_missing_a_poke_ball_entry_is_refused() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "poke_ball");
     }
+}
+
+#[test]
+fn a_pack_missing_half_of_a_battle_effect_pair_is_refused_by_the_aggregate() {
+    let rom = RomFixture::new().emerald_header().finish();
+    for missing in ["battle-effect/003/image", "battle-effect/007/palette"] {
+        with_context("battle-effect-half", &rom, without(missing), |ctx| {
+            let err = inventory::preflight(ctx.pack, &ctx.bag_ids).expect_err("a half pair");
+            assert!(
+                matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
+                "{err:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn a_surplus_battle_effect_entry_is_refused_by_the_aggregate() {
+    let rom = RomFixture::new().emerald_header().finish();
+    let mut entries = complete_inventory();
+    entries.extend(battle_effect::fixture::pair(200, 9));
+    with_context("battle-effect-surplus", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).expect_err("a surplus pair");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "battle-effect/200/image"),
+            "{err:?}"
+        );
+    });
 }

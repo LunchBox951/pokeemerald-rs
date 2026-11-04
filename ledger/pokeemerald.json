@@ -12537,6 +12537,1280 @@
       "status": "pending"
     },
     "graphics/battle_anims": {
+      "artifacts": {
+        "sprites/air_wave.png": {
+          "reason": "graphics/battle_anims/sprites/air_wave.png: the source of the image of battle-effect/003 (gBattleAnimSpriteGfx_AirWave, ANIM_TAG_AIR_WAVE); the palette of battle-effect/003 (gBattleAnimSpritePal_AirWave, ANIM_TAG_AIR_WAVE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/air_wave_2.png": {
+          "reason": "graphics/battle_anims/sprites/air_wave_2.png: the source of the image of battle-effect/154 (gBattleAnimSpriteGfx_AirWave2, ANIM_TAG_AIR_WAVE_2); the palette of battle-effect/154 (gBattleAnimSpritePal_AirWave2, ANIM_TAG_AIR_WAVE_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/alert.png": {
+          "reason": "graphics/battle_anims/sprites/alert.png: the source of the image of battle-effect/075 (gBattleAnimSpriteGfx_Alert, ANIM_TAG_ALERT); the palette of battle-effect/075 (gBattleAnimSpritePal_Alert, ANIM_TAG_ALERT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/amnesia.png": {
+          "reason": "graphics/battle_anims/sprites/amnesia.png: the source of the image of battle-effect/093 (gBattleAnimSpriteGfx_Amnesia, ANIM_TAG_AMNESIA); the palette of battle-effect/093 (gBattleAnimSpritePal_Amnesia, ANIM_TAG_AMNESIA). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/angel.png": {
+          "reason": "graphics/battle_anims/sprites/angel.png: the source of the image of battle-effect/220 (gBattleAnimSpriteGfx_Angel, ANIM_TAG_ANGEL); the palette of battle-effect/220 (gBattleAnimSpritePal_Angel, ANIM_TAG_ANGEL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/anger.png": {
+          "reason": "graphics/battle_anims/sprites/anger.png: the source of the image of battle-effect/087 (gBattleAnimSpriteGfx_Anger, ANIM_TAG_ANGER); the palette of battle-effect/087 (gBattleAnimSpritePal_Anger, ANIM_TAG_ANGER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bell.png": {
+          "reason": "graphics/battle_anims/sprites/bell.png: the source of the image of battle-effect/205 (gBattleAnimSpriteGfx_Bell, ANIM_TAG_BELL); the palette of battle-effect/205 (gBattleAnimSpritePal_Bell, ANIM_TAG_BELL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bent_spoon.png": {
+          "reason": "graphics/battle_anims/sprites/bent_spoon.png: the source of the image of battle-effect/097 (gBattleAnimSpriteGfx_BentSpoon, ANIM_TAG_BENT_SPOON); the palette of battle-effect/097 (gBattleAnimSpritePal_BentSpoon, ANIM_TAG_BENT_SPOON). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bird.png": {
+          "reason": "graphics/battle_anims/sprites/bird.png: the source of the image of battle-effect/284 (gBattleAnimSpriteGfx_Bird, ANIM_TAG_BIRD); the palette of battle-effect/284 (gBattleAnimSpritePal_Bird, ANIM_TAG_BIRD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/black_ball.png": {
+          "reason": "graphics/battle_anims/sprites/black_ball.png: the source of the image of battle-effect/017 (gBattleAnimSpriteGfx_BlackBall, ANIM_TAG_BLACK_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/black_ball_2.png": {
+          "reason": "graphics/battle_anims/sprites/black_ball_2.png: the source of the image of battle-effect/171 (gBattleAnimSpriteGfx_BlackBall2, ANIM_TAG_BLACK_BALL_2); the palette of battle-effect/171 (gBattleAnimSpritePal_BlackBall2, ANIM_TAG_BLACK_BALL_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/black_smoke.png": {
+          "reason": "graphics/battle_anims/sprites/black_smoke.png: the source of the image of battle-effect/016 (gBattleAnimSpriteGfx_BlackSmoke, ANIM_TAG_BLACK_SMOKE); the palette of battle-effect/016 (gBattleAnimSpritePal_BlackSmoke, ANIM_TAG_BLACK_SMOKE); the palette of battle-effect/017 (gBattleAnimSpritePal_BlackSmoke, ANIM_TAG_BLACK_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/blue_light_wall.pal": {
+          "reason": "graphics/battle_anims/sprites/blue_light_wall.pal: the source of the palette of battle-effect/167 (gBattleAnimSpritePal_BlueLightWall, ANIM_TAG_BLUE_LIGHT_WALL); the palette of battle-effect/208 (gBattleAnimSpritePal_BlueLightWall, ANIM_TAG_TORN_METAL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/blue_orb.pal": {
+          "reason": "graphics/battle_anims/sprites/blue_orb.pal: the source of the palette of battle-effect/236 (gBattleAnimSpritePal_BlueOrb, ANIM_TAG_BLUE_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/blue_ring.pal": {
+          "reason": "graphics/battle_anims/sprites/blue_ring.pal: the source of the palette of battle-effect/165 (gBattleAnimSpritePal_BlueRing, ANIM_TAG_BLUE_RING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/blue_ring_2.pal": {
+          "reason": "graphics/battle_anims/sprites/blue_ring_2.pal: the source of the palette of battle-effect/288 (gBattleAnimSpritePal_BlueRing2, ANIM_TAG_BLUE_RING_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/blue_star.png": {
+          "reason": "graphics/battle_anims/sprites/blue_star.png: the source of the image of battle-effect/031 (gBattleAnimSpriteGfx_BlueStar, ANIM_TAG_BLUE_STAR); the palette of battle-effect/031 (gBattleAnimSpritePal_BlueStar, ANIM_TAG_BLUE_STAR). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bluegreen_orb.png": {
+          "reason": "graphics/battle_anims/sprites/bluegreen_orb.png: the source of the image of battle-effect/251 (gBattleAnimSpriteGfx_BluegreenOrb, ANIM_TAG_BLUEGREEN_ORB); the palette of battle-effect/251 (gBattleAnimSpritePal_BluegreenOrb, ANIM_TAG_BLUEGREEN_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bone.png": {
+          "reason": "graphics/battle_anims/sprites/bone.png: the source of the image of battle-effect/000 (gBattleAnimSpriteGfx_Bone, ANIM_TAG_BONE); the palette of battle-effect/000 (gBattleAnimSpritePal_Bone, ANIM_TAG_BONE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/breaking_egg.png": {
+          "reason": "graphics/battle_anims/sprites/breaking_egg.png: the source of the image of battle-effect/202 (gBattleAnimSpriteGfx_BreakingEgg, ANIM_TAG_BREAKING_EGG); the palette of battle-effect/202 (gBattleAnimSpritePal_BreakingEgg, ANIM_TAG_BREAKING_EGG). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/breath.png": {
+          "reason": "graphics/battle_anims/sprites/breath.png: the source of the image of battle-effect/086 (gBattleAnimSpriteGfx_Breath, ANIM_TAG_BREATH); the palette of battle-effect/086 (gBattleAnimSpritePal_Breath, ANIM_TAG_BREATH). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/brown_orb.pal": {
+          "reason": "graphics/battle_anims/sprites/brown_orb.pal: the source of the palette of battle-effect/259 (gBattleAnimSpritePal_BrownOrb, ANIM_TAG_BROWN_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/bubble.png": {
+          "reason": "graphics/battle_anims/sprites/bubble.png: the source of the image of battle-effect/146 (gBattleAnimSpriteGfx_Bubble, ANIM_TAG_BUBBLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/circle_of_light.png": {
+          "reason": "graphics/battle_anims/sprites/circle_of_light.png: the source of the image of battle-effect/212 (gBattleAnimSpriteGfx_CircleOfLight, ANIM_TAG_CIRCLE_OF_LIGHT); the image of battle-effect/267 (gBattleAnimSpriteGfx_CircleOfLight, ANIM_TAG_WHITE_CIRCLE_OF_LIGHT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/clamp.png": {
+          "reason": "graphics/battle_anims/sprites/clamp.png: the source of the image of battle-effect/145 (gBattleAnimSpriteGfx_Clamp, ANIM_TAG_CLAMP). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/claw_slash.png": {
+          "reason": "graphics/battle_anims/sprites/claw_slash.png: the source of the image of battle-effect/039 (gBattleAnimSpriteGfx_ClawSlash, ANIM_TAG_CLAW_SLASH); the palette of battle-effect/039 (gBattleAnimSpritePal_ClawSlash, ANIM_TAG_CLAW_SLASH). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/coin.png": {
+          "reason": "graphics/battle_anims/sprites/coin.png: the source of the image of battle-effect/100 (gBattleAnimSpriteGfx_Coin, ANIM_TAG_COIN); the palette of battle-effect/100 (gBattleAnimSpritePal_Coin, ANIM_TAG_COIN). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/confetti.png": {
+          "reason": "graphics/battle_anims/sprites/confetti.png: the source of the image of battle-effect/240 (gBattleAnimSpriteGfx_Confetti, ANIM_TAG_CONFETTI); the palette of battle-effect/240 (gBattleAnimSpritePal_Confetti, ANIM_TAG_CONFETTI). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/conversion.png": {
+          "reason": "graphics/battle_anims/sprites/conversion.png: the source of the image of battle-effect/018 (gBattleAnimSpriteGfx_Conversion, ANIM_TAG_CONVERSION); the palette of battle-effect/018 (gBattleAnimSpritePal_Conversion, ANIM_TAG_CONVERSION). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/cross_impact.png": {
+          "reason": "graphics/battle_anims/sprites/cross_impact.png: the source of the image of battle-effect/285 (gBattleAnimSpriteGfx_CrossImpact, ANIM_TAG_CROSS_IMPACT); the palette of battle-effect/285 (gBattleAnimSpritePal_CrossImpact, ANIM_TAG_CROSS_IMPACT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/cut.png": {
+          "reason": "graphics/battle_anims/sprites/cut.png: the source of the image of battle-effect/138 (gBattleAnimSpriteGfx_Cut, ANIM_TAG_CUT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/devil.png": {
+          "reason": "graphics/battle_anims/sprites/devil.png: the source of the image of battle-effect/221 (gBattleAnimSpriteGfx_Devil, ANIM_TAG_DEVIL); the palette of battle-effect/221 (gBattleAnimSpritePal_Devil, ANIM_TAG_DEVIL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/dirt_mound.png": {
+          "reason": "graphics/battle_anims/sprites/dirt_mound.png: the source of the image of battle-effect/281 (gBattleAnimSpriteGfx_DirtMound, ANIM_TAG_DIRT_MOUND); the palette of battle-effect/281 (gBattleAnimSpritePal_DirtMound, ANIM_TAG_DIRT_MOUND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/duck.png": {
+          "reason": "graphics/battle_anims/sprites/duck.png: the source of the image of battle-effect/073 (gBattleAnimSpriteGfx_Duck, ANIM_TAG_DUCK); the palette of battle-effect/073 (gBattleAnimSpritePal_Duck, ANIM_TAG_DUCK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/eclipsing_orb.png": {
+          "reason": "graphics/battle_anims/sprites/eclipsing_orb.png: the source of the image of battle-effect/234 (gBattleAnimSpriteGfx_EclipsingOrb, ANIM_TAG_ECLIPSING_ORB); the palette of battle-effect/234 (gBattleAnimSpritePal_EclipsingOrb, ANIM_TAG_ECLIPSING_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/electric_orbs.png": {
+          "reason": "graphics/battle_anims/sprites/electric_orbs.png: the source of the image of battle-effect/211 (gBattleAnimSpriteGfx_ElectricOrbs, ANIM_TAG_ELECTRIC_ORBS); the palette of battle-effect/211 (gBattleAnimSpritePal_ElectricOrbs, ANIM_TAG_ELECTRIC_ORBS); the palette of battle-effect/212 (gBattleAnimSpritePal_ElectricOrbs, ANIM_TAG_CIRCLE_OF_LIGHT); the palette of battle-effect/213 (gBattleAnimSpritePal_ElectricOrbs, ANIM_TAG_ELECTRICITY). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/electricity.png": {
+          "reason": "graphics/battle_anims/sprites/electricity.png: the source of the image of battle-effect/213 (gBattleAnimSpriteGfx_Electricity, ANIM_TAG_ELECTRICITY). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/explosion.png": {
+          "reason": "graphics/battle_anims/sprites/explosion.png: the source of the image of battle-effect/198 (gBattleAnimSpriteGfx_Explosion, ANIM_TAG_EXPLOSION); the palette of battle-effect/198 (gBattleAnimSpritePal_Explosion, ANIM_TAG_EXPLOSION). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/explosion_6.png": {
+          "reason": "graphics/battle_anims/sprites/explosion_6.png: the source of the image of battle-effect/007 (gBattleAnimSpriteGfx_Explosion6, ANIM_TAG_EXPLOSION_6); the palette of battle-effect/007 (gBattleAnimSpritePal_Explosion6, ANIM_TAG_EXPLOSION_6). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/eye.png": {
+          "reason": "graphics/battle_anims/sprites/eye.png: the source of the image of battle-effect/187 (gBattleAnimSpriteGfx_Eye, ANIM_TAG_EYE); the palette of battle-effect/187 (gBattleAnimSpritePal_Eye, ANIM_TAG_EYE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/eye_sparkle.png": {
+          "reason": "graphics/battle_anims/sprites/eye_sparkle.png: the source of the image of battle-effect/218 (gBattleAnimSpriteGfx_EyeSparkle, ANIM_TAG_EYE_SPARKLE); the palette of battle-effect/218 (gBattleAnimSpritePal_EyeSparkle, ANIM_TAG_EYE_SPARKLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/fang_attack.png": {
+          "reason": "graphics/battle_anims/sprites/fang_attack.png: the source of the image of battle-effect/192 (gBattleAnimSpriteGfx_FangAttack, ANIM_TAG_FANG_ATTACK); the palette of battle-effect/192 (gBattleAnimSpritePal_FangAttack, ANIM_TAG_FANG_ATTACK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/finger.png": {
+          "reason": "graphics/battle_anims/sprites/finger.png: the source of the image of battle-effect/064 (gBattleAnimSpriteGfx_Finger, ANIM_TAG_FINGER); the palette of battle-effect/064 (gBattleAnimSpritePal_Finger, ANIM_TAG_FINGER); the palette of battle-effect/214 (gBattleAnimSpritePal_Finger, ANIM_TAG_FINGER_2); the palette of battle-effect/247 (gBattleAnimSpritePal_Finger, ANIM_TAG_TAG_HAND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/finger_2.png": {
+          "reason": "graphics/battle_anims/sprites/finger_2.png: the source of the image of battle-effect/214 (gBattleAnimSpriteGfx_Finger2, ANIM_TAG_FINGER_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/fire.png": {
+          "reason": "graphics/battle_anims/sprites/fire.png: the source of the image of battle-effect/033 (gBattleAnimSpriteGfx_Fire, ANIM_TAG_FIRE); the palette of battle-effect/033 (gBattleAnimSpritePal_Fire, ANIM_TAG_FIRE); the palette of battle-effect/035 (gBattleAnimSpritePal_Fire, ANIM_TAG_FIRE_PLUME). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/fire_plume.png": {
+          "reason": "graphics/battle_anims/sprites/fire_plume.png: the source of the image of battle-effect/035 (gBattleAnimSpriteGfx_FirePlume, ANIM_TAG_FIRE_PLUME). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/flat_rock.png": {
+          "reason": "graphics/battle_anims/sprites/flat_rock.png: the source of the image of battle-effect/257 (gBattleAnimSpriteGfx_FlatRock, ANIM_TAG_FLAT_ROCK); the palette of battle-effect/257 (gBattleAnimSpritePal_FlatRock, ANIM_TAG_FLAT_ROCK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/flower.pal": {
+          "reason": "graphics/battle_anims/sprites/flower.pal: the source of the palette of battle-effect/159 (gBattleAnimSpritePal_Flower, ANIM_TAG_FLOWER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/flower_0.png": {
+          "reason": "graphics/battle_anims/sprites/flower_0.png: the source of part 0 of the flower.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/159 (gBattleAnimSpriteGfx_Flower, ANIM_TAG_FLOWER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/flower_1.png": {
+          "reason": "graphics/battle_anims/sprites/flower_1.png: the source of part 1 of the flower.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/159 (gBattleAnimSpriteGfx_Flower, ANIM_TAG_FLOWER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/flying_dirt.png": {
+          "reason": "graphics/battle_anims/sprites/flying_dirt.png: the source of the image of battle-effect/261 (gBattleAnimSpriteGfx_FlyingDirt, ANIM_TAG_FLYING_DIRT); the palette of battle-effect/261 (gBattleAnimSpritePal_FlyingDirt, ANIM_TAG_FLYING_DIRT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/focus_energy.png": {
+          "reason": "graphics/battle_anims/sprites/focus_energy.png: the source of the image of battle-effect/184 (gBattleAnimSpriteGfx_FocusEnergy, ANIM_TAG_FOCUS_ENERGY); the palette of battle-effect/184 (gBattleAnimSpritePal_FocusEnergy, ANIM_TAG_FOCUS_ENERGY). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ghostly_spirit.png": {
+          "reason": "graphics/battle_anims/sprites/ghostly_spirit.png: the source of the image of battle-effect/200 (gBattleAnimSpriteGfx_GhostlySpirit, ANIM_TAG_GHOSTLY_SPIRIT); the palette of battle-effect/200 (gBattleAnimSpritePal_GhostlySpirit, ANIM_TAG_GHOSTLY_SPIRIT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/glowy_blue_orb.pal": {
+          "reason": "graphics/battle_anims/sprites/glowy_blue_orb.pal: the source of the palette of battle-effect/268 (gBattleAnimSpritePal_GlowyBlueOrb, ANIM_TAG_GLOWY_BLUE_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/glowy_green_orb.pal": {
+          "reason": "graphics/battle_anims/sprites/glowy_green_orb.pal: the source of the palette of battle-effect/265 (gBattleAnimSpritePal_GlowyGreenOrb, ANIM_TAG_GLOWY_GREEN_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/glowy_red_orb.png": {
+          "reason": "graphics/battle_anims/sprites/glowy_red_orb.png: the source of the image of battle-effect/264 (gBattleAnimSpriteGfx_GlowyRedOrb, ANIM_TAG_GLOWY_RED_ORB); the palette of battle-effect/264 (gBattleAnimSpritePal_GlowyRedOrb, ANIM_TAG_GLOWY_RED_ORB); the image of battle-effect/265 (gBattleAnimSpriteGfx_GlowyRedOrb, ANIM_TAG_GLOWY_GREEN_ORB); the image of battle-effect/268 (gBattleAnimSpriteGfx_GlowyRedOrb, ANIM_TAG_GLOWY_BLUE_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gold_ring.png": {
+          "reason": "graphics/battle_anims/sprites/gold_ring.png: the source of the image of battle-effect/163 (gBattleAnimSpriteGfx_GoldRing, ANIM_TAG_GOLD_RING); the palette of battle-effect/163 (gBattleAnimSpritePal_GoldRing, ANIM_TAG_GOLD_RING); the image of battle-effect/164 (gBattleAnimSpriteGfx_GoldRing, ANIM_TAG_PURPLE_RING); the image of battle-effect/165 (gBattleAnimSpriteGfx_GoldRing, ANIM_TAG_BLUE_RING); and 1 more tags. Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gold_stars.png": {
+          "reason": "graphics/battle_anims/sprites/gold_stars.png: the source of the image of battle-effect/233 (gBattleAnimSpriteGfx_GoldStars, ANIM_TAG_GOLD_STARS); the palette of battle-effect/233 (gBattleAnimSpritePal_GoldStars, ANIM_TAG_GOLD_STARS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gray_light_wall.pal": {
+          "reason": "graphics/battle_anims/sprites/gray_light_wall.pal: the source of the palette of battle-effect/169 (gBattleAnimSpritePal_GrayLightWall, ANIM_TAG_GRAY_LIGHT_WALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gray_orb.png": {
+          "reason": "graphics/battle_anims/sprites/gray_orb.png: the source of the image of battle-effect/235 (gBattleAnimSpriteGfx_GrayOrb, ANIM_TAG_GRAY_ORB); the palette of battle-effect/235 (gBattleAnimSpritePal_GrayOrb, ANIM_TAG_GRAY_ORB); the image of battle-effect/236 (gBattleAnimSpriteGfx_GrayOrb, ANIM_TAG_BLUE_ORB); the image of battle-effect/237 (gBattleAnimSpriteGfx_GrayOrb, ANIM_TAG_RED_ORB_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gray_smoke.png": {
+          "reason": "graphics/battle_anims/sprites/gray_smoke.png: the source of the image of battle-effect/030 (gBattleAnimSpriteGfx_GraySmoke, ANIM_TAG_GRAY_SMOKE); the palette of battle-effect/030 (gBattleAnimSpritePal_GraySmoke, ANIM_TAG_GRAY_SMOKE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/green_light_wall.png": {
+          "reason": "graphics/battle_anims/sprites/green_light_wall.png: the source of the image of battle-effect/166 (gBattleAnimSpriteGfx_GreenLightWall, ANIM_TAG_GREEN_LIGHT_WALL); the palette of battle-effect/166 (gBattleAnimSpritePal_GreenLightWall, ANIM_TAG_GREEN_LIGHT_WALL); the image of battle-effect/167 (gBattleAnimSpriteGfx_GreenLightWall, ANIM_TAG_BLUE_LIGHT_WALL); the image of battle-effect/168 (gBattleAnimSpriteGfx_GreenLightWall, ANIM_TAG_RED_LIGHT_WALL); and 2 more tags. Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/green_sparkle.png": {
+          "reason": "graphics/battle_anims/sprites/green_sparkle.png: the source of the image of battle-effect/195 (gBattleAnimSpriteGfx_GreenSparkle, ANIM_TAG_GREEN_SPARKLE); the palette of battle-effect/195 (gBattleAnimSpritePal_GreenSparkle, ANIM_TAG_GREEN_SPARKLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/green_spike.png": {
+          "reason": "graphics/battle_anims/sprites/green_spike.png: the source of the image of battle-effect/266 (gBattleAnimSpriteGfx_GreenSpike, ANIM_TAG_GREEN_SPIKE); the palette of battle-effect/266 (gBattleAnimSpritePal_GreenSpike, ANIM_TAG_GREEN_SPIKE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/green_star.png": {
+          "reason": "graphics/battle_anims/sprites/green_star.png: the source of the image of battle-effect/241 (gBattleAnimSpriteGfx_GreenStar, ANIM_TAG_GREEN_STAR); the palette of battle-effect/241 (gBattleAnimSpritePal_GreenStar, ANIM_TAG_GREEN_STAR). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/guard_ring.png": {
+          "reason": "graphics/battle_anims/sprites/guard_ring.png: the source of the image of battle-effect/244 (gBattleAnimSpriteGfx_GuardRing, ANIM_TAG_GUARD_RING); the palette of battle-effect/244 (gBattleAnimSpritePal_GuardRing, ANIM_TAG_GUARD_RING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/gust.png": {
+          "reason": "graphics/battle_anims/sprites/gust.png: the source of the image of battle-effect/009 (gBattleAnimSpriteGfx_Gust, ANIM_TAG_GUST); the palette of battle-effect/009 (gBattleAnimSpritePal_Gust, ANIM_TAG_GUST). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/hail.png": {
+          "reason": "graphics/battle_anims/sprites/hail.png: the source of the image of battle-effect/263 (gBattleAnimSpriteGfx_Hail, ANIM_TAG_HAIL); the palette of battle-effect/263 (gBattleAnimSpritePal_Hail, ANIM_TAG_HAIL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/hands_and_feet.png": {
+          "reason": "graphics/battle_anims/sprites/hands_and_feet.png: the source of the image of battle-effect/143 (gBattleAnimSpriteGfx_HandsAndFeet, ANIM_TAG_HANDS_AND_FEET); the palette of battle-effect/143 (gBattleAnimSpritePal_HandsAndFeet, ANIM_TAG_HANDS_AND_FEET). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/hit_duplicate.png": {
+          "reason": "graphics/battle_anims/sprites/hit_duplicate.png: the source of the palette of battle-effect/053 (gBattleAnimSpritePal_HitDuplicate, ANIM_TAG_NOISE_LINE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/hollow_orb.png": {
+          "reason": "graphics/battle_anims/sprites/hollow_orb.png: the source of the image of battle-effect/249 (gBattleAnimSpriteGfx_HollowOrb, ANIM_TAG_HOLLOW_ORB); the palette of battle-effect/249 (gBattleAnimSpritePal_HollowOrb, ANIM_TAG_HOLLOW_ORB); the palette of battle-effect/250 (gBattleAnimSpritePal_HollowOrb, ANIM_TAG_X_SIGN). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/horn_hit.png": {
+          "reason": "graphics/battle_anims/sprites/horn_hit.png: the source of the image of battle-effect/020 (gBattleAnimSpriteGfx_HornHit, ANIM_TAG_HORN_HIT); the palette of battle-effect/020 (gBattleAnimSpritePal_HornHit, ANIM_TAG_HORN_HIT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/horn_hit_2.png": {
+          "reason": "graphics/battle_anims/sprites/horn_hit_2.png: the source of the image of battle-effect/153 (gBattleAnimSpriteGfx_HornHit2, ANIM_TAG_HORN_HIT_2); the palette of battle-effect/153 (gBattleAnimSpritePal_HornHit2, ANIM_TAG_HORN_HIT_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_chunk.png": {
+          "reason": "graphics/battle_anims/sprites/ice_chunk.png: the source of the image of battle-effect/043 (gBattleAnimSpriteGfx_IceChunk, ANIM_TAG_ICE_CHUNK); the palette of battle-effect/043 (gBattleAnimSpritePal_IceChunk, ANIM_TAG_ICE_CHUNK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals.pal": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals.pal: the source of the palette of battle-effect/141 (gBattleAnimSpritePal_IceCrystals, ANIM_TAG_ICE_CRYSTALS); the palette of battle-effect/142 (gBattleAnimSpritePal_IceCrystals, ANIM_TAG_ICE_SPIKES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals_0.png": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals_0.png: the source of part 0 of the ice_crystals.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/141 (gBattleAnimSpriteGfx_IceCrystals, ANIM_TAG_ICE_CRYSTALS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals_1.png": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals_1.png: the source of part 1 of the ice_crystals.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/141 (gBattleAnimSpriteGfx_IceCrystals, ANIM_TAG_ICE_CRYSTALS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals_2.png": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals_2.png: the source of part 2 of the ice_crystals.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/141 (gBattleAnimSpriteGfx_IceCrystals, ANIM_TAG_ICE_CRYSTALS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals_3.png": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals_3.png: the source of part 3 of the ice_crystals.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/141 (gBattleAnimSpriteGfx_IceCrystals, ANIM_TAG_ICE_CRYSTALS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_crystals_4.png": {
+          "reason": "graphics/battle_anims/sprites/ice_crystals_4.png: the source of part 4 of the ice_crystals.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/141 (gBattleAnimSpriteGfx_IceCrystals, ANIM_TAG_ICE_CRYSTALS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_cube.pal": {
+          "reason": "graphics/battle_anims/sprites/ice_cube.pal: the source of the palette of battle-effect/010 (gBattleAnimSpritePal_IceCube, ANIM_TAG_ICE_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_cube_0.png": {
+          "reason": "graphics/battle_anims/sprites/ice_cube_0.png: the source of part 0 of the ice_cube.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/010 (gBattleAnimSpriteGfx_IceCube, ANIM_TAG_ICE_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_cube_1.png": {
+          "reason": "graphics/battle_anims/sprites/ice_cube_1.png: the source of part 1 of the ice_cube.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/010 (gBattleAnimSpriteGfx_IceCube, ANIM_TAG_ICE_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_cube_2.png": {
+          "reason": "graphics/battle_anims/sprites/ice_cube_2.png: the source of part 2 of the ice_cube.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/010 (gBattleAnimSpriteGfx_IceCube, ANIM_TAG_ICE_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_cube_3.png": {
+          "reason": "graphics/battle_anims/sprites/ice_cube_3.png: the source of part 3 of the ice_cube.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/010 (gBattleAnimSpriteGfx_IceCube, ANIM_TAG_ICE_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/ice_spikes.png": {
+          "reason": "graphics/battle_anims/sprites/ice_spikes.png: the source of the image of battle-effect/142 (gBattleAnimSpriteGfx_IceSpikes, ANIM_TAG_ICE_SPIKES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/icicle_spear.png": {
+          "reason": "graphics/battle_anims/sprites/icicle_spear.png: the source of the image of battle-effect/262 (gBattleAnimSpriteGfx_IcicleSpear, ANIM_TAG_ICICLE_SPEAR); the palette of battle-effect/262 (gBattleAnimSpritePal_IcicleSpear, ANIM_TAG_ICICLE_SPEAR). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/impact.png": {
+          "reason": "graphics/battle_anims/sprites/impact.png: the source of the image of battle-effect/135 (gBattleAnimSpriteGfx_Impact, ANIM_TAG_IMPACT); the palette of battle-effect/135 (gBattleAnimSpritePal_Impact, ANIM_TAG_IMPACT); the palette of battle-effect/137 (gBattleAnimSpritePal_Impact, ANIM_TAG_SCRATCH); the palette of battle-effect/138 (gBattleAnimSpritePal_Impact, ANIM_TAG_CUT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/item_bag.png": {
+          "reason": "graphics/battle_anims/sprites/item_bag.png: the source of the image of battle-effect/224 (gBattleAnimSpriteGfx_ItemBag, ANIM_TAG_ITEM_BAG); the palette of battle-effect/224 (gBattleAnimSpritePal_ItemBag, ANIM_TAG_ITEM_BAG). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/jagged_music_note.png": {
+          "reason": "graphics/battle_anims/sprites/jagged_music_note.png: the source of the image of battle-effect/225 (gBattleAnimSpriteGfx_JaggedMusicNote, ANIM_TAG_JAGGED_MUSIC_NOTE); the palette of battle-effect/225 (gBattleAnimSpritePal_JaggedMusicNote, ANIM_TAG_JAGGED_MUSIC_NOTE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/large_fresh_egg.png": {
+          "reason": "graphics/battle_anims/sprites/large_fresh_egg.png: the source of the image of battle-effect/175 (gBattleAnimSpriteGfx_LargeFreshEgg, ANIM_TAG_LARGE_FRESH_EGG); the palette of battle-effect/175 (gBattleAnimSpritePal_LargeFreshEgg, ANIM_TAG_LARGE_FRESH_EGG). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/leaf.png": {
+          "reason": "graphics/battle_anims/sprites/leaf.png: the source of the image of battle-effect/063 (gBattleAnimSpriteGfx_Leaf, ANIM_TAG_LEAF); the palette of battle-effect/063 (gBattleAnimSpritePal_Leaf, ANIM_TAG_LEAF). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/leer.png": {
+          "reason": "graphics/battle_anims/sprites/leer.png: the source of the image of battle-effect/027 (gBattleAnimSpriteGfx_Leer, ANIM_TAG_LEER); the palette of battle-effect/027 (gBattleAnimSpritePal_Leer, ANIM_TAG_LEER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/letter_z.png": {
+          "reason": "graphics/battle_anims/sprites/letter_z.png: the source of the image of battle-effect/228 (gBattleAnimSpriteGfx_LetterZ, ANIM_TAG_LETTER_Z); the palette of battle-effect/228 (gBattleAnimSpritePal_LetterZ, ANIM_TAG_LETTER_Z). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/lick.png": {
+          "reason": "graphics/battle_anims/sprites/lick.png: the source of the image of battle-effect/177 (gBattleAnimSpriteGfx_Lick, ANIM_TAG_LICK); the palette of battle-effect/177 (gBattleAnimSpritePal_Lick, ANIM_TAG_LICK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/lightning.png": {
+          "reason": "graphics/battle_anims/sprites/lightning.png: the source of the image of battle-effect/037 (gBattleAnimSpriteGfx_Lightning, ANIM_TAG_LIGHTNING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/lightning_2.png": {
+          "reason": "graphics/battle_anims/sprites/lightning_2.png: the source of the palette of battle-effect/037 (gBattleAnimSpritePal_Lightning2, ANIM_TAG_LIGHTNING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/lock_on.png": {
+          "reason": "graphics/battle_anims/sprites/lock_on.png: the source of the image of battle-effect/014 (gBattleAnimSpriteGfx_LockOn, ANIM_TAG_LOCK_ON); the palette of battle-effect/014 (gBattleAnimSpritePal_LockOn, ANIM_TAG_LOCK_ON). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/magenta_heart.png": {
+          "reason": "graphics/battle_anims/sprites/magenta_heart.png: the source of the image of battle-effect/210 (gBattleAnimSpriteGfx_MagentaHeart, ANIM_TAG_MAGENTA_HEART); the palette of battle-effect/210 (gBattleAnimSpritePal_MagentaHeart, ANIM_TAG_MAGENTA_HEART); the image of battle-effect/216 (gBattleAnimSpriteGfx_MagentaHeart, ANIM_TAG_RED_HEART); the image of battle-effect/219 (gBattleAnimSpriteGfx_MagentaHeart, ANIM_TAG_PINK_HEART). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/magnifying_glass.png": {
+          "reason": "graphics/battle_anims/sprites/magnifying_glass.png: the source of the image of battle-effect/258 (gBattleAnimSpriteGfx_MagnifyingGlass, ANIM_TAG_MAGNIFYING_GLASS); the palette of battle-effect/258 (gBattleAnimSpritePal_MagnifyingGlass, ANIM_TAG_MAGNIFYING_GLASS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/metal_sound_waves.png": {
+          "reason": "graphics/battle_anims/sprites/metal_sound_waves.png: the source of the image of battle-effect/260 (gBattleAnimSpriteGfx_MetalSoundWaves, ANIM_TAG_METAL_SOUND_WAVES); the palette of battle-effect/260 (gBattleAnimSpritePal_MetalSoundWaves, ANIM_TAG_METAL_SOUND_WAVES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/meteor.png": {
+          "reason": "graphics/battle_anims/sprites/meteor.png: the source of the image of battle-effect/256 (gBattleAnimSpriteGfx_Meteor, ANIM_TAG_METEOR); the palette of battle-effect/256 (gBattleAnimSpritePal_Meteor, ANIM_TAG_METEOR). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/milk_bottle.png": {
+          "reason": "graphics/battle_anims/sprites/milk_bottle.png: the source of the image of battle-effect/099 (gBattleAnimSpriteGfx_MilkBottle, ANIM_TAG_MILK_BOTTLE); the palette of battle-effect/099 (gBattleAnimSpritePal_MilkBottle, ANIM_TAG_MILK_BOTTLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/mist_cloud.png": {
+          "reason": "graphics/battle_anims/sprites/mist_cloud.png: the source of the image of battle-effect/144 (gBattleAnimSpriteGfx_MistCloud, ANIM_TAG_MIST_CLOUD); the palette of battle-effect/144 (gBattleAnimSpritePal_MistCloud, ANIM_TAG_MIST_CLOUD); the image of battle-effect/172 (gBattleAnimSpriteGfx_MistCloud, ANIM_TAG_PURPLE_GAS_CLOUD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/moon.png": {
+          "reason": "graphics/battle_anims/sprites/moon.png: the source of the image of battle-effect/194 (gBattleAnimSpriteGfx_Moon, ANIM_TAG_MOON); the palette of battle-effect/194 (gBattleAnimSpritePal_Moon, ANIM_TAG_MOON). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/movement_waves.png": {
+          "reason": "graphics/battle_anims/sprites/movement_waves.png: the source of the image of battle-effect/215 (gBattleAnimSpriteGfx_MovementWaves, ANIM_TAG_MOVEMENT_WAVES); the palette of battle-effect/215 (gBattleAnimSpritePal_MovementWaves, ANIM_TAG_MOVEMENT_WAVES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/mud_sand.pal": {
+          "reason": "graphics/battle_anims/sprites/mud_sand.pal: the source of the palette of battle-effect/074 (gBattleAnimSpritePal_MudSand, ANIM_TAG_MUD_SAND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/mud_sand_0.png": {
+          "reason": "graphics/battle_anims/sprites/mud_sand_0.png: the source of part 0 of the mud_sand.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/074 (gBattleAnimSpriteGfx_MudSand, ANIM_TAG_MUD_SAND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/mud_sand_1.png": {
+          "reason": "graphics/battle_anims/sprites/mud_sand_1.png: the source of part 1 of the mud_sand.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/074 (gBattleAnimSpriteGfx_MudSand, ANIM_TAG_MUD_SAND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/music_notes.png": {
+          "reason": "graphics/battle_anims/sprites/music_notes.png: the source of the image of battle-effect/072 (gBattleAnimSpriteGfx_MusicNotes, ANIM_TAG_MUSIC_NOTES); the palette of battle-effect/072 (gBattleAnimSpritePal_MusicNotes, ANIM_TAG_MUSIC_NOTES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/music_notes_2.pal": {
+          "reason": "graphics/battle_anims/sprites/music_notes_2.pal: the source of the palette of battle-effect/206 (gBattleAnimSpritePal_MusicNotes2, ANIM_TAG_MUSIC_NOTES_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/music_notes_2.png": {
+          "reason": "graphics/battle_anims/sprites/music_notes_2.png: the source of the image of battle-effect/206 (gBattleAnimSpriteGfx_MusicNotes2, ANIM_TAG_MUSIC_NOTES_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/nail.png": {
+          "reason": "graphics/battle_anims/sprites/nail.png: the source of the image of battle-effect/199 (gBattleAnimSpriteGfx_Nail, ANIM_TAG_NAIL); the palette of battle-effect/199 (gBattleAnimSpritePal_Nail, ANIM_TAG_NAIL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/needle.png": {
+          "reason": "graphics/battle_anims/sprites/needle.png: the source of the image of battle-effect/161 (gBattleAnimSpriteGfx_Needle, ANIM_TAG_NEEDLE); the palette of battle-effect/161 (gBattleAnimSpritePal_Needle, ANIM_TAG_NEEDLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/noise_line.png": {
+          "reason": "graphics/battle_anims/sprites/noise_line.png: the source of the image of battle-effect/053 (gBattleAnimSpriteGfx_NoiseLine, ANIM_TAG_NOISE_LINE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/opening_eye.png": {
+          "reason": "graphics/battle_anims/sprites/opening_eye.png: the source of the image of battle-effect/190 (gBattleAnimSpriteGfx_OpeningEye, ANIM_TAG_OPENING_EYE); the palette of battle-effect/190 (gBattleAnimSpritePal_OpeningEye, ANIM_TAG_OPENING_EYE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/orange_light_wall.pal": {
+          "reason": "graphics/battle_anims/sprites/orange_light_wall.pal: the source of the palette of battle-effect/170 (gBattleAnimSpritePal_OrangeLightWall, ANIM_TAG_ORANGE_LIGHT_WALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/orbs.png": {
+          "reason": "graphics/battle_anims/sprites/orbs.png: the source of the image of battle-effect/147 (gBattleAnimSpriteGfx_Orbs, ANIM_TAG_ORBS); the palette of battle-effect/147 (gBattleAnimSpritePal_Orbs, ANIM_TAG_ORBS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pain_split.png": {
+          "reason": "graphics/battle_anims/sprites/pain_split.png: the source of the image of battle-effect/239 (gBattleAnimSpriteGfx_PainSplit, ANIM_TAG_PAIN_SPLIT); the palette of battle-effect/239 (gBattleAnimSpritePal_PainSplit, ANIM_TAG_PAIN_SPLIT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/paw_print.png": {
+          "reason": "graphics/battle_anims/sprites/paw_print.png: the source of the image of battle-effect/252 (gBattleAnimSpriteGfx_PawPrint, ANIM_TAG_PAW_PRINT); the palette of battle-effect/252 (gBattleAnimSpritePal_PawPrint, ANIM_TAG_PAW_PRINT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pencil.png": {
+          "reason": "graphics/battle_anims/sprites/pencil.png: the source of the image of battle-effect/002 (gBattleAnimSpriteGfx_Pencil, ANIM_TAG_PENCIL); the palette of battle-effect/002 (gBattleAnimSpritePal_Pencil, ANIM_TAG_PENCIL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pink_cloud.png": {
+          "reason": "graphics/battle_anims/sprites/pink_cloud.png: the source of the image of battle-effect/242 (gBattleAnimSpriteGfx_PinkCloud, ANIM_TAG_PINK_CLOUD); the palette of battle-effect/242 (gBattleAnimSpritePal_PinkCloud, ANIM_TAG_PINK_CLOUD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pink_heart.pal": {
+          "reason": "graphics/battle_anims/sprites/pink_heart.pal: the source of the palette of battle-effect/219 (gBattleAnimSpritePal_PinkHeart, ANIM_TAG_PINK_HEART). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pink_petal.png": {
+          "reason": "graphics/battle_anims/sprites/pink_petal.png: the source of the image of battle-effect/238 (gBattleAnimSpriteGfx_PinkPetal, ANIM_TAG_PINK_PETAL); the palette of battle-effect/238 (gBattleAnimSpritePal_PinkPetal, ANIM_TAG_PINK_PETAL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/poison_bubble.png": {
+          "reason": "graphics/battle_anims/sprites/poison_bubble.png: the source of the image of battle-effect/150 (gBattleAnimSpriteGfx_PoisonBubble, ANIM_TAG_POISON_BUBBLE); the palette of battle-effect/150 (gBattleAnimSpritePal_PoisonBubble, ANIM_TAG_POISON_BUBBLE); the palette of battle-effect/151 (gBattleAnimSpritePal_PoisonBubble, ANIM_TAG_TOXIC_BUBBLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/poison_powder.png": {
+          "reason": "graphics/battle_anims/sprites/poison_powder.png: the source of the image of battle-effect/065 (gBattleAnimSpriteGfx_PoisonPowder, ANIM_TAG_POISON_POWDER); the palette of battle-effect/065 (gBattleAnimSpritePal_PoisonPowder, ANIM_TAG_POISON_POWDER); the image of battle-effect/067 (gBattleAnimSpriteGfx_PoisonPowder, ANIM_TAG_SLEEP_POWDER); the image of battle-effect/068 (gBattleAnimSpriteGfx_PoisonPowder, ANIM_TAG_STUN_SPORE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pokeball.png": {
+          "reason": "graphics/battle_anims/sprites/pokeball.png: the source of the image of battle-effect/226 (gBattleAnimSpriteGfx_Pokeball, ANIM_TAG_POKEBALL); the palette of battle-effect/226 (gBattleAnimSpritePal_Pokeball, ANIM_TAG_POKEBALL); the palette of battle-effect/227 (gBattleAnimSpritePal_Pokeball, ANIM_TAG_SPOTLIGHT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/pokeblock.png": {
+          "reason": "graphics/battle_anims/sprites/pokeblock.png: the source of the image of battle-effect/269 (gBattleAnimSpriteGfx_Pokeblock, ANIM_TAG_POKEBLOCK); the palette of battle-effect/269 (gBattleAnimSpritePal_Pokeblock, ANIM_TAG_POKEBLOCK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/protect.png": {
+          "reason": "graphics/battle_anims/sprites/protect.png: the source of the image of battle-effect/280 (gBattleAnimSpriteGfx_Protect, ANIM_TAG_PROTECT); the palette of battle-effect/280 (gBattleAnimSpritePal_Protect, ANIM_TAG_PROTECT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_flame.png": {
+          "reason": "graphics/battle_anims/sprites/purple_flame.png: the source of the image of battle-effect/253 (gBattleAnimSpriteGfx_PurpleFlame, ANIM_TAG_PURPLE_FLAME); the palette of battle-effect/253 (gBattleAnimSpritePal_PurpleFlame, ANIM_TAG_PURPLE_FLAME). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_gas_cloud.pal": {
+          "reason": "graphics/battle_anims/sprites/purple_gas_cloud.pal: the source of the palette of battle-effect/172 (gBattleAnimSpritePal_PurpleGasCloud, ANIM_TAG_PURPLE_GAS_CLOUD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_hand_outline.png": {
+          "reason": "graphics/battle_anims/sprites/purple_hand_outline.png: the source of the image of battle-effect/193 (gBattleAnimSpriteGfx_PurpleHandOutline, ANIM_TAG_PURPLE_HAND_OUTLINE); the palette of battle-effect/193 (gBattleAnimSpritePal_PurpleHandOutline, ANIM_TAG_PURPLE_HAND_OUTLINE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_ring.pal": {
+          "reason": "graphics/battle_anims/sprites/purple_ring.pal: the source of the palette of battle-effect/164 (gBattleAnimSpritePal_PurpleRing, ANIM_TAG_PURPLE_RING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_scratch.png": {
+          "reason": "graphics/battle_anims/sprites/purple_scratch.png: the source of the image of battle-effect/245 (gBattleAnimSpriteGfx_PurpleScratch, ANIM_TAG_PURPLE_SCRATCH); the palette of battle-effect/245 (gBattleAnimSpritePal_PurpleScratch, ANIM_TAG_PURPLE_SCRATCH); the palette of battle-effect/246 (gBattleAnimSpritePal_PurpleScratch, ANIM_TAG_PURPLE_SWIPE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/purple_swipe.png": {
+          "reason": "graphics/battle_anims/sprites/purple_swipe.png: the source of the image of battle-effect/246 (gBattleAnimSpriteGfx_PurpleSwipe, ANIM_TAG_PURPLE_SWIPE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/rain_drops.png": {
+          "reason": "graphics/battle_anims/sprites/rain_drops.png: the source of the image of battle-effect/115 (gBattleAnimSpriteGfx_RainDrops, ANIM_TAG_RAIN_DROPS); the palette of battle-effect/115 (gBattleAnimSpritePal_RainDrops, ANIM_TAG_RAIN_DROPS); the palette of battle-effect/146 (gBattleAnimSpritePal_RainDrops, ANIM_TAG_BUBBLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/rainbow_rings.png": {
+          "reason": "graphics/battle_anims/sprites/rainbow_rings.png: the source of the image of battle-effect/140 (gBattleAnimSpriteGfx_RainbowRings, ANIM_TAG_RAINBOW_RINGS); the palette of battle-effect/140 (gBattleAnimSpritePal_RainbowRings, ANIM_TAG_RAINBOW_RINGS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/rapid_spin.png": {
+          "reason": "graphics/battle_anims/sprites/rapid_spin.png: the source of the image of battle-effect/229 (gBattleAnimSpriteGfx_RapidSpin, ANIM_TAG_RAPID_SPIN); the palette of battle-effect/229 (gBattleAnimSpritePal_RapidSpin, ANIM_TAG_RAPID_SPIN). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/razor_leaf.png": {
+          "reason": "graphics/battle_anims/sprites/razor_leaf.png: the source of the image of battle-effect/160 (gBattleAnimSpriteGfx_RazorLeaf, ANIM_TAG_RAZOR_LEAF); the palette of battle-effect/160 (gBattleAnimSpritePal_RazorLeaf, ANIM_TAG_RAZOR_LEAF). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/recycle.png": {
+          "reason": "graphics/battle_anims/sprites/recycle.png: the source of the image of battle-effect/278 (gBattleAnimSpriteGfx_Recycle, ANIM_TAG_RECYCLE); the palette of battle-effect/278 (gBattleAnimSpritePal_Recycle, ANIM_TAG_RECYCLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/red_ball.png": {
+          "reason": "graphics/battle_anims/sprites/red_ball.png: the source of the image of battle-effect/254 (gBattleAnimSpriteGfx_RedBall, ANIM_TAG_RED_BALL); the palette of battle-effect/254 (gBattleAnimSpritePal_RedBall, ANIM_TAG_RED_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/red_heart.pal": {
+          "reason": "graphics/battle_anims/sprites/red_heart.pal: the source of the palette of battle-effect/216 (gBattleAnimSpritePal_RedHeart, ANIM_TAG_RED_HEART). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/red_light_wall.pal": {
+          "reason": "graphics/battle_anims/sprites/red_light_wall.pal: the source of the palette of battle-effect/168 (gBattleAnimSpritePal_RedLightWall, ANIM_TAG_RED_LIGHT_WALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/red_orb.png": {
+          "reason": "graphics/battle_anims/sprites/red_orb.png: the source of the image of battle-effect/217 (gBattleAnimSpriteGfx_RedOrb, ANIM_TAG_RED_ORB); the palette of battle-effect/217 (gBattleAnimSpritePal_RedOrb, ANIM_TAG_RED_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/red_orb_2.pal": {
+          "reason": "graphics/battle_anims/sprites/red_orb_2.pal: the source of the palette of battle-effect/237 (gBattleAnimSpritePal_RedOrb2, ANIM_TAG_RED_ORB_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/rocks.png": {
+          "reason": "graphics/battle_anims/sprites/rocks.png: the source of the image of battle-effect/058 (gBattleAnimSpriteGfx_Rocks, ANIM_TAG_ROCKS); the palette of battle-effect/058 (gBattleAnimSpritePal_Rocks, ANIM_TAG_ROCKS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/roots.png": {
+          "reason": "graphics/battle_anims/sprites/roots.png: the source of the image of battle-effect/223 (gBattleAnimSpriteGfx_Roots, ANIM_TAG_ROOTS); the palette of battle-effect/223 (gBattleAnimSpritePal_Roots, ANIM_TAG_ROOTS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/round_shadow.png": {
+          "reason": "graphics/battle_anims/sprites/round_shadow.png: the source of the image of battle-effect/156 (gBattleAnimSpriteGfx_RoundShadow, ANIM_TAG_ROUND_SHADOW); the palette of battle-effect/156 (gBattleAnimSpritePal_RoundShadow, ANIM_TAG_ROUND_SHADOW). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/round_white_halo.png": {
+          "reason": "graphics/battle_anims/sprites/round_white_halo.png: the source of the image of battle-effect/191 (gBattleAnimSpriteGfx_RoundWhiteHalo, ANIM_TAG_ROUND_WHITE_HALO); the palette of battle-effect/191 (gBattleAnimSpritePal_RoundWhiteHalo, ANIM_TAG_ROUND_WHITE_HALO). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/scratch.png": {
+          "reason": "graphics/battle_anims/sprites/scratch.png: the source of the image of battle-effect/137 (gBattleAnimSpriteGfx_Scratch, ANIM_TAG_SCRATCH). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/seed.png": {
+          "reason": "graphics/battle_anims/sprites/seed.png: the source of the image of battle-effect/006 (gBattleAnimSpriteGfx_Seed, ANIM_TAG_SEED); the palette of battle-effect/006 (gBattleAnimSpritePal_Seed, ANIM_TAG_SEED). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/shadow_ball.png": {
+          "reason": "graphics/battle_anims/sprites/shadow_ball.png: the source of the image of battle-effect/176 (gBattleAnimSpriteGfx_ShadowBall, ANIM_TAG_SHADOW_BALL); the palette of battle-effect/176 (gBattleAnimSpritePal_ShadowBall, ANIM_TAG_SHADOW_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sharp_teeth.png": {
+          "reason": "graphics/battle_anims/sprites/sharp_teeth.png: the source of the image of battle-effect/139 (gBattleAnimSpriteGfx_SharpTeeth, ANIM_TAG_SHARP_TEETH); the palette of battle-effect/139 (gBattleAnimSpritePal_SharpTeeth, ANIM_TAG_SHARP_TEETH); the palette of battle-effect/145 (gBattleAnimSpritePal_SharpTeeth, ANIM_TAG_CLAMP). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/shock_3.png": {
+          "reason": "graphics/battle_anims/sprites/shock_3.png: the source of the image of battle-effect/282 (gBattleAnimSpriteGfx_Shock3, ANIM_TAG_SHOCK_3); the palette of battle-effect/282 (gBattleAnimSpritePal_Shock3, ANIM_TAG_SHOCK_3). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/slam_hit.png": {
+          "reason": "graphics/battle_anims/sprites/slam_hit.png: the source of the image of battle-effect/056 (gBattleAnimSpriteGfx_SlamHit, ANIM_TAG_SLAM_HIT); the palette of battle-effect/056 (gBattleAnimSpritePal_SlamHit, ANIM_TAG_SLAM_HIT); the image of battle-effect/287 (gBattleAnimSpriteGfx_SlamHit, ANIM_TAG_WHIP_HIT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/slam_hit_2.png": {
+          "reason": "graphics/battle_anims/sprites/slam_hit_2.png: the source of the image of battle-effect/277 (gBattleAnimSpriteGfx_SlamHit2, ANIM_TAG_SLAM_HIT_2); the palette of battle-effect/277 (gBattleAnimSpritePal_SlamHit2, ANIM_TAG_SLAM_HIT_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/slash.png": {
+          "reason": "graphics/battle_anims/sprites/slash.png: the source of the image of battle-effect/183 (gBattleAnimSpriteGfx_Slash, ANIM_TAG_SLASH); the palette of battle-effect/183 (gBattleAnimSpritePal_Slash, ANIM_TAG_SLASH); the image of battle-effect/286 (gBattleAnimSpriteGfx_Slash, ANIM_TAG_SLASH_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/slash_2.pal": {
+          "reason": "graphics/battle_anims/sprites/slash_2.pal: the source of the palette of battle-effect/286 (gBattleAnimSpritePal_Slash2, ANIM_TAG_SLASH_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sleep_powder.pal": {
+          "reason": "graphics/battle_anims/sprites/sleep_powder.pal: the source of the palette of battle-effect/067 (gBattleAnimSpritePal_SleepPowder, ANIM_TAG_SLEEP_POWDER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/small_bubbles.png": {
+          "reason": "graphics/battle_anims/sprites/small_bubbles.png: the source of the image of battle-effect/155 (gBattleAnimSpriteGfx_SmallBubbles, ANIM_TAG_SMALL_BUBBLES); the palette of battle-effect/155 (gBattleAnimSpritePal_SmallBubbles, ANIM_TAG_SMALL_BUBBLES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/small_ember.png": {
+          "reason": "graphics/battle_anims/sprites/small_ember.png: the source of the image of battle-effect/029 (gBattleAnimSpriteGfx_SmallEmber, ANIM_TAG_SMALL_EMBER); the palette of battle-effect/029 (gBattleAnimSpritePal_SmallEmber, ANIM_TAG_SMALL_EMBER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/small_red_eye.png": {
+          "reason": "graphics/battle_anims/sprites/small_red_eye.png: the source of the image of battle-effect/248 (gBattleAnimSpriteGfx_SmallRedEye, ANIM_TAG_SMALL_RED_EYE); the palette of battle-effect/248 (gBattleAnimSpritePal_SmallRedEye, ANIM_TAG_SMALL_RED_EYE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/smellingsalt_effect.png": {
+          "reason": "graphics/battle_anims/sprites/smellingsalt_effect.png: the source of the image of battle-effect/255 (gBattleAnimSpriteGfx_SmellingsaltEffect, ANIM_TAG_SMELLINGSALT_EFFECT); the palette of battle-effect/255 (gBattleAnimSpritePal_SmellingsaltEffect, ANIM_TAG_SMELLINGSALT_EFFECT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/snore_z.png": {
+          "reason": "graphics/battle_anims/sprites/snore_z.png: the source of the image of battle-effect/197 (gBattleAnimSpriteGfx_SnoreZ, ANIM_TAG_SNORE_Z); the palette of battle-effect/197 (gBattleAnimSpritePal_SnoreZ, ANIM_TAG_SNORE_Z). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spark.pal": {
+          "reason": "graphics/battle_anims/sprites/spark.pal: the source of the palette of battle-effect/001 (gBattleAnimSpritePal_Spark, ANIM_TAG_SPARK); the palette of battle-effect/173 (gBattleAnimSpritePal_Spark, ANIM_TAG_SPARK_H). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spark_0.png": {
+          "reason": "graphics/battle_anims/sprites/spark_0.png: the source of part 0 of the spark.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/001 (gBattleAnimSpriteGfx_Spark, ANIM_TAG_SPARK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spark_1.png": {
+          "reason": "graphics/battle_anims/sprites/spark_1.png: the source of part 1 of the spark.4bpp tile stream that graphics_file_rules.mk concatenates into the image of battle-effect/001 (gBattleAnimSpriteGfx_Spark, ANIM_TAG_SPARK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spark_2.png": {
+          "reason": "graphics/battle_anims/sprites/spark_2.png: the source of the image of battle-effect/011 (gBattleAnimSpriteGfx_Spark2, ANIM_TAG_SPARK_2); the palette of battle-effect/011 (gBattleAnimSpritePal_Spark2, ANIM_TAG_SPARK_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spark_h.png": {
+          "reason": "graphics/battle_anims/sprites/spark_h.png: the source of the image of battle-effect/173 (gBattleAnimSpriteGfx_SparkH, ANIM_TAG_SPARK_H). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sparkle_1.png": {
+          "reason": "graphics/battle_anims/sprites/sparkle_1.png: the source of the image of battle-effect/049 (gBattleAnimSpriteGfx_Sparkle1, ANIM_TAG_SPARKLE_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sparkle_2.pal": {
+          "reason": "graphics/battle_anims/sprites/sparkle_2.pal: the source of the palette of battle-effect/049 (gBattleAnimSpritePal_Sparkle2, ANIM_TAG_SPARKLE_2). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sparkle_3.png": {
+          "reason": "graphics/battle_anims/sprites/sparkle_3.png: the source of the image of battle-effect/070 (gBattleAnimSpriteGfx_Sparkle3, ANIM_TAG_SPARKLE_3); the palette of battle-effect/070 (gBattleAnimSpritePal_Sparkle3, ANIM_TAG_SPARKLE_3); the palette of battle-effect/071 (gBattleAnimSpritePal_Sparkle3, ANIM_TAG_SPARKLE_4). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sparkle_4.png": {
+          "reason": "graphics/battle_anims/sprites/sparkle_4.png: the source of the image of battle-effect/071 (gBattleAnimSpriteGfx_Sparkle4, ANIM_TAG_SPARKLE_4). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sparkle_6.png": {
+          "reason": "graphics/battle_anims/sprites/sparkle_6.png: the source of the image of battle-effect/271 (gBattleAnimSpriteGfx_Sparkle6, ANIM_TAG_SPARKLE_6); the palette of battle-effect/271 (gBattleAnimSpritePal_Sparkle6, ANIM_TAG_SPARKLE_6). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/speed_dust.png": {
+          "reason": "graphics/battle_anims/sprites/speed_dust.png: the source of the image of battle-effect/207 (gBattleAnimSpriteGfx_SpeedDust, ANIM_TAG_SPEED_DUST); the palette of battle-effect/207 (gBattleAnimSpritePal_SpeedDust, ANIM_TAG_SPEED_DUST). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sphere_to_cube.png": {
+          "reason": "graphics/battle_anims/sprites/sphere_to_cube.png: the source of the image of battle-effect/185 (gBattleAnimSpriteGfx_SphereToCube, ANIM_TAG_SPHERE_TO_CUBE); the palette of battle-effect/185 (gBattleAnimSpritePal_SphereToCube, ANIM_TAG_SPHERE_TO_CUBE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spider_web.png": {
+          "reason": "graphics/battle_anims/sprites/spider_web.png: the source of the image of battle-effect/181 (gBattleAnimSpriteGfx_SpiderWeb, ANIM_TAG_SPIDER_WEB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spikes.png": {
+          "reason": "graphics/battle_anims/sprites/spikes.png: the source of the image of battle-effect/152 (gBattleAnimSpriteGfx_Spikes, ANIM_TAG_SPIKES); the palette of battle-effect/152 (gBattleAnimSpritePal_Spikes, ANIM_TAG_SPIKES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spiral.png": {
+          "reason": "graphics/battle_anims/sprites/spiral.png: the source of the image of battle-effect/196 (gBattleAnimSpriteGfx_Spiral, ANIM_TAG_SPIRAL); the palette of battle-effect/196 (gBattleAnimSpritePal_Spiral, ANIM_TAG_SPIRAL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/splash.png": {
+          "reason": "graphics/battle_anims/sprites/splash.png: the source of the image of battle-effect/272 (gBattleAnimSpriteGfx_Splash, ANIM_TAG_SPLASH); the palette of battle-effect/272 (gBattleAnimSpritePal_Splash, ANIM_TAG_SPLASH); the palette of battle-effect/273 (gBattleAnimSpritePal_Splash, ANIM_TAG_SWEAT_BEAD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spore.png": {
+          "reason": "graphics/battle_anims/sprites/spore.png: the source of the image of battle-effect/158 (gBattleAnimSpriteGfx_Spore, ANIM_TAG_SPORE); the palette of battle-effect/158 (gBattleAnimSpritePal_Spore, ANIM_TAG_SPORE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/spotlight.png": {
+          "reason": "graphics/battle_anims/sprites/spotlight.png: the source of the image of battle-effect/227 (gBattleAnimSpriteGfx_Spotlight, ANIM_TAG_SPOTLIGHT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/string.png": {
+          "reason": "graphics/battle_anims/sprites/string.png: the source of the image of battle-effect/179 (gBattleAnimSpriteGfx_String, ANIM_TAG_STRING); the palette of battle-effect/179 (gBattleAnimSpritePal_String, ANIM_TAG_STRING); the palette of battle-effect/180 (gBattleAnimSpritePal_String, ANIM_TAG_WEB_THREAD); the palette of battle-effect/181 (gBattleAnimSpritePal_String, ANIM_TAG_SPIDER_WEB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/stun_spore.pal": {
+          "reason": "graphics/battle_anims/sprites/stun_spore.pal: the source of the palette of battle-effect/068 (gBattleAnimSpritePal_StunSpore, ANIM_TAG_STUN_SPORE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sunlight.png": {
+          "reason": "graphics/battle_anims/sprites/sunlight.png: the source of the image of battle-effect/157 (gBattleAnimSpriteGfx_Sunlight, ANIM_TAG_SUNLIGHT); the palette of battle-effect/157 (gBattleAnimSpritePal_Sunlight, ANIM_TAG_SUNLIGHT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sweat_bead.png": {
+          "reason": "graphics/battle_anims/sprites/sweat_bead.png: the source of the image of battle-effect/273 (gBattleAnimSpriteGfx_SweatBead, ANIM_TAG_SWEAT_BEAD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sweat_drop.png": {
+          "reason": "graphics/battle_anims/sprites/sweat_drop.png: the source of the image of battle-effect/243 (gBattleAnimSpriteGfx_SweatDrop, ANIM_TAG_SWEAT_DROP); the palette of battle-effect/243 (gBattleAnimSpritePal_SweatDrop, ANIM_TAG_SWEAT_DROP). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/swipe.png": {
+          "reason": "graphics/battle_anims/sprites/swipe.png: the source of the image of battle-effect/222 (gBattleAnimSpriteGfx_Swipe, ANIM_TAG_SWIPE); the palette of battle-effect/222 (gBattleAnimSpritePal_Swipe, ANIM_TAG_SWIPE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/sword.png": {
+          "reason": "graphics/battle_anims/sprites/sword.png: the source of the image of battle-effect/005 (gBattleAnimSpriteGfx_Sword, ANIM_TAG_SWORD); the palette of battle-effect/005 (gBattleAnimSpritePal_Sword, ANIM_TAG_SWORD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/tag_hand.png": {
+          "reason": "graphics/battle_anims/sprites/tag_hand.png: the source of the image of battle-effect/247 (gBattleAnimSpriteGfx_TagHand, ANIM_TAG_TAG_HAND). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/teal_alert.png": {
+          "reason": "graphics/battle_anims/sprites/teal_alert.png: the source of the image of battle-effect/189 (gBattleAnimSpriteGfx_TealAlert, ANIM_TAG_TEAL_ALERT); the palette of battle-effect/189 (gBattleAnimSpritePal_TealAlert, ANIM_TAG_TEAL_ALERT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/tendrils.png": {
+          "reason": "graphics/battle_anims/sprites/tendrils.png: the source of the image of battle-effect/186 (gBattleAnimSpriteGfx_Tendrils, ANIM_TAG_TENDRILS); the palette of battle-effect/186 (gBattleAnimSpritePal_Tendrils, ANIM_TAG_TENDRILS). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/thin_ring.png": {
+          "reason": "graphics/battle_anims/sprites/thin_ring.png: the source of the image of battle-effect/203 (gBattleAnimSpriteGfx_ThinRing, ANIM_TAG_THIN_RING); the palette of battle-effect/203 (gBattleAnimSpritePal_ThinRing, ANIM_TAG_THIN_RING). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/thought_bubble.png": {
+          "reason": "graphics/battle_anims/sprites/thought_bubble.png: the source of the image of battle-effect/209 (gBattleAnimSpriteGfx_ThoughtBubble, ANIM_TAG_THOUGHT_BUBBLE); the palette of battle-effect/209 (gBattleAnimSpritePal_ThoughtBubble, ANIM_TAG_THOUGHT_BUBBLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/torn_metal.png": {
+          "reason": "graphics/battle_anims/sprites/torn_metal.png: the source of the image of battle-effect/208 (gBattleAnimSpriteGfx_TornMetal, ANIM_TAG_TORN_METAL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/toxic_bubble.png": {
+          "reason": "graphics/battle_anims/sprites/toxic_bubble.png: the source of the image of battle-effect/151 (gBattleAnimSpriteGfx_ToxicBubble, ANIM_TAG_TOXIC_BUBBLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/tri_attack_triangle.png": {
+          "reason": "graphics/battle_anims/sprites/tri_attack_triangle.png: the source of the image of battle-effect/230 (gBattleAnimSpriteGfx_TriAttackTriangle, ANIM_TAG_TRI_ATTACK_TRIANGLE); the palette of battle-effect/230 (gBattleAnimSpritePal_TriAttackTriangle, ANIM_TAG_TRI_ATTACK_TRIANGLE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/warm_rock.png": {
+          "reason": "graphics/battle_anims/sprites/warm_rock.png: the source of the image of battle-effect/201 (gBattleAnimSpriteGfx_WarmRock, ANIM_TAG_WARM_ROCK); the palette of battle-effect/201 (gBattleAnimSpritePal_WarmRock, ANIM_TAG_WARM_ROCK). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/water_impact.png": {
+          "reason": "graphics/battle_anims/sprites/water_impact.png: the source of the image of battle-effect/148 (gBattleAnimSpriteGfx_WaterImpact, ANIM_TAG_WATER_IMPACT); the palette of battle-effect/148 (gBattleAnimSpritePal_WaterImpact, ANIM_TAG_WATER_IMPACT); the palette of battle-effect/149 (gBattleAnimSpritePal_WaterImpact, ANIM_TAG_WATER_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/water_orb.png": {
+          "reason": "graphics/battle_anims/sprites/water_orb.png: the source of the image of battle-effect/149 (gBattleAnimSpriteGfx_WaterOrb, ANIM_TAG_WATER_ORB); the image of battle-effect/259 (gBattleAnimSpriteGfx_WaterOrb, ANIM_TAG_BROWN_ORB). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/weather_ball.png": {
+          "reason": "graphics/battle_anims/sprites/weather_ball.png: the source of the image of battle-effect/283 (gBattleAnimSpriteGfx_WeatherBall, ANIM_TAG_WEATHER_BALL); the palette of battle-effect/283 (gBattleAnimSpritePal_WeatherBall, ANIM_TAG_WEATHER_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/web_thread.png": {
+          "reason": "graphics/battle_anims/sprites/web_thread.png: the source of the image of battle-effect/180 (gBattleAnimSpriteGfx_WebThread, ANIM_TAG_WEB_THREAD). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/whip_hit.pal": {
+          "reason": "graphics/battle_anims/sprites/whip_hit.pal: the source of the palette of battle-effect/287 (gBattleAnimSpritePal_WhipHit, ANIM_TAG_WHIP_HIT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/whirlwind_lines.png": {
+          "reason": "graphics/battle_anims/sprites/whirlwind_lines.png: the source of the image of battle-effect/162 (gBattleAnimSpriteGfx_WhirlwindLines, ANIM_TAG_WHIRLWIND_LINES); the palette of battle-effect/162 (gBattleAnimSpritePal_WhirlwindLines, ANIM_TAG_WHIRLWIND_LINES). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/white_circle_of_light.pal": {
+          "reason": "graphics/battle_anims/sprites/white_circle_of_light.pal: the source of the palette of battle-effect/267 (gBattleAnimSpritePal_WhiteCircleOfLight, ANIM_TAG_WHITE_CIRCLE_OF_LIGHT). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/white_feather.png": {
+          "reason": "graphics/battle_anims/sprites/white_feather.png: the source of the image of battle-effect/270 (gBattleAnimSpriteGfx_WhiteFeather, ANIM_TAG_WHITE_FEATHER); the palette of battle-effect/270 (gBattleAnimSpritePal_WhiteFeather, ANIM_TAG_WHITE_FEATHER). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/white_shadow.png": {
+          "reason": "graphics/battle_anims/sprites/white_shadow.png: the source of the image of battle-effect/188 (gBattleAnimSpriteGfx_WhiteShadow, ANIM_TAG_WHITE_SHADOW); the palette of battle-effect/188 (gBattleAnimSpritePal_WhiteShadow, ANIM_TAG_WHITE_SHADOW). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/wisp_fire.png": {
+          "reason": "graphics/battle_anims/sprites/wisp_fire.png: the source of the image of battle-effect/232 (gBattleAnimSpriteGfx_WispFire, ANIM_TAG_WISP_FIRE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/wisp_orb.png": {
+          "reason": "graphics/battle_anims/sprites/wisp_orb.png: the source of the image of battle-effect/231 (gBattleAnimSpriteGfx_WispOrb, ANIM_TAG_WISP_ORB); the palette of battle-effect/231 (gBattleAnimSpritePal_WispOrb, ANIM_TAG_WISP_ORB); the palette of battle-effect/232 (gBattleAnimSpritePal_WispOrb, ANIM_TAG_WISP_FIRE). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/x_sign.png": {
+          "reason": "graphics/battle_anims/sprites/x_sign.png: the source of the image of battle-effect/250 (gBattleAnimSpriteGfx_XSign, ANIM_TAG_X_SIGN). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/yellow_ball.png": {
+          "reason": "graphics/battle_anims/sprites/yellow_ball.png: the source of the image of battle-effect/013 (gBattleAnimSpriteGfx_YellowBall, ANIM_TAG_YELLOW_BALL); the palette of battle-effect/013 (gBattleAnimSpritePal_YellowBall, ANIM_TAG_YELLOW_BALL). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprites/yellow_star.png": {
+          "reason": "graphics/battle_anims/sprites/yellow_star.png: the source of the image of battle-effect/174 (gBattleAnimSpriteGfx_YellowStar, ANIM_TAG_YELLOW_STAR); the palette of battle-effect/174 (gBattleAnimSpritePal_YellowStar, ANIM_TAG_YELLOW_STAR). Selected by the catalog-reachable rows of gBattleAnimPicTable and gBattleAnimPaletteTable (BattleEffectRecord::inventory) through their src/graphics.c declarations. cargo xtask extract decodes it into the pack entry, and the ROM importer reads the same entry from the supported ROM's LZ77 stream, corroborating the table row's pointer, size and tag first; the equivalence test proves the two packs equal. The rest of graphics/battle_anims stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.battle",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -29592,16 +30866,28 @@
     "src/data/battle_anim.h": {
       "artifacts": {
         "gBattleAnimPaletteTable": {
-          "reason": "gBattleAnimPaletteTable (src/data/battle_anim.h:1303-1594). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpritePal_*, ANIM_TAG_*} and joined by tag; the table-selected palette is kept even where it is not the sheet's own (GrayOrb, BlueOrb, and RedOrb2 share one sheet and select three palettes), and a selected tag registered twice is refused. NOT modelled: the 96 rows no catalog program loads emit nothing (the stock table registers ANIM_TAG_SAP_DRIP twice and never ANIM_TAG_SAP_DRIP_2, both outside the inventory); ROM import of the table is pending.",
+          "reason": "gBattleAnimPaletteTable (src/data/battle_anim.h:1303-1594). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpritePal_*, ANIM_TAG_*} and joined by tag; the table-selected palette is kept even where it is not the sheet's own (GrayOrb, BlueOrb, and RedOrb2 share one sheet and select three palettes), and a selected tag registered twice is refused. The ROM importer reads the 193 selected rows (gBattleAnimPaletteTable[catalog-reachable]). NOT modelled: the 96 rows no catalog program loads emit nothing (the stock table registers ANIM_TAG_SAP_DRIP twice and never ANIM_TAG_SAP_DRIP_2, both outside the inventory).",
           "rust_target": "crates/xtask/src/extract/battle_effect.rs",
           "spec": "S-4",
           "status": "stubbed"
         },
+        "gBattleAnimPaletteTable[catalog-reachable]": {
+          "reason": "gBattleAnimPaletteTable (src/data/battle_anim.h:1303-1594), the 193 rows BattleEffectRecord::inventory selects from the catalog (including ANIM_TAG_POKEBLOCK). The ROM importer reads each selected row at its sprite index and requires the CompressedSpritePalette pointer and tag ANIM_SPRITES_START + index to match the profile before it decodes the palette (the four padding bytes are not a field); the profile generator pins the table by those same rows. The table-selected palette is the one emitted even where it is not the sheet's own (GrayOrb, BlueOrb and RedOrb2 share one sheet and select three palettes), and MusicNotes2 keeps its five banks. Emitted ids are exactly battle-effect/<NNN>/palette for the inventory. NOT covered here: the 96 rows no catalog program loads, which are never read (the stock table registers ANIM_TAG_SAP_DRIP twice and never ANIM_TAG_SAP_DRIP_2, both outside the inventory).",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gBattleAnimPicTable": {
-          "reason": "gBattleAnimPicTable (src/data/battle_anim.h:1010-1301). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpriteGfx_*, size, ANIM_TAG_*} and joined by tag, never by row position; the row of each inventory tag selects its sheet declaration, and the registered size is checked against the five concatenated sheets' tile streams (the registered sizes of bent_spoon, eye_sparkle, and sparkle_6 differ from their PNGs, so a single PNG keeps its whole raster). NOT modelled: the 96 rows no catalog program loads emit nothing, and their declarations and sources are never read; ROM import of the table is pending.",
+          "reason": "gBattleAnimPicTable (src/data/battle_anim.h:1010-1301). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpriteGfx_*, size, ANIM_TAG_*} and joined by tag, never by row position; the row of each inventory tag selects its sheet declaration, and the registered size is checked against the five concatenated sheets' tile streams (the registered sizes of bent_spoon, eye_sparkle, and sparkle_6 differ from their PNGs, so a single PNG keeps its whole raster). The ROM importer reads the 193 selected rows (gBattleAnimPicTable[catalog-reachable]). NOT modelled: the 96 rows no catalog program loads emit nothing, and their declarations and sources are never read.",
           "rust_target": "crates/xtask/src/extract/battle_effect.rs",
           "spec": "S-4",
           "status": "stubbed"
+        },
+        "gBattleAnimPicTable[catalog-reachable]": {
+          "reason": "gBattleAnimPicTable (src/data/battle_anim.h:1010-1301), the 193 rows BattleEffectRecord::inventory selects from the catalog (including ANIM_TAG_POKEBLOCK, loaded by AnimTask_LoadPokeblockGfx). The ROM importer reads each selected row at its sprite index and requires the CompressedSpriteSheet pointer, registered byte size and tag ANIM_SPRITES_START + index to match the profile before it decodes the sheet; the profile generator pins the table by those same rows (crates/xtask/src/gen_rom_profile/battle_effect.rs). Three registered sizes (bent_spoon, eye_sparkle, sparkle_6) differ from their PNGs and are checked as registered, not against the pack raster. Emitted ids are exactly battle-effect/<NNN>/image for the inventory. NOT covered here: the 96 rows no catalog program loads, which are never read.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.header",
@@ -31986,10 +33272,16 @@
     "src/graphics.c": {
       "artifacts": {
         "gBattleAnimSpriteGfx_and_Pal-declarations": {
-          "reason": "gBattleAnimSpriteGfx_* and gBattleAnimSpritePal_* INCGFX_U32 declarations (src/graphics.c, first at :25 and :32). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: only the declarations the selected rows name are parsed, each exactly once, as a .png with .4bpp.lz, a .4bpp with .lz for the five concatenated sheets, or a .png or .pal with .gbapal.lz, and the sources must sit under graphics/battle_anims; the sheet is kept at its PNG's dimensions and pixels, the palette is a PNG PLTE or a JASC file of whole 16-colour banks (MusicNotes2 keeps its five). NOT modelled: every declaration no inventory tag selects, and ROM import of the sheets and palettes.",
+          "reason": "gBattleAnimSpriteGfx_* and gBattleAnimSpritePal_* INCGFX_U32 declarations (src/graphics.c, first at :25 and :32). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: only the declarations the selected rows name are parsed, each exactly once, as a .png with .4bpp.lz, a .4bpp with .lz for the five concatenated sheets, or a .png or .pal with .gbapal.lz, and the sources must sit under graphics/battle_anims; the sheet is kept at its PNG's dimensions and pixels, the palette is a PNG PLTE or a JASC file of whole 16-colour banks (MusicNotes2 keeps its five). The ROM importer reads the sheets and palettes those declarations build (gBattleAnimSpriteGfx_and_Pal-declarations[catalog-reachable]). NOT modelled: every declaration no inventory tag selects.",
           "rust_target": "crates/xtask/src/extract/battle_effect.rs",
           "spec": "S-4",
           "status": "stubbed"
+        },
+        "gBattleAnimSpriteGfx_and_Pal-declarations[catalog-reachable]": {
+          "reason": "The gBattleAnimSpriteGfx_* and gBattleAnimSpritePal_* INCGFX_U32 declarations (src/graphics.c, first at :25 and :32) that the 193 selected rows of gBattleAnimPicTable and gBattleAnimPaletteTable name: 173 distinct sheet and 170 distinct palette declarations. Each is a .png with .4bpp.lz, a .4bpp with .lz for the five concatenated sheets, or a .png or .pal with .gbapal.lz, and its source sits under graphics/battle_anims. cargo xtask extract reads exactly these declarations; the ROM importer reads the LZ77 stream each one builds, at the address its table row holds. NOT covered here: every declaration no inventory tag selects.",
+          "rust_target": "crates/rom-import/src/domains/battle_effect.rs",
+          "spec": "S-4",
+          "status": "ported"
         },
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",

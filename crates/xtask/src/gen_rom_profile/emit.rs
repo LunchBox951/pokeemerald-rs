@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+mod battle_effect;
 mod poke_ball;
 
 use rom_import::Encoding;
@@ -72,11 +73,11 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
-    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots, BattleEffectRoot,
+    BattleEffectRoots, BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots,
+    BlobRoot, CryRoots, Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot,
+    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 }};
@@ -145,6 +146,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
+    battle_effect::battle_effect_roots(&mut out, &plan.battle_effects);
 
     trainer_front_roots(&mut out, &plan.trainer_front);
 
@@ -1295,6 +1297,7 @@ mod bag_field_tests {
             opening_scene: scene_plan(),
             evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
+            battle_effects: super::battle_effect::tests::plan(),
             battle_interface: interface_plan(),
             naming_screen: naming_plan(),
         };
