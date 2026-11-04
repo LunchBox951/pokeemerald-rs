@@ -48,21 +48,13 @@ impl OverworldPhase {
     /// `field_input_suppressed` withholds a forced landing from every
     /// completed-step consumer, per upstream's `tookStep`/
     /// `checkStandardWildEncounter` exclusion
-    /// (`field_control_avatar.c:116-122`).
-    ///
-    /// The arrival's east step is held movement
-    /// (`FieldCallback_EscalatorWarpIn`, `field_effect.c:1813-1818`), which
-    /// bypasses the keypad movement that sets `runningState` MOVING
-    /// (`field_player_avatar.c:353-379`), so its landing never sets `tookStep`
-    /// (`field_control_avatar.c:118-119`). It is withheld from every `tookStep`
-    /// consumer (the coord event, door-shaped warp and step-count script of
-    /// `TryStartStepBasedScript`, `:155-161`) and queued as a tile-centre
-    /// observation for the encounter gate instead, as a stationary turn's is,
-    /// since `checkStandardWildEncounter` needs only `T_TILE_CENTER`
-    /// (`:120-121`). `runningState` staying `NOT_MOVING` also makes a held
-    /// direction other than east turn before it steps
-    /// (`CheckMovementInputNotOnBike`, `:587-595`), so the keypad's moving
-    /// streak ends here.
+    /// (`field_control_avatar.c:116-122`). The escalator arrival's east step
+    /// is held movement (`field_effect.c:1813-1818`), so its landing never
+    /// sets `tookStep` (`field_control_avatar.c:118-119`): it reaches only
+    /// the encounter gate, as a stationary turn's tile-centre observation
+    /// does (`:120-121`), and `runningState` staying `NOT_MOVING` ends the
+    /// keypad's moving streak (`CheckMovementInputNotOnBike`,
+    /// `field_player_avatar.c:587-595`).
     pub(super) fn take_stepped_onto(&mut self) -> Option<TilePos> {
         let stepped_onto = self
             .pending_landing
