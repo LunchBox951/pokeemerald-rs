@@ -368,6 +368,17 @@ pub struct SamplePlan {
     pub data_len: u32,
 }
 
+/// The species cry tables and their samples, owned.
+#[derive(Debug, Clone)]
+pub struct CryPlan {
+    /// `gCryTable`.
+    pub normal: u32,
+    /// `gCryTable_Reverse`.
+    pub reverse: u32,
+    /// Every cry sample in table order. `data_len` is the decoded count.
+    pub samples: Vec<SamplePlan>,
+}
+
 /// The audio roots, owned.
 #[derive(Debug, Clone)]
 pub struct AudioPlan {
@@ -384,6 +395,8 @@ pub struct AudioPlan {
     pub direct_sound: Vec<SamplePlan>,
     /// Every CGB programmable-wave table.
     pub programmable_wave: Vec<SamplePlan>,
+    /// The species cries, or `None` for a pack that holds none.
+    pub cry: Option<CryPlan>,
 }
 
 /// One special battle-message template's root, owned.
@@ -607,6 +620,17 @@ pub struct BattleInterfacePlan {
     pub battle_bar: BlobPlan,
 }
 
+/// The naming screen's sheets, palettes, and tilemaps, owned.
+#[derive(Debug, Clone)]
+pub struct NamingScreenPlan {
+    /// Every `naming-screen/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `naming-screen/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `naming-screen/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -642,7 +666,9 @@ pub struct ProfilePlan {
     pub evolution_scene: EvolutionScenePlan,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfacePlan,
-    /// The starters' static battler art.
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenPlan,
+    /// The static battler art.
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,

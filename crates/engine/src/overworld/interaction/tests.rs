@@ -30,6 +30,11 @@ const BEHAVIORS: [u8; 4] = [0, mb::MB_PC, mb::MB_COUNTER, mb::MB_SECRET_BASE_PC]
 
 type Cell = ((i32, i32), u16, u8);
 
+/// The authored script reference: `"0x0"` is upstream's null script pointer and has none.
+fn script_ref(script: &'static str) -> Option<assets::ScriptRef> {
+    (script != "0x0").then(|| assets::ScriptRef::new(script))
+}
+
 fn object(local_id: u8, (x, y): (i32, i32), elevation: u8, script: &'static str) -> ObjectEvent {
     ObjectEvent {
         local_id,
@@ -42,7 +47,7 @@ fn object(local_id: u8, (x, y): (i32, i32), elevation: u8, script: &'static str)
         movement_range_y: 0,
         trainer_type: TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script,
+        script: script_ref(script),
         flag: "0",
     }
 }
@@ -57,7 +62,10 @@ fn sign(
         x: u16::try_from(x).unwrap(),
         y: u16::try_from(y).unwrap(),
         elevation,
-        kind: BgEventKind::Sign { facing, script },
+        kind: BgEventKind::Sign {
+            facing,
+            script: script_ref(script),
+        },
     }
 }
 
@@ -85,6 +93,7 @@ fn scene<R>(
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &[MapConnection],
     };
     const SIZE: u16 = 5;

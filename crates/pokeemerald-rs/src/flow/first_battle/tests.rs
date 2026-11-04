@@ -319,11 +319,11 @@ fn advancing_an_absent_first_battle_does_nothing() {
 #[test]
 fn start_first_battle_refuses_an_inadmissible_lead_before_any_draw() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
-    let slakoth = max_iv_player_mon(SpeciesId::SLAKOTH, 5, vec![MoveId::SCRATCH]);
+    let mightyena = max_iv_player_mon(SpeciesId::MIGHTYENA, 5, vec![MoveId::SCRATCH]);
     assert_eq!(
-        start_first_battle(slakoth, 0, &mut rng).err(),
+        start_first_battle(mightyena, 0, &mut rng).err(),
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());

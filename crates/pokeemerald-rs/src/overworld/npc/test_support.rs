@@ -24,7 +24,7 @@ pub(super) fn object(
         movement_range_y: 0,
         trainer_type: TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script: "0x0",
+        script: None,
         flag: "0",
     }
 }
@@ -75,6 +75,7 @@ pub(super) fn open_runtime(width: u16, height: u16) -> engine::overworld::MapRun
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [assets::MapConnection],
     }));
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {

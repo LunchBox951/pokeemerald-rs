@@ -233,3 +233,49 @@ fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack()
     assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
     assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }
+
+// Same platform boundary as the traversal opens in `created_dirs`: every
+// other Unix falls back to a read-requiring open.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn an_import_into_an_existing_destination_that_is_writable_but_not_readable_publishes() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Creating, renaming and removing a basename needs write and search on
+    // the directory, never read: a `0o300` drop box takes the pack.
+    let dir = TempDir::new("unreadable-destination");
+    let drop_box = dir.join("drop-box");
+    fs::create_dir(&drop_box).expect("the destination is created");
+    let pack_path = drop_box.join("pokeemerald.pack");
+    let source = SourceRom::new("unreadable-destination-src");
+
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o300))
+        .expect("the destination closes");
+    // A privileged user ignores directory permissions, so the close-off does
+    // not block them and there is nothing to assert. Asked of the outcome
+    // rather than of the uid, so it needs no libc.
+    let unreadable = fs::read_dir(&drop_box).is_err();
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    });
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o755))
+        .expect("the destination reopens");
+
+    if unreadable {
+        outcome.expect("a writable, searchable destination takes the pack");
+        assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+        assert_eq!(file_names(&drop_box), ["pokeemerald.pack"]);
+    } else {
+        // A privileged user is not closed off by `0o300`, so the assertion
+        // cannot run; say so rather than pass vacuously.
+        eprintln!(
+            "an_import_into_an_existing_destination_that_is_writable_but_not_readable_publishes: \
+             skipped -- running privileged, 0o300 did not close the destination off"
+        );
+    }
+}
