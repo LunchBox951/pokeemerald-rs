@@ -118,6 +118,7 @@ fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
             table: FULL_SWING_WAVE_RAM,
             adsr: CgbAdsr::flat(),
             fixed_rate,
+            length: 0,
         })
     };
     let fixed = rendered_cgb_frames(tone(true), 8);
@@ -135,6 +136,7 @@ fn a_cgb_wave_note_produces_sound_through_the_sequencer() {
         table: [0xFF; 16],
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let song = Song::new(voices, vec![cgb_test_track()], 150);
     let mut seq = Sequencer::new(song);
@@ -343,5 +345,36 @@ fn a_square1_sweep_byte_with_a_live_period_is_not_normalized() {
     assert!(
         rendered_cgb_frames(tone(0x19), 8) != rendered_cgb_frames(tone(0x08), 8),
         "a live sweep period must reach the hardware unchanged"
+    );
+}
+
+/// `WaveTone::length` must reach the voice through the sequencer: raw length
+/// 252 loads 4, which the enable edge takes to 3, so the counter stops the wave
+/// at the third 256 Hz clock (sample 156) and it holds the latch it had then.
+#[test]
+fn a_cgb_wave_instruments_length_cuts_its_note_through_the_sequencer() {
+    let wave = |length| {
+        Instrument::CgbWave(WaveTone {
+            wave_id: Arc::from("full-swing"),
+            table: [0x0F; 16],
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+            length,
+        })
+    };
+    let bits = |frame: &[f32]| -> Vec<u32> { frame.iter().map(|s| s.to_bits()).collect() };
+    let uncut = bits(&rendered_cgb_frames(wave(0), 1));
+    let cut = bits(&rendered_cgb_frames(wave(252), 1));
+    let expiry = 156 * 2;
+
+    assert_eq!(cut[..expiry], uncut[..expiry]);
+    let held = uncut[expiry];
+    assert!(
+        cut[expiry..].iter().step_by(2).all(|&left| left == held),
+        "the stopped wave holds one level"
+    );
+    assert!(
+        uncut[expiry..].windows(2).any(|pair| pair[0] != pair[1]),
+        "sanity: the wave without a length keeps changing"
     );
 }

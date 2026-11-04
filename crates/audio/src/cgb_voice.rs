@@ -443,7 +443,10 @@ impl CgbVoice {
             hardware_muted: false,
             hardware_envelope_volume,
             length_register: 0,
-            length: LengthCounter::default(),
+            length: match channel {
+                CgbChannelNumber::Wave => LengthCounter::two_hundred_fifty_six_step(),
+                _ => LengthCounter::sixty_four_step(),
+            },
             length_stopped: false,
             sequencer_step: FrameSequencer::INITIAL_STEP,
             last_contribution: 0,
@@ -546,8 +549,17 @@ impl CgbVoice {
     /// its duty running, and a wave stops clocking but keeps emitting its held
     /// sample on the last committed route, since `NR30 = 0` clears neither the
     /// sample nor `NR51` (`mgba/src/gb/audio.c:246-253,768-774`).
-    pub(crate) fn render_idle_hardware(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
+    ///
+    /// The wave's length counter keeps counting while `NR30` holds it off
+    /// (`mgba/src/gb/audio.c:690-696`), so `length_ticks` still clock it.
+    pub(crate) fn render_idle_hardware(
+        &mut self,
+        acc: &mut [StereoAcc],
+        sweep_ticks: &[usize],
+        length_ticks: &[usize],
+    ) {
         if let Some(contribution) = self.oscillator.held_wave_contribution() {
+            self.clock_length_silently(length_ticks.iter().copied());
             for output in acc.iter_mut() {
                 self.routing.accumulate(contribution, output);
             }
@@ -677,7 +689,7 @@ impl CgbVoice {
         }
         // The note's first pitch block stores `NRx4` with the enable bit.
         if initial_trigger && self.envelope.is_active() {
-            self.write_length_enable();
+            self.write_first_pitch_length();
         }
         // Pan is recomputed at every boundary, transition or not
         // (`m4a.c:1077-1085`).
@@ -824,7 +836,13 @@ impl CgbVoice {
             if self.length_stopped {
                 // The duty index does not step, but the time passes: the
                 // next register write catches it up (`mgba/src/gb/audio.c:162-171,493-510`).
+                // A wave presents the latch its last clock left
+                // (`mgba/src/gb/audio.c:768-774`), which its one-sample-late
+                // output has not reached yet.
                 self.oscillator.defer_idle_samples(1);
+                if let Some(held) = self.oscillator.held_wave_contribution() {
+                    self.last_contribution = held;
+                }
             } else {
                 self.last_contribution = self.oscillator.frame_contribution(
                     self.frame_gain,

@@ -131,7 +131,8 @@ pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
     PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle,
-    StarterSpecies, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    StarterSpecies, TextPrinterDownArrow, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle,
+    WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
