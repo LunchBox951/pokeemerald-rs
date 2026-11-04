@@ -55,7 +55,7 @@ fn selected_local_id(phase: &OverworldPhase) -> Option<u8> {
 }
 
 /// A pack with just the assets Mom's dialog box loads, so the real `step` can open it.
-fn dialog_pack(label: &str) -> &'static std::path::Path {
+fn dialog_pack(label: &str) -> std::path::PathBuf {
     use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
     let bytes = pack_bytes_with_fonts(vec![
         image_entry("text-window/image/message_box", 56, 16, 4, 0),
@@ -67,19 +67,17 @@ fn dialog_pack(label: &str) -> &'static std::path::Path {
         std::thread::current().id()
     ));
     crate::flow::tests::write_scratch_exclusive(&path, bytes);
-    // `PackSource::Test` needs a `'static` path, leaked once per call as the sibling
-    // dialog-pacing tests do.
-    Box::leak(path.into_boxed_path())
+    path
 }
 
 fn phase_beside_mom(
     position: (i32, i32),
     facing: Direction,
-    pack: Option<&'static std::path::Path>,
+    pack: Option<&std::path::Path>,
 ) -> OverworldPhase {
     let mut phase = synthetic_phase(PlayerState::new(position, FLOOR_ELEVATION, facing), None);
     if let Some(path) = pack {
-        phase.pack_source = crate::pack_source::PackSource::Test(path);
+        phase.pack_source = crate::pack_source::PackSource::Explicit(path.into());
     }
     phase
 }
@@ -89,7 +87,7 @@ fn mom_turns_toward_the_player_from_each_side_before_her_dialog_prints() {
     for (position, facing) in SIDES {
         let label = format!("{}-{}", position.0, position.1);
         let pack = dialog_pack(&label);
-        let mut phase = phase_beside_mom(position, facing, Some(pack));
+        let mut phase = phase_beside_mom(position, facing, Some(&pack));
         turn_mom_to(&mut phase, facing);
         assert_eq!(
             mom_facing(&phase),
@@ -98,7 +96,7 @@ fn mom_turns_toward_the_player_from_each_side_before_her_dialog_prints() {
         );
 
         phase.step(pressed(Buttons::A));
-        let _ = std::fs::remove_file(pack);
+        let _ = std::fs::remove_file(&pack);
 
         assert_eq!(
             mom_facing(&phase),

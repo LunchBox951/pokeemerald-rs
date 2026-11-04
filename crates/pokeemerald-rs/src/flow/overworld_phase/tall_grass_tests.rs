@@ -520,14 +520,13 @@ fn route_101_phase_crossing_into_oldale(
         &CROSSING_SPRITES,
         true,
     );
-    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
     let mut phase = OverworldPhase::for_test(
         synthetic_scene_with_tall_grass_sprites(20, 20, &[]),
         ROUTE_101,
         PlayerState::new((LANDING_X, 0), GROUND, Direction::North),
         None,
     );
-    phase.pack_source = crate::pack_source::PackSource::Test(leaked);
+    phase.pack_source = crate::pack_source::PackSource::Explicit(path.as_path().into());
     (phase, path)
 }
 

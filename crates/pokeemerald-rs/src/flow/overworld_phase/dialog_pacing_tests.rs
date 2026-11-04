@@ -67,7 +67,7 @@ fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
 }
 
 /// Drives a dialog the production `phase.step` opened from a synthetic
-/// on-disk pack ([`crate::pack_source::PackSource::Test`]) and asserts a
+/// on-disk pack ([`crate::pack_source::PackSource::Explicit`]) and asserts a
 /// FAST-saved session reveals its message in fewer frames than a SLOW-saved
 /// one (`sTextSpeedFrameDelays`, `pokeemerald/src/menu.c:77-82`).
 #[test]
@@ -108,15 +108,10 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
         let path = claim_scratch_pack("field-dialog", saved_text_speed, &pack_bytes_blob);
-        // `PackSource::Test` needs a `'static` path; leaked once per call,
-        // reclaimed only when the test process exits (test-only, matches
-        // this crate's own `Box::leak`-for-`'static`-fixtures idiom).
-        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
-
         // One tile east of Mom, facing west -- directly adjacent (this
         // file's other Mom-interaction tests' own fixture notes).
         let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
-        phase.pack_source = PackSource::Test(leaked_path);
+        phase.pack_source = PackSource::Explicit(path.as_path().into());
         phase.save2.options_text_speed = saved_text_speed;
 
         phase.step(pressed(Buttons::A));
@@ -203,13 +198,8 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
         let path = claim_scratch_pack("sight-trainer-intro", saved_text_speed, &pack_bytes_blob);
-        // `PackSource::Test` needs a `'static` path; leaked once per call,
-        // reclaimed only when the test process exits (this file's own
-        // Mom-dialog text-speed test uses the identical idiom).
-        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
-
         let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
-        phase.pack_source = PackSource::Test(leaked_path);
+        phase.pack_source = PackSource::Explicit(path.as_path().into());
         phase.save2.options_text_speed = saved_text_speed;
         phase.begin_synthetic_sight_approach_for_test();
 
