@@ -4,6 +4,7 @@
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 
+use super::battler_state::MoveLock;
 use super::trainer::fixed_ivs;
 use super::{
     Battle, BattleEvent, BattlerSide, EnemyAction, LastLandedMove, PerishSongTurns, PlayerAction,
@@ -346,6 +347,10 @@ fn a_switch_resets_the_outgoing_battlers_scratch_and_history_only() {
         LastLandedMove::Move(MoveId::TACKLE),
     );
     battle.battler_states[enemy].set_perish_song(Some(PerishSongTurns(0)));
+    battle.battler_states[enemy].set_move_lock(Some(MoveLock {
+        move_id: MoveId::ROLLOUT,
+        attempts_left: 3,
+    }));
     battle.battler_states[player].record_move_end(
         BattlerSide::Enemy,
         true,

@@ -37,6 +37,8 @@ mod execute;
 pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 #[cfg(test)]
+mod rollout_tests;
+#[cfg(test)]
 mod switch_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
@@ -119,8 +121,9 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
-    /// Move history and Perish Song state per battler, `[player, enemy]`,
-    /// reset whenever a battler leaves or enters the field.
+    /// Move history, Perish Song and multi-turn lock state per battler,
+    /// `[player, enemy]`, reset whenever a battler leaves or enters the
+    /// field.
     battler_states: [BattlerState; 2],
 }
 
@@ -667,6 +670,10 @@ impl Battle {
     /// the same PP gate construction used, against the current battlers
     /// rather than the ones construction saw; see the crate root docs for why.
     fn revalidate_enemy_admission(&self) -> Result<(), BattleError> {
+        // A locked enemy can select nothing but its locked move.
+        if let Some(locked) = self.battler_state(BattlerSide::Enemy).locked_move() {
+            return secondary::ensure_admissible(&self.dex, locked, &self.enemy, &self.player);
+        }
         for slot in self.enemy.moves() {
             if slot.pp > 0 {
                 secondary::ensure_admissible(&self.dex, slot.move_id, &self.enemy, &self.player)?;
@@ -678,7 +685,10 @@ impl Battle {
     /// Resolves one player action and returns the resulting events in order.
     ///
     /// The action is validated before RNG is consumed. The opponent then chooses
-    /// an action before a run attempt or move ordering resolves.
+    /// an action before a run attempt or move ordering resolves. A battler
+    /// locked into a move ([`BattlerState::locked_move`]) is not asked: the
+    /// player's submitted action is replaced by the locked move, and the
+    /// opponent's choice draws nothing.
     ///
     /// # Errors
     ///
@@ -786,6 +796,9 @@ impl Battle {
         if self.outcome.is_some() {
             return Err(BattleError::BattleAlreadyOver);
         }
+        if let Some(locked) = self.battler_state(BattlerSide::Player).locked_move() {
+            return self.validate_locked_player_action(action, locked);
+        }
 
         match action {
             PlayerAction::Run => match self.kind {
@@ -824,6 +837,30 @@ impl Battle {
         }
     }
 
+    /// A locked battler never reaches the action menu or the move list
+    /// (`pokeemerald/src/battle_main.c:4160`-`:4163`): whatever the caller
+    /// submitted, the action is the locked move from the slot last chosen,
+    /// which `HandleAction_UseMove` reads without a PP test
+    /// (`pokeemerald/src/battle_util.c:107`-`:110`). Only a slot outside the
+    /// moveset is still refused.
+    fn validate_locked_player_action(
+        &self,
+        action: PlayerAction,
+        locked: MoveId,
+    ) -> Result<ValidatedPlayerAction, BattleError> {
+        if let PlayerAction::UseMove(slot) = action {
+            if slot >= self.player.moves().len() {
+                return Err(BattleError::InvalidMoveSlot(slot));
+            }
+        }
+        ensure_executable(&self.dex, locked)?;
+        secondary::ensure_admissible(&self.dex, locked, &self.player, &self.enemy)?;
+        Ok(ValidatedPlayerAction::UseMove {
+            slot: Some(self.retained_slots[0]),
+            move_id: locked,
+        })
+    }
+
     fn start_turn(&mut self, rng: &mut impl BattleRng) {
         if self.turn_has_started {
             self.turn_counter = self.turn_counter.saturating_add(1);
@@ -833,6 +870,16 @@ impl Battle {
     }
 
     fn choose_enemy_action(&self, rng: &mut impl BattleRng) -> Result<EnemyAction, BattleError> {
+        // A locked enemy skips its AI and consumes no draw
+        // (`pokeemerald/src/battle_main.c:4160`-`:4163`); the slot it last
+        // chose holds the locked move.
+        if self
+            .battler_state(BattlerSide::Enemy)
+            .locked_move()
+            .is_some()
+        {
+            return Ok(EnemyAction::Move(self.retained_slots[1]));
+        }
         match &self.kind {
             BattleKind::FirstBattle => Ok(choose_enemy_action_first_battle(
                 &self.enemy,
@@ -1477,6 +1524,9 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
+                // `BattleScript_DoSelfConfusionDmg` cancels the series before
+                // the self-hit lands (`data/battle_scripts_1.s:3802`).
+                self.cancel_multi_turn_moves(player_is_attacker);
                 self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
                 self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
@@ -1488,6 +1538,9 @@ impl Battle {
             self.enemy.status1()
         };
         if draws_full_paralysis(attacker_status1, rng) {
+            // The canceller's own call is commented out; the script cancels
+            // (`data/battle_scripts_1.s:3777`).
+            self.cancel_multi_turn_moves(player_is_attacker);
             events.push(BattleEvent::FullyParalyzed {
                 by_player: player_is_attacker,
                 move_id,
@@ -1517,31 +1570,52 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
-        if let Some(slot) = slot {
-            let slot_pp = if player_is_attacker {
-                self.player.moves()[slot].pp
-            } else {
-                self.enemy.moves()[slot].pp
-            };
-            if slot_pp == 0 {
-                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
-                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
-                // nothing from an empty slot (`:1230`).
-                if move_id != STRUGGLE {
-                    events.push(BattleEvent::FailedNoPp {
-                        by_player: player_is_attacker,
-                        move_id,
-                    });
-                    self.record_cancelled_move(player_is_attacker, move_id)?;
-                    return Ok(());
-                }
-            } else if player_is_attacker {
-                self.player.deduct_pp_by(slot, pp_cost)?;
-            } else {
-                self.enemy.deduct_pp_by(slot, pp_cost)?;
-            }
+        if !self.spend_pp_or_abort(player_is_attacker, move_id, slot, pp_cost, events)? {
+            return Ok(());
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// The no-PP abort and `ppreduce` for a chosen slot; `false` means the
+    /// action ended at the abort.
+    ///
+    /// A locked attempt skips both (`Cmd_attackcanceler`,
+    /// `battle_script_commands.c:934`-`:935`; `data/battle_scripts_1.s:1599`-
+    /// `:1600`), so only a series' first attempt spends PP.
+    fn spend_pp_or_abort(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        pp_cost: u8,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let locked = self
+            .battler_state(BattlerSide::from_is_player(player_is_attacker))
+            .locked_move()
+            .is_some();
+        let Some(slot) = slot.filter(|_| !locked) else {
+            return Ok(true);
+        };
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if attacker.moves()[slot].pp > 0 {
+            attacker.deduct_pp_by(slot, pp_cost)?;
+        } else if move_id != STRUGGLE {
+            // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+            // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+            // nothing from an empty slot (`:1230`).
+            events.push(BattleEvent::FailedNoPp {
+                by_player: player_is_attacker,
+                move_id,
+            });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one
