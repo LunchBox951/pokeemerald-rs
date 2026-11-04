@@ -15,7 +15,12 @@
 //! the walk goes through it, as it needs no write access to the parent. The
 //! reopen that follows compares the name against that identity, so a swap
 //! after the claim is refused too. Elsewhere a level is made at its final
-//! name and a same-user replacement in the gap cannot be told apart.
+//! name and a same-user replacement in the gap cannot be told apart. So it
+//! is where the kernel or filesystem answers the no-replace rename with
+//! `EINVAL`, `ENOTSUP` or `ENOSYS` (an NFS mount, say): the private
+//! directory is removed after checking its identity, and the level is made
+//! at its final name, which gives up the guarantee on that mount in
+//! exchange for importing at all.
 //!
 //! # Accepted residuals
 //!
@@ -124,7 +129,18 @@ pub(super) fn claim_level(
         .map_err(|errno| ClaimError::Failed(errno.into()))?;
     after_mkdir();
     let (identity, held) = identity_of(created, pin_from, parent, &private, owner, sync_reopen)
-        .map_err(ClaimError::Failed)?;
+        .map_err(|source| {
+            // It cannot be removed: nothing shows the name still holds the
+            // directory that was made. Say where it is instead.
+            ClaimError::Failed(io::Error::new(
+                source.kind(),
+                format!(
+                    "{source}; the directory {} made for the level could not be \
+                     checked and was left in place",
+                    std::path::Path::new(&private).display()
+                ),
+            ))
+        })?;
     match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
         Ok(()) => Ok(identity),
         Err(errno) => {
@@ -136,9 +152,36 @@ pub(super) fn claim_level(
                     std::path::Path::new(name).display()
                 );
             }
+            if no_replace_unsupported(errno) {
+                // This filesystem cannot refuse to replace (an NFS mount, say):
+                // make the level at its final name, as where no such rename
+                // exists, rather than refuse to import at all.
+                return claim_at_final_name(
+                    created,
+                    pin_from,
+                    parent,
+                    name,
+                    owner,
+                    after_mkdir,
+                    sync_reopen,
+                );
+            }
             Err(ClaimError::from_errno(errno))
         }
     }
+}
+
+/// Whether `errno` says the filesystem or kernel has no no-replace rename,
+/// as opposed to this rename having failed.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn no_replace_unsupported(errno: rustix::io::Errno) -> bool {
+    matches!(
+        errno,
+        rustix::io::Errno::INVAL | rustix::io::Errno::NOTSUP | rustix::io::Errno::NOSYS
+    )
 }
 
 /// Removes the empty directory this run made as `private` in `parent`,
@@ -163,8 +206,22 @@ pub(super) fn discard_private(
     before_move: &mut dyn FnMut(),
 ) -> bool {
     before_move();
-    if take_back::rename_without_replacing(&**parent, private, &**parent, aside).is_err() {
-        return false;
+    match take_back::rename_without_replacing(&**parent, private, &**parent, aside) {
+        Ok(()) => {}
+        Err(errno) if no_replace_unsupported(errno) => {
+            // No rename that refuses to replace here, so the name is checked
+            // and then unlinked, which a same-user writer can come between;
+            // all it can cost is an empty directory of its own.
+            let unchanged =
+                rustix::fs::statat(&**parent, private, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .ok()
+                    .zip(rustix::fs::fstat(held).ok())
+                    .is_some_and(|(found, ours)| same_directory_identity(&found, &ours));
+            return unchanged
+                && rustix::fs::unlinkat(&**parent, private, rustix::fs::AtFlags::REMOVEDIR)
+                    .is_ok();
+        }
+        Err(_) => return false,
     }
     let ours = match (
         rustix::fs::fstat(held),
@@ -210,6 +267,30 @@ fn fresh_private_name(
     not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
 ))]
 pub(super) fn claim_level(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    after_mkdir: &mut dyn FnMut(),
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> Result<rustix::fs::Stat, ClaimError> {
+    claim_at_final_name(
+        created,
+        pin_from,
+        parent,
+        name,
+        owner,
+        after_mkdir,
+        sync_reopen,
+    )
+}
+
+/// Makes the level `name` in `parent` at that name and stats it there. A
+/// same-user writer of `parent` can replace it in the gap, which is the
+/// weaker guarantee this gives up the private-name claim for.
+#[cfg(unix)]
+fn claim_at_final_name(
     created: &mut [CreatedDirectory],
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
