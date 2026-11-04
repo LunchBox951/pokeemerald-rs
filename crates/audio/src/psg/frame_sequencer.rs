@@ -1,7 +1,8 @@
 use crate::pitch::MIXER_RATE;
 
 /// The sample offsets at which one buffer's frame-sequencer steps clock the
-/// sweep and the length counters, plus the step in effect when it began.
+/// sweep, the length counters and the volume envelopes, plus the step in effect
+/// when it began.
 #[derive(Clone, Debug)]
 pub struct FrameClocks {
     /// The last step the sequencer completed before this buffer; a register
@@ -12,23 +13,26 @@ pub struct FrameClocks {
     pub sweep: Vec<usize>,
     /// Ascending offsets of the 256 Hz length clocks (steps 0, 2, 4 and 6).
     pub length: Vec<usize>,
+    /// Ascending offsets of the 64 Hz envelope clocks (step 7).
+    pub envelope: Vec<usize>,
 }
 
 impl FrameClocks {
     /// An empty set of clocks with room for one frame of each.
     #[must_use]
-    pub fn with_capacity(sweep: usize, length: usize) -> Self {
+    pub fn with_capacity(sweep: usize, length: usize, envelope: usize) -> Self {
         Self {
             start_step: FrameSequencer::INITIAL_STEP,
             sweep: Vec::with_capacity(sweep),
             length: Vec::with_capacity(length),
+            envelope: Vec::with_capacity(envelope),
         }
     }
 }
 
 /// Schedules the CGB frame sequencer's 512 Hz steps without quantizing them to
-/// render buffers: sweep on steps 2 and 6 (128 Hz) and length on the even
-/// steps (256 Hz) (`mgba/src/gb/audio.c:649-707`).
+/// render buffers: sweep on steps 2 and 6 (128 Hz), length on the even steps
+/// (256 Hz) and envelope on step 7 (64 Hz) (`mgba/src/gb/audio.c:649-735`).
 #[derive(Clone, Copy, Debug)]
 pub struct FrameSequencer {
     tick_accumulator: u32,
@@ -87,18 +91,22 @@ impl FrameSequencer {
         }
     }
 
-    /// Replaces `clocks` with the sweep and length offsets for `samples`
-    /// output samples.
+    /// Replaces `clocks` with the sweep, length and envelope offsets for
+    /// `samples` output samples.
     pub fn advance_clocks_into(&mut self, samples: usize, clocks: &mut FrameClocks) {
         clocks.start_step = self.step;
         clocks.sweep.clear();
         clocks.length.clear();
+        clocks.envelope.clear();
         self.advance_steps(samples, |offset, step| {
             if step & 1 == 0 {
                 clocks.length.push(offset);
             }
             if step == 2 || step == 6 {
                 clocks.sweep.push(offset);
+            }
+            if step == 7 {
+                clocks.envelope.push(offset);
             }
         });
     }
@@ -175,7 +183,7 @@ mod tests {
     #[test]
     fn the_default_epoch_keeps_the_established_sweep_offsets_and_adds_length_clocks() {
         let mut clock = FrameSequencer::default();
-        let mut clocks = FrameClocks::with_capacity(0, 0);
+        let mut clocks = FrameClocks::with_capacity(0, 0, 0);
         clock.advance_clocks_into(1200, &mut clocks);
         assert_eq!(clocks.start_step, 6);
         assert_eq!(
@@ -189,5 +197,51 @@ mod tests {
             "length clocks fall on steps 0, 2, 4 and 6"
         );
         assert_eq!(clock.step(), 3, "45 steps from step 6 land on step 3");
+    }
+
+    #[test]
+    fn envelope_clocks_fall_on_step_seven_without_moving_sweep_or_length() {
+        let mut clock = FrameSequencer::default();
+        let mut clocks = FrameClocks::with_capacity(0, 0, 0);
+        clock.advance_clocks_into(1200, &mut clocks);
+        assert_eq!(clocks.envelope, vec![26, 235, 444, 653, 862, 1071]);
+
+        let mut frame_clock = FrameSequencer::default();
+        let per_frame: Vec<Vec<usize>> = (0..6)
+            .map(|_| {
+                frame_clock.advance_clocks_into(224, &mut clocks);
+                clocks.envelope.clone()
+            })
+            .collect();
+        assert_eq!(
+            per_frame,
+            vec![
+                vec![26],
+                vec![11, 220],
+                vec![205],
+                vec![190],
+                vec![175],
+                vec![160]
+            ]
+        );
+    }
+
+    #[test]
+    fn envelope_clocks_run_at_64hz_and_keep_their_phase_across_buffer_splits() {
+        let one_second = usize::try_from(MIXER_RATE).expect("MIXER_RATE fits a usize");
+        let mut clock = FrameSequencer::default();
+        let mut clocks = FrameClocks::with_capacity(0, 0, 0);
+        clock.advance_clocks_into(10 * one_second, &mut clocks);
+        assert_eq!(clocks.envelope.len(), 640);
+
+        let mut whole = FrameSequencer::default();
+        whole.advance_clocks_into(600, &mut clocks);
+        let whole_envelope = clocks.envelope.clone();
+        let mut split = FrameSequencer::default();
+        split.advance_clocks_into(300, &mut clocks);
+        let mut combined = clocks.envelope.clone();
+        split.advance_clocks_into(300, &mut clocks);
+        combined.extend(clocks.envelope.iter().map(|offset| offset + 300));
+        assert_eq!(whole_envelope, combined);
     }
 }
