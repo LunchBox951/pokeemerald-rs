@@ -27,12 +27,15 @@ fn sweeping_voice(start_key: u8, retune_key: u8) -> CgbVoice {
 }
 
 fn first_frame_sounded(voice: &mut CgbVoice) -> bool {
+    // The attack's hardware envelope climbs from silence only on the shared
+    // sequencer's envelope clocks.
+    let mut clock = SharedClock::new();
     let mut sounded = false;
     for _ in 0..FRAMES {
-        voice.begin_frame(false);
-        let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
-        voice.render(&mut acc, &[]);
-        sounded |= acc.iter().any(|&(l, r)| l != 0 || r != 0);
+        sounded |= clock
+            .frame(voice, false)
+            .iter()
+            .any(|&(l, r)| l != 0 || r != 0);
     }
     sounded
 }

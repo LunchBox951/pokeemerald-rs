@@ -14,7 +14,7 @@ impl Rig {
     fn at_step(step: u8) -> Self {
         Self {
             sequencer: FrameSequencer::at_step(step),
-            clocks: FrameClocks::with_capacity(4, 8),
+            clocks: FrameClocks::with_capacity(4, 8, 2),
         }
     }
 
@@ -24,7 +24,12 @@ impl Rig {
         voice.set_sequencer_step(self.clocks.start_step);
         voice.begin_frame(false);
         let mut acc = vec![(0, 0); SAMPLES_PER_FRAME];
-        voice.render_clocked(&mut acc, &self.clocks.sweep, &self.clocks.length);
+        voice.render_clocked(
+            &mut acc,
+            &self.clocks.sweep,
+            &self.clocks.length,
+            &self.clocks.envelope,
+        );
         acc
     }
 }

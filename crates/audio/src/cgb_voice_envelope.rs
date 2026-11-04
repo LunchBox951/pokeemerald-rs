@@ -53,11 +53,30 @@ fn centred_goal_thirty_one_note() -> TestNote {
     }
 }
 
+/// The first phase-7 envelope clock of the shared sequencer's default epoch.
+const FIRST_ENVELOPE_EVENT: usize = 26;
+
+/// The frame's samples, each as the larger of its two channel magnitudes.
+fn magnitudes(acc: &[StereoAcc]) -> Vec<i32> {
+    acc.iter()
+        .map(|&(left, right)| left.abs().max(right.abs()))
+        .collect()
+}
+
+/// Hardware attack 17 decodes to an upward period of one event.
+const CLIMBING_EVERY_EVENT: CgbAdsr = CgbAdsr {
+    attack: 17,
+    decay: 0,
+    sustain: 15,
+    release: 0,
+};
+
 /// Peak render sample of each of `frames` consecutive frames of a square
 /// voice, counting from its note-on. Square gain is the hardware nibble
 /// alone (`Oscillator::envelope_gain_256`), so the series reads the
 /// hardware envelope out directly.
 fn square_peaks_from_note_on(adsr: CgbAdsr, frames: usize) -> Vec<i32> {
+    let mut clock = SharedClock::new();
     let mut voice = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
@@ -65,15 +84,7 @@ fn square_peaks_from_note_on(adsr: CgbAdsr, frames: usize) -> Vec<i32> {
         centred_goal_thirty_one_note(),
     );
     (0..frames)
-        .map(|_| {
-            voice.begin_frame(false);
-            let mut acc = vec![(0i32, 0i32); 64];
-            voice.render(&mut acc, &[]);
-            acc.iter()
-                .map(|&(left, right)| left.abs().max(right.abs()))
-                .max()
-                .unwrap_or(0)
-        })
+        .map(|_| peak_magnitude(&clock.frame(&mut voice, false)))
         .collect()
 }
 
@@ -84,66 +95,60 @@ fn note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period() {
     // byte.
     //
     // Attack 17 writes `(17 + CGB_NRx2_ENV_DIR_INC) & 0xF == 9`: period
-    // 1, upward. The nibble leaves zero on the second frame, not on the
-    // raw byte's eighteenth.
-    let climbing = square_peaks_from_note_on(
-        CgbAdsr {
-            attack: 17,
-            decay: 0,
-            sustain: 15,
-            release: 0,
-        },
-        4,
-    );
+    // 1, upward. One level lands per phase-7 event: the events at 26 of the
+    // first frame, 11 and 220 of the second, and 205 of the third.
     assert_eq!(
-        climbing[0], 0,
-        "the note-on write still owes one iteration on its own frame"
-    );
-    assert!(
-        climbing[1] > 0 && climbing[2] > climbing[1] && climbing[3] > climbing[2],
-        "a decoded period of 1 climbs a nibble per frame, got {climbing:?}"
+        square_peaks_from_note_on(CLIMBING_EVERY_EVENT, 4),
+        [2, 6, 8, 10],
+        "a decoded period of 1 climbs a nibble per event, two units a nibble"
     );
 }
 
 #[test]
-fn a_doubled_note_on_frame_still_owes_its_write_until_the_frame_ends() {
+fn a_hardware_step_takes_effect_at_its_event_inside_the_render_frame() {
+    for channel in [CgbChannelNumber::Square1, CgbChannelNumber::Square2] {
+        let mut clock = SharedClock::new();
+        let mut voice = square_voice_with_adsr(
+            channel,
+            None,
+            CLIMBING_EVERY_EVENT,
+            centred_goal_thirty_one_note(),
+        );
+        let heard = magnitudes(&clock.frame(&mut voice, false));
+
+        assert_eq!(voice.hardware_volume(), 1, "{channel:?}");
+        assert!(
+            heard[..FIRST_ENVELOPE_EVENT].iter().all(|&m| m == 0),
+            "{channel:?}: silent before the event"
+        );
+        assert!(
+            heard[FIRST_ENVELOPE_EVENT..].iter().all(|&m| m == 2),
+            "{channel:?}: one level from the event's own sample on"
+        );
+    }
+}
+
+#[test]
+fn a_note_on_write_leaves_the_hardware_unstepped_until_the_first_event() {
     // Upstream stores NRx2 once per `CgbSound` pass, after the doubling
-    // re-entry (`m4a.c:1176-1226`), so the hardware timer stays unarmed
-    // through the whole note-on frame.
-    let adsr = CgbAdsr {
-        attack: 17,
-        decay: 0,
-        sustain: 15,
-        release: 0,
-    };
-    let mut voice = square_voice_with_adsr(
-        CgbChannelNumber::Square1,
-        None,
-        adsr,
-        centred_goal_thirty_one_note(),
-    );
-    let peak_of = |voice: &mut CgbVoice, extra_envelope_iteration: bool| {
-        voice.begin_frame(extra_envelope_iteration);
-        let mut acc = vec![(0i32, 0i32); 64];
-        voice.render(&mut acc, &[]);
-        acc.iter()
-            .map(|&(left, right)| left.abs().max(right.abs()))
-            .max()
-            .unwrap_or(0)
-    };
-
-    let note_on_frame = peak_of(&mut voice, true);
-    let next_frame = peak_of(&mut voice, false);
-
-    assert_eq!(
-        note_on_frame, 0,
-        "a doubled note-on frame owes its write until the pass ends, so the \
-         hardware nibble must not step during it"
-    );
-    assert!(
-        next_frame > 0,
-        "the frame after the note-on write must show the first hardware step, got {next_frame}"
-    );
+    // re-entry (`m4a.c:1176-1226`), so a doubled and an ordinary note-on pass
+    // both leave the nibble where the store latched it and the sequencer's
+    // next event takes the first step.
+    for extra_iteration in [false, true] {
+        let mut clock = SharedClock::new();
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            CLIMBING_EVERY_EVENT,
+            centred_goal_thirty_one_note(),
+        );
+        let heard = magnitudes(&clock.frame(&mut voice, extra_iteration));
+        assert!(
+            heard[..FIRST_ENVELOPE_EVENT].iter().all(|&m| m == 0),
+            "doubled: {extra_iteration}"
+        );
+        assert_eq!(heard[FIRST_ENVELOPE_EVENT], 2, "doubled: {extra_iteration}");
+    }
 }
 
 #[test]
@@ -181,6 +186,7 @@ fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes
         sustain: 0,
         release: 0,
     };
+    let mut clock = SharedClock::new();
     let mut voice = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
@@ -188,56 +194,32 @@ fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes
         centred_goal_thirty_one_note(),
     );
 
-    voice.begin_frame(false);
+    let heard = magnitudes(&clock.frame(&mut voice, false));
     assert_eq!(
         voice.envelope_volume(),
         31,
-        "write frame must hold the raw goal"
+        "the software envelope does not step inside a render frame"
     );
-    let mut write_frame_acc = vec![(0i32, 0i32); 64];
-    voice.render(&mut write_frame_acc, &[]);
-    let write_frame_peak = write_frame_acc
-        .iter()
-        .map(|&(left, right)| left.abs().max(right.abs()))
-        .max()
-        .unwrap_or(0);
-    assert_eq!(write_frame_peak, level_15_peak);
-
-    voice.begin_frame(false);
-    assert_eq!(
-        voice.envelope_volume(),
-        30,
-        "one paced decay step without a write must have run"
+    assert_eq!(voice.hardware_volume(), 14);
+    assert!(
+        heard[..FIRST_ENVELOPE_EVENT]
+            .iter()
+            .all(|&m| m == level_15_peak),
+        "the write latches the nibble of the raw goal until the event"
     );
-    let mut next_frame_acc = vec![(0i32, 0i32); 64];
-    voice.render(&mut next_frame_acc, &[]);
-    let next_frame_peak = next_frame_acc
-        .iter()
-        .map(|&(left, right)| left.abs().max(right.abs()))
-        .max()
-        .unwrap_or(0);
-    assert_eq!(
-        next_frame_peak, level_14_peak,
-        "hardware's own envelope timer must already be one step quieter"
+    assert!(
+        heard[FIRST_ENVELOPE_EVENT..]
+            .iter()
+            .all(|&m| m == level_14_peak),
+        "hardware's own envelope timer is one step quieter from the event on"
     );
-}
-
-/// Render one frame and return its peak sample magnitude.
-fn frame_peak(voice: &mut CgbVoice) -> i32 {
-    voice.begin_frame(false);
-    let mut acc = vec![(0i32, 0i32); 64];
-    voice.render(&mut acc, &[]);
-    acc.iter()
-        .map(|&(left, right)| left.abs().max(right.abs()))
-        .max()
-        .unwrap_or(0)
 }
 
 #[test]
 fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
     // A live volume write retriggers NRx4 (`m4a.c:1223`), which reloads the
     // hardware envelope timer (`mgba/src/gb/audio.c:856-859`) while the
-    // software counter keeps its phase.
+    // software counter keeps its phase and the sequencer its own.
     let level_15_peak = square_peak_at_level(130, 15);
     let level_14_peak = square_peak_at_level(121, 14);
     assert_ne!(
@@ -245,9 +227,12 @@ fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
         "sanity: the two levels differ"
     );
 
+    // Hardware period 7: from the note-on write, the seventh event is the one
+    // at sample 1280, frame 5 offset 160; software holds its level through
+    // frame 6.
     let paced_decay = CgbAdsr {
         attack: 0,
-        decay: 4,
+        decay: 7,
         sustain: 0,
         release: 0,
     };
@@ -256,46 +241,43 @@ fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
         track_left: 130,
         ..TestNote::default()
     };
-    let mut voice = square_voice_with_adsr(
+    let mut written_clock = SharedClock::new();
+    let mut control_clock = SharedClock::new();
+    let mut written = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
         paced_decay,
         goal_fifteen_note,
     );
-
-    assert_eq!(
-        frame_peak(&mut voice),
-        level_15_peak,
-        "sanity: the attack-to-decay write latches level 15"
-    );
-    for frame in 0..2 {
-        assert_eq!(
-            frame_peak(&mut voice),
-            level_15_peak,
-            "sanity: frame {frame} is still inside the first decay period"
-        );
+    let mut control = written.clone();
+    let mut frames = Vec::new();
+    for frame in 0..10 {
+        if frame == 3 {
+            written.set_track_volume(130, 130);
+        }
+        frames.push((
+            magnitudes(&written_clock.frame(&mut written, false)),
+            magnitudes(&control_clock.frame(&mut control, false)),
+        ));
     }
 
-    // Two iterations short of the software counter's next step.
-    voice.set_track_volume(130, 130);
-    assert_eq!(
-        frame_peak(&mut voice),
-        level_15_peak,
-        "sanity: the live volume write relatches the same level 15"
+    let (written_frame_5, control_frame_5) = &frames[5];
+    assert!(
+        control_frame_5[..160].iter().all(|&m| m == level_15_peak)
+            && control_frame_5[160..].iter().all(|&m| m == level_14_peak),
+        "the untouched voice steps at the seventh event after its note-on write"
     );
-
-    for frame in 0..(paced_decay.decay - 1) {
-        assert_eq!(
-            frame_peak(&mut voice),
-            level_15_peak,
-            "frame {frame} after the live volume write: the trigger restarted the hardware \
-             envelope timer, so a full step time must elapse before the next hardware step"
-        );
-    }
-    assert_eq!(
-        frame_peak(&mut voice),
-        level_14_peak,
-        "one full step time after the trigger, the hardware envelope steps once"
+    assert!(
+        written_frame_5.iter().all(|&m| m == level_15_peak),
+        "the live write at frame 3 restarted the countdown, so the sequencer's \
+         seventh event has not yet counted out"
+    );
+    // The restarted countdown ends at sample 2116, frame 9 offset 100.
+    let written_frame_9 = &frames[9].0;
+    assert!(
+        written_frame_9[..100].iter().all(|&m| m == level_15_peak)
+            && written_frame_9[100..].iter().all(|&m| m == level_14_peak),
+        "the restarted countdown steps at the seventh event after the write"
     );
 }
 
@@ -307,6 +289,7 @@ fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes
         sustain: 15,
         release: 0,
     };
+    let mut clock = SharedClock::new();
     let mut voice = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
@@ -314,41 +297,32 @@ fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes
         centred_goal_thirty_one_note(),
     );
 
+    let level_15_peak = square_peak_at_level(130, 15);
     let mut previous_peak = -1i32;
-    let mut peak_at_fifteen = None;
+    let mut frames_pinned_above_fifteen = 0;
     for _ in 0..40 {
-        voice.begin_frame(false);
+        let peak = peak_magnitude(&clock.frame(&mut voice, false));
         let level = voice.envelope_volume();
-        let mut acc = vec![(0i32, 0i32); 64];
-        voice.render(&mut acc, &[]);
-        let peak = acc
-            .iter()
-            .map(|&(left, right)| left.abs().max(right.abs()))
-            .max()
-            .unwrap_or(0);
-        if level <= 15 {
-            assert!(
-                peak >= previous_peak,
-                "loudness must not fall while the level is climbing in range"
-            );
-            if level == 15 {
-                peak_at_fifteen = Some(peak);
-            }
-        } else {
+        assert!(
+            peak >= previous_peak,
+            "loudness must not fall while the hardware climbs"
+        );
+        if level > 15 && previous_peak == level_15_peak {
             assert_eq!(
-                Some(peak),
-                peak_at_fifteen,
+                peak, level_15_peak,
                 "hardware must stay pinned at level 15's loudness once the level exceeds it"
             );
+            frames_pinned_above_fifteen += 1;
         }
         previous_peak = peak;
         if level >= 31 {
             break;
         }
     }
+    assert_eq!(previous_peak, level_15_peak);
     assert!(
-        peak_at_fifteen.is_some(),
-        "test setup must run the attack far enough to reach level 15"
+        frames_pinned_above_fifteen > 0,
+        "test setup must run the software attack past level 15"
     );
 }
 
@@ -360,6 +334,7 @@ fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
         sustain: 0,
         release: 0,
     };
+    let mut clock = SharedClock::new();
     let mut voice = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
@@ -369,15 +344,8 @@ fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
 
     let mut saw_silence_while_still_in_range = false;
     for _ in 0..40 {
-        voice.begin_frame(false);
+        let peak = peak_magnitude(&clock.frame(&mut voice, false));
         let level = voice.envelope_volume();
-        let mut acc = vec![(0i32, 0i32); 64];
-        voice.render(&mut acc, &[]);
-        let peak = acc
-            .iter()
-            .map(|&(left, right)| left.abs().max(right.abs()))
-            .max()
-            .unwrap_or(0);
         if level > 0 && level <= 15 && peak == 0 {
             saw_silence_while_still_in_range = true;
         }
