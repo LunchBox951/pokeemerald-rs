@@ -1,12 +1,12 @@
-//! Per-battler move history, Perish Song and Truant state.
+//! Per-battler move history, Perish Song, Truant and Intimidate entry state.
 //!
 //! Upstream keeps these in arrays indexed by battler (`gLastLandedMoves`,
 //! `gLastHitBy`, `gStatuses3[].perishSongTimer`,
-//! `gDisableStructs[].truantCounter`) that `SwitchInClearSetData` and
+//! `gDisableStructs[].truantCounter`, `gStatuses3[].STATUS3_INTIMIDATE_POKES`) that `SwitchInClearSetData` and
 //! `FaintClearSetData` reset, so they belong to the battler's occupancy
 //! of the field and not to a party member. None of it reaches a save.
 
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 
 /// One of the two battlers in a single battle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +61,7 @@ pub struct BattlerState {
     last_hitter: Option<BattlerSide>,
     perish_song: Option<PerishSongTurns>,
     truant_loafing: bool,
+    intimidate_pending: bool,
 }
 
 impl BattlerState {
@@ -91,11 +92,39 @@ impl BattlerState {
         self.truant_loafing
     }
 
-    /// `Cmd_switchineffects` sets the counter for an incoming Truant holder
-    /// after `SwitchInClearSetData` zeroed it (`battle_script_commands.c:5258`-
-    /// `:5263`); a battler of any other ability keeps it clear.
-    pub(super) fn enter_field(&mut self, has_truant: bool) {
-        self.truant_loafing = has_truant;
+    /// Whether this occupant's Intimidate activation is queued
+    /// (`STATUS3_INTIMIDATE_POKES`), waiting for the entry batch to finish.
+    #[must_use]
+    pub const fn intimidate_pending(&self) -> bool {
+        self.intimidate_pending
+    }
+
+    /// The state of a battler present when the battle starts: no Truant
+    /// counter, and an Intimidate holder queued by its switch-in ability
+    /// check (`battle_util.c:2559`-`:2564`).
+    pub(super) fn at_battle_start(ability: AbilityId) -> Self {
+        Self {
+            intimidate_pending: ability == AbilityId::INTIMIDATE,
+            ..Self::default()
+        }
+    }
+
+    /// A fresh occupant's state after `SwitchInClearSetData`: `Cmd_switchineffects`
+    /// sets an incoming Truant holder's counter
+    /// (`battle_script_commands.c:5258`-`:5263`), and the switch-in ability
+    /// check queues an Intimidate holder (`battle_util.c:2559`-`:2564`).
+    pub(super) fn after_switch_in(ability: AbilityId) -> Self {
+        Self {
+            truant_loafing: ability == AbilityId::TRUANT,
+            ..Self::at_battle_start(ability)
+        }
+    }
+
+    /// The queued activation ran: `ABILITYEFFECT_INTIMIDATE1/2` clear
+    /// `STATUS3_INTIMIDATE_POKES` before the script starts
+    /// (`battle_util.c:3003`-`:3016`, `:3074`-`:3088`).
+    pub(super) fn settle_intimidate(&mut self) {
+        self.intimidate_pending = false;
     }
 
     /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_TRUANT` case toggles the counter

@@ -353,7 +353,9 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     }
 }
 
-fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
+/// Whether `ability` stops a stat drop to `stat`: Clear Body and White Smoke
+/// stop every drop, Keen Eye an Accuracy drop and Hyper Cutter an Attack drop.
+pub(crate) fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
     ability == CLEAR_BODY
         || ability == WHITE_SMOKE
         || (ability == KEEN_EYE && stat == ChangedStat::Accuracy)

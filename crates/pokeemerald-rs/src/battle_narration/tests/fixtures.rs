@@ -53,7 +53,7 @@ const SELECTORS: &[(&str, u8)] = &[
     ("B_ATK_NAME_WITH_PREFIX_MON1", 0x0D),
 ];
 
-/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, a newline as `FE`, and `\p` as `FA`.
+/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, a newline as `FE`, and `\p` and `\l` as `FA`.
 pub(super) fn template(source: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut chars = source.chars().peekable();
@@ -76,7 +76,11 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                 out.extend([0xFD, selector.1]);
             }
             '\\' => {
-                assert_eq!(chars.next(), Some('p'), "only \\p is an escape");
+                let escape = chars.next();
+                assert!(
+                    matches!(escape, Some('p' | 'l')),
+                    "only \\p and \\l are escapes"
+                );
                 out.push(0xFA);
             }
             '\n' => out.push(0xFE),

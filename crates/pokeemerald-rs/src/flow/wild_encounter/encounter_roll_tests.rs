@@ -594,20 +594,20 @@ fn a_run_onto_an_encounter_returns_from_battle_standing() {
     );
 }
 
-/// An Intimidate lead (`battle_util.c:3003-3016`, a switch-in effect admission refuses) disables the roll like an unfightable
+/// A Speed Boost lead (`battle_util.c:2601-2652`, an end-turn effect admission refuses) disables the roll like an unfightable
 /// table, so no encounter or `CreateWildMon` draw is spent on a refused battle.
 #[test]
 fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    let mightyena = player_mon(SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
+    let ninjask = player_mon(SpeciesId::NINJASK.0, 50, vec![MoveId::SCRATCH]);
     assert_eq!(
-        battle::ensure_participant_admissible(&mightyena),
+        battle::ensure_participant_admissible(&ninjask),
         Err(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::INTIMIDATE
+            assets::AbilityId::SPEED_BOOST
         )),
     );
-    phase.set_fresh_lead_for_test(mightyena);
+    phase.set_fresh_lead_for_test(ninjask);
     let immunity_before = phase.wild.immunity_steps();
     let behavior_before = phase.wild.prev_metatile_behavior();
 
@@ -625,7 +625,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     assert_eq!(
         phase.wild_lead_refusal,
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::INTIMIDATE
+            assets::AbilityId::SPEED_BOOST
         )),
         "the refusal is reported, and remembered so it reports once"
     );
@@ -641,23 +641,23 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
 #[test]
 fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
     let mut rng = Rng::new(ENCOUNTER_SEED);
-    let mightyena = player_mon(SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
+    let ninjask = player_mon(SpeciesId::NINJASK.0, 50, vec![MoveId::SCRATCH]);
     let encounter = WildEncounter {
         slot: 0,
         species: WURMPLE,
         level: 2,
     };
     assert_eq!(
-        start_wild_battle(mightyena, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        start_wild_battle(ninjask, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::INTIMIDATE
+            assets::AbilityId::SPEED_BOOST
         )),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }
 
 /// A loaded lead holding Oran Berry (`HoldEffect` it does not model) disables the roll
-/// like an Intimidate lead: refused and reported, never silently played without the effect.
+/// like a Speed Boost lead: refused and reported, never silently played without the effect.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));

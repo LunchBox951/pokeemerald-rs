@@ -26,6 +26,7 @@
 mod context;
 mod events;
 mod expand;
+mod intimidate;
 mod lifecycle;
 mod names;
 mod narrator;
@@ -131,4 +132,5 @@ mod tests {
     mod expansion;
     mod families;
     mod fixtures;
+    mod intimidate;
 }

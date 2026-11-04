@@ -22,6 +22,8 @@ mod escape;
 mod first_battle;
 #[path = "turn_engine/freeze.rs"]
 mod freeze;
+#[path = "turn_engine/intimidate.rs"]
+mod intimidate;
 #[path = "turn_engine/lifecycle.rs"]
 mod lifecycle;
 #[path = "turn_engine/move_resolution.rs"]

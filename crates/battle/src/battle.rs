@@ -34,6 +34,9 @@ pub mod battler_state;
 mod events;
 mod execute;
 pub(crate) mod held_item;
+mod intimidate;
+#[cfg(test)]
+mod intimidate_tests;
 pub(crate) mod opponent_ai;
 #[cfg(test)]
 mod switch_tests;
@@ -123,6 +126,10 @@ pub struct Battle {
     /// Move history, Perish Song and Truant state per battler, `[player, enemy]`,
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
+    /// Events from the battle's opening entry (the initial Intimidate drops),
+    /// delivered by [`Battle::take_entry_events`] or, if not taken, ahead of the
+    /// next turn's events or rejection.
+    pending_entry_events: Vec<BattleEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,10 +276,13 @@ impl Battle {
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
-    /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
+    /// Vital Spirit, confused with Own Tempo, or holds
     /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
-    /// [`BattleError::UnportedAbilityInteraction`].
+    /// [`BattleError::UnportedAbilityInteraction`]. An Intimidate holder
+    /// lowers the opposing Attack before this returns, player's holder first;
+    /// the [`BattleEvent::Intimidated`] or [`BattleEvent::IntimidatePrevented`]
+    /// results lead the first turn's events.
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
@@ -330,7 +340,8 @@ impl Battle {
             ),
         )?;
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
-        Ok(Self {
+        let battler_states = intimidate::battle_start_states(&player, &enemy);
+        let mut battle = Self {
             dex,
             player,
             player_reserves,
@@ -349,8 +360,11 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
-            battler_states: [BattlerState::default(); 2],
-        })
+            battler_states,
+            pending_entry_events: Vec::new(),
+        };
+        battle.settle_battle_start_intimidate();
+        Ok(battle)
     }
 
     /// Starts a trainer battle with `party[0]` active and the rest on the
@@ -478,7 +492,8 @@ impl Battle {
 
         let enemy = party.remove(0);
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
-        Ok(Self {
+        let battler_states = intimidate::battle_start_states(&player, &enemy);
+        let mut battle = Self {
             dex,
             player,
             player_reserves,
@@ -493,8 +508,11 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
-            battler_states: [BattlerState::default(); 2],
-        })
+            battler_states,
+            pending_entry_events: Vec::new(),
+        };
+        battle.settle_battle_start_intimidate();
+        Ok(battle)
     }
 
     /// Returns the opponent's trainer context, if this is a trainer battle.
@@ -626,6 +644,7 @@ impl Battle {
             });
         } else {
             self.settle_fainted_enemy(&mut events)?;
+            self.resolve_intimidate_queue(&mut events);
             // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
             // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
@@ -695,8 +714,11 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`TurnError`] for an invalid state or action. Pre-turn failures
-    /// consume no RNG and contain no events. A pending move-learning decision
-    /// takes precedence over an existing outcome.
+    /// consume no RNG and contain no events, other than any opening
+    /// [`BattleEvent::Intimidated`] results not yet taken through
+    /// [`Battle::take_entry_events`], which the rejection delivers instead of
+    /// the next turn. A pending move-learning decision takes precedence over
+    /// an existing outcome.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -705,8 +727,28 @@ impl Battle {
         let mut events = Vec::new();
         match self.resolve_turn(player_action, rng, &mut events) {
             Ok(()) => Ok(events),
-            Err(error) => Err(TurnError { events, error }),
+            Err(error) => {
+                // A rejected first action still reports the opening entry
+                // events it found waiting, so they are delivered once.
+                events.append(&mut self.pending_entry_events);
+                Err(TurnError { events, error })
+            }
         }
+    }
+
+    /// Drains the events from the battle's opening entry: the initial
+    /// [`BattleEvent::Intimidated`] and [`BattleEvent::IntimidatePrevented`]
+    /// results, in battler order. Upstream resolves them before the first
+    /// action is chosen (`TryDoEventsBeforeFirstTurn`,
+    /// `src/battle_main.c:3869`-`:3883`), and a constructor returns no
+    /// events, so a caller that presents the entry ahead of action selection
+    /// calls this once after construction.
+    ///
+    /// Each event is delivered once: events drained here are absent from
+    /// [`Battle::take_turn`], which otherwise leads its first turn, or its
+    /// rejection, with them. Draws no RNG.
+    pub fn take_entry_events(&mut self) -> Vec<BattleEvent> {
+        std::mem::take(&mut self.pending_entry_events)
     }
 
     /// Run Away or equal-or-greater raw Speed escapes without a draw and ends
@@ -727,6 +769,7 @@ impl Battle {
         if !self.escape_is_guaranteed(player_action) {
             self.revalidate_enemy_admission()?;
         }
+        events.append(&mut self.pending_entry_events);
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
         self.resolve_selected_actions(player_action, enemy_action, rng, events)
@@ -1150,7 +1193,15 @@ impl Battle {
         });
     }
 
+    /// `HandleFaintedMonActions`: the replacement batch, then the queued
+    /// entry abilities (`src/battle_util.c:1912`-`:1963`).
     fn handle_fainted_mons(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        self.send_out_replacements(events)?;
+        self.resolve_intimidate_queue(events);
+        Ok(())
+    }
+
+    fn send_out_replacements(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
             return Ok(());
         }
@@ -1244,11 +1295,8 @@ impl Battle {
         // first, so the trainer's replacement scores against `MOVE_NONE`
         // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
         self.player.clear_battle_scratch();
-        self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
-        // `Cmd_switchineffects` then sets an incoming Truant holder's counter
-        // (`battle_script_commands.c:5258`-`:5263`).
-        self.battler_states[BattlerSide::Player.index()]
-            .enter_field(self.player.ability() == AbilityId::TRUANT);
+        self.battler_states[BattlerSide::Player.index()] =
+            BattlerState::after_switch_in(self.player.ability());
         self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::PlayerSentOut {
             species: self.player.species(),
@@ -1360,11 +1408,8 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
-        self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
-        // `Cmd_switchineffects` then sets an incoming Truant holder's counter
-        // (`battle_script_commands.c:5258`-`:5263`).
-        self.battler_states[BattlerSide::Enemy.index()]
-            .enter_field(self.enemy.ability() == AbilityId::TRUANT);
+        self.battler_states[BattlerSide::Enemy.index()] =
+            BattlerState::after_switch_in(self.enemy.ability());
         // `SwitchInClearSetData` zeroes `gCurrentMove` (`battle_main.c:3257`).
         self.last_move_used = MOVE_NONE;
         events.push(BattleEvent::TrainerSentOut {
@@ -1685,7 +1730,11 @@ impl Battle {
             // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
             // `:1139`, `:100`-`:104`).
             EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
-            EnemyAction::Switch(slot) => self.switch_enemy_to(slot, events),
+            EnemyAction::Switch(slot) => {
+                self.switch_enemy_to(slot, events)?;
+                self.resolve_intimidate_queue(events);
+                Ok(())
+            }
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
@@ -1778,6 +1827,7 @@ mod tests {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            pending_entry_events: Vec::new(),
         };
         (battle, player_max_hp, player_move_max_pp)
     }

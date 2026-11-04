@@ -312,6 +312,32 @@ pub enum BattleEvent {
         /// The ability that prevented the change.
         ability: AbilityId,
     },
+    /// A queued Intimidate holder lowered the opposing battler's Attack:
+    /// `BattleScript_IntimidateActivates` (`data/battle_scripts_1.s:4024`-
+    /// `:4048`) prints `STRINGID_PKMNCUTSATTACKWITH`.
+    ///
+    /// This follows the entry that queued the activation: the battle's first
+    /// turn events for the initial entrants, or the replacement's send-out
+    /// event after a faint or switch. An Attack already at its minimum stage
+    /// yields no event, as the script skips its message there. The drop
+    /// draws no RNG.
+    Intimidated {
+        /// Whether the player's battler is the Intimidate holder. The
+        /// lowered battler is the other side.
+        by_player: bool,
+        /// The lowered battler's resulting Attack stage.
+        new_stage: StatStage,
+    },
+    /// The opposing battler's ability stopped a queued Intimidate
+    /// (`BattleScript_IntimidatePrevented`, `data/battle_scripts_1.s:4044`-
+    /// `:4048`): Clear Body, White Smoke or Hyper Cutter.
+    IntimidatePrevented {
+        /// Whether the player's battler is the Intimidate holder. The
+        /// protected battler is the other side.
+        by_player: bool,
+        /// The protected battler's ability.
+        ability: AbilityId,
+    },
     /// A sound move exited through `BattleScript_SoundproofProtected`
     /// (`data/battle_scripts_1.s:4158`-`:4164`): the target's
     /// [`AbilityId::SOUNDPROOF`] blocked the move itself, not a named stat

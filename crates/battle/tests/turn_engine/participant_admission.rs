@@ -1,5 +1,5 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate, Speed Boost,
+//! (`battle_util.c:2873-2951`) and always-refused abilities (Speed Boost,
 //! Color Change, Trace, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
@@ -20,14 +20,8 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 25] {
+fn refused() -> [(BattlePokemon, AbilityId); 22] {
     [
-        (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
-        (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
-        (
-            mon(SpeciesId::MAWILE, 1, Status1::Healthy),
-            AbilityId::INTIMIDATE,
-        ),
         (healthy(SpeciesId::NINJASK), AbilityId::SPEED_BOOST),
         (healthy(SpeciesId::YANMA), AbilityId::SPEED_BOOST),
         (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
@@ -223,6 +217,16 @@ const EFFECT_SPORE_HOLDERS: [SpeciesId; 4] = [
 /// are admitted wherever they stand.
 const TRUANT_HOLDERS: [SpeciesId; 2] = [SpeciesId::SLAKOTH, SpeciesId::SLAKING];
 
+/// Intimidate holders and the ability slot that selects it: its queued entry
+/// drop is modelled, so they are admitted wherever they stand. Each has a
+/// single ability slot, because a trainer battle refuses a two-ability player
+/// species whose ability the AI cannot read.
+const INTIMIDATE_HOLDERS: [(SpeciesId, u8); 3] = [
+    (SpeciesId::MIGHTYENA, 0),
+    (SpeciesId::GYARADOS, 0),
+    (SpeciesId::SALAMENCE, 0),
+];
+
 /// The constructor script for `player` against `enemy`: the order tiebreak is
 /// drawn only when their turn-order Speeds tie.
 fn admission_script_for(player: &BattlePokemon, enemy: &BattlePokemon) -> Vec<u16> {
@@ -285,6 +289,55 @@ fn truant_holders_are_admitted_on_every_participant_path() {
             let holder = || {
                 let holder = mon(species, 0, status);
                 assert_eq!(holder.ability(), AbilityId::TRUANT);
+                holder
+            };
+            let opponent = || healthy(SpeciesId::ZIGZAGOON);
+            let lead = || healthy(SpeciesId::MUDKIP);
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+            wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            trainer(holder(), vec![], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+            trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(
+                lead(),
+                vec![],
+                vec![opponent(), opponent(), holder()],
+                &mut rng,
+            )
+            .unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(lead(), vec![holder()], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+    }
+}
+
+#[test]
+fn intimidate_holders_are_admitted_on_every_participant_path() {
+    for (species, slot) in INTIMIDATE_HOLDERS {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            let holder = || {
+                let holder = mon(species, slot, status);
+                assert_eq!(holder.ability(), AbilityId::INTIMIDATE);
                 holder
             };
             let opponent = || healthy(SpeciesId::ZIGZAGOON);
@@ -391,7 +444,6 @@ fn confusion_is_refused_only_for_own_tempo() {
 #[test]
 fn an_always_refused_ability_is_refused_whatever_the_status() {
     for (species, ability) in [
-        (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
         (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, AbilityId::TRACE),

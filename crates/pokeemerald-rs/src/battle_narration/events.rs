@@ -12,13 +12,14 @@ use assets::{AbilityId, Effectiveness};
 use battle::{BattleEvent, ChangedStat, Status1};
 
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
+use super::intimidate;
 use super::lifecycle;
 use super::names::NarrationNames;
 use super::narrator::Narrator;
 use super::string_ids as id;
 use super::{NarrationError, NarrationRequest, TemplateId};
 
-fn table(template: u16, context: NarrationContext) -> NarrationRequest {
+pub(super) fn table(template: u16, context: NarrationContext) -> NarrationRequest {
     NarrationRequest {
         template: TemplateId::Table(template),
         context,
@@ -82,6 +83,9 @@ pub(super) fn requests(
         return Ok(requests);
     }
     if let Some(requests) = ability_results(narrator, event)? {
+        return Ok(requests);
+    }
+    if let Some(requests) = intimidate::requests(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = status_results(narrator, event) {
