@@ -13,7 +13,7 @@ use crate::battle_narration::{
 const SLOTS: &[(u16, &str)] = &[
     (12, "{B_TRAINER1_LOSE_TEXT}"),
     (13, "{B_BUFF1} gained{B_BUFF2}\n{B_BUFF3} EXP. Points!\\p"),
-    (15, "{B_BUFF1} learned\n{B_BUFF2}!\\p"),
+    (15, "{B_BUFF1} learned\n{B_BUFF2}!{WAIT_SE}\\p"),
     (16, "{B_BUFF1} is trying to\nlearn {B_BUFF2}.\\p"),
     (17, "But, {B_BUFF1} can't learn\nmore than four moves.\\p"),
     (18, "Delete a move to make\nroom for {B_BUFF2}?"),
@@ -25,7 +25,7 @@ const SLOTS: &[(u16, &str)] = &[
     (29, "{B_DEF_NAME_WITH_PREFIX}\nfainted!\\p"),
     (30, "{B_PLAYER_NAME} got ¥{B_BUFF1}\nfor winning!\\p"),
     (31, "{B_PLAYER_NAME} is out of\nusable POKéMON!\\p"),
-    (32, "{B_PLAYER_NAME} whited out!"),
+    (32, "{B_PLAYER_NAME} whited out!{PAUSE_UNTIL_PRESS}"),
     (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
     (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
@@ -37,7 +37,7 @@ const SLOTS: &[(u16, &str)] = &[
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
-    (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
+    (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!\\lIt may be unable to move!"),
     (209, "sharply "),
     (210, "rose!"),
     (211, "harshly "),
@@ -46,18 +46,21 @@ const SLOTS: &[(u16, &str)] = &[
     (217, "A critical hit!"),
     (221, "It's not very effective…"),
     (222, "It's super effective!"),
-    (219, "1, 2, and... Poof!\\p"),
-    (220, "And...\\p"),
-    (223, "Got away safely!\\p"),
-    (224, "Wild {B_BUFF1} fled!"),
+    (
+        219,
+        "{PAUSE 32}1, {PAUSE 15}2, and{PAUSE 15}… {PAUSE 15}… {PAUSE 15}… {PAUSE 15}{PLAY_SE SE_BALL_BOUNCE_1}Poof!\\p",
+    ),
+    (220, "And…\\p"),
+    (223, "{PLAY_SE SE_FLEE}Got away safely!\\p"),
+    (224, "{PLAY_SE SE_FLEE}Wild {B_BUFF1} fled!"),
     (226, "Can't escape!\\p"),
     (327, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade {B_CURRENT_MOVE} useless!"),
     (329, ""),
     (330, " a boosted"),
-    (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
+    (339, "{PLAY_SE SE_FLEE}{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
-    (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
+    (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s\\l{B_DEF_ABILITY} from working!"),
 ];
 
 const SPECIALS: &[(&str, &str)] = &[
@@ -119,7 +122,7 @@ fn a_wild_battle_opens_by_naming_the_wild_pokemon() {
 
     assert_eq!(
         lines(&[narrator.introduction()]),
-        ["Wild RATTATA appeared!{SCROLL}"]
+        ["Wild RATTATA appeared!{CLEAR}"]
     );
     assert_eq!(narrator.initial_send_out(Side::Opponent), None);
     assert_eq!(
@@ -138,7 +141,7 @@ fn a_trainer_battle_opens_with_the_challenge_and_the_trainers_send_out() {
             narrator.initial_send_out(Side::Opponent).unwrap()
         ]),
         [
-            "YOUNGSTER BEN\nwould like to battle!{SCROLL}",
+            "YOUNGSTER BEN\nwould like to battle!{CLEAR}",
             "YOUNGSTER BEN sent\nout RATTATA!"
         ]
     );
@@ -309,9 +312,9 @@ fn a_status_passed_on_by_an_ability_names_its_holder_and_its_victim() {
     assert_eq!(
         lines(&narrate(&mut narrator, &[by_target, by_attacker, blocked])),
         [
-            "Wild RATTATA's STATIC\nparalyzed TORCHIC!",
-            "TORCHIC's SYNCHRONIZE\nparalyzed Wild RATTATA!",
-            "TORCHIC's LIMBER\nprevents Wild RATTATA's SYNCHRONIZE from working!"
+            "Wild RATTATA's STATIC\nparalyzed TORCHIC!{SCROLL}It may be unable to move!",
+            "TORCHIC's SYNCHRONIZE\nparalyzed Wild RATTATA!{SCROLL}It may be unable to move!",
+            "TORCHIC's LIMBER\nprevents Wild RATTATA's{SCROLL}SYNCHRONIZE from working!"
         ]
     );
 }
@@ -339,7 +342,7 @@ fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
         [
             "Wild PARAS's EFFECT SPORE\nmade TORCHIC sleep!",
             "Wild PARAS's EFFECT SPORE\npoisoned TORCHIC!",
-            "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!",
+            "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!{SCROLL}It may be unable to move!",
         ]
     );
 }
@@ -390,7 +393,7 @@ fn a_replacement_is_named_after_the_faint_that_precedes_it() {
     assert_eq!(
         lines(&requests),
         [
-            "Foe RATTATA\nfainted!{SCROLL}",
+            "Foe RATTATA\nfainted!{CLEAR}",
             "YOUNGSTER BEN sent\nout ZIGZAGOON!",
             "Foe ZIGZAGOON's\nattack missed!"
         ]
@@ -440,17 +443,18 @@ fn experience_and_move_learning_print_in_upstream_order() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "TORCHIC gained\n1234 EXP. Points!{SCROLL}",
-            "TORCHIC is trying to\nlearn EMBER.{SCROLL}",
-            "But, TORCHIC can't learn\nmore than four moves.{SCROLL}",
+            "TORCHIC gained\n1234 EXP. Points!{CLEAR}",
+            "TORCHIC is trying to\nlearn EMBER.{CLEAR}",
+            "But, TORCHIC can't learn\nmore than four moves.{CLEAR}",
             "Delete a move to make\nroom for EMBER?",
-            "1, 2, and... Poof!{SCROLL}",
-            "TORCHIC forgot\nSCRATCH.{SCROLL}",
-            "And...{SCROLL}",
-            "TORCHIC learned\nEMBER!{SCROLL}",
+            "{CTRL:0x08}1, {CTRL:0x08}2, and{CTRL:0x08}… {CTRL:0x08}… {CTRL:0x08}… \
+             {CTRL:0x08}{CTRL:0x10}Poof!{CLEAR}",
+            "TORCHIC forgot\nSCRATCH.{CLEAR}",
+            "And…{CLEAR}",
+            "TORCHIC learned\nEMBER!{CTRL:0x0a}{CLEAR}",
             // `decode_to_string` spells `{PAUSE 32}` as its control code.
             "{CTRL:0x08}Stop learning\nEMBER?",
-            "TORCHIC did not learn\nEMBER.{SCROLL}",
+            "TORCHIC did not learn\nEMBER.{CLEAR}",
         ]
     );
 }
@@ -466,9 +470,9 @@ fn a_trainer_victory_prints_the_defeat_the_trainers_words_then_the_prize() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "Player defeated\nYOUNGSTER BEN!{SCROLL}",
+            "Player defeated\nYOUNGSTER BEN!{CLEAR}",
             "Good battle!{CTRL:0x09}",
-            "BRENDAN got ¥120\nfor winning!{SCROLL}"
+            "BRENDAN got ¥120\nfor winning!{CLEAR}"
         ]
     );
 }
@@ -483,8 +487,8 @@ fn a_loss_prints_both_whiteout_messages_and_a_wild_win_prints_nothing() {
             &[BattleEvent::Ended(BattleOutcome::PlayerLost)]
         )),
         [
-            "BRENDAN is out of\nusable POKéMON!{SCROLL}",
-            "BRENDAN whited out!"
+            "BRENDAN is out of\nusable POKéMON!{CLEAR}",
+            "BRENDAN whited out!{CTRL:0x09}"
         ]
     );
     assert!(narrate(
@@ -514,9 +518,9 @@ fn running_and_a_fleeing_wild_pokemon_print_their_own_lines() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "Can't escape!{SCROLL}",
-            "Got away safely!{SCROLL}",
-            "Wild RATTATA fled!"
+            "Can't escape!{CLEAR}",
+            "{CTRL:0x10}Got away safely!{CLEAR}",
+            "{CTRL:0x10}Wild RATTATA fled!"
         ]
     );
 }
@@ -641,7 +645,7 @@ fn a_run_away_escape_names_the_fleeing_battler_and_its_ability() {
 
     assert_eq!(
         lines(&narrate(&mut narrator, &[escape])),
-        ["TORCHIC fled\nusing RUN AWAY!{SCROLL}"]
+        ["{CTRL:0x10}TORCHIC fled\nusing RUN AWAY!{CLEAR}"]
     );
 }
 
@@ -760,8 +764,241 @@ fn a_boosted_award_reads_gained_a_boosted() {
     assert_eq!(
         lines(&narrate(&mut narrator, &[award(false), award(true)])),
         [
-            "TORCHIC gained\n69 EXP. Points!{SCROLL}",
-            "TORCHIC gained a boosted\n69 EXP. Points!{SCROLL}",
+            "TORCHIC gained\n69 EXP. Points!{CLEAR}",
+            "TORCHIC gained a boosted\n69 EXP. Points!{CLEAR}",
         ]
     );
+}
+
+/// Hand-encoded upstream bytes (`charmap.txt:420`-`:428`, `:1087`-`:1088`) for
+/// `sText_PlayerWhiteout2`, `sText_123Poof`, `sText_AndEllipsis`,
+/// `sText_PkmnWasParalyzedBy`, `sText_GotAwaySafely` and `sText_WildPkmnFled`
+/// (`src/battle_message.c:78`, `:105`, `:313`, `:314`, `:318`, `:321`). They
+/// bypass the fixture encoder, so dropping a wait, a sound command or a
+/// continuation from `expand` changes what comes out.
+mod upstream_bytes {
+    use std::collections::BTreeMap;
+
+    use assets::pack::{
+        BattleMessageTable, BATTLE_MESSAGE_SPECIAL_TEMPLATES as SPECIAL_TEMPLATES,
+        BATTLE_MESSAGE_TABLE_END as TABLE_END, BATTLE_MESSAGE_TABLE_START as TABLE_START,
+    };
+    use engine::text::{self, Token};
+
+    use super::{
+        expand, narrate, narrator, render, AssetNames, BattleEvent, BattleKind, BattleOutcome,
+        MoveId,
+    };
+
+    const END: u8 = 0xFF;
+    const SCROLL: u8 = 0xFA;
+    const CLEAR: u8 = 0xFB;
+    const NEWLINE: u8 = 0xFE;
+    const PAUSE_UNTIL_PRESS: [u8; 2] = [0xFC, 0x09];
+    /// `FC 10 lo hi` for `SE_FLEE` (17) and `SE_BALL_BOUNCE_1` (56).
+    const PLAY_SE_FLEE: [u8; 4] = [0xFC, 0x10, 17, 0];
+    const PLAY_SE_BALL_BOUNCE_1: [u8; 4] = [0xFC, 0x10, 56, 0];
+
+    /// `FC 08 n`.
+    fn pause(frames: u8) -> [u8; 3] {
+        [0xFC, 0x08, frames]
+    }
+
+    fn glyphs(source: &str) -> Vec<u8> {
+        source
+            .chars()
+            .map(|c| text::char_to_byte(c).expect("glyph encodes"))
+            .collect()
+    }
+
+    fn chars(source: &str) -> Vec<Token> {
+        source.chars().map(Token::Char).collect()
+    }
+
+    fn control(sub: u8, args: &[u8]) -> Token {
+        Token::ExtCtrl {
+            sub,
+            args: args.to_vec(),
+        }
+    }
+
+    fn poof_slot() -> Vec<u8> {
+        [
+            &pause(32)[..],
+            &glyphs("1, "),
+            &pause(15),
+            &glyphs("2, and"),
+            &pause(15),
+            &glyphs("… "),
+            &pause(15),
+            &glyphs("… "),
+            &pause(15),
+            &glyphs("… "),
+            &pause(15),
+            &PLAY_SE_BALL_BOUNCE_1,
+            &glyphs("Poof!"),
+            &[CLEAR, END],
+        ]
+        .concat()
+    }
+
+    fn paralyzed_slot() -> Vec<u8> {
+        [
+            &[0xFD, 0x13][..],
+            &glyphs("'s "),
+            &[0xFD, 0x1A, NEWLINE],
+            &glyphs("paralyzed "),
+            &[0xFD, 0x11],
+            &glyphs("!"),
+            &[SCROLL],
+            &glyphs("It may be unable to move!"),
+            &[END],
+        ]
+        .concat()
+    }
+
+    fn slots() -> BTreeMap<u16, Vec<u8>> {
+        BTreeMap::from([
+            (
+                32,
+                [
+                    &[0xFD, 0x23][..],
+                    &glyphs(" whited out!"),
+                    &PAUSE_UNTIL_PRESS,
+                    &[END],
+                ]
+                .concat(),
+            ),
+            (56, paralyzed_slot()),
+            (219, poof_slot()),
+            (220, [&glyphs("And…")[..], &[CLEAR, END]].concat()),
+            (
+                223,
+                [
+                    &PLAY_SE_FLEE[..],
+                    &glyphs("Got away safely!"),
+                    &[CLEAR, END],
+                ]
+                .concat(),
+            ),
+            (
+                224,
+                [
+                    &PLAY_SE_FLEE[..],
+                    &glyphs("Wild "),
+                    &[0xFD, 0x00],
+                    &glyphs(" fled!"),
+                    &[END],
+                ]
+                .concat(),
+            ),
+        ])
+    }
+
+    /// What `events` print against the upstream bytes above.
+    fn expanded(events: &[BattleEvent]) -> Vec<Vec<Token>> {
+        let slots = slots();
+        let empty: &[u8] = &[END];
+        let table = BattleMessageTable::from_entries(
+            (TABLE_START..TABLE_END).map(|id| (id, slots.get(&id).map_or(empty, Vec::as_slice))),
+            (0..SPECIAL_TEMPLATES.len()).map(|index| (u16::try_from(index).unwrap(), empty)),
+        )
+        .unwrap();
+        let mut narrator = narrator(BattleKind::Wild);
+        narrate(&mut narrator, events)
+            .iter()
+            .map(|request| expand(&table, &AssetNames, request).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn the_second_whiteout_line_waits_for_a_press() {
+        let lines = expanded(&[BattleEvent::Ended(BattleOutcome::PlayerLost)]);
+
+        assert_eq!(
+            lines[1],
+            [
+                chars("BRENDAN whited out!"),
+                vec![control(0x09, &[]), Token::End]
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn learning_over_a_move_keeps_every_poof_wait_and_the_bounce_sound() {
+        let lines = expanded(&[BattleEvent::MoveReplaced {
+            learned: MoveId::EMBER,
+            forgotten: MoveId::SCRATCH,
+            slot: 0,
+        }]);
+
+        assert_eq!(
+            lines[0],
+            [
+                vec![control(0x08, &[32])],
+                chars("1, "),
+                vec![control(0x08, &[15])],
+                chars("2, and"),
+                vec![control(0x08, &[15])],
+                chars("… "),
+                vec![control(0x08, &[15])],
+                chars("… "),
+                vec![control(0x08, &[15])],
+                chars("… "),
+                vec![control(0x08, &[15]), control(0x10, &[56, 0])],
+                chars("Poof!"),
+                vec![Token::PromptClear, Token::End],
+            ]
+            .concat()
+        );
+        assert_eq!(
+            lines[2],
+            [chars("And…"), vec![Token::PromptClear, Token::End]].concat()
+        );
+    }
+
+    #[test]
+    fn escapes_start_with_the_flee_sound() {
+        let lines = expanded(&[
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::WildFled,
+        ]);
+
+        assert_eq!(
+            lines[0],
+            [
+                vec![control(0x10, &[17, 0])],
+                chars("Got away safely!"),
+                vec![Token::PromptClear, Token::End],
+            ]
+            .concat()
+        );
+        assert_eq!(
+            lines[1],
+            [
+                vec![control(0x10, &[17, 0])],
+                chars("Wild RATTATA fled!"),
+                vec![Token::End],
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn an_ability_paralysis_scrolls_on_to_its_second_sentence() {
+        let lines = expanded(&[BattleEvent::ParalyzedByStatic {
+            by_player: true,
+            move_id: MoveId::TACKLE,
+        }]);
+
+        assert_eq!(
+            render(&lines[0]).replace('’', "'"),
+            "Wild RATTATA's STATIC\nparalyzed TORCHIC!{SCROLL}It may be unable to move!"
+        );
+        assert!(lines[0].contains(&Token::PromptScroll));
+    }
 }

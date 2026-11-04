@@ -5,7 +5,7 @@ use assets::items::ItemId;
 use assets::MoveId;
 use engine::text::Token;
 
-use super::fixtures::{bare_context, render, request, Fixture, RATTATA};
+use super::fixtures::{bare_context, render, request, template, Fixture, RATTATA};
 use crate::battle_narration::{
     expand, AssetNames, BattleBuffer, BattleKind, Battler, BufferOp, NarrationError, Side,
     StatusName, TemplateId,
@@ -238,7 +238,7 @@ fn a_placeholder_only_other_battle_types_reach_is_refused() {
 
 #[test]
 fn controls_and_the_terminator_survive_expansion() {
-    let fixture = Fixture::new(&[(20, "a\nb\\p{B_BUFF1}")], &[]);
+    let fixture = Fixture::new(&[(20, "a\nb\\lc\\p{B_BUFF1}")], &[]);
     let tokens = expand(
         &fixture.table(),
         &AssetNames,
@@ -253,7 +253,26 @@ fn controls_and_the_terminator_survive_expansion() {
             Token::Newline,
             Token::Char('b'),
             Token::PromptScroll,
+            Token::Char('c'),
+            Token::PromptClear,
             Token::End,
         ]
+    );
+}
+
+/// The fixture encoder must write the bytes `charmap.txt` defines
+/// (`:420`-`:428`, `:1087`-`:1088`), or every table built from it differs from
+/// the pack: `\l` is `FA`, `\p` is `FB`, `{PLAY_SE}` carries a little-endian
+/// song id.
+#[test]
+fn the_fixture_encoder_writes_the_charmap_bytes_for_controls() {
+    assert_eq!(template("A\\lB\\p"), [0xBB, 0xFA, 0xBC, 0xFB, 0xFF]);
+    assert_eq!(
+        template("{PAUSE_UNTIL_PRESS}{WAIT_SE}{PAUSE 32}"),
+        [0xFC, 0x09, 0xFC, 0x0A, 0xFC, 0x08, 32, 0xFF]
+    );
+    assert_eq!(
+        template("{PLAY_SE SE_FLEE}{PLAY_SE SE_BALL_BOUNCE_1}"),
+        [0xFC, 0x10, 17, 0, 0xFC, 0x10, 56, 0, 0xFF]
     );
 }

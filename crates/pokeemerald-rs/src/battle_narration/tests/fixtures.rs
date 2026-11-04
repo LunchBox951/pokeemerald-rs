@@ -53,7 +53,15 @@ const SELECTORS: &[(&str, u8)] = &[
     ("B_ATK_NAME_WITH_PREFIX_MON1", 0x0D),
 ];
 
-/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, a newline as `FE`, and `\p` as `FA`.
+/// `SE_*` names to song ids, from `include/constants/songs.h`.
+const SOUNDS: &[(&str, u16)] = &[("SE_FLEE", 17), ("SE_BALL_BOUNCE_1", 56)];
+
+/// Encodes a template the way upstream's `charmap.txt` does.
+///
+/// `{NAME}` is `FD selector`, `{PAUSE n}` is `FC 08 n`, `{PAUSE_UNTIL_PRESS}`
+/// is `FC 09`, `{WAIT_SE}` is `FC 0A`, `{PLAY_SE SE_*}` is `FC 10` and the song
+/// id as a little-endian `u16`, a newline is `FE`, `\l` is `FA` (scroll) and
+/// `\p` is `FB` (clear).
 pub(super) fn template(source: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut chars = source.chars().peekable();
@@ -69,16 +77,38 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                     ]);
                     continue;
                 }
+                match name.as_str() {
+                    "PAUSE_UNTIL_PRESS" => {
+                        out.extend([0xFC, 0x09]);
+                        continue;
+                    }
+                    "WAIT_SE" => {
+                        out.extend([0xFC, 0x0A]);
+                        continue;
+                    }
+                    _ => {}
+                }
+                if let Some(sound) = name.strip_prefix("PLAY_SE ") {
+                    let song = SOUNDS
+                        .iter()
+                        .find(|(known, _)| *known == sound)
+                        .unwrap_or_else(|| panic!("fixture sound {sound} is unknown"))
+                        .1;
+                    out.extend([0xFC, 0x10]);
+                    out.extend(song.to_le_bytes());
+                    continue;
+                }
                 let selector = SELECTORS
                     .iter()
                     .find(|(known, _)| *known == name)
                     .unwrap_or_else(|| panic!("fixture placeholder {name} is unknown"));
                 out.extend([0xFD, selector.1]);
             }
-            '\\' => {
-                assert_eq!(chars.next(), Some('p'), "only \\p is an escape");
-                out.push(0xFA);
-            }
+            '\\' => match chars.next() {
+                Some('l') => out.push(0xFA),
+                Some('p') => out.push(0xFB),
+                other => panic!("only \\l and \\p are escapes, not {other:?}"),
+            },
             '\n' => out.push(0xFE),
             other => out.push(text::char_to_byte(other).expect("fixture glyph encodes")),
         }
