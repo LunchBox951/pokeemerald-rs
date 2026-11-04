@@ -28,6 +28,10 @@
 use crate::damage::BattleRng;
 
 /// The transient conditions carried by one battler.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag mirrors a distinct upstream status2/status3 bit"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Volatiles {
     /// Whether Focus Energy is active.
