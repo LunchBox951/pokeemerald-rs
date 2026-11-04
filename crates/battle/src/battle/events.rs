@@ -270,6 +270,39 @@ pub enum BattleEvent {
         /// The move that failed.
         move_id: MoveId,
     },
+    /// Yawn left its target drowsy (`STRINGID_PKMNWASMADEDROWSY`,
+    /// `BattleScript_EffectYawn`, `data/battle_scripts_1.s:2451`-`:2473`).
+    /// Sleep follows at the end of the target's second turn tick unless a
+    /// status or sleep-preventing ability intervenes, with no further event.
+    MadeDrowsy {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that applied the effect.
+        move_id: MoveId,
+    },
+    /// The target's Insomnia or Vital Spirit made Yawn ineffective
+    /// (`STRINGID_PKMNSXMADEITINEFFECTIVE`,
+    /// `BattleScript_PrintBankAbilityMadeIneffective`,
+    /// `data/battle_scripts_1.s:2455`-`:2456`, `:2467`-`:2473`). The script
+    /// checks the ability before any status, so it wins over an existing
+    /// status or drowsiness, which fail with [`BattleEvent::ButItFailed`].
+    YawnAbilityProtected {
+        /// Whether the player used the move; the ability belongs to the other
+        /// side.
+        by_player: bool,
+        /// The move that was made ineffective.
+        move_id: MoveId,
+        /// The target's ability that prevented the drowsiness.
+        ability: AbilityId,
+    },
+    /// Yawn's drowsiness expired and the battler fell asleep
+    /// (`STRINGID_PKMNFELLASLEEP`, `BattleScript_YawnMakesAsleep`,
+    /// `data/battle_scripts_1.s:3878`-`:3885`; `ENDTURN_YAWN`,
+    /// `src/battle_util.c:1753`-`:1771`). Refused expiry emits nothing.
+    FellAsleepFromYawn {
+        /// Whether the player's battler fell asleep.
+        by_player: bool,
+    },
     /// A move started or refreshed its user's Charge effect.
     ChargingPower {
         /// Whether the player used the move.

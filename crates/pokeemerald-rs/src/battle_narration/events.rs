@@ -181,6 +181,10 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         BattleEvent::LiquidOoze { .. } => table(id::ITSUCKEDLIQUIDOOZE, base),
         BattleEvent::NothingHappened { .. } => table(id::BUTNOTHINGHAPPENED, base),
         BattleEvent::ButItFailed { .. } => table(id::BUTITFAILED, base),
+        BattleEvent::MadeDrowsy { by_player, .. } => table(
+            id::PKMNWASMADEDROWSY,
+            base.user_vs_target(Side::user(by_player)),
+        ),
         BattleEvent::GettingPumped { by_player, .. } => table(
             id::PKMNGETTINGPUMPED,
             base.user_vs_target(Side::user(by_player)),
@@ -327,6 +331,16 @@ fn ability_results(
 fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let base = narrator.context();
     let request = match *event {
+        BattleEvent::YawnAbilityProtected {
+            by_player, ability, ..
+        } => {
+            let holder = Side::user(by_player).other();
+            let mut context = base
+                .user_vs_target(Side::user(by_player))
+                .with_ability(holder, ability);
+            context.scripting = Some(holder);
+            table(id::PKMNSXMADEITINEFFECTIVE, context)
+        }
         BattleEvent::Paralyzed { by_player, .. } => table(
             id::PKMNWASPARALYZED,
             base.user_vs_target(Side::user(by_player)),
@@ -443,6 +457,11 @@ fn end_turn_and_spore_results(
             AbilityId::EFFECT_SPORE,
             Holder::Target,
         ),
+        BattleEvent::FellAsleepFromYawn { by_player } => {
+            let mut context = base;
+            context.effect = Some(Side::user(by_player));
+            table(id::PKMNFELLASLEEP, context)
+        }
         BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
             id::PKMNPOISONEDBY,
             base,

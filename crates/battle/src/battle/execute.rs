@@ -36,6 +36,7 @@ use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
 mod effect_spore;
 mod pipelines;
+mod yawn;
 use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
@@ -85,6 +86,7 @@ pub(super) enum MovePipeline {
     DefenseCurl,
     Paralyze,
     Confuse,
+    Yawn,
     OrdinaryHit,
 }
 
@@ -128,6 +130,8 @@ impl MovePipeline {
             (Self::Paralyze, crate::paralyze::ensure_resolvable)
         } else if is_confuse_effect(effect) {
             (Self::Confuse, crate::confuse::ensure_resolvable)
+        } else if yawn::is_yawn_effect(effect) {
+            (Self::Yawn, yawn::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -434,6 +438,10 @@ impl Battle {
             }
             MovePipeline::Confuse => {
                 self.execute_confuse_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Yawn => {
+                self.execute_yawn_move(attacker_is_player, move_id, events);
+                Ok(())
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -1143,6 +1151,7 @@ mod pipeline_agreement_tests {
         (&[156], MovePipeline::DefenseCurl),
         (&[67], MovePipeline::Paralyze),
         (&[49], MovePipeline::Confuse),
+        (&[187], MovePipeline::Yawn),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
@@ -1177,7 +1186,8 @@ mod pipeline_agreement_tests {
                     || crate::flag_move::ensure_resolvable(dex, move_id).is_ok()
                     || crate::defense_curl::ensure_resolvable(dex, move_id).is_ok()
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
+                    || move_id == MoveId::YAWN;
                 if accepted {
                     Ok(())
                 } else {

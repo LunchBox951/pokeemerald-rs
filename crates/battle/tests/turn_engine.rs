@@ -72,3 +72,5 @@ mod trainer_battle;
 mod truant;
 #[path = "turn_engine/turn_order.rs"]
 mod turn_order;
+#[path = "turn_engine/yawn.rs"]
+mod yawn;
