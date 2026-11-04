@@ -174,6 +174,10 @@ fn party_events() -> Vec<BattleEvent> {
             species: RATTATA,
             reserves_remaining: 1,
         },
+        BattleEvent::TracedAbility {
+            by_player,
+            ability: AbilityId::LIMBER,
+        },
         BattleEvent::ExpGained {
             amount: 10,
             boosted: false,
@@ -201,7 +205,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 70;
+const VARIANTS: usize = 71;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -278,6 +282,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FrozenSolid { .. } => 67,
         BattleEvent::Thawed { .. } => 68,
         BattleEvent::ThawedByMove { .. } => 69,
+        BattleEvent::TracedAbility { .. } => 70,
     }
 }
 

@@ -395,6 +395,11 @@ pub struct BattlePokemon {
     volatiles: Volatiles,
     status1: Status1,
     pending_move_learn: Option<PendingMoveLearn>,
+    /// The ability Trace copied for this battler's current time on the field
+    /// (`gBattleMons[].ability`, which `Cmd_switchindataupdate` reloads from
+    /// the species slot on every send-out). Never part of a save: see
+    /// [`BattlePokemon::native_ability`].
+    traced_ability: Option<AbilityId>,
 }
 
 // Manual, rather than derived, so `created_at_level` (its own doc comment)
@@ -425,6 +430,7 @@ impl PartialEq for BattlePokemon {
             volatiles,
             status1,
             pending_move_learn,
+            traced_ability,
         } = self;
         *species == other.species
             && *level == other.level
@@ -448,6 +454,7 @@ impl PartialEq for BattlePokemon {
             && *volatiles == other.volatiles
             && *status1 == other.status1
             && *pending_move_learn == other.pending_move_learn
+            && *traced_ability == other.traced_ability
     }
 }
 
@@ -562,6 +569,7 @@ impl BattlePokemon {
             volatiles: Volatiles::default(),
             status1: Status1::default(),
             pending_move_learn: None,
+            traced_ability: None,
         })
     }
 
@@ -623,11 +631,22 @@ impl BattlePokemon {
         self.personality
     }
 
-    /// Ability selected by [`BattlePokemon::ability_slot`].
+    /// The ability battle mechanics read: the one Trace copied this turn on
+    /// the field, else [`BattlePokemon::native_ability`].
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        match self.traced_ability {
+            Some(traced) => traced,
+            None => self.native_ability(),
+        }
+    }
+
+    /// Ability selected by [`BattlePokemon::ability_slot`], which a copy by
+    /// Trace never changes.
     ///
     /// Species without a secondary ability always use their primary ability.
     #[must_use]
-    pub const fn ability(&self) -> AbilityId {
+    pub const fn native_ability(&self) -> AbilityId {
         let [first, second] = self.base_stats.abilities;
         if second.0 == 0 || self.ability_slot == 0 {
             first
@@ -845,8 +864,23 @@ impl BattlePokemon {
     /// method (`crate::battle::execute::Battle::settle_faint`, the
     /// double-faint arm of `crate::battle::execute::pipelines`).
     pub fn clear_battle_scratch(&mut self) {
+        self.clear_fainted_scratch();
+        self.traced_ability = None;
+    }
+
+    /// [`BattlePokemon::clear_battle_scratch`] for a battler that just fainted
+    /// but is still on the field: `FaintClearSetData` clears stages and
+    /// volatiles, not `gBattleMons[].ability` (`battle_main.c:3269`-`:3289`),
+    /// and the corpse's contact abilities and replacement scoring still read it.
+    pub(crate) fn clear_fainted_scratch(&mut self) {
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
+    }
+
+    /// `AbilityBattleEffects`' Trace copy: this battler's ability becomes
+    /// `copied` until it leaves the field (`src/battle_util.c:3053`-`:3058`).
+    pub(crate) fn trace_ability(&mut self, copied: AbilityId) {
+        self.traced_ability = Some(copied);
     }
 
     /// Applies earned experience one level threshold at a time, capping both

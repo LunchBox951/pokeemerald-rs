@@ -659,6 +659,21 @@ pub enum BattleEvent {
         /// Usable (non-fainted) reserves remaining after the replacement.
         reserves_remaining: usize,
     },
+    /// A queued Trace holder copied the opposing battler's ability:
+    /// `BattleScript_TraceActivates` (`data/battle_scripts_1.s:3971`-`:3975`),
+    /// whose `STRINGID_PKMNTRACED` names the copied-from battler and ability
+    /// (`src/battle_util.c:3017`-`:3069`).
+    ///
+    /// This follows the entry that queued the activation: the battle's first
+    /// turn events for the initial entrants, or the replacement's send-out
+    /// event after a faint. The copy draws no RNG.
+    TracedAbility {
+        /// Whether the player's battler is the Trace holder. The copied-from
+        /// battler is the other side.
+        by_player: bool,
+        /// The ability the holder now has.
+        ability: AbilityId,
+    },
     /// The full experience award after the opposing battler fainted.
     ///
     /// Application begins before this event. If the award pauses at a

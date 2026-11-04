@@ -801,7 +801,7 @@ impl Battle {
         } else {
             &mut self.enemy
         };
-        fainted_battler.clear_battle_scratch();
+        fainted_battler.clear_fainted_scratch();
         fainted_battler.set_status1(Status1::Healthy);
         // `FaintClearSetData` resets the battler's history, Perish Song
         // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).

@@ -3,9 +3,9 @@
 //! Focus Energy handlers.
 
 use super::{
-    choose_trainer_action, ensure_scoreable, fold_ai_type_effectiveness, score_bad_move,
-    score_bad_move_prologue, MoveScores, ScoreableEffect, AI_EFFECTIVENESS_NEUTRAL,
-    UNCHANGED_AFTER_PROLOGUE_EFFECTS,
+    ai_get_ability, choose_trainer_action, ensure_scoreable, ensure_target_ability_unambiguous,
+    fold_ai_type_effectiveness, score_bad_move, score_bad_move_prologue, MoveScores,
+    ScoreableEffect, AI_EFFECTIVENESS_NEUTRAL, UNCHANGED_AFTER_PROLOGUE_EFFECTS,
 };
 use crate::battle::opponent_ai::EnemyAction;
 use crate::dex::Dex;
@@ -367,6 +367,24 @@ fn a_two_ability_target_is_refused_without_a_guess_draw() {
         Err(BattleError::AmbiguousPlayerAbility(VOLTORB))
     );
     assert_eq!(rng.draws(), 0);
+}
+
+#[test]
+fn a_traced_trapping_ability_does_not_make_a_two_ability_target_readable() {
+    let mut player = mon(SpeciesId::RALTS, &[MoveId::POUND]);
+    player.trace_ability(AbilityId::SHADOW_TAG);
+    assert_eq!(
+        ensure_target_ability_unambiguous(&player),
+        Err(BattleError::AmbiguousPlayerAbility(SpeciesId::RALTS))
+    );
+}
+
+#[test]
+fn a_single_ability_trace_holder_reads_as_the_ability_it_copied() {
+    let mut player = mon(SpeciesId::PORYGON2, &[MoveId::POUND]);
+    assert_eq!(ai_get_ability(&player), Ok(AbilityId::TRACE));
+    player.trace_ability(AbilityId::FLASH_FIRE);
+    assert_eq!(ai_get_ability(&player), Ok(AbilityId::FLASH_FIRE));
 }
 
 #[test]

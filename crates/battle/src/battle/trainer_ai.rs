@@ -554,8 +554,8 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 ];
 
 /// Refuses a scoring target whose species has two ability slots and whose
-/// true ability is not a trapping one, because upstream's ability read for it
-/// depends on battle history or a random guess the engine does not model
+/// native ability is not a trapping one, because upstream's ability read for
+/// it depends on battle history or a random guess the engine does not model
 /// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
 /// Pull, or Arena Trap is admitted: upstream returns it before the guess
 /// (`src/battle_ai_script_commands.c:1368-1376`).
@@ -566,7 +566,7 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 /// whose selected ability is not a trapping one.
 pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
     let [_, second] = target.ability_slots();
-    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.native_ability()) {
         Ok(())
     } else {
         Err(BattleError::AmbiguousPlayerAbility(target.species()))
@@ -576,7 +576,11 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
 /// targets admission allows: a true trapping ability, read directly
 /// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
-/// species' sole ability. No history lookup, no draw.
+/// species' sole ability. No history lookup, no draw. A Trace copy is the
+/// one history entry the read can reach: the drain ends in `RecordAbilityBattle`
+/// for the copied ability (`src/battle_util.c:3194`-`:3195`, `ABILITYEFFECT_TRACE`
+/// is below `ABILITYEFFECT_CHECK_OTHER_SIDE`), so a single-ability Trace
+/// holder reads as the ability it copied.
 ///
 /// # Errors
 ///

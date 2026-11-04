@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
 //! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate, Speed Boost,
-//! Color Change, Trace, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! Color Change, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 25] {
+fn refused() -> [(BattlePokemon, AbilityId); 20] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -31,17 +31,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 25] {
         (healthy(SpeciesId::NINJASK), AbilityId::SPEED_BOOST),
         (healthy(SpeciesId::YANMA), AbilityId::SPEED_BOOST),
         (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
-        (healthy(SpeciesId::PORYGON), AbilityId::TRACE),
-        (healthy(SpeciesId::PORYGON2), AbilityId::TRACE),
-        (mon(SpeciesId::RALTS, 1, Status1::Healthy), AbilityId::TRACE),
-        (
-            mon(SpeciesId::KIRLIA, 1, Status1::Healthy),
-            AbilityId::TRACE,
-        ),
-        (
-            mon(SpeciesId::GARDEVOIR, 1, Status1::Healthy),
-            AbilityId::TRACE,
-        ),
         (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
         (
             mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
@@ -394,7 +383,6 @@ fn an_always_refused_ability_is_refused_whatever_the_status() {
         (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
         (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
-        (SpeciesId::PORYGON, AbilityId::TRACE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
         (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
