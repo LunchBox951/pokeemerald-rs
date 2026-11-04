@@ -342,12 +342,21 @@ fn both_trainers_write_a_front_a_back_and_one_palette_in_id_order() {
 
 #[test]
 fn the_emitted_pack_resolves_both_trainers_in_both_directions() {
+    the_emitted_pack_resolves_both_trainers_under(&std::env::temp_dir());
+}
+
+/// The fixture body, with the temporary root it claims its scratch under
+/// passed in so the ownership regressions can hand it a root of their own.
+fn the_emitted_pack_resolves_both_trainers_under(temp_root: &std::path::Path) {
     let (pack, _) = run(&rom()).expect("well-formed tables");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-trainer-battlers-import-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&path, pack).unwrap();
+    let scratch = TempDir::under(temp_root, "pack");
+    let path = scratch.join("trainer-battlers.pack");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, &pack))
+        .expect("the pack lands in the fixture's own directory");
     let loaded = AssetPack::load(&path).expect("a loadable pack");
     for (trainer, front_byte, back_first, first_color) in [
         (TrainerPicId::BRENDAN, 0x21_u8, 0x12_u8, 0x0100_u16),
@@ -368,7 +377,6 @@ fn the_emitted_pack_resolves_both_trainers_in_both_directions() {
         assert_eq!(front.art.palette.color(0), Some(first_color));
         assert_eq!(back.art.palette.color(0), Some(first_color));
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -549,4 +557,96 @@ fn a_truncated_back_sheet_or_corrupt_front_stream_is_refused_and_queues_nothing(
     let err = write(&rom, &roots_of(family(&FRONTS, &BACKS)), &mut writer).unwrap_err();
     assert!(matches!(err, ImportError::Lz77 { .. }), "{err}");
     assert_eq!(writer.len(), 0);
+}
+
+/// A fresh directory under a temporary root, unique to this process and
+/// this call, removed on drop.
+///
+/// `create_dir`'s exclusivity settles the name, so the fixture never writes
+/// into, truncates, or unlinks a path it did not create. (The shared helpers
+/// in `tests/foundation.rs` and `lib.rs` are out of reach of this module.)
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        Self::under(&std::env::temp_dir(), label)
+    }
+
+    fn under(root: &std::path::Path, label: &str) -> Self {
+        let pid = std::process::id();
+        for attempt in 0..1_000u32 {
+            let path = root.join(format!(
+                "rom-import-trainer-battlers-{label}-{pid}-{attempt}"
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => panic!("a writable temp dir: {err}"),
+            }
+        }
+        panic!("no unused temp directory name for {label} under pid {pid}");
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.path.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// The name the pack fixture used to write to, which sat directly under the
+/// shared temporary root and was derived from nothing but the PID.
+fn the_old_fixture_name() -> String {
+    format!(
+        "pokeemerald-rs-trainer-battlers-import-{}.pack",
+        std::process::id()
+    )
+}
+
+// The regressions plant at the old name inside a temporary root of their
+// own, so no setup or cleanup here touches an entry in the shared one.
+
+#[test]
+fn the_pack_fixture_leaves_a_preexisting_file_at_its_old_path_untouched() {
+    let root = TempDir::new("root");
+    let planted = root.join(&the_old_fixture_name());
+    std::fs::write(&planted, b"not ours").unwrap();
+    the_emitted_pack_resolves_both_trainers_under(&root.path);
+    assert_eq!(std::fs::read(&planted).unwrap(), b"not ours");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_pack_fixture_does_not_follow_a_symlink_planted_at_its_old_path() {
+    let root = TempDir::new("root");
+    let foreign = root.join("foreign");
+    std::fs::write(&foreign, b"precious").unwrap();
+    let planted = root.join(&the_old_fixture_name());
+    std::os::unix::fs::symlink(&foreign, &planted).unwrap();
+    the_emitted_pack_resolves_both_trainers_under(&root.path);
+    let link_kept = std::fs::symlink_metadata(&planted).is_ok_and(|m| m.file_type().is_symlink());
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"precious");
+    assert!(link_kept, "the planted link was unlinked");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_pack_fixture_does_not_create_the_target_of_a_dangling_symlink_at_its_old_path() {
+    let root = TempDir::new("root");
+    let absent = root.join("absent");
+    let planted = root.join(&the_old_fixture_name());
+    std::os::unix::fs::symlink(&absent, &planted).unwrap();
+    the_emitted_pack_resolves_both_trainers_under(&root.path);
+    let link_kept = std::fs::symlink_metadata(&planted).is_ok_and(|m| m.file_type().is_symlink());
+    assert!(
+        !absent.exists(),
+        "the fixture wrote through the dangling link"
+    );
+    assert!(link_kept, "the planted link was unlinked");
 }
