@@ -76,3 +76,73 @@ fn order_by_depth_keeps_transparent_higher_priority_entry_from_raising_player() 
         .expect("player texel is opaque");
     assert_eq!(pixel.priority, 2, "player keeps its own OBJ priority");
 }
+
+/// A 16x16 OBJ at OAM `y` whose palette bank tags it.
+fn tagged_at(y: u8, bank: u8) -> SheetSprite {
+    SheetSprite::new(
+        OamEntry::new(
+            120,
+            y,
+            0,
+            bank,
+            rendering::BitDepth::Bpp4,
+            false,
+            false,
+            rendering::ObjShape::Square,
+            1,
+            2,
+            true,
+        ),
+        0,
+    )
+}
+
+fn banks_in_order(sprites: &[DepthSprite]) -> Vec<u8> {
+    order_sprites(sprites)
+        .iter()
+        .map(|sprite| sprite.palette_bank())
+        .collect()
+}
+
+/// Upstream `SortSprites` maps `oam.y >= 160` to `y - 256` before the tie
+/// (`sprite.c:385-389`), so a sprite at top -8 (OAM 248) sorts behind one
+/// at top +8 (`:413-415`).
+#[test]
+fn order_sprites_breaks_tie_by_signed_screen_y_across_top_boundary() {
+    let above = DepthSprite::with_subpriority(tagged_at(248, 0), 100);
+    let below = DepthSprite::with_subpriority(tagged_at(8, 1), 100);
+    let ordered = order_sprites(&[above.clone(), below.clone()]);
+    assert_eq!(
+        ordered[0].palette_bank(),
+        1,
+        "the sprite at screen top +8 must take the earlier OAM slot"
+    );
+    assert_eq!(ordered[0].oam().y(), 8, "the emitted Y stays wrapped");
+    assert_eq!(ordered[1].oam().y(), 248, "the emitted Y stays wrapped");
+    assert_eq!(
+        banks_in_order(&[below, above]),
+        [1, 0],
+        "input order does not matter once the Y keys differ"
+    );
+}
+
+/// The wrap point is `DISPLAY_HEIGHT` (`sprite.c:385`): OAM 160 is -96, so
+/// it sorts behind OAM 159 even though the raw byte is larger.
+#[test]
+fn order_sprites_breaks_tie_by_signed_screen_y_across_bottom_boundary() {
+    let last_row = DepthSprite::with_subpriority(tagged_at(159, 0), 100);
+    let wrapped = DepthSprite::with_subpriority(tagged_at(160, 1), 100);
+    assert_eq!(banks_in_order(&[wrapped.clone(), last_row.clone()]), [0, 1]);
+    assert_eq!(banks_in_order(&[last_row, wrapped]), [0, 1]);
+}
+
+/// Two wrapped Ys and two on-screen Ys keep the larger-Y-first order.
+#[test]
+fn order_sprites_keeps_larger_y_first_when_no_boundary_is_crossed() {
+    let high = DepthSprite::with_subpriority(tagged_at(8, 0), 100);
+    let low = DepthSprite::with_subpriority(tagged_at(40, 1), 100);
+    assert_eq!(banks_in_order(&[high, low]), [1, 0]);
+    let far = DepthSprite::with_subpriority(tagged_at(200, 2), 100);
+    let near = DepthSprite::with_subpriority(tagged_at(248, 3), 100);
+    assert_eq!(banks_in_order(&[far, near]), [3, 2]);
+}
