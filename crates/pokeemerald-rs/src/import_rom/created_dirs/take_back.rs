@@ -2,8 +2,8 @@
 //! removes a created level without trusting its mutable name.
 //!
 //! A level whose name still resolves to the identity captured at creation
-//! is renamed (no-replace) into a quarantine: one private directory per
-//! rollback, made beside the outermost level rollback may take back, so it
+//! and that holds no entries is renamed (no-replace) into a quarantine: one
+//! private directory per rollback, made beside the outermost level rollback may take back, so it
 //! is never inside a level it empties. A level on another filesystem than
 //! that quarantine (`EXDEV`, as behind a `..` into a mount) gets a
 //! quarantine of its own beside it, removed before the walk goes on; the
@@ -17,6 +17,7 @@
 //! This module walks the levels; the steps live in its children:
 //!
 //! - [`quarantine`] makes, vouches for and removes the quarantine.
+//! - [`occupied`] lists a held level, so one that holds entries is not moved.
 //! - [`restore`] captures a level into it, re-checks the capture, and unlinks
 //!   or puts it back.
 //! - [`report`] says on stderr where a level or quarantine was left.
@@ -31,11 +32,13 @@
 //! the import owns. The residuals of each step are documented with it, in
 //! [`restore`] and [`quarantine`].
 //!
-//! Rollback is also not crash-safe: a process killed after a level was
-//! renamed into its quarantine and before it was removed or put back leaves
-//! it at `.undo-<hex>/level` with no warning, and no later run looks for
-//! it. That level holds data only if another writer filled it, or swapped
-//! in its own directory, during the import.
+//! Rollback is also not crash-safe, but only for a level that gains entries
+//! in the instant between [`occupied`]'s listing and the rename: a level that
+//! holds entries when listed is left where it is, never moved. A process
+//! killed after an empty level was renamed into its quarantine and before it
+//! was removed leaves it at `.undo-<hex>/level` with no warning, and no later
+//! run looks for it. That level holds data only if another writer filled it,
+//! or swapped in its own directory, in that window.
 
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
@@ -46,6 +49,7 @@ use super::{same_directory_identity, CreatedDirectory};
 
 #[cfg(test)]
 mod hooks;
+mod occupied;
 mod quarantine;
 mod report;
 mod restore;
@@ -56,6 +60,7 @@ pub(super) use hooks::{
     take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
     take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
 };
+use occupied::level_holds_entries;
 use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
@@ -64,7 +69,7 @@ pub(super) use report::located_beside;
 use report::{warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{is_this_level, take_back_into};
+use restore::{holds_this_level, is_this_level, take_back_into};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -131,6 +136,26 @@ pub(super) fn undo_created_directories_with_capture_hooks(
         match looked_up {
             Ok((_, true)) => {
                 before_take();
+                // A level that holds entries is not moved at all: once in a
+                // quarantine, a crash would leave them hidden there.
+                match level_holds_entries(dir) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        leave_unmoved(
+                            parent,
+                            dir,
+                            "it holds entries",
+                            "it holds entries, so rollback did not move it into a cleanup directory",
+                        );
+                        break;
+                    }
+                    Err(err) => {
+                        let unlisted =
+                            format!("it could not be listed: {}", std::io::Error::from(err));
+                        leave_unmoved(parent, dir, &unlisted, &unlisted);
+                        break;
+                    }
+                }
                 if quarantine.is_none() {
                     quarantine = claim_quarantine(created, dir);
                 }
@@ -197,6 +222,36 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     }
     if let Some(held) = quarantine {
         remove_quarantine(&held, &mut || {});
+    }
+}
+
+/// Reports that `dir` is not moved because of `state` (it holds entries, or
+/// could not be listed). The check read the held original, so if another
+/// writer moved it since the name was validated, it is reported where it
+/// stands now, not under its old name. `in_place` is the reason given when
+/// the original is still at its name.
+fn leave_unmoved(parent: &OwnedFd, dir: &CreatedDirectory, state: &str, in_place: &str) {
+    match holds_this_level(parent.as_fd(), &dir.name, dir) {
+        Ok(true) => warn_left_standing(
+            dir,
+            format_args!("{in_place}; the levels above it are left too"),
+        ),
+        Ok(false) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{state} and another entry has taken its name; the levels above it are left too"
+                ),
+            );
+            warn_if_moved_away(dir);
+        }
+        Err(err) => warn_left_standing(
+            dir,
+            format_args!(
+                "{state} and could not be examined under its name: {}; the levels above it are left too",
+                std::io::Error::from(err)
+            ),
+        ),
     }
 }
 
