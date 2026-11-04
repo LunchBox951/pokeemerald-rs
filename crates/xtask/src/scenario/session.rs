@@ -81,13 +81,12 @@ impl PackSelection {
 /// that check and the following pathname operation remains possible there for
 /// a write. Windows refuses a scratch volume without stable file IDs (FAT,
 /// exFAT) when it claims the directory, before anything is written, and
-/// cleanup checks again before it removes anything. Windows cleanup is a
-/// handle walk: it lists the held directory, opens each child by
-/// name under the held root without following reparse points and with no
-/// delete sharing, verifies the opened 128-bit file ID against the listing
-/// before deleting through that handle, and recurses through the
-/// child's own handle, so a child swapped in under the root is refused as on
-/// Unix. `OpenFileById` is not used because it sits behind `windows-sys`'s
+/// cleanup checks again before it removes anything: only there is a file ID a
+/// stable identity rather than a directory-entry slot a replacement can reuse.
+/// Windows cleanup opens each listed child by name under its held parent and
+/// deletes it only through a handle whose 128-bit file ID matches the
+/// listing, so a child swapped in under the root is refused as on Unix.
+/// `OpenFileById` is not used because it sits behind `windows-sys`'s
 /// `Win32_Security` feature, outside the approved surface. The open hold is
 /// also a descendant handle of every ancestor of the scratch directory, and
 /// NTFS refuses to rename a directory with an open handle in its subtree;
@@ -138,6 +137,19 @@ impl Scratch {
     /// replacement that lands between `create_dir` and this open is therefore
     /// adopted only if it is itself an empty private directory.
     fn claim(path: PathBuf) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        let require_volume = require_unique_file_ids;
+        #[cfg(not(windows))]
+        let require_volume = |_: &std::fs::File| Ok(());
+        Self::claim_with(path, require_volume)
+    }
+
+    /// [`Self::claim`] with the scratch volume's check injected, so a test can
+    /// refuse the volume. Only Windows checks the volume (see [`Scratch`]).
+    fn claim_with(
+        path: PathBuf,
+        require_volume: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
         let hold = open_hold(&path)?;
         let mut scratch = Self {
             path,
@@ -151,13 +163,11 @@ impl Scratch {
             scratch.hold = None;
             return Err(error);
         }
-        // Windows cleanup can verify entries only on a volume with stable
-        // file IDs, so refuse any other volume here, before anything is
-        // written, rather than leave the session's media behind at drop. The
-        // directory is proven ours and still empty, so it goes with the same
-        // empty-only `remove_dir` that ends a normal cleanup.
-        #[cfg(windows)]
-        if let Err(error) = scratch.hold().and_then(require_unique_file_ids) {
+        // Refuse an unsupported volume before anything is written, rather
+        // than leave the session's media behind at drop. The directory is
+        // proven ours and still empty, so it goes with the same empty-only
+        // `remove_dir` that ends a normal cleanup.
+        if let Err(error) = scratch.hold().and_then(require_volume) {
             scratch.hold = None;
             let _ = std::fs::remove_dir(&scratch.path);
             return Err(error);
@@ -278,8 +288,7 @@ impl Scratch {
         #[cfg(windows)]
         {
             // The hold shares no delete access, so while the contents go the
-            // root can be neither renamed away nor replaced; the walk is
-            // handle-based and refuses a swapped-in child.
+            // root can be neither renamed away nor replaced.
             remove_contents(self.hold()?, path, &mut |_| {})?;
             // The hold denies deleting the root itself, so it is released for
             // an empty-only `remove_dir`: a replacement that wins that instant

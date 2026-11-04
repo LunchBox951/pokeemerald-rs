@@ -823,6 +823,59 @@ fn a_held_scratch_directory_keeps_its_parent_from_being_renamed() {
     );
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn a_refused_scratch_volume_fails_the_claim_and_removes_the_empty_directory() {
+    let base = private_base("refused-volume");
+    let path = base.join("scratch");
+    create_private_dir(&path).unwrap();
+    let mut checked = false;
+    let result = Scratch::claim_with(path, |_| {
+        checked = true;
+        Err(std::io::Error::other("injected unsupported volume"))
+    });
+    let left: Vec<_> = std::fs::read_dir(&base)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(checked, "the claim must check the volume");
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "injected unsupported volume"
+    );
+    assert!(
+        left.is_empty(),
+        "nothing is written and the empty scratch directory is removed: {left:?}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_cleanup_on_a_refused_volume_removes_nothing() {
+    let scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+    let save_dir = scratch.path.join("save");
+    std::fs::create_dir(&save_dir).unwrap();
+    std::fs::write(save_dir.join(SAVE_FILE_NAME), b"save").unwrap();
+    std::fs::write(scratch.path.join(PACK_FILE_NAME), b"pack").unwrap();
+    let mut reached = Vec::new();
+    let result = hold::remove_contents_with(
+        scratch.hold().unwrap(),
+        &scratch.path,
+        &|_| Err(std::io::Error::other("injected unsupported volume")),
+        &mut |name| reached.push(name.to_owned()),
+    );
+    let pack = std::fs::read(scratch.path.join(PACK_FILE_NAME));
+    let save = std::fs::read(save_dir.join(SAVE_FILE_NAME));
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "injected unsupported volume"
+    );
+    assert!(reached.is_empty(), "no entry is reached: {reached:?}");
+    assert_eq!(pack.unwrap(), b"pack");
+    assert_eq!(save.unwrap(), b"save");
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn a_failed_readable_open_restores_the_original_mode_and_propagates() {

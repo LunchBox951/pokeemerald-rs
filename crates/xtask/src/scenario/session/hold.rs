@@ -254,27 +254,27 @@ pub(super) fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
-/// Empties `dir` (held as `dir`, named by `dir_path`) with a handle-based walk,
-/// the Windows counterpart of the Unix `remove_contents`. The volume must
-/// support opening by file ID (NTFS and `ReFS` do; FAT and exFAT, whose IDs
-/// follow directory-entry slots, do not), or nothing is removed. The entries
-/// are listed through the held handle ([`win_fs::list_directory_by_file_id`],
-/// which carries each entry's full 128-bit file ID; the 64-bit form is not
-/// unique on `ReFS`). Each entry is then opened by name under the held
-/// directory with `DELETE` access, no delete sharing and without following a
-/// reparse point, and is refused unless the opened handle's 128-bit file ID
-/// ([`win_fs::wide_file_id`]) is the one the listing named. Deletion goes
-/// through that verified handle with POSIX semantics, ignoring the read-only
-/// attribute ([`win_fs::delete_through_handle_ignoring_read_only`]), and
-/// subdirectories recurse through their own handles, which keep them from
-/// being renamed while they are emptied. The name is resolved once, so a
-/// swapped-in entry fails the ID check and is left alone. `OpenFileById` is
-/// not used: it sits behind `windows-sys`'s `Win32_Security` feature, outside
-/// the approved `Win32_Storage_FileSystem` surface.
+/// Empties `dir` (held as `dir`, named by `dir_path`) through handles, the
+/// Windows counterpart of the Unix `remove_contents`, and removes nothing on a
+/// volume [`require_unique_file_ids`] refuses. [`Scratch`](super::Scratch)
+/// owns the contract: why each entry's 128-bit file ID is verified, why the
+/// volume must have stable IDs, and why `OpenFileById` is not used.
 #[cfg(windows)]
 pub(super) fn remove_contents(
     dir: &std::fs::File,
     dir_path: &Path,
+    before_remove: &mut dyn FnMut(&std::ffi::OsStr),
+) -> std::io::Result<()> {
+    remove_contents_with(dir, dir_path, &require_unique_file_ids, before_remove)
+}
+
+/// [`remove_contents`] with the volume check injected, so a test can refuse
+/// the volume.
+#[cfg(windows)]
+pub(super) fn remove_contents_with(
+    dir: &std::fs::File,
+    dir_path: &Path,
+    require_volume: &dyn Fn(&std::fs::File) -> std::io::Result<()>,
     before_remove: &mut dyn FnMut(&std::ffi::OsStr),
 ) -> std::io::Result<()> {
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -284,7 +284,7 @@ pub(super) fn remove_contents(
     const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    require_unique_file_ids(dir)?;
+    require_volume(dir)?;
     for entry in win_fs::list_directory_by_file_id(dir)? {
         // A test seam: the instant between the listing and the open.
         before_remove(&entry.name);
@@ -300,7 +300,7 @@ pub(super) fn remove_contents(
             ));
         }
         if entry.is_real_directory() {
-            remove_contents(&child, &child_path, before_remove)?;
+            remove_contents_with(&child, &child_path, require_volume, before_remove)?;
         }
         // The entry goes when this handle closes (or, after the legacy
         // fallback, when the last handle to it closes).
@@ -311,10 +311,8 @@ pub(super) fn remove_contents(
 }
 
 /// Refuses a volume that cannot open a file by its ID
-/// ([`win_fs::volume_supports_open_by_file_id`]): only there is a file ID a
-/// stable identity rather than a directory-entry position that a replacement
-/// can reuse. The claim runs this before the session writes anything, and
-/// cleanup runs it again before it removes anything.
+/// ([`win_fs::volume_supports_open_by_file_id`]); [`Scratch`](super::Scratch)
+/// says why, and when the claim and cleanup run this.
 #[cfg(windows)]
 pub(super) fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
     if !win_fs::volume_supports_open_by_file_id(dir)? {
