@@ -1,5 +1,5 @@
-//! Vouching for a level right after `mkdirat` made it, where the name may
-//! already hold a replacement.
+//! Claiming a level right after `mkdirat` made it, where a writer of the
+//! parent may take its name.
 
 use super::*;
 
@@ -22,14 +22,66 @@ fn create_as(
     )
 }
 
+/// The names in `dir` the creation made privately.
+fn private_entries(dir: &std::path::Path) -> Vec<String> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    entry_names(dir)
+        .into_iter()
+        .filter(|name| name.starts_with(".import-"))
+        .collect()
+}
+
 #[test]
-fn a_level_of_another_user_is_neither_recorded_nor_descended_into() {
-    // Swapping in a directory of another user needs root, so this makes the
-    // level `mkdirat` just made stand for one by expecting a different
-    // user: what is refused is a level the walk cannot vouch is its user's.
-    let dir = TempDir::new("level-of-another-user");
+fn a_replacement_put_at_a_levels_name_after_mkdir_is_not_claimed() {
+    // The hook runs right after `mkdirat` succeeded, before anything looks
+    // at the new directory -- the window in which `statat` used to take a
+    // replacement's identity, after which every check against it agreed. It
+    // puts an empty directory of this same user at the level's name, moving
+    // the one `mkdirat` made out of the way if that is already there.
+    let dir = TempDir::new("swap-after-mkdir");
     let first = dir.join("a");
     let target = first.join("b");
+    let moved = dir.join("a-original");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut swapped = 0;
+
+    let creation = create_as(&target, owner, &mut || {
+        if swapped == 0 {
+            swapped += 1;
+            if first.exists() {
+                fs::rename(&first, &moved).unwrap();
+            }
+            fs::create_dir(&first).unwrap();
+        }
+    })
+    .expect("the destination is created inside the directory that was there");
+
+    assert_eq!(swapped, 1, "the replacement was put in place once");
+    assert_eq!(
+        creation
+            .created
+            .iter()
+            .map(|level| level.name.clone())
+            .collect::<Vec<_>>(),
+        ["b"],
+        "only the level made inside the replacement is recorded, not the replacement"
+    );
+    super::undo_created_directories(&creation.created);
+    assert!(first.is_dir(), "rollback removed the replacement");
+    assert!(!target.exists(), "the level inside it is taken back");
+    assert_eq!(private_entries(&dir.path), Vec::<String>::new());
+    assert_eq!(private_entries(&first), Vec::<String>::new());
+}
+
+#[test]
+fn a_level_of_another_user_is_refused_and_leaves_nothing_behind() {
+    // Swapping in a directory of another user needs root, so the walk is
+    // told to expect a different user instead: what is refused is a
+    // directory it cannot vouch is its user's.
+    let dir = TempDir::new("level-of-another-user");
+    let target = dir.join("a").join("b");
     let owner = rustix::process::geteuid().as_raw();
     let mut after_mkdir = 0;
 
@@ -40,64 +92,34 @@ fn a_level_of_another_user_is_neither_recorded_nor_descended_into() {
         panic!("a level of another user was accepted as the level `mkdirat` made");
     };
     assert!(created.is_empty(), "the level was recorded");
-    assert!(!target.exists(), "a level was created inside it");
-    super::undo_created_directories(&created);
-    assert!(first.is_dir(), "rollback removed a level it never recorded");
+    assert_eq!(entry_names(&dir.path), Vec::<String>::new());
 }
 
 #[test]
-fn a_replacement_of_another_user_swapped_in_after_mkdir_is_neither_recorded_nor_descended_into() {
-    // The seam sits after `mkdirat` and before the `statat` that used to take
-    // the replacement's identity, after which every check against it agreed.
-    // Only root can hand a replacement to another user, so this one runs
-    // there; `a_level_of_another_user_is_neither_recorded_nor_descended_into`
-    // covers the same refusal for everyone else.
-    if rustix::process::geteuid().as_raw() != 0 {
-        eprintln!("skipped: chowning the replacement to another user needs root");
-        return;
-    }
-    let dir = TempDir::new("swap-after-mkdir");
+fn a_level_is_made_under_a_private_name_until_it_is_claimed() {
+    let dir = TempDir::new("after-mkdir-seam");
     let first = dir.join("a");
     let target = first.join("b");
-    let moved = dir.join("a-original");
-
-    let result = create_as(&target, 0, &mut || {
-        fs::rename(&first, &moved).unwrap();
-        fs::create_dir(&first).unwrap();
-        rustix::fs::chown(&first, Some(rustix::fs::Uid::from_raw(65534)), None).unwrap();
-    });
-
-    let Err((created, _)) = result else {
-        panic!("a replacement was accepted as the level `mkdirat` made");
-    };
-    assert!(created.is_empty(), "the replacement was recorded");
-    assert!(
-        !target.exists(),
-        "a level was created inside the replacement"
-    );
-    super::undo_created_directories(&created);
-    assert!(first.is_dir(), "rollback removed the replacement");
-    assert!(moved.is_dir(), "the level `mkdirat` made is left standing");
-}
-
-#[test]
-fn a_level_is_looked_at_only_after_its_mkdir_has_succeeded() {
-    let dir = TempDir::new("after-mkdir-seam");
-    let target = dir.join("a").join("b");
     let owner = rustix::process::geteuid().as_raw();
     let mut seen = Vec::new();
 
     let creation = create_as(&target, owner, &mut || {
-        seen.push((dir.join("a").is_dir(), target.is_dir()));
+        seen.push((
+            private_entries(&dir.path).len() + private_entries(&first).len(),
+            first.join("b").exists(),
+            first.exists() && private_entries(&dir.path).is_empty(),
+        ));
     })
     .expect("both levels are created");
 
     assert_eq!(creation.created.len(), 2);
     assert_eq!(
         seen,
-        [(true, false), (true, true)],
-        "the seam runs once per level, with its directory already made"
+        [(1, false, false), (1, false, true)],
+        "each level exists only under its private name when the seam runs"
     );
+    assert_eq!(private_entries(&dir.path), Vec::<String>::new());
+    assert_eq!(private_entries(&first), Vec::<String>::new());
 }
 
 #[test]

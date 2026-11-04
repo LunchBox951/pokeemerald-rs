@@ -1,30 +1,34 @@
-//! Making a level and reopening it, vouching that it is ours.
+//! Making a level and claiming the directory `mkdirat` made.
 //!
-//! `mkdirat` hands back no descriptor, so between it and the first look at
-//! the name another writer of the parent can exchange the new directory for
-//! one it prepared. The identity read afterwards then belongs to the
-//! replacement, and every later check against that identity agrees. What
-//! those checks cannot show is whose directory it is, so a level is
-//! recorded and pinned only when it is also a directory owned by the
-//! current user ([`made_by`]); a replacement owned by anyone else is refused
-//! and left unrecorded.
+//! `mkdirat` hands back no descriptor, so a level made at its final name can
+//! be exchanged by another writer of the parent for a directory it prepared
+//! before anything looks at the name. The identity read afterwards then
+//! belongs to the replacement, and every later check against that identity
+//! agrees. Where the platform can rename without replacing (Linux, Android,
+//! Apple), a level is made instead under a private name no other account
+//! can predict, opened by that name so its identity is read from a
+//! descriptor, and only then renamed (no-replace) into place; a name someone
+//! else took meanwhile is theirs, and the private directory is removed. The
+//! reopen that follows compares the name against that identity, so a swap
+//! after the claim is refused too. Elsewhere a level is made at its final
+//! name and a same-user replacement in the gap cannot be told apart.
 //!
-//! # Accepted residual
+//! # Accepted residuals
 //!
-//! A replacement prepared by a writer running as this same user passes that
-//! check, and no stat or open through the name can tell it from the level
-//! `mkdirat` made. Such a writer can already delete or rewrite everything
-//! the import owns (see `take_back`), and rollback removes only a level that
-//! is still empty, so the cost is an empty directory of that writer's taken
-//! back. A new level is not required to be empty: a second import creating
-//! beneath it may legitimately have put an entry there already.
+//! A writer of the parent running as this user who lists it fast enough to
+//! find the private name before it is opened can still exchange it. Such a
+//! writer can already delete or rewrite everything the import owns (see
+//! `take_back`), and a level is refused unless it is a directory of this
+//! user's. A swap after the reopen is `take_back`'s to withstand. A new
+//! level is not required to be empty: a second import creating beneath it
+//! may legitimately have put an entry there already.
 
 use std::ffi::OsStr;
 use std::io;
 
 use super::{
     dest, is_out_of_descriptors, is_out_of_descriptors_io, same_directory_identity,
-    sync_and_shed_outermost_pinned_level, CreatedDirectory,
+    sync_and_shed_outermost_pinned_level, take_back, CreatedDirectory,
 };
 
 /// `mkdirat`s `name` in `parent`, shedding a pin and retrying while
@@ -48,6 +52,125 @@ pub(super) fn mkdir_level(
                     && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
             result => return result,
         }
+    }
+}
+
+/// Makes the level `name` in `parent` and answers with the identity of the
+/// directory this call made, owned by `owner`. `after_mkdir` runs once the
+/// directory is made and before anything looks at it, where a test replaces
+/// it.
+///
+/// Where the platform can rename without replacing, the directory is made
+/// under a private name no other account can predict, opened by that name,
+/// and stat'ed through the descriptor; only then is it renamed (no-replace)
+/// to `name`. A writer of `parent` cannot exchange it for its own before
+/// the identity is taken, since it cannot know the name, and a swap of the
+/// private name after that leaves `name` holding a directory other than the
+/// identity returned, which the reopen refuses. A `name` that is already
+/// taken fails the call as `mkdirat` would have, and the private directory
+/// is removed. Elsewhere there is no such rename, so the directory is made
+/// at `name` and stat'ed there, which a same-user writer can race.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+pub(super) fn claim_level(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    after_mkdir: &mut dyn FnMut(),
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<rustix::fs::Stat> {
+    let hex = loop {
+        match take_back::unguessable_hex() {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            result => break result?,
+        }
+    };
+    let private = std::ffi::OsString::from(format!(".import-{hex}"));
+    mkdir_level(created, pin_from, parent, &private, sync_reopen)?;
+    after_mkdir();
+    let claimed =
+        identity_of(created, pin_from, parent, &private, owner, sync_reopen).and_then(|identity| {
+            take_back::rename_without_replacing(&**parent, &private, &**parent, name)
+                .map(|()| identity)
+                .map_err(io::Error::from)
+        });
+    if claimed.is_err() {
+        // Best effort: a directory left under the private name is empty and
+        // harmless, and the failure being reported is the real one.
+        let _ = rustix::fs::unlinkat(&**parent, &private, rustix::fs::AtFlags::REMOVEDIR);
+    }
+    claimed
+}
+
+/// [`claim_level`] where there is no no-replace rename: the directory is made
+/// at `name` itself.
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+))]
+pub(super) fn claim_level(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    after_mkdir: &mut dyn FnMut(),
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<rustix::fs::Stat> {
+    mkdir_level(created, pin_from, parent, name, sync_reopen)?;
+    after_mkdir();
+    let found = loop {
+        match rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Err(err)
+                if is_out_of_descriptors(err)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            result => break result?,
+        }
+    };
+    vouch_owned_by(found, owner)
+}
+
+/// The identity of the directory `name` in `parent`, read through a
+/// descriptor opened by that name and dropped again, so no descriptor is
+/// held across the rename that follows.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn identity_of(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<rustix::fs::Stat> {
+    let held = loop {
+        match dest::open_created_directory_at(parent, name) {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            result => break result?,
+        }
+    };
+    vouch_owned_by(rustix::fs::fstat(&held)?, owner)
+}
+
+/// `identity` if it is a directory of `owner`'s, else the refusal.
+#[cfg(unix)]
+fn vouch_owned_by(identity: rustix::fs::Stat, owner: u32) -> io::Result<rustix::fs::Stat> {
+    if made_by(&identity, owner) {
+        Ok(identity)
+    } else {
+        Err(io::Error::other(
+            "directory level is not a directory owned by this user",
+        ))
     }
 }
 

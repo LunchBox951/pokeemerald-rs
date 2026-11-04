@@ -6,9 +6,10 @@
 //! through its pinned parent, and only while the name there still resolves
 //! to the identity captured at creation; any level the check cannot vouch
 //! for, including one past [`pin_budget`] or whose pin was shed to free a
-//! descriptor, is left standing. A level is pinned only after `acquire`
-//! has vouched that it is a directory of this user's, since `mkdir`
-//! returns no descriptor and the name may already hold a replacement. Off Unix each level is addressed by path.
+//! descriptor, is left standing. A level is recorded only after `acquire`
+//! has claimed it under a private name, since `mkdir` returns no descriptor
+//! and a name made in a directory others can write may be taken by a
+//! replacement. Off Unix each level is addressed by path.
 //!
 //! Durability lives in `sync`; the Unix take-back protocol, and the
 //! residuals it accepts, in `take_back`.
@@ -226,13 +227,13 @@ fn create_directories_with_hooks(
     .map(|creation| creation.created)
 }
 
-/// Records a level just `mkdirat`ed at `name` in `parent_fd`: captures its
-/// identity, reopens it, and answers with the descriptor the next level
-/// descends through.
+/// Records a level just claimed at `name` in `parent_fd` with `identity`:
+/// reopens it, and answers with the descriptor the next level descends
+/// through.
 #[cfg(unix)]
 #[expect(
     clippy::too_many_arguments,
-    reason = "the walk state, the pin window, the expected owner and the two test seams are all needed to reopen one level"
+    reason = "the walk state, the pin window, the claimed identity and the two test seams are all needed to reopen one level"
 )]
 fn create_missing_level(
     created: &mut Vec<CreatedDirectory>,
@@ -241,32 +242,14 @@ fn create_missing_level(
     parent_fd: std::rc::Rc<std::os::fd::OwnedFd>,
     path: PathBuf,
     name: std::ffi::OsString,
-    owner: u32,
+    identity: rustix::fs::Stat,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
     // `fstat` takes no descriptor, so it cannot fail for want of one.
     let parent_identity = rustix::fs::fstat(&*parent_fd)?;
-    // The identity is captured before the reopen so a failed reopen cannot
-    // un-record a level that was made; anything but a directory at the name
-    // is a swap and is refused.
-    let found = loop {
-        match rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-            Err(err)
-                if is_out_of_descriptors(err)
-                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            result => break result,
-        }
-    };
-    let identity = match found {
-        Ok(found) if made_by(&found, owner) => found,
-        Ok(_) => {
-            return Err(io::Error::other(
-                "directory level was replaced during creation",
-            ));
-        }
-        Err(source) => return Err(source.into()),
-    };
+    // `identity` was taken before the reopen so a failed reopen cannot
+    // un-record a level that was made.
     // The new entry is synced while its parent is still held: shedding may
     // later find no slot to reopen the parent for a sync, and a parent off
     // the destination's ancestry is out of [`sync_shed_parents`]'s reach.
@@ -395,7 +378,7 @@ fn create_directories_pinned_with_hooks(
 
 /// [`create_directories_pinned_with_hooks`] with `after_mkdir`, the seam
 /// where a test replaces a level right after its `mkdirat` succeeded and
-/// before anything looks at the name, and `owner`, the user a level must
+/// before anything looks at it, and `owner`, the user a level must
 /// belong to; production passes a no-op and its own effective user.
 #[cfg(unix)]
 #[expect(
@@ -453,9 +436,17 @@ fn create_directories_pinned_after_mkdir(
             };
             continue;
         };
-        match mkdir_level(&mut created, &mut pin_from, &parent_fd, &name, sync_reopen) {
-            Ok(()) => {
-                after_mkdir();
+        let claimed = claim_level(
+            &mut created,
+            &mut pin_from,
+            &parent_fd,
+            &name,
+            owner,
+            after_mkdir,
+            sync_reopen,
+        );
+        match claimed {
+            Ok(identity) => {
                 match create_missing_level(
                     &mut created,
                     &mut pin_from,
@@ -463,7 +454,7 @@ fn create_directories_pinned_after_mkdir(
                     parent_fd,
                     level,
                     name,
-                    owner,
+                    identity,
                     before_reopen,
                     sync_reopen,
                 ) {
@@ -497,7 +488,7 @@ fn create_directories_pinned_after_mkdir(
                         Err(source) => return Err((created, source)),
                     }
                 } else {
-                    return Err((created, mkdir_err.into()));
+                    return Err((created, mkdir_err));
                 }
             }
         }
@@ -571,7 +562,7 @@ mod sync;
 mod take_back;
 
 #[cfg(unix)]
-use acquire::{made_by, mkdir_level, reopen_created_level, ReopenedLevel};
+use acquire::{claim_level, reopen_created_level, ReopenedLevel};
 
 #[cfg(unix)]
 use sync::sync_and_shed_outermost_pinned_level;
