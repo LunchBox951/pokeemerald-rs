@@ -22,9 +22,10 @@ impl Battle {
     /// which cancels the series and ends the move before any critical-hit,
     /// variance or effect-chance draw. A landed attempt then advances the
     /// series ([`next_attempt`]) and runs the ordinary damage script at the
-    /// series' power. The effect-chance draw is spent although the move has no
-    /// secondary effect, as `Cmd_seteffectwithchance` evaluates `Random()`
-    /// first (`battle_script_commands.c:2923`).
+    /// series' power, reporting a super- or not-very-effective matchup after
+    /// the hit as the ordinary pipeline does. The effect-chance draw is spent
+    /// although the move has no secondary effect, as `Cmd_seteffectwithchance`
+    /// evaluates `Random()` first (`battle_script_commands.c:2923`).
     ///
     /// # Errors
     ///
@@ -96,6 +97,10 @@ impl Battle {
             damage: hp_lost,
             is_critical,
         });
+        // `BattleScript_HitFromCritCalc`'s `resultmessage` prints the matchup
+        // ahead of `seteffectwithchance` and `tryfaintmon`
+        // (`data/battle_scripts_1.s:263`-`:266`).
+        self.push_type_effectiveness(attacker_is_player, move_id, events);
         spend_effect_chance_draw(
             &self.dex,
             move_id,

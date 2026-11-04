@@ -6,6 +6,7 @@
 //! (`src/battle_util.c:107`-`:110`).
 
 mod cancellation;
+mod effectiveness;
 mod selection;
 mod series;
 
