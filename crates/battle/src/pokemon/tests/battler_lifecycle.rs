@@ -557,12 +557,17 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
     let mut mon = sample_mon(&dex);
     mon.stages_mut().speed = StatStage::new(2).unwrap();
     mon.volatiles_mut().set_confusion(3);
+    mon.volatiles_mut().set_yawn();
     mon.set_status1(Status1::Paralysed);
     mon.clear_battle_scratch();
     assert_eq!(mon.stages(), StatStages::default());
     assert!(
         !mon.volatiles().confused(),
         "confusion is battle-only scratch, cleared with every other volatile"
+    );
+    assert!(
+        !mon.volatiles().drowsy(),
+        "Yawn's drowsiness is STATUS3_YAWN, zeroed with the rest of status3"
     );
     assert_eq!(
         mon.status1(),

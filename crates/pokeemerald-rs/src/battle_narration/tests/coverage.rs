@@ -118,6 +118,13 @@ fn move_events() -> Vec<BattleEvent> {
 fn ability_and_status_events() -> Vec<BattleEvent> {
     let (by_player, move_id) = (BY_PLAYER, MOVE);
     vec![
+        BattleEvent::MadeDrowsy { by_player, move_id },
+        BattleEvent::YawnAbilityProtected {
+            by_player,
+            move_id,
+            ability: AbilityId::INSOMNIA,
+        },
+        BattleEvent::FellAsleepFromYawn { by_player },
         BattleEvent::SoundproofProtected { by_player, move_id },
         BattleEvent::Paralyzed { by_player, move_id },
         BattleEvent::AlreadyParalyzed { by_player, move_id },
@@ -201,7 +208,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 70;
+const VARIANTS: usize = 73;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -278,6 +285,9 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FrozenSolid { .. } => 67,
         BattleEvent::Thawed { .. } => 68,
         BattleEvent::ThawedByMove { .. } => 69,
+        BattleEvent::MadeDrowsy { .. } => 70,
+        BattleEvent::YawnAbilityProtected { .. } => 71,
+        BattleEvent::FellAsleepFromYawn { .. } => 72,
     }
 }
 

@@ -24,7 +24,7 @@ use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
     burn_residual_damage, draw_freeze_canceller, draws_full_paralysis, draws_shed_skin_cure,
-    poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
+    poison_residual_damage, tick_sleep, try_inflict_sleep, FreezeCanceller, SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
@@ -1039,6 +1039,7 @@ impl Battle {
             } else {
                 self.enemy.volatiles_mut().tick_charge();
             }
+            self.apply_yawn_residual(is_player, rng, events);
             let now_fainted = if is_player {
                 self.player.is_fainted()
             } else {
@@ -1052,6 +1053,33 @@ impl Battle {
             }
         }
         Ok(())
+    }
+
+    /// `ENDTURN_YAWN` (`pokeemerald/src/battle_util.c:1753`-`:1771`): a living
+    /// drowsy battler ticks once per end of turn, after its own Charge tick.
+    /// The first tick draws nothing. The expiring tick clears the drowsiness
+    /// and, only if sleep can land, draws one `(Random() & 3) + 2` duration
+    /// ([`try_inflict_sleep`]); a refused expiry is silent and draws nothing.
+    fn apply_yawn_residual(
+        &mut self,
+        is_player: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let battler = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if battler.is_fainted() || !battler.volatiles_mut().tick_yawn() {
+            return;
+        }
+        if let Some(asleep) = try_inflict_sleep(battler.status1(), battler.ability(), rng) {
+            battler.set_status1(asleep);
+            events.push(BattleEvent::FellAsleepFromYawn {
+                by_player: is_player,
+            });
+        }
     }
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {

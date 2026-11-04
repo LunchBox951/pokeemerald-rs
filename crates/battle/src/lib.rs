@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the nine pipelines
+//! one of the battle scripts this crate reproduces — the ten pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -41,6 +41,7 @@
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
+//! | `battle::execute::yawn` | `BattleScript_EffectYawn` |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -245,7 +246,7 @@
 //! status for a poison landing and the *defender*'s Own
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing) —
-//! and the move effects the nine
+//! and the move effects the ten
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and

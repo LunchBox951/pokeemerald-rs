@@ -26,6 +26,7 @@ const SLOTS: &[(u16, &str)] = &[
     (30, "{B_PLAYER_NAME} got ¥{B_BUFF1}\nfor winning!\\p"),
     (31, "{B_PLAYER_NAME} is out of\nusable POKéMON!\\p"),
     (32, "{B_PLAYER_NAME} whited out!"),
+    (35, "{B_EFF_NAME_WITH_PREFIX}\nfell asleep!"),
     (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
     (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
@@ -36,6 +37,7 @@ const SLOTS: &[(u16, &str)] = &[
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
+    (182, "{B_ATK_NAME_WITH_PREFIX} made\n{B_DEF_NAME_WITH_PREFIX} drowsy!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
     (209, "sharply "),
@@ -57,6 +59,7 @@ const SLOTS: &[(u16, &str)] = &[
     (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
+    (346, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade it ineffective!"),
     (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
 ];
 
@@ -340,6 +343,53 @@ fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
             "Wild PARAS's EFFECT SPORE\nmade TORCHIC sleep!",
             "Wild PARAS's EFFECT SPORE\npoisoned TORCHIC!",
             "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectYawn` names the user and target in
+/// `STRINGID_PKMNWASMADEDROWSY`; an Insomnia or Vital Spirit holder is the
+/// scripting battler of `STRINGID_PKMNSXMADEITINEFFECTIVE`; the expiry's
+/// `BattleScript_YawnMakesAsleep` names the drowsy battler as the effect
+/// battler (`data/battle_scripts_1.s:2451`-`:2473`, `:3878`-`:3885`).
+#[test]
+fn yawn_names_the_user_the_target_and_the_battler_that_fell_asleep() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::YAWN;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::MadeDrowsy {
+                    by_player: true,
+                    move_id
+                },
+                BattleEvent::MadeDrowsy {
+                    by_player: false,
+                    move_id
+                },
+                BattleEvent::YawnAbilityProtected {
+                    by_player: true,
+                    move_id,
+                    ability: AbilityId::INSOMNIA
+                },
+                BattleEvent::YawnAbilityProtected {
+                    by_player: false,
+                    move_id,
+                    ability: AbilityId::VITAL_SPIRIT
+                },
+                BattleEvent::FellAsleepFromYawn { by_player: true },
+                BattleEvent::FellAsleepFromYawn { by_player: false },
+            ]
+        )),
+        [
+            "TORCHIC made\nWild RATTATA drowsy!",
+            "Wild RATTATA made\nTORCHIC drowsy!",
+            "Wild RATTATA's INSOMNIA\nmade it ineffective!",
+            "TORCHIC's VITAL SPIRIT\nmade it ineffective!",
+            "TORCHIC\nfell asleep!",
+            "Wild RATTATA\nfell asleep!",
         ]
     );
 }

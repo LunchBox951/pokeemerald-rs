@@ -341,6 +341,7 @@ fn a_switch_resets_the_outgoing_battlers_scratch_and_history_only() {
     battle.enemy.volatiles_mut().set_defense_curl();
     battle.enemy.volatiles_mut().set_confusion(3);
     battle.enemy.volatiles_mut().activate_flash_fire();
+    battle.enemy.volatiles_mut().set_yawn();
     battle.last_move_used = MoveId::TACKLE;
     let enemy = BattlerSide::Enemy.index();
     let player = BattlerSide::Player.index();
