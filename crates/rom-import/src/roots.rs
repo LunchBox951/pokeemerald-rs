@@ -201,10 +201,15 @@ pub struct SpriteRoots {
     /// which palette a graphics id draws from. The generator uses it to
     /// pick the right address for a palette whose bytes repeat in the ROM.
     pub palette_table: GbaPtr,
-    /// Every `sprite/*` sheet.
+    /// Every `sprite/*` sheet and the `field-effect/image/*` sheet.
     pub sheets: &'static [ImageRoot],
-    /// Every `sprite/palette/*` bank.
+    /// Every `sprite/palette/*` bank. Each must be named in
+    /// [`Self::palette_table`].
     pub palettes: &'static [PaletteRoot],
+    /// Every `field-effect/palette/*` bank. These are not named in
+    /// [`Self::palette_table`] (`gFieldEffectObjectPalette1` is bound through
+    /// a field-effect template), so they are not corroborated against it.
+    pub field_effect_palettes: &'static [PaletteRoot],
 }
 
 /// One `struct MapLayout` and the two grids it points at.
@@ -749,6 +754,7 @@ impl Roots {
             palette_table: GbaPtr::AT_BASE,
             sheets: &[],
             palettes: &[],
+            field_effect_palettes: &[],
         },
         layouts: &[],
         fonts: &[],
@@ -833,6 +839,7 @@ impl Roots {
             .flat_map(|tileset| tileset.palettes.iter())
             .chain(self.title_screen.palettes.iter())
             .chain(self.sprites.palettes.iter())
+            .chain(self.sprites.field_effect_palettes.iter())
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
             .chain(self.bag.palettes.iter())

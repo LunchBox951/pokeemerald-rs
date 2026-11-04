@@ -83,6 +83,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "evolution-scene/",
     "poke-ball/",
     "naming-screen/",
+    "field-effect/",
 ];
 
 /// The species whose static battler art both backends must carry: the
@@ -240,6 +241,13 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/raw/bg_outer",
 ];
 
+/// The tall-grass field effect's two pack ids. A prefix cannot catch both
+/// backends dropping the same constituent, so each is named.
+const FIELD_EFFECT_IDS: [&str; 2] = [
+    "field-effect/image/tall_grass",
+    "field-effect/palette/general_1",
+];
+
 /// The Birch-speech portraits: the front image and palette of Brendan and of
 /// May. Named by id so portraits both backends drop together still fail.
 const TRAINER_PORTRAIT_IDS: [&str; 4] = [
@@ -381,6 +389,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .into_iter()
         .chain(checkpoint_payload_ids())
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
+        .chain(FIELD_EFFECT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .collect();
@@ -667,6 +676,51 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
                 .any(|prefix| id.starts_with(prefix)),
             "{id} must stay pinned by id, not claimed by a prefix"
         );
+    }
+}
+
+/// The profile carries the tall-grass sheet as a five-frame, 2x2-metatile
+/// image and its palette as a separate field-effect root, so the complete
+/// `field-effect/` prefix cannot pass by both backends dropping the same entry.
+#[test]
+fn the_field_effect_profile_roots_are_the_tall_grass_ids() {
+    let sprites = &rom_import::EMERALD_US_REV0.roots.sprites;
+    let sheet = sprites
+        .sheets
+        .iter()
+        .find(|sheet| sheet.id == FIELD_EFFECT_IDS[0])
+        .expect("the tall-grass sheet is a profile root");
+    assert_eq!(
+        (
+            sheet.encoding,
+            sheet.rom_bit_depth,
+            sheet.pack_bit_depth,
+            (sheet.width, sheet.height),
+            (sheet.metatile_width, sheet.metatile_height),
+            sheet.tile_count
+        ),
+        (rom_import::Encoding::Raw, 4, 4, (80, 16), (2, 2), 20)
+    );
+
+    let palettes: Vec<_> = sprites
+        .field_effect_palettes
+        .iter()
+        .map(|palette| (palette.id, palette.color_count, palette.encoding))
+        .collect();
+    assert_eq!(
+        palettes,
+        [(FIELD_EFFECT_IDS[1], 16, rom_import::Encoding::Raw)]
+    );
+    assert!(
+        sprites
+            .palettes
+            .iter()
+            .all(|palette| palette.id != FIELD_EFFECT_IDS[1]),
+        "the object-event palette table does not name this bank"
+    );
+
+    for id in FIELD_EFFECT_IDS {
+        assert!(is_claimed_complete(id), "{id}");
     }
 }
 

@@ -257,10 +257,14 @@ pub struct TitleScreenPlan {
 pub struct SpritePlan {
     /// `sObjectEventSpritePalettes`.
     pub palette_table: u32,
-    /// Every object-event sprite sheet.
+    /// Every sprite sheet: the object-event sheets and the tall-grass
+    /// field-effect sheet.
     pub sheets: Vec<ImagePlan>,
-    /// The palette banks this root owns.
+    /// The object-event palette banks, each named by `sObjectEventSpritePalettes`.
     pub palettes: Vec<PalettePlan>,
+    /// The field-effect palette banks, which the object-event palette table
+    /// does not name.
+    pub field_effect_palettes: Vec<PalettePlan>,
 }
 
 /// A map layout root, owned.

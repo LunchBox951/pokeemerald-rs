@@ -6,7 +6,7 @@ use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
     layout_ids, naming_screen_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids,
     sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
-    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    BATTLERS, FONTS, GENERAL_1_PALETTE_ID, INTERFACE_PALETTE_IDS, TALL_GRASS_IMAGE_ID, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -36,11 +36,15 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette, and the tall-grass field-effect sheet and palette, is present.
 pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
     sprite_sheet_ids()
         .into_iter()
         .chain(sprite_palette_ids())
+        .chain([
+            TALL_GRASS_IMAGE_ID.to_owned(),
+            GENERAL_1_PALETTE_ID.to_owned(),
+        ])
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
