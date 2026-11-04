@@ -9,7 +9,10 @@ use std::collections::BTreeSet;
 use assets::bundled_overworld::{BUNDLED_LAYOUT_IDS, BUNDLED_TILESETS};
 use rom_import::profiles::bpee_rev0::EMERALD_US_REV0_ROOTS;
 
-use super::scope::{sprite_palette_ids, sprite_sheet_ids, LAYOUTS, TILESETS};
+use super::scope::{
+    sprite_palette_ids, sprite_sheet_ids, GENERAL_1_PALETTE_ID, LAYOUTS, TALL_GRASS_IMAGE_ID,
+    TILESETS,
+};
 
 fn set<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     names.into_iter().collect()
@@ -49,14 +52,26 @@ fn the_committed_profile_roots_cover_exactly_the_manifest() {
     );
     let sheets = sprite_sheet_ids();
     assert_eq!(
-        set(sheets.iter().map(String::as_str)),
+        set(sheets
+            .iter()
+            .map(String::as_str)
+            .chain([TALL_GRASS_IMAGE_ID])),
         set(roots.sprites.sheets.iter().map(|sheet| sheet.id)),
-        "sprite sheets"
+        "sprite sheets and the tall-grass sheet"
     );
     let palettes = sprite_palette_ids();
     assert_eq!(
         set(palettes.iter().map(String::as_str)),
         set(roots.sprites.palettes.iter().map(|palette| palette.id)),
         "sprite palettes"
+    );
+    assert_eq!(
+        set([GENERAL_1_PALETTE_ID]),
+        set(roots
+            .sprites
+            .field_effect_palettes
+            .iter()
+            .map(|palette| palette.id)),
+        "field-effect palettes"
     );
 }

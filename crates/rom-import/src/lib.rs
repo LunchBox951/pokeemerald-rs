@@ -41,7 +41,8 @@
 //!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
 //!   tables, animation frames), the map layouts (`layout/*`: metatile grids
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
-//!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
+//!   `sprite/palette/*` banks) with the tall-grass field effect
+//!   (`field-effect/image/tall_grass`, `field-effect/palette/general_1`), the Latin glyph sheets (`font/*/glyphs`,
 //!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and

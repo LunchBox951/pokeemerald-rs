@@ -12887,16 +12887,16 @@
     "graphics/field_effects": {
       "artifacts": {
         "palettes/general_1.pal": {
-          "reason": "graphics/field_effects/palettes/general_1.pal (16 colours, gFieldEffectObjectPalette1, bound by FLDEFF_PAL_TAG_GENERAL_1, field_effect_objects.h:2,96) is extracted as field-effect/palette/general_1 by cargo xtask extract and read through AssetPack::field_effect_palette. Not covered: the ROM-import backend does not yet write this entry; gSpritePalette_GeneralFieldEffect1 is outside sObjectEventSpritePalettes, which the importer's sprite palette corroboration requires every palette to be in.",
+          "reason": "graphics/field_effects/palettes/general_1.pal (16 colours, gFieldEffectObjectPalette1, bound by FLDEFF_PAL_TAG_GENERAL_1, field_effect_objects.h:2,96; object_event_graphics.h:304) is extracted as field-effect/palette/general_1 by cargo xtask extract and read through AssetPack::field_effect_palette. The ROM-import backend writes the same entry from the supported ROM: gen-rom-profile locates the raw bank by its unique colours into SpriteRoots::field_effect_palettes, a collection separate from SpriteRoots::palettes because gSpritePalette_GeneralFieldEffect1 is outside sObjectEventSpritePalettes, which the importer corroborates the object-event palettes against; rom-import domains/sprites.rs writes it, and the real-ROM equivalence test pins the id and finds it byte-identical to the checkout extractor.",
           "rust_target": "crates/xtask/src/extract/field_effect.rs",
           "spec": "S-4",
-          "status": "stubbed"
+          "status": "ported"
         },
         "pics/tall_grass.png": {
-          "reason": "graphics/field_effects/pics/tall_grass.png (80x16, five 2x2-tile cells, object_event_graphics.h:312) is extracted as field-effect/image/tall_grass by cargo xtask extract and read through AssetPack::field_effect_image. Not covered: the ROM-import backend does not yet write this entry (no generator root or importer domain), so a ROM-imported pack draws no tall-grass effect; the entry is outside rom-import's equivalence COMPLETE_PREFIXES until it does.",
+          "reason": "graphics/field_effects/pics/tall_grass.png (80x16, five 2x2-tile cells, object_event_graphics.h:312) is extracted as field-effect/image/tall_grass by cargo xtask extract and read through AssetPack::field_effect_image. The ROM-import backend writes the same entry from the supported ROM: gen-rom-profile locates gFieldEffectObjectPic_TallGrass (raw 4bpp, 20 tiles read with 2x2 metatiles) as an ImageRoot in SpriteRoots::sheets, rom-import domains/sprites.rs writes it, and the real-ROM equivalence test pins the id (field-effect/ is a complete prefix) and finds it byte-identical to the checkout extractor, so a ROM-imported pack draws the tall-grass effect.",
           "rust_target": "crates/xtask/src/extract/field_effect.rs",
           "spec": "S-4",
-          "status": "stubbed"
+          "status": "ported"
         }
       },
       "category": "graphics.scene",
