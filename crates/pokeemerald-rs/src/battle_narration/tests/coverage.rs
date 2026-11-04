@@ -36,6 +36,8 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
+        BattleEvent::Burned { by_player, move_id },
+        BattleEvent::TargetDefrosted { by_player, move_id },
         BattleEvent::NoEffect { by_player, move_id },
         BattleEvent::LevitateBlocked { by_player, move_id },
         BattleEvent::WonderGuardBlocked { by_player, move_id },
@@ -201,7 +203,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 70;
+const VARIANTS: usize = 72;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -278,6 +280,8 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FrozenSolid { .. } => 67,
         BattleEvent::Thawed { .. } => 68,
         BattleEvent::ThawedByMove { .. } => 69,
+        BattleEvent::Burned { .. } => 70,
+        BattleEvent::TargetDefrosted { .. } => 71,
     }
 }
 

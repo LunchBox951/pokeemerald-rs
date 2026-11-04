@@ -401,6 +401,27 @@ pub enum BattleEvent {
         /// The move that inflicted poison.
         move_id: MoveId,
     },
+    /// A burn secondary inflicted [`crate::status1::Status1::Burned`]
+    /// (`BattleScript_MoveEffectBurn`, `data/battle_scripts_1.s:3893`-`:3897`;
+    /// `STRINGID_PKMNWASBURNED` through `gGotBurnedStringIds`).
+    Burned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted the burn.
+        move_id: MoveId,
+    },
+    /// A Fire move thawed a frozen target that survived its damage
+    /// (`MOVEEND_DEFROST`, `battle_script_commands.c:4257`-`:4272`;
+    /// `BattleScript_DefrostedViaFireMove`, `data/battle_scripts_1.s:3767`-`:3771`,
+    /// `STRINGID_PKMNWASDEFROSTED`). It consumes no RNG and precedes the
+    /// target's Synchronize and contact abilities.
+    TargetDefrosted {
+        /// Whether the player used the Fire move; the thawed battler is its
+        /// target.
+        by_player: bool,
+        /// The Fire move that thawed the target.
+        move_id: MoveId,
+    },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
     /// back onto the original attacker after the target's own faint settlement
     /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
