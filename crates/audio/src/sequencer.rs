@@ -1157,6 +1157,7 @@ impl Sequencer {
                         echo_volume,
                         echo_length,
                     )
+                    .with_length(w.length)
                     .with_pitch_key(pitch_key)
                     .with_priority(priority),
                 )

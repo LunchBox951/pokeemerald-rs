@@ -236,22 +236,24 @@
 //! [`status1::Status1::Frozen`], and
 //! [`status1::Status1::Asleep`] (a loaded bad poison ticks through
 //! [`status1::bad_poison_residual_damage`] between poison and burn — see
-//! [`status1`]'s module docs; no modelled move inflicts it, sleep, burn or freeze
-//! yet, so they arrive only through [`pokemon::BattlePokemon::set_status1`]), every
+//! [`status1`]'s module docs; no modelled move inflicts toxic, sleep or freeze
+//! yet, and burn comes only from a burn secondary, so those arrive only
+//! through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! attacker ability that still reaches an unported chance-doubling for a
 //! landed secondary effect — Serene Grace (see
 //! [`secondary::ensure_admissible`], which screens the *defender*'s primary
-//! status for a poison landing and the *defender*'s Own
+//! status for a poison or burn landing and the *defender*'s Own
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing) —
 //! and the move effects the nine
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
-//! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`] and
-//! [`secondary::EFFECT_SPEED_DOWN_HIT`] are the three resolved; the other 28
+//! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
+//! [`secondary::EFFECT_SPEED_DOWN_HIT`], [`secondary::EFFECT_ACCURACY_DOWN_HIT`]
+//! and [`secondary::EFFECT_THAW_HIT`] are the five resolved; the other 26
 //! are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
@@ -330,9 +332,9 @@ pub use pokemon::{
     SPECIES_SHEDINJA,
 };
 pub use secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,
-    spend_effect_chance_draw, SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT,
-    EFFECT_POISON_HIT,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
+    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+    Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

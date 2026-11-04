@@ -78,6 +78,9 @@ pub struct WaveTone {
     pub adsr: CgbAdsr,
     /// Whether to use Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
+    /// Raw `ToneData::length`: the whole `NR31` byte, whose nonzero value also
+    /// sets the `NR34` length-enable bit (`m4a.c:1014-1018`).
+    pub length: u8,
 }
 
 /// A CGB noise instrument (hardware channel 4).

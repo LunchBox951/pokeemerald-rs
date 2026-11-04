@@ -259,11 +259,135 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
     }
 }
 
+fn wave(adsr: CgbAdsr, length: u8) -> CgbVoice {
+    wave_voice_with_adsr(adsr, false, TestNote::default()).with_length(length)
+}
+
+/// Raw wave length 240 loads `256 - 240 = 16` into `NR31` (`mgba/src/gb/audio.c:255-258`);
+/// the first pass's enable edge leaves 15 on an even step, so the 15th 256 Hz
+/// clock from the seeded epoch (sample 783, like [`CUT_LENGTH`]) stops it.
+const WAVE_CUT_LENGTH: u8 = 240;
+/// Raw wave length 252 loads 4, 3 after the enable edge: sample 156 again.
+const WAVE_TIED_LENGTH: u8 = 252;
+
+/// The wave oracle: a stopped channel presents the latch its last clock left,
+/// which is the sample the reference emits at the stop
+/// (`mgba/src/gb/audio.c:246-253,768-774`).
+fn wave_held_oracle(reference: &[StereoAcc], stop: usize, total: usize) -> Vec<StereoAcc> {
+    (0..total)
+        .map(|sample| reference[sample.min(stop)])
+        .collect()
+}
+
 #[test]
-fn the_wave_channel_ignores_a_length() {
-    let mut voice = wave_voice(false, TestNote::default()).with_length(CUT_LENGTH);
-    run(&mut Rig::at_step(6), &mut voice, 40);
+fn a_wave_note_cut_by_its_length_holds_its_latch() {
+    let reference = run(
+        &mut Rig::at_step(6),
+        &mut wave(CgbAdsr::flat(), 0),
+        CUT_FRAMES,
+    );
+    let mut voice = wave(CgbAdsr::flat(), WAVE_CUT_LENGTH);
+    let rendered = run(&mut Rig::at_step(6), &mut voice, CUT_FRAMES);
+
+    assert_eq!(
+        rendered,
+        wave_held_oracle(&reference, CUT_SAMPLE, CUT_FRAMES * SAMPLES_PER_FRAME)
+    );
+    assert!(
+        reference[CUT_SAMPLE..]
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]),
+        "sanity: the uncut note keeps oscillating after the cut"
+    );
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.is_length_stopped());
+    assert!(voice.is_active(), "the counter does not retire the note");
+    assert!(voice.is_end_tie_eligible());
+}
+
+#[test]
+fn a_wave_note_without_a_length_is_never_cut() {
+    // Without the enable bit the loaded 256 steps never count.
+    let mut voice = wave(CgbAdsr::flat(), 0);
+    run(&mut Rig::at_step(6), &mut voice, 100);
+    assert_eq!(voice.length_counter().remaining(), 256);
+    assert!(!voice.length_counter().is_enabled());
     assert!(!voice.is_length_stopped());
+}
+
+#[test]
+fn a_wave_counter_runs_the_full_256_steps() {
+    // Raw length 1 loads 255 and the enable edge takes it to 254; a frame
+    // holds about 4.3 length clocks, so a 64-step counter would stop within
+    // 15 frames and this one runs on until about frame 60.
+    let mut voice = wave(CgbAdsr::flat(), 1);
+    let mut rig = Rig::at_step(6);
+    run(&mut rig, &mut voice, 50);
+    assert!(!voice.is_length_stopped(), "254 counts outlast 50 frames");
+    assert!(voice.length_counter().remaining() > 30);
+    run(&mut rig, &mut voice, 20);
+    assert!(voice.is_length_stopped(), "and run out by frame 70");
+}
+
+#[test]
+fn a_tied_wave_is_not_retriggered_by_later_writes_after_its_count() {
+    // `CgbSound` triggers a wave only on the note's first pass and clears
+    // `n4` bit 7 after it (`m4a.c:1213-1216`), so the decay-to-sustain store,
+    // a live volume write, and a pitch write never revive the counter the way
+    // they revive a square's.
+    let write = |voice: &mut CgbVoice, rig: &mut Rig| -> Vec<StereoAcc> {
+        let mut rendered = run(rig, voice, 2);
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.set_track_pitch(0, 0);
+        rendered.extend(run(rig, voice, TIED_FRAMES - 2));
+        rendered
+    };
+    let reference = write(&mut wave(tied_adsr(), 0), &mut Rig::at_step(6));
+    let mut voice = wave(tied_adsr(), WAVE_TIED_LENGTH);
+    let rendered = write(&mut voice, &mut Rig::at_step(6));
+
+    let expected = wave_held_oracle(&reference, FIRST_EXPIRY, TIED_FRAMES * SAMPLES_PER_FRAME);
+    let mismatch = rendered.iter().zip(&expected).position(|(a, b)| a != b);
+    assert_eq!(mismatch, None);
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.is_length_stopped());
+    assert!(voice.is_end_tie_eligible(), "the tie stays held throughout");
+}
+
+#[test]
+fn a_wave_first_pass_loads_the_256_step_length_and_clocks_the_enable_edge() {
+    // Raw 255 loads 1; the enable edge empties it on an even step and the same
+    // pass's trigger reloads 256, less the owed extra clock
+    // (`m4a.c:1013-1018,1201-1216`; `mgba/src/gb/audio.c:300-313`).
+    for (step, remaining) in [(6, 255), (5, 1)] {
+        let mut voice = wave(CgbAdsr::flat(), 255);
+        first_pass(&mut voice, step);
+        assert_eq!(voice.length_counter().remaining(), remaining, "step {step}");
+        assert!(voice.length_counter().is_enabled());
+        assert!(!voice.is_length_stopped());
+    }
+}
+
+#[test]
+fn the_idle_off_write_leaves_a_wave_counter_alone() {
+    // `CgbOscOff(3)` writes only `NR30` (`m4a.c:869-871`).
+    let mut voice = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    run(&mut Rig::at_step(6), &mut voice, 1);
+    assert!(voice.is_length_stopped());
+    voice.apply_hardware_off_write();
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.length_counter().is_enabled());
+    assert!(voice.is_length_stopped());
+}
+
+#[test]
+fn a_wave_replacement_inherits_the_enable_bit_so_its_load_is_not_clocked_again() {
+    let mut predecessor = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    run(&mut Rig::at_step(6), &mut predecessor, 1);
+    let mut replacement = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    replacement.carry_hardware_state_from(&predecessor);
+    first_pass(&mut replacement, 6);
+    assert_eq!(replacement.length_counter().remaining(), 4);
 }
 
 fn first_pass(voice: &mut CgbVoice, step: u8) {
