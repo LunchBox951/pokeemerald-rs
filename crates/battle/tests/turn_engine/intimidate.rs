@@ -192,23 +192,48 @@ fn the_initial_speed_tie_draws_are_unchanged_and_entry_follows_battler_order() {
 }
 
 #[test]
-fn a_rejected_first_action_keeps_the_opening_events_for_the_next_valid_turn() {
+fn a_rejected_first_action_still_delivers_the_opening_events_once() {
+    let dex = Dex::new();
+    let player = splashing(&dex, SpeciesId::MAWILE, 20, 1);
+    let enemy = splashing(&dex, SpeciesId::MIGHTYENA, 20, 0);
+    let mut rng = SequenceRng::new(script(&[&C, &W]));
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(attack(battle.enemy()), -1, "the drop is already applied");
+
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(3), &mut rng)
+        .unwrap_err();
+    assert_eq!(rejected.events(), [dropped(true), dropped(false)]);
+    assert_eq!(rng.draws(), 1, "a rejected action spends no draw");
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(!events.iter().any(is_intimidate_event), "{events:?}");
+    rng.assert_exhausted();
+}
+
+#[test]
+fn the_opening_events_can_be_taken_before_the_first_action() {
     let dex = Dex::new();
     let player = splashing(&dex, SpeciesId::MAWILE, 20, 1);
     let enemy = splashing(&dex, SpeciesId::MIGHTYENA, 20, 0);
     let mut rng = SequenceRng::new(script(&[&C, &W]));
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
+    assert_eq!(battle.take_entry_events(), [dropped(true), dropped(false)]);
+    assert!(battle.take_entry_events().is_empty(), "taken once");
+    assert_eq!(rng.draws(), 1, "taking them spends no draw");
+
     let rejected = battle
         .take_turn(PlayerAction::UseMove(3), &mut rng)
         .unwrap_err();
     assert!(rejected.events().is_empty());
-    assert_eq!(rng.draws(), 1);
-
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert_eq!(events[..2], [dropped(true), dropped(false)]);
+    assert!(!events.iter().any(is_intimidate_event), "{events:?}");
+    assert_eq!(events.len(), 4, "only the turn's own Splash events");
     rng.assert_exhausted();
 }
 

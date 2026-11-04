@@ -26,8 +26,10 @@ pub(super) fn battle_start_states(
 }
 
 impl Battle {
-    /// Drains the opening entry's Intimidate queue. Its events wait for the
-    /// first turn, because a constructor returns no events.
+    /// Drains the opening entry's Intimidate queue. Its events wait in
+    /// `pending_entry_events`, because a constructor returns no events, until
+    /// `Battle::take_entry_events` or the first `Battle::take_turn` delivers
+    /// them.
     pub(super) fn settle_battle_start_intimidate(&mut self) {
         let mut events = Vec::new();
         self.resolve_intimidate_queue(&mut events);

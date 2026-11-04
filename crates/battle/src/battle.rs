@@ -127,7 +127,8 @@ pub struct Battle {
     /// reset whenever a battler leaves or enters the field.
     battler_states: [BattlerState; 2],
     /// Events from the battle's opening entry (the initial Intimidate drops),
-    /// delivered ahead of the first turn's events.
+    /// delivered by [`Battle::take_entry_events`] or, if not taken, ahead of the
+    /// next turn's events or rejection.
     pending_entry_events: Vec<BattleEvent>,
 }
 
@@ -713,9 +714,11 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`TurnError`] for an invalid state or action. Pre-turn failures
-    /// consume no RNG and contain no events, and keep any opening
-    /// [`BattleEvent::Intimidated`] results for the next valid turn. A pending
-    /// move-learning decision takes precedence over an existing outcome.
+    /// consume no RNG and contain no events, other than any opening
+    /// [`BattleEvent::Intimidated`] results not yet taken through
+    /// [`Battle::take_entry_events`], which the rejection delivers instead of
+    /// the next turn. A pending move-learning decision takes precedence over
+    /// an existing outcome.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -724,8 +727,28 @@ impl Battle {
         let mut events = Vec::new();
         match self.resolve_turn(player_action, rng, &mut events) {
             Ok(()) => Ok(events),
-            Err(error) => Err(TurnError { events, error }),
+            Err(error) => {
+                // A rejected first action still reports the opening entry
+                // events it found waiting, so they are delivered once.
+                events.append(&mut self.pending_entry_events);
+                Err(TurnError { events, error })
+            }
         }
+    }
+
+    /// Drains the events from the battle's opening entry: the initial
+    /// [`BattleEvent::Intimidated`] and [`BattleEvent::IntimidatePrevented`]
+    /// results, in battler order. Upstream resolves them before the first
+    /// action is chosen (`TryDoEventsBeforeFirstTurn`,
+    /// `src/battle_main.c:3869`-`:3883`), and a constructor returns no
+    /// events, so a caller that presents the entry ahead of action selection
+    /// calls this once after construction.
+    ///
+    /// Each event is delivered once: events drained here are absent from
+    /// [`Battle::take_turn`], which otherwise leads its first turn, or its
+    /// rejection, with them. Draws no RNG.
+    pub fn take_entry_events(&mut self) -> Vec<BattleEvent> {
+        std::mem::take(&mut self.pending_entry_events)
     }
 
     /// Run Away or equal-or-greater raw Speed escapes without a draw and ends
