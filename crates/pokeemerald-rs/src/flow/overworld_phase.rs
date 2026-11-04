@@ -51,6 +51,7 @@ mod frame;
 mod input;
 mod interaction;
 mod lead_owner;
+mod object_events;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
@@ -986,6 +987,9 @@ mod field_poison_tests;
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
+/// Fixed-facing object events driven by the production frame.
+#[cfg(test)]
+mod fixed_facing_tests;
 #[cfg(test)]
 mod forced_landing_field_input_gate_tests;
 #[cfg(test)]

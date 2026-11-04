@@ -76,6 +76,7 @@ impl OverworldPhase {
         if outcome == StartMenuOutcome::Open {
             self.start_menu = Some(menu);
         }
+        self.advance_object_events();
         true
     }
 

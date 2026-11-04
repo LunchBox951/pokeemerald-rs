@@ -6,6 +6,10 @@
 //! [`ObjectEventCollection`] instead seeds every template unconditionally
 //! and once; hide-flag and spawn-window admission stay query-time concerns
 //! of [`super::visible_object_event_at`] and [`super::object_event_is_in_view`].
+//!
+//! The per-frame scheduler ([`ObjectEventCollection::run_frame`]) is the one place that applies
+//! upstream's spawn window and `frozen` gate: an entry is *active* once the scheduler admits it, and
+//! only active entries run their movement type.
 
 use assets::ObjectEvent;
 
@@ -13,11 +17,17 @@ use crate::overworld::collision::elevations_compatible;
 
 use super::ObjectEventState;
 
+#[path = "object_event_scheduler.rs"]
+mod scheduler;
+pub use scheduler::FrameContext;
+use scheduler::Lifecycle;
+
 /// One authored object-event template paired with its live, mutable state.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveObjectEvent {
     template: &'static ObjectEvent,
     state: ObjectEventState,
+    lifecycle: Lifecycle,
 }
 
 impl LiveObjectEvent {
@@ -38,6 +48,13 @@ impl LiveObjectEvent {
     pub fn state_mut(&mut self) -> &mut ObjectEventState {
         &mut self.state
     }
+
+    /// Returns whether the scheduler has admitted this entry and not since retired it, the
+    /// counterpart of upstream's spawned `active` object with a sprite.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.lifecycle.is_active()
+    }
 }
 
 /// One map's live object-event state, one entry per authored template, in
@@ -45,6 +62,8 @@ impl LiveObjectEvent {
 #[derive(Debug, Clone)]
 pub struct ObjectEventCollection {
     entries: Vec<LiveObjectEvent>,
+    /// Whether the scheduler has run its map-load admission pass.
+    admitted_at_load: bool,
 }
 
 impl ObjectEventCollection {
@@ -57,8 +76,10 @@ impl ObjectEventCollection {
                 .map(|template| LiveObjectEvent {
                     template,
                     state: ObjectEventState::from_template(template),
+                    lifecycle: Lifecycle::Unadmitted,
                 })
                 .collect(),
+            admitted_at_load: false,
         }
     }
 
