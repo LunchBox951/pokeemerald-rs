@@ -8,7 +8,7 @@ use engine::overworld::wild_encounter::WildEncounter;
 use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, WildBattle};
 
 /// Route 101's slot-0 land table entry -- the same fightable wild species
 /// `crate::flow::wild_encounter::test_support::WURMPLE` names.
@@ -83,7 +83,7 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
         slot: 0,
     }));
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the healthy trailing member must fight, not be refused as fainted");
     };
     assert_eq!(battle.player().species(), selected_species);
@@ -572,7 +572,7 @@ fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
         slot: 0,
     }));
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the healthy lead must fight");
     };
     assert_eq!(battle.enemy().nature(), battle::Nature::Hardy);

@@ -15,6 +15,8 @@ fn a_fresh_record_files_the_battlers_primary_status_word() {
     for (status, word) in [
         (battle::Status1::Healthy, 0),
         (battle::Status1::Poisoned, 8),
+        (battle::Status1::Burned, 16),
+        (battle::Status1::Frozen, 32),
         (battle::Status1::Paralysed, 64),
         (battle::Status1::Asleep { turns: 5 }, 5),
     ] {
