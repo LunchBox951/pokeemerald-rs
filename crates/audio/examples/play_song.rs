@@ -16,6 +16,11 @@ use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData,
 use platform::audio::{PlaybackProgress, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
+#[path = "play_song/transport_wait.rs"]
+mod transport_wait;
+
+use transport_wait::settle_transport;
+
 const RING_CAPACITY_FRAMES: usize = 4096;
 
 /// Comfortably longer than the ~306 ms the ring can absorb at [`MIXER_RATE`],
@@ -68,6 +73,12 @@ fn main() -> ExitCode {
             };
         }
     };
+    if let Some(code) = settle_transport(&mut output) {
+        return code;
+    }
+    // `stream_errors` counts every stream the transport has built; only an
+    // error during this playback fails the run.
+    let errors = ErrorBaseline::of(&output);
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     // Pace at the real game-frame period, the same cadence the output's
@@ -106,7 +117,7 @@ fn main() -> ExitCode {
             &buffer,
             &policy,
             |chunk| producer.push(chunk),
-            || output.stream_errors(),
+            || errors.since(&output),
             Instant::now,
             std::thread::sleep,
         );
@@ -125,7 +136,7 @@ fn main() -> ExitCode {
         ring_capacity_samples,
         &policy,
         || producer.available_space(),
-        || output.stream_errors(),
+        || errors.since(&output),
         Instant::now,
         std::thread::sleep,
     ) {
@@ -152,7 +163,7 @@ fn main() -> ExitCode {
         output.device_sample_rate(),
         &policy,
         || output.playback_progress(),
-        || output.stream_errors(),
+        || errors.since(&output),
         Instant::now,
         std::thread::sleep,
     );
@@ -161,6 +172,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// The lifetime [`AudioOutput::stream_errors`] count when playback began, so
+/// an error a since-replaced stream reported earlier does not fail it.
+#[derive(Clone, Copy, Debug)]
+struct ErrorBaseline(u64);
+
+impl ErrorBaseline {
+    fn of(output: &AudioOutput) -> Self {
+        Self(output.stream_errors())
+    }
+
+    /// Stream errors reported since the baseline was taken.
+    fn since(self, output: &AudioOutput) -> u64 {
+        output.stream_errors().saturating_sub(self.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
