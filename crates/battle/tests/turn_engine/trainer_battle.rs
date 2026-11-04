@@ -1007,6 +1007,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
 
 #[test]
 fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on() {
+    const MAX_DRAW: u16 = u16::MAX;
     let dex = Dex::new();
     let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
@@ -1020,7 +1021,32 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    // `u16::MAX` draws give non-critical, minimum-roll hits that land. Draw
+    // sites per turn: turn seed battle_main.c:3923/:4013, AI simulated damage per slot
+    // battle_ai_script_commands.c:341, pick :445, then each move's accuracy
+    // battle_script_commands.c:1176 (damaging moves add crit :1282, variance
+    // :1641, secondary chance :2923). Leer's `AI_CV_DefenseDown2` roll
+    // (battle_ai_scripts.s:1125-1128) is drawn on turn 2 only: the hurt Treecko
+    // is under 70% HP, while the fresh replacement on turn 3 sees Torchic's
+    // Defense above stage 3 and skips it.
+    let mut rng = SequenceRng::new(script(&[
+        &[MAX_DRAW],    // construction turn seed
+        &[MAX_DRAW],    // turn 1: turn-start seed
+        &[MAX_DRAW; 4], // turn 1: AI simulated damage, one per slot
+        &[MAX_DRAW],    // turn 1: highest-score pick
+        &[MAX_DRAW; 4], // turn 1: player Scratch accuracy/crit/variance/secondary
+        &[MAX_DRAW],    // turn 1: enemy Leer accuracy
+        &[MAX_DRAW],    // turn 2: turn-start seed
+        &[MAX_DRAW; 4], // turn 2: AI simulated damage
+        &[MAX_DRAW],    // turn 2: Leer's AI_CV_DefenseDown2 random roll
+        &[MAX_DRAW],    // turn 2: highest-score pick
+        &[MAX_DRAW; 4], // turn 2: player Scratch faints the lead
+        &[MAX_DRAW],    // turn 3: turn-start seed
+        &[MAX_DRAW; 4], // turn 3: AI simulated damage
+        &[MAX_DRAW],    // turn 3: highest-score pick
+        &[MAX_DRAW; 4], // turn 3: player Scratch
+        &[MAX_DRAW],    // turn 3: enemy Leer accuracy
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -1048,9 +1074,15 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
         "the fainted mon is still on the field while the question is open"
     );
 
+    let draws_before_answer = rng.draws();
     let answered = battle
         .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
+    assert_eq!(
+        rng.draws(),
+        draws_before_answer,
+        "the deferred send-out draws nothing"
+    );
     assert_eq!(
         answered,
         vec![
@@ -1070,12 +1102,15 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
         battle.take_turn(PlayerAction::UseMove(0), &mut rng).is_ok(),
         "and the next turn is takeable again"
     );
+    assert_eq!(rng.draws(), 34, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Upstream's `BattleScript_TryLearnMoveLoop` exhausts every same-level
 /// learnset entry before running the deferred faint aftermath.
 #[test]
 fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
+    const MAX_DRAW: u16 = u16::MAX;
     const WYNAUT: u16 = 360;
     const COUNTER: MoveId = MoveId::COUNTER;
     const MIRROR_COAT: MoveId = MoveId::MIRROR_COAT;
@@ -1093,7 +1128,28 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
         .is_none());
     let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    // On turn 2 the hurt Treecko's Leer rolls under `AI_CV_DefenseDown2`
+    // (battle_ai_scripts.s:1125-1128), so the AI picks Pound and Pound lands;
+    // the four answers and the deferred victory draw nothing.
+    let mut rng = SequenceRng::new(script(&[
+        &[MAX_DRAW],    // construction turn seed
+        &[MAX_DRAW],    // turn 1: turn-start seed
+        &[MAX_DRAW; 4], // turn 1: AI simulated damage, one per slot
+        &[MAX_DRAW],    // turn 1: highest-score pick
+        &[MAX_DRAW; 4], // turn 1: player Scratch accuracy/crit/variance/secondary
+        &[MAX_DRAW],    // turn 1: enemy Leer accuracy
+        &[MAX_DRAW],    // turn 2: turn-start seed
+        &[MAX_DRAW; 4], // turn 2: AI simulated damage
+        &[MAX_DRAW],    // turn 2: Leer's AI_CV_DefenseDown2 random roll
+        &[MAX_DRAW],    // turn 2: highest-score pick
+        &[MAX_DRAW; 4], // turn 2: player Scratch
+        &[MAX_DRAW; 4], // turn 2: enemy Pound accuracy/crit/variance/secondary
+        &[MAX_DRAW],    // turn 3: turn-start seed
+        &[MAX_DRAW; 4], // turn 3: AI simulated damage
+        &[MAX_DRAW],    // turn 3: Leer's AI_CV_DefenseDown2 random roll
+        &[MAX_DRAW],    // turn 3: highest-score pick
+        &[MAX_DRAW; 4], // turn 3: player Scratch faints the lone Treecko
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -1112,6 +1168,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     );
     let money = battle.trainer().expect("a trainer battle").money();
 
+    let draws_before_answers = rng.draws();
     for pair in LEVEL_15_BLOCK.windows(2) {
         let answered = battle
             .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
@@ -1141,6 +1198,13 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
     assert!(battle.pending_move_learn().is_none());
+    assert_eq!(
+        rng.draws(),
+        draws_before_answers,
+        "the prompt chain and deferred victory draw nothing"
+    );
+    assert_eq!(rng.draws(), 38, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 #[test]
@@ -1609,7 +1673,6 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     const NO_LEVEL_UP_LEVEL: u8 = 100;
     const BENCH_LEVEL: u8 = 5;
     const NONCRITICAL_MIN_DAMAGE_DRAW: u16 = u16::MAX;
-    const RNG_DRAW_BUDGET: usize = 128;
     const MEGA_KICK_SLOT: usize = 0;
     const BENCH_REMAINING_AFTER_SEND_OUT: usize = 1;
 
@@ -1629,13 +1692,33 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
         max_iv_mon(&dex, MUDKIP, BENCH_LEVEL, vec![WATER_GUN]),
     ];
 
-    let mut rng = SequenceRng::new([NONCRITICAL_MIN_DAMAGE_DRAW; RNG_DRAW_BUDGET]);
+    // The exact 12-draw script: construction seed (battle_main.c:3140), turn
+    // seed (:3923/:4013), AI simulated damage x4 (battle_ai_script_commands.c:341),
+    // pick (:445), Kangaskhan's Growl accuracy (battle_script_commands.c:1176;
+    // its `AI_CV_AttackDown` rolls are skipped for a full-HP Normal-type target,
+    // battle_ai_scripts.s:1090-1105), and Mega Kick's accuracy/crit/variance/
+    // secondary chance (:1176/:1282/:1641/:2923). The poison tick and the
+    // replacement scoring draw nothing, so the turn's 11 draws are all modelled.
+    let mut rng = SequenceRng::new(script(&[
+        &[NONCRITICAL_MIN_DAMAGE_DRAW],    // construction turn seed
+        &[NONCRITICAL_MIN_DAMAGE_DRAW],    // turn-start seed
+        &[NONCRITICAL_MIN_DAMAGE_DRAW; 4], // AI simulated damage, one per slot
+        &[NONCRITICAL_MIN_DAMAGE_DRAW],    // highest-score pick
+        &[NONCRITICAL_MIN_DAMAGE_DRAW],    // enemy Growl accuracy
+        &[NONCRITICAL_MIN_DAMAGE_DRAW; 4], // Mega Kick accuracy/crit/variance/secondary
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
+    let draws_before_turn = rng.draws();
     let events = battle
         .take_turn(PlayerAction::UseMove(MEGA_KICK_SLOT), &mut rng)
         .unwrap();
+    assert_eq!(
+        rng.draws() - draws_before_turn,
+        11,
+        "the whole turn, residual tick and replacement included, draws exactly the modelled 11"
+    );
 
     let tick_index = events
         .iter()
@@ -1667,6 +1750,7 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
          so Tackle's STAB keeps party-order-first Pichu: {events:?}"
     );
     assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    rng.assert_exhausted();
 }
 
 /// `HandleFaintedMonActions` case 4 walks battlers from 0
