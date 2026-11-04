@@ -544,6 +544,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [MapConnection],
         };
         let events = MapEvents {
@@ -611,6 +612,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [MapConnection],
         };
         let events = MapEvents {
