@@ -1175,6 +1175,26 @@ mod tests {
         assert_eq!(&keyless.to_bytes(0)[0x1640..0x1644], &[0xFF; 4]);
     }
 
+    /// `GAME_STAT_STEPS` is word 5 of `gameStats` (`game_stat.h:9`), at
+    /// `0x159C + 5 * 4` in the key-XORed image.
+    #[test]
+    fn the_steps_stat_round_trips_at_its_slot_and_caps_at_the_ceiling() {
+        let key = 0x1234_5678;
+        let mut block = SaveBlock1::default();
+        block.game_stats.set(GameStat::Steps, 0x00AB_CDEF);
+        let bytes = block.to_bytes(key);
+        assert_eq!(&bytes[0x15B0..0x15B4], &(0x00AB_CDEF ^ key).to_le_bytes());
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.game_stats.get(GameStat::Steps), 0x00AB_CDEF);
+
+        let mut capped = decoded;
+        capped.game_stats.set(GameStat::Steps, 0xFF_FFFE);
+        capped.game_stats.increment(GameStat::Steps);
+        capped.game_stats.increment(GameStat::Steps);
+        let reloaded = SaveBlock1::from_bytes(&capped.to_bytes(key), key).unwrap();
+        assert_eq!(reloaded.game_stats.get(GameStat::Steps), 0xFF_FFFF);
+    }
+
     #[test]
     fn game_stats_patch_a_loaded_image_changing_only_the_selected_word() {
         let key = 0xDEAD_BEEF;
