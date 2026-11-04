@@ -54,9 +54,12 @@
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
 //! - the battle-animation catalog (`data/battle_anim_scripts.s`);
-//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
+//! - the sheet and palette of every battle-effect sprite a catalog program loads;
 //! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
-//!   sheet.
+//!   sheet; and
+//! - the Pokédex record payload: `gPokedexEntries`, every `g*PokedexText`
+//!   description, the three list orders, and the National Dex enum, validated
+//!   as one closure (`src/data/pokemon/pokedex_*.h`, `include/constants/pokedex.h`).
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -92,6 +95,7 @@
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `battle-anim/catalog`
 //! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
+//! - `pokedex/data`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -227,6 +231,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    pokedex::extract_pokedex(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

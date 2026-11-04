@@ -859,3 +859,7 @@ pub(crate) fn trainer_battler_ids() -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+
+/// The one raw pack entry the Pokédex stage emits: the validated record
+/// payload `AssetPack::pokedex_data` decodes.
+pub(crate) const POKEDEX_DATA_ID: &str = "pokedex/data";
