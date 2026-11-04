@@ -10,6 +10,7 @@
 use audio::{
     Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES, MIXER_RATE, SAMPLES_PER_FRAME,
 };
+use platform::audio::TransportState;
 use platform::{AudioOutput, PlatformError, Producer};
 
 use super::MusicError;
@@ -218,6 +219,16 @@ pub struct MusicPlayer {
     /// latch at that moment, in which case [`Self::max_device_tail_frames`]
     /// alone governs the wait exactly as before.
     measured_drain_target: Option<u64>,
+    /// The transport state the last polled transition left, so the next one
+    /// reports what it changed from. Starts at `Connecting` for a device
+    /// output because [`AudioOutput`] queues its first transition, never its
+    /// initial state.
+    transport: TransportState,
+    /// Transitions [`Self::poll_transport`] returns before asking the
+    /// output, with the device facts each advertises, so tests can drive a
+    /// transport the null backend cannot fake.
+    #[cfg(test)]
+    scripted_transport: std::collections::VecDeque<(TransportState, Option<usize>, u32)>,
 }
 
 impl MusicPlayer {
@@ -305,7 +316,6 @@ impl MusicPlayer {
             song,
             sequencer,
             producer,
-            output,
             overruns,
             fade: None,
             resolved_reverb: reverb_level,
@@ -315,6 +325,10 @@ impl MusicPlayer {
             device_tail_frames: 0,
             max_device_tail_frames: device_tail,
             measured_drain_target: None,
+            transport: initial_transport(&output),
+            #[cfg(test)]
+            scripted_transport: std::collections::VecDeque::new(),
+            output,
         })
     }
 
@@ -341,6 +355,51 @@ impl MusicPlayer {
             .render_frame_with_fade(&mut buffer, fade_vol_x);
         let pushed = self.producer.push(&buffer);
         self.overruns += (buffer.len() - pushed) as u64;
+    }
+
+    /// Takes the output transport's next unreported transition, if any,
+    /// returned as `(from, to)` so the caller can report loss and recovery
+    /// once each. Reads only published state, so it never waits on the OS
+    /// audio stack, and rendering and fades do not depend on it: a lost
+    /// transport leaves [`Self::advance_frame`] running into a full ring.
+    ///
+    /// Each `to` of [`TransportState::Ready`] refreshes the device-tail
+    /// bounds ([`Self::note_transport`]). Always `None` for the null backend.
+    pub fn poll_transport(&mut self) -> Option<(TransportState, TransportState)> {
+        #[cfg(test)]
+        if let Some((state, advertised, rate)) = self.scripted_transport.pop_front() {
+            return Some(self.note_transport(state, advertised, rate));
+        }
+        let state = self.output.poll_transport_state()?;
+        let advertised = self.output.max_callback_frames();
+        let rate = self.output.device_sample_rate();
+        Some(self.note_transport(state, advertised, rate))
+    }
+
+    /// Records a transition to `to` and returns `(from, to)`.
+    ///
+    /// Only `Ready` refreshes: the output's device facts are provisional
+    /// until a stream attaches, and drain polls or a measured target latched
+    /// before then described a stream that is gone. A retrying transport
+    /// must not restart the wait, so other states change nothing.
+    pub(super) fn note_transport(
+        &mut self,
+        to: TransportState,
+        advertised: Option<usize>,
+        rate: u32,
+    ) -> (TransportState, TransportState) {
+        let from = std::mem::replace(&mut self.transport, to);
+        if to == TransportState::Ready {
+            self.max_device_tail_frames = game_frames_in(device_tail_millis(advertised, rate));
+            self.max_drain_wait_frames = max_drain_wait_frames(
+                self.ring_capacity,
+                callback_cadence_frames(advertised, rate),
+            );
+            self.drain_wait_frames = 0;
+            self.device_tail_frames = 0;
+            self.measured_drain_target = None;
+        }
+        (from, to)
     }
 
     /// Starts an `m4aMPlayFadeOut`-scheduled fade with `speed` frames per step.
@@ -457,6 +516,13 @@ impl MusicPlayer {
     }
 }
 
+fn initial_transport(output: &AudioOutput) -> TransportState {
+    match output.transport_state() {
+        TransportState::Null => TransportState::Null,
+        _ => TransportState::Connecting,
+    }
+}
+
 fn prefill(sequencer: &mut Sequencer, producer: &Producer) -> u64 {
     let target = producer.available_space() / RING_PREFILL_DIVISOR;
     let mut buffer = [0.0_f32; Sequencer::FRAME_SAMPLES];
@@ -483,5 +549,26 @@ impl MusicPlayer {
 
     pub(crate) fn ring_capacity_for_test(&self) -> usize {
         self.ring_capacity
+    }
+
+    pub(crate) fn script_transport_for_test(
+        &mut self,
+        state: TransportState,
+        advertised: Option<usize>,
+        rate: u32,
+    ) {
+        self.scripted_transport.push_back((state, advertised, rate));
+    }
+
+    pub(crate) fn max_device_tail_frames_for_test(&self) -> usize {
+        self.max_device_tail_frames
+    }
+
+    pub(crate) fn max_drain_wait_frames_for_test(&self) -> usize {
+        self.max_drain_wait_frames
+    }
+
+    pub(crate) fn overruns_for_test(&self) -> u64 {
+        self.overruns
     }
 }

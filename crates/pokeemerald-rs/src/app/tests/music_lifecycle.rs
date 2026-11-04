@@ -15,7 +15,7 @@ const MUSIC_FRAME: usize = 4;
 /// own `Goto` -- exactly like a real BGM (see `crate::music`'s module docs
 /// on why continuous playback needs no extra restart logic beyond a song's
 /// own jump commands). Mirrors `crate::music::tests`' own `looping_song`.
-fn looping_song_for_test() -> audio::Song {
+pub(super) fn looping_song_for_test() -> audio::Song {
     use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
     use std::sync::Arc;
 
