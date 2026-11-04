@@ -482,10 +482,13 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 }
 
 impl Header {
-    /// Parses a `PLTE` chunk's data for this header: PNG 1.2 §4.1.2 forbids
-    /// `PLTE` outside indexed images (colour types 0 and 4), §11.2.3 fixes the
-    /// length. The `2^bit_depth` limit (§4.1.2) is `decode_palette`'s alone:
-    /// libpng accepts an over-long palette, and upstream ships one.
+    /// Parses a `PLTE` chunk's data for this header. PNG 1.2 §4.1.2 forbids
+    /// `PLTE` for greyscale images (colour types 0 and 4) and permits it as a
+    /// suggested palette for truecolour (types 2 and 6); this decoder accepts
+    /// it only for indexed images (type 3), the one use the extracted assets
+    /// have. §11.2.3 fixes the length. The `2^bit_depth` limit (§4.1.2) is
+    /// `decode_palette`'s alone: libpng accepts an over-long palette, and
+    /// upstream ships one.
     fn parse_palette(&self, data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
         if self.color_type != INDEXED_COLOR_TYPE {
             return Err(PngError::PaletteForbiddenForColorType(self.color_type));
