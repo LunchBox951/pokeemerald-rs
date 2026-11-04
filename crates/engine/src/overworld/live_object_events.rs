@@ -16,6 +16,7 @@ use assets::ObjectEvent;
 use crate::overworld::collision::elevations_compatible;
 
 use super::ObjectEventState;
+use crate::overworld::player::TilePos;
 
 #[path = "object_event_scheduler.rs"]
 mod scheduler;
@@ -62,8 +63,9 @@ impl LiveObjectEvent {
 #[derive(Debug, Clone)]
 pub struct ObjectEventCollection {
     entries: Vec<LiveObjectEvent>,
-    /// Whether the scheduler has run its map-load admission pass.
-    admitted_at_load: bool,
+    /// The player tile the scheduler last reconciled the spawn window at; `None` before the
+    /// map-load admission pass.
+    reconciled_at: Option<TilePos>,
 }
 
 impl ObjectEventCollection {
@@ -79,7 +81,7 @@ impl ObjectEventCollection {
                     lifecycle: Lifecycle::Unadmitted,
                 })
                 .collect(),
-            admitted_at_load: false,
+            reconciled_at: None,
         }
     }
 

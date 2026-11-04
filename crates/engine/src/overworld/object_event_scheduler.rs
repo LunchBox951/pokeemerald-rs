@@ -49,30 +49,36 @@ pub struct FrameContext<'a> {
 }
 
 impl ObjectEventCollection {
-    /// Advances every active entry's movement type by one frame, then reconciles the spawn window.
+    /// Advances every active entry's movement type by one frame, then reconciles the spawn window
+    /// if the camera moved.
     ///
-    /// The first call also admits the entries already in view before any callback runs, as map
-    /// load's `TrySpawnObjectEvents` does ahead of the first frame (`overworld.c:2163`). An entry
-    /// the camera pass admits first runs on the following frame.
+    /// The window is reconciled when `player_position` differs from the tile it last was, as
+    /// `UpdateObjectEventsForCameraUpdate` runs only on a camera tile delta
+    /// (`field_camera.c:413-416`), so a hide flag cleared while the camera is still admits
+    /// nothing until the next move. The first call also admits the entries already in view before
+    /// any callback runs, as map load's `TrySpawnObjectEvents` does ahead of the first frame
+    /// (`overworld.c:2163`). An entry the camera pass admits first runs on the following frame.
     ///
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it; the
     /// fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
-        if !self.admitted_at_load {
+        if self.reconciled_at.is_none() {
             self.reconcile_with_view(context);
-            self.admitted_at_load = true;
         }
         if !context.frozen {
             for entry in &mut self.entries {
                 entry.run_movement_type(rng);
             }
         }
-        self.reconcile_with_view(context);
+        if self.reconciled_at != Some(context.player_position) {
+            self.reconcile_with_view(context);
+        }
     }
 
     /// Spawns every in-window, unhidden entry and removes every active entry outside the view
     /// (`TrySpawnObjectEvents` then `RemoveObjectEventsOutsideView`, `:1645-1675,1677-1710`).
     fn reconcile_with_view(&mut self, context: &FrameContext<'_>) {
+        self.reconciled_at = Some(context.player_position);
         for entry in &mut self.entries {
             entry.spawn_if_in_view(context);
             entry.remove_if_outside_view(context);

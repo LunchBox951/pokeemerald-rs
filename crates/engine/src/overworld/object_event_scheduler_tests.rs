@@ -182,10 +182,35 @@ fn a_set_hide_flag_refuses_admission_until_it_clears() {
     assert_eq!(phase(&rig, 1), 0);
 
     rig.event_data.flag_clear(flag).unwrap();
+    rig.player = (21, 20);
     rig.tick(1);
     assert!(rig.collection.get(1).unwrap().is_active());
     rig.tick(1);
     assert_eq!(phase(&rig, 1), 2);
+}
+
+#[test]
+fn clearing_a_hide_flag_while_the_camera_is_stationary_waits_for_the_next_camera_update() {
+    let mut rig = Rig::new(
+        vec![template(1, 20, 20, MovementType::FaceUp, HIDDEN_FLAG)],
+        (20, 20),
+    );
+    let flag = assets::object_event_flags::resolve(HIDDEN_FLAG).unwrap();
+    rig.event_data.flag_set(flag).unwrap();
+    rig.tick(1);
+    assert!(!rig.collection.get(1).unwrap().is_active());
+
+    // `TrySpawnObjectEvents` runs only on a camera tile delta (`field_camera.c:413-416`).
+    rig.event_data.flag_clear(flag).unwrap();
+    rig.tick(10);
+    assert!(
+        !rig.collection.get(1).unwrap().is_active(),
+        "admitted with no camera update"
+    );
+
+    rig.player = (21, 20);
+    rig.tick(1);
+    assert!(rig.collection.get(1).unwrap().is_active());
 }
 
 #[test]
