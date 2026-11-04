@@ -6,17 +6,14 @@ use crate::extract::voicegroups::parser;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
 
 use crate::gen_rom_profile::error::GenRomProfileError;
-use crate::gen_rom_profile::locate::{
-    only_one_matching, slice_at_addr, to_offset, u32_at_addr, u8_at_addr,
-};
-use crate::gen_rom_profile::plan::{
-    KeysplitPlan, ReportLine, Resolution, SamplePlan, SymbolExpectation, VoicegroupPlan,
-};
+use crate::gen_rom_profile::locate::{only_one_matching, u32_at_addr};
+use crate::gen_rom_profile::plan::{SymbolExpectation, VoicegroupPlan};
 use crate::gen_rom_profile::Context;
 
+use super::samples::SampleCandidates;
 use super::{
     ADDRESSABLE_SLOTS, DIRECT_SOUND_PREFIX, DIRECT_SOUND_SYMBOL, PROGRAMMABLE_WAVE_PREFIX,
-    PROGRAMMABLE_WAVE_SYMBOL, SLOT_BYTES, SLOT_POINTER, SLOT_TABLE, TYPE_KEYSPLIT, TYPE_RHYTHM,
+    PROGRAMMABLE_WAVE_SYMBOL, SLOT_BYTES, SLOT_POINTER,
 };
 
 /// The map symbol expected at a voicegroup's address.
@@ -32,7 +29,7 @@ pub(super) fn voicegroup_symbol(label: &str, starting_note: u8) -> SymbolExpecta
 
 /// The map symbol expected at a key-split table's address; biased tables
 /// have none, as with [`voicegroup_symbol`].
-fn keysplit_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
+pub(super) fn keysplit_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
     if starting_note == 0 {
         SymbolExpectation::Exact(format!("keysplit_{label}"))
     } else {
@@ -52,23 +49,25 @@ pub(super) fn plan_for(label: &str, addr: u32, group: &RawVoiceGroup) -> Voicegr
 }
 
 /// The ROM address of `group`: the single run of slots whose sample pointers
-/// match the located samples.
+/// each name one of the located copies of the sample the source declares.
 ///
-/// `starting_note` biases the returned address back from the first slot.
+/// `starting_note` biases the returned address back from the first slot. This
+/// only anchors the song table from the title; every other group is reached
+/// through pointers (`closure`).
 pub(super) fn locate_voicegroup(
     ctx: &Context<'_>,
     label: &str,
     group: &RawVoiceGroup,
-    direct_sound: &[SamplePlan],
-    programmable_wave: &[SamplePlan],
+    direct_sound: &[SampleCandidates],
+    programmable_wave: &[SampleCandidates],
 ) -> Result<u32, GenRomProfileError> {
-    let find = |id: &str, table: &[SamplePlan]| {
+    fn find<'a>(id: &str, table: &'a [SampleCandidates]) -> Option<&'a [u32]> {
         table
             .iter()
-            .find(|plan| plan.id == id)
-            .map(|plan| plan.addr)
-    };
-    let mut constraints: Vec<(usize, u32)> = Vec::new();
+            .find(|candidates| candidates.id == id)
+            .map(|candidates| candidates.addrs.as_slice())
+    }
+    let mut constraints: Vec<(usize, &[u32])> = Vec::new();
     for (index, slot) in group.slots.iter().enumerate() {
         let required = match slot {
             RawSlot::DirectSound { sample_symbol, .. } => sample_symbol
@@ -85,31 +84,34 @@ pub(super) fn locate_voicegroup(
                 }),
             _ => None,
         };
-        if let Some(addr) = required {
-            constraints.push((index, addr));
+        if let Some(addrs) = required {
+            constraints.push((index, addrs));
         }
     }
-    let (anchor_index, anchor_addr) =
-        *constraints
-            .first()
-            .ok_or_else(|| GenRomProfileError::StructMismatch {
-                id: format!("voicegroup_{label}"),
-                reason: "no slot names a sample, so nothing anchors the run".to_owned(),
-            })?;
+    let &(anchor_index, anchor_addrs) = constraints
+        .iter()
+        .min_by_key(|(_, addrs)| addrs.len())
+        .ok_or_else(|| GenRomProfileError::StructMismatch {
+            id: format!("voicegroup_{label}"),
+            reason: "no slot names a sample, so nothing anchors the run".to_owned(),
+        })?;
 
     let bias = u32::from(group.starting_note) * SLOT_BYTES;
     let anchor_slot = u32::try_from(anchor_index).expect("a slot index fits in u32");
     only_one_matching(
         &format!("voicegroup_{label}"),
         "every sample slot in the group",
-        ctx.pointers
-            .refs_to(anchor_addr)
-            .iter()
-            .filter_map(|at| at.checked_sub(SLOT_POINTER + anchor_slot * SLOT_BYTES)),
+        anchor_addrs.iter().flat_map(|&anchor_addr| {
+            ctx.pointers
+                .refs_to(anchor_addr)
+                .iter()
+                .filter_map(move |at| at.checked_sub(SLOT_POINTER + anchor_slot * SLOT_BYTES))
+        }),
         |&first_slot| {
-            constraints.iter().all(|&(index, addr)| {
+            constraints.iter().all(|&(index, addrs)| {
                 let slot = u32::try_from(index).expect("a slot index fits in u32");
-                u32_at_addr(ctx.rom, first_slot + slot * SLOT_BYTES + SLOT_POINTER) == Some(addr)
+                u32_at_addr(ctx.rom, first_slot + slot * SLOT_BYTES + SLOT_POINTER)
+                    .is_some_and(|value| addrs.contains(&value))
             })
         },
     )
@@ -123,124 +125,8 @@ pub(super) fn locate_voicegroup(
     })
 }
 
-/// The child voicegroups and key-split tables of one group.
-type Children = (Vec<VoicegroupPlan>, Vec<KeysplitPlan>);
-
-pub(super) fn walk_children(
-    ctx: &Context<'_>,
-    parent: u32,
-    group: &RawVoiceGroup,
-    groups: &std::collections::HashMap<String, RawVoiceGroup>,
-    report: &mut Vec<ReportLine>,
-) -> Result<Children, GenRomProfileError> {
-    let tables = read_keysplit_tables(&ctx.upstream)?;
-    let mut voicegroups = Vec::new();
-    let mut keysplits = Vec::new();
-
-    for (index, slot) in group.slots.iter().enumerate() {
-        // `starting_note` biases the group's address back from its first slot.
-        let slot_addr = parent
-            + u32::from(group.starting_note) * SLOT_BYTES
-            + u32::try_from(index).expect("a slot index fits in u32") * SLOT_BYTES;
-        let (child_label, table_label, expected_type) = match slot {
-            RawSlot::KeySplit {
-                child_label,
-                table_label,
-            } => (child_label, Some(table_label), TYPE_KEYSPLIT),
-            RawSlot::Rhythm { child_label } => (child_label, None, TYPE_RHYTHM),
-            _ => continue,
-        };
-        let kind = u8_at_addr(ctx.rom, slot_addr);
-        if kind != Some(expected_type) {
-            return Err(GenRomProfileError::StructMismatch {
-                id: format!("voicegroup_{child_label}"),
-                reason: format!(
-                    "slot {index} reads type {kind:?}, not the {expected_type:#04X} its source declares"
-                ),
-            });
-        }
-        let child_addr = u32_at_addr(ctx.rom, slot_addr + SLOT_POINTER)
-            .filter(|value| to_offset(*value).is_some())
-            .ok_or_else(|| GenRomProfileError::StructMismatch {
-                id: format!("voicegroup_{child_label}"),
-                reason: format!("slot {index} does not point into the cartridge"),
-            })?;
-        let child =
-            groups
-                .get(child_label.as_str())
-                .ok_or_else(|| GenRomProfileError::UpstreamSource {
-                    path: ctx.upstream.join("sound/voicegroups"),
-                    reason: format!("no voicegroup declares the label `{child_label}`"),
-                })?;
-        let mut line = ReportLine::unique(format!("audio/voicegroup/{child_label}"), child_addr, 0)
-            .with(Resolution::PointerWalk)
-            .note(format!("{} slots declared", child.slots.len()));
-        line.symbol = voicegroup_symbol(child_label, child.starting_note);
-        report.push(line);
-        voicegroups.push(plan_for(child_label, child_addr, child));
-
-        if let Some(table_label) = table_label {
-            keysplits.push(locate_keysplit(
-                ctx,
-                slot_addr,
-                table_label,
-                &tables,
-                report,
-            )?);
-        }
-    }
-    Ok((voicegroups, keysplits))
-}
-
-/// The key-split table at a slot's table pointer.
-fn locate_keysplit(
-    ctx: &Context<'_>,
-    slot_addr: u32,
-    label: &str,
-    tables: &std::collections::HashMap<String, parser::RawKeySplitTable>,
-    report: &mut Vec<ReportLine>,
-) -> Result<KeysplitPlan, GenRomProfileError> {
-    let table = tables
-        .get(label)
-        .ok_or_else(|| GenRomProfileError::UpstreamSource {
-            path: ctx.upstream.join("sound/keysplit_tables.inc"),
-            reason: format!("no key-split table named `{label}`"),
-        })?;
-    let addr = u32_at_addr(ctx.rom, slot_addr + SLOT_TABLE)
-        .filter(|value| to_offset(*value).is_some())
-        .ok_or_else(|| GenRomProfileError::StructMismatch {
-            id: format!("keysplit_{label}"),
-            reason: "the slot's table pointer is not a cartridge address".to_owned(),
-        })?;
-    // The table pointer is biased back by `starting_note`; the bytes start after it.
-    let data = addr + u32::from(table.starting_note);
-    if slice_at_addr(ctx.rom, data, table.table.len()) != Some(table.table.as_slice()) {
-        return Err(GenRomProfileError::StructMismatch {
-            id: format!("keysplit_{label}"),
-            reason: format!(
-                "the {} bytes at {data:08X} are not the table",
-                table.table.len()
-            ),
-        });
-    }
-    let len = u16::try_from(table.table.len()).expect("a key-split table fits in u16");
-    let mut line = ReportLine::unique(format!("keysplit_{label}"), addr, u32::from(len))
-        .with(Resolution::PointerWalk);
-    line.symbol = keysplit_symbol(label, table.starting_note);
-    report.push(line.note(format!(
-        "biased back {} notes; {len} notes mapped",
-        table.starting_note
-    )));
-    Ok(KeysplitPlan {
-        label: label.to_owned(),
-        addr,
-        starting_note: table.starting_note,
-        len,
-    })
-}
-
 /// The key-split tables of `sound/keysplit_tables.inc`.
-fn read_keysplit_tables(
+pub(super) fn read_keysplit_tables(
     upstream: &Path,
 ) -> Result<std::collections::HashMap<String, parser::RawKeySplitTable>, GenRomProfileError> {
     let path = upstream.join("sound/keysplit_tables.inc");

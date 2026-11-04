@@ -33,6 +33,13 @@
 //! BPM halved; `PAN`, `BEND`, and `TUNE` store `64 + value`. Decoding ends
 //! at `FINE` or reconnects to an already decoded execution context.
 //!
+//! A loop's second lap often arrives with a different running status, key or
+//! velocity from its first, though the loop never reads them before setting
+//! them. [`fold`] merges those contexts back into one body, so the track is
+//! the checkout compiler's stream with its explicit `Goto`. The bytes after a
+//! `GOTO` (the rests and `FINE` `tools/mid2agb` writes there) are kept when
+//! they decode, as the compiler's trailing events are.
+//!
 //! Rests come out of the ROM in `tools/mid2agb`'s chunking and go into the
 //! pack in [`assets::Song::new`]'s canonical shape; nothing here has to
 //! know the difference.
@@ -48,7 +55,9 @@ use crate::rom::Rom;
 use crate::roots::{AudioRoots, Roots, SongRoot};
 
 mod decode;
+mod fold;
 use decode::{decode_track, Context};
+use fold::Point;
 
 /// `gClockTable` (`pokeemerald/src/m4a_tables.c`): the tick count each
 /// rest and note opcode stands for.
@@ -88,6 +97,8 @@ const XCMD_IECV: u8 = 0x08;
 const XCMD_IECL: u8 = 0x09;
 /// `C_V`, the centre `PAN`/`BEND`/`TUNE` store.
 const CENTER: u8 = 0x40;
+/// A `GOTO`'s pointer operand.
+const GOTO_OPERAND_BYTES: usize = 4;
 /// The engine's `patternStack` depth.
 const MAX_PATTERN_DEPTH: usize = 3;
 /// `SongHeader` field offsets.
@@ -231,6 +242,13 @@ struct Track<'r, 'a> {
     id: &'static str,
     index: usize,
     events: Vec<SongEvent>,
+    /// Where each of `events` came from, aligned with it.
+    points: Vec<Point>,
+    /// The command being executed.
+    command: Point,
+    /// The bytes after each executed `GOTO`: unreachable by execution, but
+    /// part of the track's stream.
+    tails: Vec<Context>,
     state: Context,
 }
 
@@ -265,6 +283,7 @@ impl Track<'_, '_> {
 
     fn push(&mut self, event: SongEvent) {
         self.events.push(event);
+        self.points.push(self.command.clone());
     }
 }
 
@@ -290,7 +309,13 @@ fn step(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<Step, ImportErr
             track.push(SongEvent::Fine);
             return Ok(Step::Fine);
         }
-        CMD_GOTO => track.destination(at)?,
+        CMD_GOTO => {
+            let destination = track.destination(at)?;
+            let mut tail = track.state.clone();
+            tail.at = at + GOTO_OPERAND_BYTES;
+            track.tails.push(tail);
+            destination
+        }
         // A `PATT` at the engine's stack depth branches straight to
         // `ply_fine` without reading its target (m4a_1.s:851-867).
         CMD_PATT if track.state.patterns.len() >= MAX_PATTERN_DEPTH => {

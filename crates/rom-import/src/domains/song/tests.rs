@@ -146,7 +146,8 @@ fn track_b() -> Vec<u8> {
 }
 
 // The loop first arrives with an initialized note state, unlike its entry
-// after VOICE. The contexts converge after the explicit note; FINE is unreachable.
+// after VOICE. The contexts converge after the explicit note, so the second
+// pass folds back into the first; the unreachable FINE after the GOTO stays.
 fn track_b_events() -> Vec<SongEvent> {
     let note = SongEvent::Note {
         key: 60,
@@ -158,18 +159,17 @@ fn track_b_events() -> Vec<SongEvent> {
         SongEvent::Volume(127),
         note.clone(),
         SongEvent::Wait(1),
-        note.clone(),
+        note,
         SongEvent::Wait(1),
         SongEvent::Wait(2),
         SongEvent::MemAccBranch {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            target: 8,
+            target: 1,
         },
-        SongEvent::Volume(127),
-        note,
-        SongEvent::Goto(3),
+        SongEvent::Goto(1),
+        SongEvent::Fine,
     ]
 }
 

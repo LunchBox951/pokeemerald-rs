@@ -28,7 +28,7 @@ use super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::Context;
 
 /// A scratch directory unique to one test.
-fn scratch(name: &str) -> PathBuf {
+pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "pokeemerald-rs-gen-rom-profile-{name}-{}",
         std::process::id()
@@ -1379,22 +1379,19 @@ fn a_malformed_song_payload_is_refused_as_an_entry_shape() {
 }
 
 #[test]
-fn songs_beside_mus_title_are_left_to_the_checkout_instead_of_refused() {
-    // `cargo xtask extract` emits the whole checkpoint manifest, but the ROM
-    // backend imports only `mus_title` until #1850; the locator plans that one
-    // song and claims nothing about the others.
+fn a_song_beside_mus_title_the_rom_does_not_hold_is_refused() {
+    // Every pack song is planned from `gSongTable`; `MUS_OTHER`'s entry is
+    // empty in this ROM, so its header cannot be read.
     with_audio_context(
         "audio-two-songs",
         &["audio/song/mus_other", "audio/song/mus_title"],
         |ctx| {
             let mut report = Vec::new();
-            let plan = audio::locate(ctx, &mut report)
-                .expect("a pack holding mus_title among other songs locates");
-            assert_eq!(plan.songs.len(), 1);
-            assert_eq!(plan.songs[0].id, "audio/song/mus_title");
+            let err = audio::locate(ctx, &mut report)
+                .expect_err("a pack song with no table entry must be refused");
             assert!(
-                report.iter().all(|line| line.id != "audio/song/mus_other"),
-                "the other song is not claimed: {report:?}"
+                matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/song/mus_other"),
+                "{err:?}"
             );
         },
     );

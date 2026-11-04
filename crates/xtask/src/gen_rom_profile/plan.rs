@@ -648,7 +648,7 @@ pub struct ProfilePlan {
     pub text_window: TextWindowPlan,
     /// Interface palettes.
     pub interface: Vec<PalettePlan>,
-    /// `MUS_TITLE` and everything it plays through.
+    /// The checkpoint songs and everything they play through.
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,

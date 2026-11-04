@@ -14,6 +14,8 @@ use assets::{
 };
 use pack_format::PackWriter;
 
+mod borrowed;
+
 use super::{direct_sound, programmable_wave, voicegroup, write};
 use crate::error::ImportError;
 use crate::fixture::RomFixture;
