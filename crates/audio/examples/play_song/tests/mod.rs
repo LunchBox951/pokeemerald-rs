@@ -9,7 +9,7 @@ use super::{
     push_frame, start_playback, usable_callback_in_span, wait_for_device_tail,
     wait_for_device_tail_or_measured, wait_for_drain, wait_for_frame_deadline,
     wait_for_measured_tail, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
-    DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+    DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX, SUPERVISION_GRACE,
 };
 use audio::Sequencer;
 use platform::audio::{PlaybackProgress, UsableReading};

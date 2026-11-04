@@ -71,6 +71,13 @@ impl FakeStream {
         self.errors.set(self.errors.get() + 1);
     }
 
+    /// The worker retires a stream whose fatal error was already counted.
+    fn retire_counted_stream(&self) {
+        let lost = TransportState::Unavailable(TransportFailure::StreamLost);
+        self.published.borrow_mut().push_back(lost);
+        self.state.set(lost);
+    }
+
     /// The stream fails and is detached. With `rebuilt`, the worker has
     /// already attached a new one by the time the application looks.
     fn lose_stream(&self, rebuilt: bool) {
@@ -221,7 +228,7 @@ fn a_recovered_error_during_the_device_tail_still_finishes() {
     );
 
     assert!(result.is_ok(), "the last buffer played despite the XRUN");
-    assert_eq!(slept, [tail]);
+    assert_eq!(slept, [tail, SUPERVISION_GRACE]);
 }
 
 #[test]
@@ -346,4 +353,66 @@ fn a_stream_lost_without_a_callback_error_still_ends_playback_after_a_rebuild() 
         })
     ));
     assert_eq!(stream.errors.get(), BASELINE_ERRORS);
+}
+
+#[test]
+fn a_fatal_error_counted_before_the_worker_publishes_still_fails_the_tail() {
+    let (stream, mut health) = FakeStream::new(&[]);
+    let sleeps = Cell::new(0_u32);
+
+    let result = wait_for_device_tail(
+        Duration::from_millis(200),
+        || stream.terminal(&mut health),
+        |_| {
+            sleeps.set(sleeps.get() + 1);
+            if sleeps.get() == 1 {
+                // The callback counts a fatal error and raises `lost`; the
+                // worker has not supervised yet, so nothing is published.
+                stream.xrun();
+            } else {
+                // The worker's next supervise tick retires the stream.
+                stream.retire_counted_stream();
+            }
+        },
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+        ),
+        "a fatal error the worker had not yet published was reported as success: ok={}",
+        result.is_ok()
+    );
+}
+
+#[test]
+fn a_fatal_error_counted_before_the_worker_publishes_still_fails_the_measured_tail() {
+    let (stream, mut health) = FakeStream::new(&[]);
+    let clock = Cell::new(Instant::now());
+    let sleeps = Cell::new(0_u32);
+
+    let result = wait_for_device_tail_or_measured(
+        Some(4),
+        Duration::from_millis(200),
+        48_000,
+        &policy(),
+        || {
+            // The target sounds just as the callback counts a fatal error.
+            stream.xrun();
+            Some(progress(4, 4))
+        },
+        || stream.terminal(&mut health),
+        || clock.get(),
+        |duration| {
+            sleeps.set(sleeps.get() + 1);
+            clock.set(clock.get() + duration);
+            stream.retire_counted_stream();
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+    ));
 }

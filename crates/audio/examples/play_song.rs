@@ -447,14 +447,33 @@ fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32)
     }
 }
 
-/// Sleeps `tail`, then fails if `terminal_errors` reports the playback ended:
-/// a terminal device error during the tail means the last buffer never played.
+/// Sleeps `tail`, then fails if the playback ended: a terminal device error
+/// during the tail means the last buffer never played.
 fn wait_for_device_tail(
     tail: Duration,
     mut terminal_errors: impl FnMut() -> Option<u64>,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
     sleep(tail);
+    finish_unless_lost(&mut terminal_errors, &mut sleep)
+}
+
+/// How long the transport's worker has to retire a stream whose fatal error
+/// the callback already counted: it supervises on a short poll and only then
+/// publishes the loss, so the final look must outwait that tick.
+const SUPERVISION_GRACE: Duration = Duration::from_millis(100);
+
+/// The success decision at the end of the tail. A fatal callback error is
+/// counted before the worker publishes the transport as unavailable, so a
+/// look that finds nothing yet is repeated after [`SUPERVISION_GRACE`].
+fn finish_unless_lost(
+    terminal_errors: &mut impl FnMut() -> Option<u64>,
+    sleep: &mut impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    if let Some(errors) = terminal_errors() {
+        return Err(DrainError::StreamStoppedDuringTail { errors });
+    }
+    sleep(SUPERVISION_GRACE);
     match terminal_errors() {
         None => Ok(()),
         Some(errors) => Err(DrainError::StreamStoppedDuringTail { errors }),
@@ -947,9 +966,9 @@ fn wait_for_device_tail_or_measured(
     device_sample_rate: u32,
     policy: &RetryPolicy,
     progress: impl FnMut() -> Option<PlaybackProgress>,
-    terminal_errors: impl FnMut() -> Option<u64>,
+    mut terminal_errors: impl FnMut() -> Option<u64>,
     now: impl FnMut() -> Instant,
-    sleep: impl FnMut(Duration),
+    mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
     if let Some(target) = submitted_target {
         wait_for_measured_tail(
@@ -958,10 +977,11 @@ fn wait_for_device_tail_or_measured(
             device_sample_rate,
             policy,
             progress,
-            terminal_errors,
+            &mut terminal_errors,
             now,
-            sleep,
-        )
+            &mut sleep,
+        )?;
+        finish_unless_lost(&mut terminal_errors, &mut sleep)
     } else {
         wait_for_device_tail(derived_tail, terminal_errors, sleep)
     }
