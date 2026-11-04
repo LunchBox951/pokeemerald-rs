@@ -309,12 +309,13 @@ fn fabricated_coord_event(x: i16, y: i16, elevation: u8) -> assets::CoordEvent {
     }
 }
 
-/// The guard's predicate itself: a stored-0 event stacks with any elevation on its tile, which
-/// full-tuple dedup missed (#3074); distinct ordinary elevations and distinct tiles do not stack.
+/// The guard's predicate itself: a stored-0 event stacks with any elevation on its tile, as
+/// `coord_events_at`'s wildcard match does; distinct ordinary elevations and distinct tiles do
+/// not stack.
 #[test]
 fn the_stacked_event_predicate_counts_a_stored_wildcard_elevation_as_overlapping() {
     let wildcard = engine::overworld::collision::ELEVATION_TRANSITION;
-    // The #3074 case: a stored-0 event on the rescue tile plus the real elevation-3 event.
+    // A stored-0 event on the rescue tile plus the real elevation-3 event.
     let stack = [
         fabricated_coord_event(10, 19, wildcard),
         fabricated_coord_event(10, 19, ROUTE_101_TRIGGER_ELEVATION),
