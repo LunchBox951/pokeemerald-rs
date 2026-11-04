@@ -8,15 +8,15 @@ use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
-    field_messages, fonts, inventory, layouts, locate_profile, naming_screen, opening_scene,
-    poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
+    opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
     poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
+    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -30,6 +30,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
         .chain(layout_ids())
         .chain(text_window_ids())
+        .chain(INTERFACE_IMAGE_IDS.map(str::to_owned))
         .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
         .chain(sprite_sheet_ids())
         // Sprite palettes stay, so deleting a sheet removes only that sheet.
@@ -91,6 +92,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "naming_screen" {
             naming_screen::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "interface" {
+            interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
             poke_ball::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
@@ -800,6 +803,25 @@ fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
         );
         assert!(report.is_empty(), "{report:?}");
     });
+}
+
+#[test]
+fn a_pack_missing_the_down_arrow_sheet_is_refused() {
+    let id = "interface/image/down_arrow";
+    assert_eq!(INTERFACE_IMAGE_IDS, [id]);
+    assert_refused("no-down-arrow", without(id), id, "interface");
+}
+
+#[test]
+fn an_unrelated_interface_image_does_not_satisfy_the_down_arrow_requirement() {
+    let mut entries = without("interface/image/down_arrow");
+    entries.push(raw_entry("interface/image/other".to_owned(), vec![0]));
+    assert_refused(
+        "other-interface-image",
+        entries,
+        "interface/image/down_arrow",
+        "interface",
+    );
 }
 
 #[test]

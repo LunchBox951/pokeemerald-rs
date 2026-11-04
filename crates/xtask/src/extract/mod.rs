@@ -24,7 +24,7 @@
 //! - the tall-grass field-effect sheet and its `general_1` palette;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
-//!   main-menu background palette; and
+//!   main-menu background palette, and the text printer's down-arrow sheet; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes and both Birch tilemaps;
 //! - Birch's speech scene (shadow sheet, background tilemap and palettes, his
@@ -72,7 +72,7 @@
 //! - `layout/<name>/{map,border}`
 //! - `font/<name>/glyphs`
 //! - `text-window/{image,palette}/<stem>`
-//! - `interface/palette/main_menu_bg`
+//! - `interface/image/down_arrow` and `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `evolution-scene/{image,palette,raw}/<name>`
@@ -207,6 +207,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
+    interface::extract_interface_images(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     opening_scene::extract_opening_scene(&upstream, &mut writer)?;

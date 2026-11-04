@@ -85,6 +85,10 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "naming-screen/",
 ];
 
+/// The text printer's page-prompt arrow, by id: `interface/` is a complete
+/// prefix, but a sheet both backends drop together would pass it.
+const DOWN_ARROW_IDS: [&str; 1] = ["interface/image/down_arrow"];
+
 /// The species whose static battler art both backends must carry: the
 /// starters, then the checkpoint's other eleven Pokémon.
 const BATTLER_SPECIES: [&str; 14] = [
@@ -383,6 +387,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
+        .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -526,6 +531,58 @@ fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
         .colors()
         .eq(from_checkout.sheet.palette.colors()));
     assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
+}
+
+/// The down arrow resolves through the typed accessor from both packs, and
+/// all four frames are equal. The accessor validates the sheet's shape, so a
+/// ROM import that wrote the wrong raster fails here as well as in the byte
+/// comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-down-arrow-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let from_rom = imported
+        .text_printer_down_arrow()
+        .expect("the imported pack's down arrow");
+    let from_checkout = checkout
+        .text_printer_down_arrow()
+        .expect("the checkout pack's down arrow");
+    let _ = std::fs::remove_file(imported_path);
+
+    for index in 0..4 {
+        let (rom_frame, checkout_frame) = (from_rom.frame(index), from_checkout.frame(index));
+        assert_eq!(
+            (rom_frame.width, rom_frame.height),
+            (8, 16),
+            "frame {index}"
+        );
+        assert!(
+            rom_frame.pixels.iter().any(|&pixel| pixel != 0),
+            "frame {index} is blank"
+        );
+        assert_eq!(rom_frame.pixels, checkout_frame.pixels, "frame {index}");
+    }
 }
 
 /// The cries, named by id: the `audio/cry/table` entry, exactly
