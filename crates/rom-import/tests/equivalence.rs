@@ -32,12 +32,11 @@
 //!   here instead of shipping a pack with a hole in it. A domain slice adds
 //!   its prefix when it lands.
 //!
-//! The species cries are under the complete `audio/` prefix like every other
-//! sample: the table and the samples it names are required of the ROM backend,
-//! and [`the_cries_are_named_by_id`] pins them by the table's own contents so
-//! a cry both backends drop together still fails.
-//! Every `audio/voicegroup/` and `audio/sample/` id is compared; the songs are
-//! pinned by [`ROM_IMPORTED_SONG_IDS`], not claimed by prefix.
+//! Everything under `audio/` is claimed: every checkpoint song, voicegroup and
+//! sample, and the species cries. [`the_cries_are_named_by_id`] pins the cries
+//! by the table's own contents, and [`CHECKPOINT_SONG_COUNT`] and
+//! [`PINNED_SONG_IDS`] pin the songs, so a song both backends drop together
+//! still fails.
 //!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
@@ -69,8 +68,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
-    "audio/voicegroup/",
-    "audio/sample/",
+    "audio/",
     "trainer-pic/",
     "trainer/",
     "battle-message/",
@@ -104,10 +102,21 @@ const BATTLER_SPECIES: [&str; 14] = [
     "pelipper",
 ];
 
-/// The only song the ROM backend imports, by id: its song root is the profile's lone
-/// `mus_title` entry. The checkout pack also carries every other checkpoint song, so
-/// `audio/song/` is not in [`COMPLETE_PREFIXES`]; a dropped title still fails by this id.
-const ROM_IMPORTED_SONG_IDS: [&str; 1] = ["audio/song/mus_title"];
+/// How many songs the checkpoint manifest selects
+/// (`crates/xtask/src/extract/midi/manifest.rs`).
+const CHECKPOINT_SONG_COUNT: usize = 150;
+
+/// Songs both backends must carry whatever else changes: the title, the silent
+/// dummy (no tracks, the default voicegroup), looping music, and sound effects
+/// on three music players.
+const PINNED_SONG_IDS: [&str; 6] = [
+    "audio/song/mus_title",
+    "audio/song/mus_dummy",
+    "audio/song/mus_route101",
+    "audio/song/mus_vs_wild",
+    "audio/song/se_select",
+    "audio/song/se_low_health",
+];
 
 /// Whether the ROM backend claims every checkout entry with this id.
 fn is_claimed_complete(id: &str) -> bool {
@@ -286,19 +295,15 @@ fn missing_imported<V>(ids: &[&str], imported: &BTreeMap<String, V>) -> Vec<Stri
 }
 
 #[test]
-fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
+fn the_whole_audio_prefix_is_claimed() {
     assert!(is_claimed_complete("audio/voicegroup/title"));
     assert!(is_claimed_complete(
         "audio/sample/direct-sound/sc88pro_trumpet_60"
     ));
-    for id in ROM_IMPORTED_SONG_IDS {
-        assert!(
-            !is_claimed_complete(id),
-            "{id} is pinned by id, not by prefix"
-        );
+    assert!(is_claimed_complete("audio/cry/table"));
+    for id in PINNED_SONG_IDS {
+        assert!(is_claimed_complete(id), "{id} is under the audio prefix");
     }
-    assert!(!is_claimed_complete("audio/song/se_select"));
-    assert!(!is_claimed_complete("audio/song/mus_vs_wild"));
 }
 
 #[test]
@@ -364,9 +369,19 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `audio/song/` is not a complete prefix, so the imported songs are
-    // pinned by id too (`ROM_IMPORTED_SONG_IDS`).
-    differences.extend(missing_imported(&ROM_IMPORTED_SONG_IDS, &imported));
+    // A song both backends drop together is still caught: the count and the
+    // pinned ids come from this file, not from either pack.
+    differences.extend(missing_imported(&PINNED_SONG_IDS, &imported));
+    let songs = imported
+        .keys()
+        .filter(|id| id.starts_with("audio/song/"))
+        .count();
+    if songs != CHECKPOINT_SONG_COUNT {
+        differences.push(format!(
+            "the ROM backend wrote {songs} songs, the checkpoint manifest selects \
+             {CHECKPOINT_SONG_COUNT}"
+        ));
+    }
 
     // `battle-interface/` is not a complete prefix, so the textbox, element,
     // battle-bar, frame, shadow, and ball-palette entries are pinned by id.

@@ -4,8 +4,6 @@ use std::path::Path;
 
 use assets::audio::Song;
 
-use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
-
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::locate::{
     only_one_matching, to_offset, u16_at_addr, u32_at_addr, u8_at_addr,
@@ -13,6 +11,7 @@ use crate::gen_rom_profile::locate::{
 use crate::gen_rom_profile::plan::{ReportLine, Resolution, SongPlan};
 use crate::gen_rom_profile::Context;
 
+use super::validation::leak_str;
 use super::{raw_payload, MAX_TRACKS, SLOT_POINTER, SONG_TABLE_ENTRY_BYTES, SONG_TABLE_MS_OFFSET};
 
 const HEADER_TRACK_COUNT_OFFSET: u32 = 0;
@@ -22,16 +21,20 @@ const HEADER_FIXED_BYTES: u32 = 8;
 const TRACK_POINTER_BYTES: u32 = 4;
 const REVERB_ENABLED_BIT: u8 = 0x80;
 
-/// Finds the header of the song that plays through `voicegroup`, and the
-/// `gSongTable` holding it: the table starts at the header's entry minus
+/// A song's plan and the pack voicegroup its header's tone pointer names.
+pub(super) struct LocatedSong {
+    pub plan: SongPlan,
+    pub voicegroup_id: String,
+}
+
+/// Finds `gSongTable` from the one song `song_id` that plays through the
+/// already located voicegroup: the table starts at the header's entry minus
 /// the song's `MUS_*` index in entries.
-pub(super) fn locate_song(
+pub(super) fn locate_table(
     ctx: &Context<'_>,
     song_id: &str,
-    voicegroup_label: &str,
     voicegroup: u32,
-    report: &mut Vec<ReportLine>,
-) -> Result<(SongPlan, u32), GenRomProfileError> {
+) -> Result<u32, GenRomProfileError> {
     let header = only_one_matching(
         song_id,
         "the MP2K song-header layout",
@@ -39,23 +42,56 @@ pub(super) fn locate_song(
             .refs_to(voicegroup)
             .iter()
             .filter_map(|at| at.checked_sub(SLOT_POINTER)),
-        |&base| is_song_header(ctx, base),
+        |&base| is_playable_song_header(ctx, base),
     )?;
-    let track_count = u8_at_addr(ctx.rom, header + HEADER_TRACK_COUNT_OFFSET).unwrap_or(0);
     let entry = only_one_matching(
         song_id,
         "a gSongTable entry",
         ctx.pointers.refs_to(header).iter().copied(),
         |_| true,
     )?;
-    check_song_header(ctx, song_id, voicegroup_label, header, entry)?;
     let index = song_index(&ctx.upstream, song_id)?;
-    let table = entry
+    entry
         .checked_sub(u32::from(index) * SONG_TABLE_ENTRY_BYTES)
         .ok_or_else(|| GenRomProfileError::StructMismatch {
             id: "gSongTable".to_owned(),
             reason: format!("entry {index} at {entry:08X} puts the table before the ROM"),
+        })
+}
+
+/// Reads song `song_id`'s `gSongTable` entry and header, and requires them
+/// and the tracks they point at to agree with the pack song.
+pub(super) fn plan_song(
+    ctx: &Context<'_>,
+    table: u32,
+    song_id: &str,
+    report: &mut Vec<ReportLine>,
+) -> Result<LocatedSong, GenRomProfileError> {
+    let index = song_index(&ctx.upstream, song_id)?;
+    let mismatch = |reason: String| GenRomProfileError::StructMismatch {
+        id: song_id.to_owned(),
+        reason,
+    };
+    let entry = table
+        .checked_add(u32::from(index) * SONG_TABLE_ENTRY_BYTES)
+        .ok_or_else(|| mismatch(format!("entry {index} is past the address space")))?;
+    let header = u32_at_addr(ctx.rom, entry)
+        .filter(|value| to_offset(*value).is_some())
+        .ok_or_else(|| {
+            mismatch(format!(
+                "the song-table entry {index} at {entry:08X} holds no cartridge pointer"
+            ))
         })?;
+    if !is_song_header(ctx, header) {
+        return Err(mismatch(format!(
+            "{header:08X} is not the MP2K song-header layout"
+        )));
+    }
+    let track_count = u8_at_addr(ctx.rom, header + HEADER_TRACK_COUNT_OFFSET).unwrap_or(0);
+    let voicegroup = u32_at_addr(ctx.rom, header + SLOT_POINTER)
+        .filter(|value| to_offset(*value).is_some())
+        .ok_or_else(|| mismatch(format!("the header at {header:08X} has no tone pointer")))?;
+    let voicegroup_id = check_song_header(ctx, song_id, header, entry)?;
 
     report.push(
         ReportLine::unique(
@@ -63,58 +99,52 @@ pub(super) fn locate_song(
             header,
             HEADER_FIXED_BYTES + u32::from(track_count) * TRACK_POINTER_BYTES,
         )
-        .with(Resolution::StructDerived)
-        .note(format!("{track_count} tracks")),
+        .with(Resolution::PointerWalk)
+        .note(format!("{track_count} tracks; gSongTable entry {index}")),
     );
-    report.push(
-        ReportLine::unique("gSongTable", table, 0)
-            .with(Resolution::PointerWalk)
-            .symbol("gSongTable")
-            .note(format!("entry {index} points at the song header")),
-    );
-
-    Ok((
-        SongPlan {
+    Ok(LocatedSong {
+        plan: SongPlan {
             id: song_id.to_owned(),
             index,
             header,
             track_count,
             voicegroup,
         },
-        table,
-    ))
+        voicegroup_id,
+    })
+}
+
+/// The pack song `song_id`, decoded.
+///
+/// # Errors
+///
+/// The pack-entry errors, or [`GenRomProfileError::EntryShape`] naming
+/// `song_id` when the payload does not decode as a song.
+pub(super) fn pack_song(ctx: &Context<'_>, song_id: &str) -> Result<Song, GenRomProfileError> {
+    Song::decode(raw_payload(ctx, song_id)?).map_err(|err| GenRomProfileError::EntryShape {
+        id: song_id.to_owned(),
+        reason: err.to_string(),
+    })
 }
 
 /// Checks the located header and `gSongTable` entry against the pack's
 /// canonical [`Song`], and requires the ROM's decoded tracks to equal the
-/// pack payload byte for byte.
+/// pack payload byte for byte. Returns the id of the voicegroup the song
+/// plays through.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::EntryShape`] naming `song_id` when the pack payload
-/// does not decode as a song, or whose voicegroup is not
-/// `audio/voicegroup/{voicegroup_label}`;
+/// does not decode as a song;
 /// [`GenRomProfileError::StructMismatch`] when the header disagrees;
 /// [`GenRomProfileError::SongBytecodeMismatch`] when the tracks disagree.
 fn check_song_header(
     ctx: &Context<'_>,
     song_id: &str,
-    voicegroup_label: &str,
     header: u32,
     entry: u32,
-) -> Result<(), GenRomProfileError> {
-    let shape = |reason: String| GenRomProfileError::EntryShape {
-        id: song_id.to_owned(),
-        reason,
-    };
-    let song = Song::decode(raw_payload(ctx, song_id)?).map_err(|err| shape(err.to_string()))?;
-    let expected_group = format!("audio/voicegroup/{voicegroup_label}");
-    if song.voicegroup().0 != expected_group {
-        return Err(shape(format!(
-            "plays through `{}`, not `{expected_group}`",
-            song.voicegroup().0
-        )));
-    }
+) -> Result<String, GenRomProfileError> {
+    let song = pack_song(ctx, song_id)?;
 
     let mismatch = |reason: String| GenRomProfileError::StructMismatch {
         id: song_id.to_owned(),
@@ -161,7 +191,7 @@ fn check_song_header(
     let reader = rom_import::RomReader::new(ctx.rom);
     let decoded = rom_import::decode_song_payload(
         &reader,
-        SUPPORTED_SONG_ID,
+        leak_str(song_id),
         ptr,
         &song.voicegroup().0,
         song.player().0,
@@ -172,14 +202,21 @@ fn check_song_header(
             "the ROM's decoded tracks differ from the pack payload".to_owned(),
         ));
     }
-    Ok(())
+    Ok(song.voicegroup().0.clone())
+}
+
+/// A header with a playable track, which anchors the table search: a
+/// voicegroup's references include no silent header's.
+fn is_playable_song_header(ctx: &Context<'_>, base: u32) -> bool {
+    u8_at_addr(ctx.rom, base + HEADER_TRACK_COUNT_OFFSET).is_some_and(|count| count != 0)
+        && is_song_header(ctx, base)
 }
 
 fn is_song_header(ctx: &Context<'_>, base: u32) -> bool {
     let Some(track_count) = u8_at_addr(ctx.rom, base + HEADER_TRACK_COUNT_OFFSET) else {
         return false;
     };
-    if track_count == 0 || track_count > MAX_TRACKS {
+    if track_count > MAX_TRACKS {
         return false;
     }
     (0..u32::from(track_count)).all(|track| {

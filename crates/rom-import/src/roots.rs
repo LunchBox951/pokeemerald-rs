@@ -355,7 +355,7 @@ pub struct CryRoots {
     pub samples: &'static [SampleRoot],
 }
 
-/// The audio roots `MUS_TITLE` and the species cries need.
+/// The audio roots the checkpoint songs and the species cries need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioRoots {
     /// `gSongTable`, an array of 8-byte `{header, ms, me}` entries.
@@ -701,7 +701,7 @@ pub struct Roots {
     pub text_window: TextWindowRoots,
     /// Interface palettes.
     pub interface: InterfaceRoots,
-    /// `MUS_TITLE` and everything it plays through.
+    /// The checkpoint songs and everything they play through.
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,

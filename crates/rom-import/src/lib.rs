@@ -30,7 +30,7 @@
 //!   gen-rom-profile` into [`profiles::bpee_rev0`]. It covers every asset
 //!   domain the pack holds: tilesets and their animations, the title
 //!   screen, object-event sprites, map layouts, fonts, text windows,
-//!   interface palettes, and `MUS_TITLE`'s audio tree.
+//!   interface palettes, and the audio of every checkpoint song.
 //! - [`Sha1`] is a hand-rolled FIPS 180-4 implementation, because the hash
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
@@ -58,7 +58,7 @@
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
-//!   `assets`' own schema encoders, and `MUS_TITLE` itself
+//!   `assets`' own schema encoders, and every checkpoint song
 //!   (`audio/song/*`), decoded from the engine's track byte-code into
 //!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
 //!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to

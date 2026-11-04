@@ -1,24 +1,31 @@
-//! Locates the audio plan for `MUS_TITLE` and everything it plays through,
-//! and the species cries.
+//! Locates the audio plan for every pack song and everything it plays
+//! through, and the species cries.
 
+mod closure;
 mod cry;
 mod samples;
 mod songs;
 mod validation;
 mod voicegroups;
 
+#[cfg(test)]
+mod multi_song_tests;
+
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
+use std::collections::BTreeMap;
+
 use crate::extract::voicegroups::index_voicegroup_sources;
 
 use super::error::GenRomProfileError;
 use super::plan::{AudioPlan, ReportLine, Resolution};
 use super::Context;
 
+use closure::{walk, Sources};
 use cry::locate_cry;
 use samples::{locate_direct_sound, locate_programmable_wave};
-use songs::locate_song;
-use validation::check_voicegroups;
-use voicegroups::{locate_voicegroup, plan_for, voicegroup_symbol, walk_children};
+use songs::{locate_table, pack_song, plan_song};
+use validation::check_plan;
+use voicegroups::{locate_voicegroup, read_keysplit_tables};
 
 const WAVE_HEADER_BYTES: u32 = 16;
 const WAVE_STATUS_LOOP: u16 = 0x4000;
@@ -40,14 +47,20 @@ const DIRECT_SOUND_PREFIX: &str = "audio/sample/direct-sound/";
 const PROGRAMMABLE_WAVE_PREFIX: &str = "audio/sample/programmable-wave/";
 const DIRECT_SOUND_SYMBOL: &str = "DirectSoundWaveData_";
 const PROGRAMMABLE_WAVE_SYMBOL: &str = "ProgrammableWaveData_";
-const ROOT_VOICEGROUP_LABEL: &str = "title";
 
-/// Plans the audio for the one supported song, [`SUPPORTED_SONG_ID`].
+/// Plans the audio for every pack song: its table entry and header, the
+/// voicegroups, key-split tables and samples it plays through, and the species
+/// cries.
+///
+/// `gSongTable` is anchored once, from [`SUPPORTED_SONG_ID`]'s voicegroup;
+/// every song then comes from its constant's table entry, and every other
+/// group, table and sample from the pointers of the groups reached.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::StructMismatch`] if the pack's `audio/song/` ids
-/// do not include [`SUPPORTED_SONG_ID`],
+/// do not include [`SUPPORTED_SONG_ID`], or if the ROM disagrees with the
+/// pack anywhere in the closure,
 /// [`GenRomProfileError::MissingUpstreamCheckout`] without a `pokeemerald/`
 /// checkout, [`GenRomProfileError::UpstreamSource`] if one of its `sound/`
 /// files does not parse, plus any locator failure.
@@ -55,10 +68,6 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<AudioPlan, GenRomProfileError> {
-    // Every derivation below is written around this one song, never a family
-    // of them. The checkout pack carries the whole checkpoint manifest, but
-    // the ROM backend imports only this song until #1850, so the others are
-    // left unclaimed rather than refused.
     let song_ids = ctx.pack.ids_with_prefix("audio/song/");
     if !song_ids.iter().any(|id| id == SUPPORTED_SONG_ID) {
         return Err(GenRomProfileError::StructMismatch {
@@ -72,8 +81,8 @@ pub fn locate(
             ctx.upstream.clone(),
         ));
     }
-    let direct_sound = locate_direct_sound(ctx, report)?;
-    let programmable_wave = locate_programmable_wave(ctx, report)?;
+    let direct_sound = locate_direct_sound(ctx)?;
+    let programmable_wave = locate_programmable_wave(ctx)?;
 
     let groups = index_voicegroup_sources(&ctx.upstream)
         .map_err(|err| GenRomProfileError::UpstreamSource {
@@ -81,41 +90,82 @@ pub fn locate(
             reason: err.to_string(),
         })?
         .groups_by_label;
+    let tables = read_keysplit_tables(&ctx.upstream)?;
 
-    let label = ROOT_VOICEGROUP_LABEL;
+    let anchor_group = pack_song(ctx, SUPPORTED_SONG_ID)?.voicegroup().0.clone();
+    let label = anchor_group
+        .strip_prefix("audio/voicegroup/")
+        .unwrap_or(&anchor_group);
     let group = groups
         .get(label)
         .ok_or_else(|| GenRomProfileError::UpstreamSource {
             path: ctx.upstream.join("sound/voicegroups"),
             reason: format!("no voicegroup declares the label `{label}`"),
         })?;
-    let root = locate_voicegroup(ctx, label, group, &direct_sound, &programmable_wave)?;
-    let mut line = ReportLine::unique(format!("audio/voicegroup/{label}"), root, 0)
-        .with(Resolution::StructDerived)
-        .note(format!("{} slots declared", group.slots.len()));
-    line.symbol = voicegroup_symbol(label, group.starting_note);
-    report.push(line);
-    let mut voicegroups = vec![plan_for(label, root, group)];
+    let anchor = locate_voicegroup(ctx, label, group, &direct_sound, &programmable_wave)?;
+    let song_table = locate_table(ctx, SUPPORTED_SONG_ID, anchor)?;
+    report.push(
+        ReportLine::unique("gSongTable", song_table, 0)
+            .with(Resolution::PointerWalk)
+            .symbol("gSongTable")
+            .note(format!(
+                "{SUPPORTED_SONG_ID}'s entry points at its header; {} songs planned",
+                song_ids.len()
+            )),
+    );
 
-    let (child_voicegroups, mut keysplits) = walk_children(ctx, root, group, &groups, report)?;
-    voicegroups.extend(child_voicegroups);
+    let mut songs = Vec::with_capacity(song_ids.len());
+    let mut roots = BTreeMap::new();
+    let mut indices = BTreeMap::new();
+    for id in &song_ids {
+        let located = plan_song(ctx, song_table, id, report)?;
+        if let Some(other) = indices.insert(located.plan.index, id.clone()) {
+            return Err(GenRomProfileError::StructMismatch {
+                id: id.clone(),
+                reason: format!(
+                    "{other} has the same gSongTable index {}",
+                    located.plan.index
+                ),
+            });
+        }
+        match roots.insert(located.voicegroup_id.clone(), located.plan.voicegroup) {
+            Some(bound) if bound != located.plan.voicegroup => {
+                return Err(GenRomProfileError::StructMismatch {
+                    id: id.clone(),
+                    reason: format!(
+                        "{} is at {bound:08X} for an earlier song and {:08X} here",
+                        located.voicegroup_id, located.plan.voicegroup
+                    ),
+                });
+            }
+            _ => {}
+        }
+        songs.push(located.plan);
+    }
 
-    let (song, song_table) = locate_song(ctx, SUPPORTED_SONG_ID, label, root, report)?;
+    let closure = walk(
+        ctx,
+        &Sources {
+            groups: &groups,
+            tables: &tables,
+            direct_sound: &direct_sound,
+            programmable_wave: &programmable_wave,
+        },
+        &roots,
+        report,
+    )?;
     let cry = locate_cry(ctx, report)?;
-
-    keysplits.sort_by(|a, b| a.label.cmp(&b.label));
-    voicegroups.sort_by(|a, b| a.label.cmp(&b.label));
 
     let plan = AudioPlan {
         song_table,
-        songs: vec![song],
-        voicegroups,
-        keysplits,
-        direct_sound,
-        programmable_wave,
+        songs,
+        voicegroups: closure.voicegroups,
+        keysplits: closure.keysplits,
+        direct_sound: closure.direct_sound,
+        programmable_wave: closure.programmable_wave,
         cry,
     };
-    check_voicegroups(ctx, &plan)?;
+    check_plan(ctx, &plan)?;
     Ok(plan)
 }
 
