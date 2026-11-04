@@ -1780,86 +1780,70 @@ fn publish_refuses_to_replace_a_racing_empty_generation_dir() {
 }
 
 /// Failure preserves another writer's replacement at the generation name.
+///
+/// The competitor acts from the last in-call hook, so the replacement always
+/// lands while the call still holds its generation, never after it returns.
 #[cfg(unix)]
 #[test]
 fn failure_cleanup_leaves_a_generation_dir_a_competitor_took_during_publication() {
+    use std::cell::Cell;
+
     let output_dir = scratch_path("replaced-generation-dir-out");
     let _out_guard = ScratchGuard(output_dir.clone());
     std::fs::create_dir_all(&output_dir).unwrap();
     let scene = Scene::MainMenuNewGame;
     std::fs::create_dir(output_dir.join(format!("{}.generation", scene.name()))).unwrap();
 
-    let (send, recv) = std::sync::mpsc::channel::<PathBuf>();
-    let competitor_output_dir = output_dir.clone();
-    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let racer_done = std::sync::Arc::clone(&done);
-    let competitor = std::thread::spawn(move || {
-        // A publish that fails before the hook drops the sender instead of
-        // sending, and one that fails before the rename never produces the
-        // payload waited on below; both end this thread rather than parking
-        // it forever.
-        let Ok(generation_dir) = recv.recv() else {
-            return (false, false);
-        };
-        let generation_rgb = generation_dir.join(format!("{}.rgb", scene.name()));
-        let bystander = competitor_output_dir.join(".competitor-directory");
-        std::fs::create_dir(&bystander).unwrap();
-        std::fs::write(bystander.join("competitor.marker"), b"competitor").unwrap();
-        while !generation_rgb.exists() {
-            if racer_done.load(std::sync::atomic::Ordering::Relaxed) {
-                return (false, false);
-            }
-            std::hint::spin_loop();
-        }
-        // The claim has provably happened by now, since this call's own
-        // payload is already inside the claimed directory.
-        let mut removed = false;
-        for _ in 0..1024 {
-            if std::fs::remove_dir_all(&generation_dir).is_ok() {
-                removed = true;
-                break;
-            }
-            if !generation_dir.exists() {
-                break;
-            }
-        }
-        let replaced = std::fs::rename(&bystander, &generation_dir).is_ok();
-        (removed, replaced)
-    });
-
-    let mut claimed: Option<PathBuf> = None;
-    let announce_the_claimed_generation_dir = || {
-        let generation = std::fs::read_dir(&output_dir)
+    let claimed: Cell<Option<PathBuf>> = Cell::new(None);
+    let removed = Cell::new(false);
+    let replaced = Cell::new(false);
+    let competitor_takes_the_generation_dir = || {
+        // Only this call's promoted generation sits at a name with this
+        // prefix; the precreated pointer directory lacks the trailing dash.
+        let generation_prefix = format!("{}.generation-", scene.name());
+        let generation_dir = std::fs::read_dir(&output_dir)
             .unwrap()
             .find_map(|entry| {
                 let name = entry.unwrap().file_name();
-                let name = name.to_str()?;
-                name.strip_prefix('.')?
-                    .strip_suffix(".staged")
-                    .map(str::to_owned)
+                name.to_str()?
+                    .starts_with(&generation_prefix)
+                    .then(|| output_dir.join(name))
             })
-            .expect("this call's own staging directory must exist by now");
-        let generation_dir = output_dir.join(&generation);
-        claimed = Some(generation_dir.clone());
-        send.send(generation_dir).unwrap();
-        Ok(())
+            .expect("this call's own promoted generation must exist by now");
+        assert!(
+            generation_dir
+                .join(format!("{}.rgb", scene.name()))
+                .exists(),
+            "the claim must have happened: this call's payload is inside {generation_dir:?}"
+        );
+        let bystander = output_dir.join(".competitor-directory");
+        std::fs::create_dir(&bystander).unwrap();
+        std::fs::write(bystander.join("competitor.marker"), b"competitor").unwrap();
+        removed.set(std::fs::remove_dir_all(&generation_dir).is_ok());
+        replaced.set(std::fs::rename(&bystander, &generation_dir).is_ok());
+        claimed.set(Some(generation_dir));
     };
 
-    let result = super::publish_generation(
+    let result = super::publish_generation_with(
         scene,
         &output_dir,
         b"rgb-bytes",
         b"meta-bytes",
-        announce_the_claimed_generation_dir,
+        || Ok(()),
+        || {},
+        || {},
+        competitor_takes_the_generation_dir,
     );
-    drop(send);
-    done.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (removed, replaced) = competitor.join().unwrap();
-    let generation_dir = claimed.expect("the hook must have run");
+    let generation_dir = claimed.take().expect("the in-call hook must have run");
+    let (removed, replaced) = (removed.get(), replaced.get());
 
     assert!(
         result.is_err(),
         "a directory at the pointer path must fail promotion"
+    );
+    assert!(
+        matches!(&result, Err(RecordSnapshotError::Write(path, _)) if *path == generation_dir),
+        "the failure must be reported against the replaced generation: {result:?}"
     );
     assert!(
         removed && replaced,
