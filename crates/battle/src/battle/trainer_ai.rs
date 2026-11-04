@@ -20,7 +20,9 @@ use assets::trainers::AiFlags;
 use assets::{AbilityId, MoveEffect, MoveId, Type, TypeChart};
 
 use super::opponent_ai::{all_known_moves_are_spent, selectable_slot, EnemyAction};
-use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab, BattleRng};
+use crate::damage::{
+    apply_stab, apply_type_effectiveness, base_damage_with_flash_fire, has_stab, BattleRng,
+};
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -98,9 +100,10 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant. Any
 /// other effect is never an implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 13] = [
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 14] = [
     MoveEffect::ABSORB,
     MoveEffect::POISON_HIT,
+    MoveEffect::THAW_HIT,
     MoveEffect::ALWAYS_HIT,
     MoveEffect::MULTI_HIT,
     MoveEffect::DRAGON_RAGE,
@@ -751,7 +754,9 @@ fn estimated_damage(
             attacker.stats().max_hp,
         ),
     };
-    let damage = base_damage(&input);
+    // `CalculateBaseDamage` applies the attacker's Flash Fire latch to a Fire
+    // move in every simulated read too (`pokemon.c:3366-3371`).
+    let damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
@@ -1274,6 +1279,41 @@ mod tests {
     /// Attack, so a weak Ice move can rival a resisted physical one.
     const JYNX: SpeciesId = SpeciesId(124);
 
+    /// `CalculateBaseDamage` applies the attacker's Flash Fire latch to every
+    /// simulated Fire read (`pokemon.c:3366-3371`).
+    #[test]
+    fn a_latched_flash_fire_boosts_the_simulated_fire_damage() {
+        let dex = Dex::new();
+        let build = |species| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                20,
+                Ivs {
+                    hp: 31,
+                    attack: 31,
+                    defense: 31,
+                    speed: 31,
+                    sp_attack: 31,
+                    sp_defense: 31,
+                },
+                DEFAULT_PERSONALITY,
+                vec![MoveId::FLAME_WHEEL],
+            )
+            .unwrap()
+        };
+        let mut enemy = build(JYNX);
+        let player = build(MAKUHITA);
+        let plain =
+            estimated_damage(&dex, MoveId::FLAME_WHEEL, &enemy, &player, PERCENT_SCALE).unwrap();
+
+        enemy.volatiles_mut().flash_fire = true;
+        let latched =
+            estimated_damage(&dex, MoveId::FLAME_WHEEL, &enemy, &player, PERCENT_SCALE).unwrap();
+
+        assert!(latched > plain, "{latched} must exceed {plain}");
+    }
+
     /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty
     /// slot, depleted or not (`battle_ai_script_commands.c:1204-1213`), and it
     /// halves raw Special Attack for Fire/Ice against Thick Fat
@@ -1397,6 +1437,10 @@ mod tests {
             ensure_scoreable(&dex, EMBER, flags),
             Err(BattleError::UnscoreableMoveEffect(EMBER))
         );
+        // Flame Wheel and Sacred Fire share `EFFECT_THAW_HIT`, which no
+        // enabled script branches on.
+        assert!(ensure_scoreable(&dex, MoveId::FLAME_WHEEL, flags).is_ok());
+        assert!(ensure_scoreable(&dex, MoveId::SACRED_FIRE, flags).is_ok());
     }
 
     #[test]

@@ -34,6 +34,7 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod burn;
 mod effect_spore;
 mod pipelines;
 use pipelines::hit_failure_event;
@@ -556,6 +557,7 @@ impl Battle {
                     self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
                 }
                 self.settle_faint(!attacker_is_player, events);
+                self.defrost_target_of_fire_move(attacker_is_player, move_id, hp_lost, events)?;
                 // See `BattleEvent::PoisonedBySynchronize`'s docs for why the
                 // reflection runs here, after the target's own faint check.
                 if poisoned_synchronize_holder {
@@ -624,6 +626,9 @@ impl Battle {
             }
             SecondaryApplication::SpeedDown => {
                 self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+            }
+            SecondaryApplication::Burn => {
+                self.apply_secondary_burn(attacker_is_player, move_id, events);
             }
         }
         poisoned_synchronize_holder
@@ -1146,7 +1151,7 @@ mod pipeline_agreement_tests {
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
-                131, 141, 163,
+                125, 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1273,8 +1278,9 @@ mod absorbing_ability_tests {
         sp_defense: 31,
     };
 
-    /// No executable Fire move exists, so the executor's Flash Fire arm is
-    /// driven directly with the outcome `damage_core` reports for Ember.
+    /// Drives the executor's Flash Fire arm directly with the outcome
+    /// `damage_core` reports for Ember; `tests/turn_engine/thaw_hit.rs` covers
+    /// the same arm through Flame Wheel on a real `Battle`.
     #[test]
     fn a_flash_fire_outcome_latches_the_defender_and_reports_the_boost_once() {
         let dex = Dex::new();

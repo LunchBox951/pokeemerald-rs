@@ -14,8 +14,9 @@
 //!
 //! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`),
 //! [`EFFECT_CONFUSE_HIT`] (the `status2` `MOVE_EFFECT_CONFUSION` case,
-//! `:2528-2544`) and [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
-//! case, `:2666-2683`) are the three ported trampolines.
+//! `:2528-2544`), [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
+//! case, `:2666-2683`), and [`EFFECT_THAW_HIT`] (the `STATUS1_BURN` case,
+//! `:2341-2379`) are the four ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -30,6 +31,10 @@ pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
 pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
 pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect::CONFUSE_HIT;
+/// Move effect shared by Flame Wheel and Sacred Fire: a burn secondary, plus
+/// the user's thaw at `CANCELER_THAW`. `EFFECT_BURN_HIT` prepares the same
+/// byte but stays unported with the rest of the trampolines.
+pub const EFFECT_THAW_HIT: MoveEffect = MoveEffect::THAW_HIT;
 
 /// Metadata for a damaging move-effect script ending in `setmoveeffect`
 /// followed immediately by `goto BattleScript_EffectHit`.
@@ -154,6 +159,44 @@ pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
 #[must_use]
 pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_SPEED_DOWN_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_THAW_HIT`], the fourth
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+/// `EFFECT_BURN_HIT` and Blaze Kick share its symbolic `MOVE_EFFECT_BURN`
+/// byte but stay unported.
+#[must_use]
+pub fn is_thaw_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_THAW_HIT
+}
+
+/// `SetMoveEffect`'s silent `STATUS1_BURN` guards on a secondary landing: a
+/// Fire-type or Water Veil defender, or one already carrying a primary status,
+/// is left unchanged (`battle_script_commands.c:2361-2379`), and Shield Dust
+/// blocks any chance-based effect the same way (`:2253-2255`). Water Veil's
+/// prevention message needs `primary` or `MOVE_EFFECT_CERTAIN`, which a chance
+/// roll below 100 never sets (`:2342-2359`).
+#[must_use]
+fn burn_can_land(defender: &BattlePokemon) -> bool {
+    defender.status1().is_healthy() && burn_could_ever_land(defender)
+}
+
+/// [`burn_can_land`] without the primary-status guard, for the screen in
+/// [`ensure_admissible`]: an asleep or frozen defender can clear its status
+/// on its own earlier action the same turn, so the status read at that
+/// checkpoint cannot rule a burn out.
+#[must_use]
+fn burn_could_ever_land(defender: &BattlePokemon) -> bool {
+    !defender.types().contains(&Type::Fire)
+        && defender.ability() != AbilityId::WATER_VEIL
+        && defender.ability() != AbilityId::SHIELD_DUST
+}
+
+/// Whether the defender's primary status, as read at an admission checkpoint,
+/// can still clear before the attacker's move executes.
+fn status_may_clear(defender: &BattlePokemon) -> bool {
+    let status = defender.status1();
+    status.is_healthy() || status.is_asleep() || status.is_frozen()
 }
 
 /// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
@@ -317,6 +360,9 @@ pub fn ensure_admissible(
         }
         return Ok(());
     }
+    if is_thaw_hit_effect(mv.effect) {
+        return ensure_thaw_hit_admissible(mv.secondary_effect_chance, attacker, defender);
+    }
     let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
         confuse_hit_could_ever_land(defender)
     } else {
@@ -325,6 +371,43 @@ pub fn ensure_admissible(
     if status_could_ever_land
         && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
         && attacker.ability() == AbilityId::SERENE_GRACE
+    {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE,
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects an [`EFFECT_THAW_HIT`] move whose landing would activate an unsupported
+/// ability interaction.
+///
+/// A burned Synchronize holder reflects the burn onto the attacker through
+/// `MOVEEND_SYNCHRONIZE_TARGET` (`battle_util.c:2971`-`:2986`), which the
+/// engine does not model. Serene Grace doubles the chance
+/// (`battle_script_commands.c:2912-2915`): that is unobservable only when the
+/// burn can never land, with one exception. A doubled chance of 100 or more
+/// calls `SetMoveEffect` with `MOVE_EFFECT_CERTAIN` (`:2923-2930`), which
+/// makes a Water Veil holder print its prevention message
+/// (`:2342-2359`) where the plain chance would be silently discarded, so
+/// Sacred Fire's 50% still needs the refusal against that holder.
+fn ensure_thaw_hit_admissible(
+    secondary_effect_chance: u8,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<(), BattleError> {
+    let could_burn = burn_could_ever_land(defender) && status_may_clear(defender);
+    if defender.ability() == AbilityId::SYNCHRONIZE && could_burn {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SYNCHRONIZE,
+        ));
+    }
+    let doubled_chance_is_certain =
+        u32::from(secondary_effect_chance) * 2 >= u32::from(GUARANTEED_EFFECT_CHANCE);
+    let certain_effect_exposes_water_veil =
+        doubled_chance_is_certain && defender.ability() == AbilityId::WATER_VEIL;
+    if attacker.ability() == AbilityId::SERENE_GRACE
+        && (could_burn || certain_effect_exposes_water_veil)
     {
         return Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE,
@@ -359,6 +442,10 @@ pub enum SecondaryApplication {
     /// stage is left unchanged without a message
     /// (`battle_script_commands.c:7056-7059,7094-7095`).
     SpeedDown,
+    /// The caller must write [`crate::status1::Status1::Burned`] to the
+    /// defender, subject to the same post-damage faint check
+    /// (`battle_script_commands.c:2261`-`:2264`).
+    Burn,
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -371,8 +458,8 @@ pub enum SecondaryApplication {
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
-/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
+/// or [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_THAW_HIT`], or Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -428,6 +515,14 @@ pub fn spend_effect_chance_draw(
         });
     }
 
+    if is_thaw_hit_effect(mv.effect) {
+        return Ok(if burn_can_land(defender) {
+            SecondaryApplication::Burn
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
     Err(BattleError::UnportedSecondaryEffect(move_id))
 }
 
@@ -471,3 +566,6 @@ pub fn resolve_synchronize_poison_reflection(
 #[cfg(test)]
 #[path = "secondary/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "secondary/thaw_hit_tests.rs"]
+mod thaw_hit_tests;
