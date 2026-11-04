@@ -56,6 +56,11 @@ impl StereoRouting {
         cgb_envelope_goal(self.right, self.left, cgb_pan(self.right, self.left))
     }
 
+    /// Whether either output side currently carries this channel (`NR51`).
+    pub(super) fn is_routed(self) -> bool {
+        self.right_enabled || self.left_enabled
+    }
+
     pub(super) fn accumulate(self, contribution: i32, output: &mut StereoAcc) {
         if self.right_enabled {
             output.1 += contribution;

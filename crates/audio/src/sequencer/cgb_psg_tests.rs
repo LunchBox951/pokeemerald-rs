@@ -345,3 +345,56 @@ fn a_square1_sweep_byte_with_a_live_period_is_not_normalized() {
         "a live sweep period must reach the hardware unchanged"
     );
 }
+
+/// Songs whose only voice is a wave note that has played out.
+fn finished_wave_sequencer() -> (Sequencer, Vec<f32>) {
+    let voices = vec![Instrument::CgbWave(WaveTone {
+        wave_id: Arc::from("flat"),
+        table: [0xFF; 16],
+        adsr: CgbAdsr::flat(),
+        fixed_rate: false,
+    })];
+    let song = Song::new(voices, vec![cgb_test_track()], 150);
+    let mut seq = Sequencer::new(song);
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    let mut frames = 0;
+    while !seq.is_finished() && frames < 500 {
+        seq.render_frame(&mut out);
+        frames += 1;
+    }
+    (seq, out)
+}
+
+/// A wave note's held sample is a permanent level (`mgba/src/gb/audio.c:246-253,
+/// 768-774`), not a finite tail: `is_finished` must still return, while the
+/// literal `is_silent` query reports the level the mixer keeps emitting.
+#[test]
+fn a_finished_wave_song_reports_its_held_level_as_output_not_as_a_tail() {
+    let (mut seq, mut out) = finished_wave_sequencer();
+    assert!(seq.is_finished(), "the held level never blocks completion");
+    assert!(!seq.is_sounding());
+    assert_eq!(seq.voice_count(), 0);
+    assert!(!seq.is_silent(), "the vacated wave slot still emits");
+    for _ in 0..8 {
+        seq.render_frame(&mut out);
+        assert!(
+            out.iter().any(|&s| s != 0.0),
+            "the held level keeps being mixed"
+        );
+        assert!(seq.is_finished());
+        assert!(!seq.is_silent());
+    }
+}
+
+/// A reverb tail or a silent song is silent only once nothing is emitted.
+#[test]
+fn a_song_without_a_wave_note_is_silent_once_finished() {
+    let song = Song::new(Vec::new(), vec![vec![Event::Wait(2), Event::Fine]], 150);
+    let mut seq = Sequencer::new(song);
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    for _ in 0..4 {
+        seq.render_frame(&mut out);
+    }
+    assert!(seq.is_finished());
+    assert!(seq.is_silent());
+}

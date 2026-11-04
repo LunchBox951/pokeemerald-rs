@@ -541,6 +541,19 @@ impl CgbVoice {
         }
     }
 
+    /// Whether the idle slot is a wave channel whose held sample is nonzero
+    /// and still routed to an output side, so every idle frame keeps mixing it
+    /// (`render_idle_hardware`'s doc). Unlike a noise latch, nothing the idle
+    /// slot does ever settles it: only a retrigger or a route write ends it
+    /// (`mgba/src/gb/audio.c:246-253,399-403,768-774`).
+    pub(crate) fn holds_wave_output(&self) -> bool {
+        self.routing.is_routed()
+            && self
+                .oscillator
+                .held_wave_contribution()
+                .is_some_and(|contribution| contribution != 0)
+    }
+
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
     /// and emits its latch (`mgba/src/gb/audio.c:606-641,782`), a square keeps
     /// its duty running, and a wave stops clocking but keeps emitting its held
