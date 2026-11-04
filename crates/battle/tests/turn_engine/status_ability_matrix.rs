@@ -1,5 +1,6 @@
 //! This Status1-only matrix pins the Limber (paralysis), Immunity (poison),
-//! Water Veil (burn), and Magma Armor (freeze) admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
+//! Water Veil (burn), Magma Armor (freeze), and Insomnia/Vital Spirit (sleep)
+//! admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
 //! refused, as its move-end cure is unmodelled; `participant_admission.rs`
 //! covers that volatile. Every other ability here is admitted, whether
 //! modelled or deferred.
@@ -14,16 +15,20 @@ use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
 
-const STATUSES: [Status1; 5] = [
+const STATUSES: [Status1; 6] = [
     Status1::Healthy,
     Status1::Paralysed,
     Status1::Poisoned,
     Status1::Burned,
     Status1::Frozen,
+    Status1::Asleep { turns: 3 },
 ];
 
 /// Columns: name, species, saved ability slot, expected ability, and the one
-/// status whose constructor admission is refused, if any.
+/// status whose constructor admission is refused, if any. Sleep is a nonzero
+/// duration here: a zero duration is the cleared sleep bits, which
+/// [`Status1::Healthy`] normalisation admits (see
+/// `a_zero_duration_sleep_is_a_healthy_holder_for_every_row`).
 const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
     ("guts", SpeciesId::RATTATA, 1, AbilityId::GUTS, None),
     (
@@ -68,13 +73,19 @@ const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
         AbilityId::EARLY_BIRD,
         None,
     ),
-    ("insomnia", SpeciesId::DROWZEE, 0, AbilityId::INSOMNIA, None),
+    (
+        "insomnia",
+        SpeciesId::DROWZEE,
+        0,
+        AbilityId::INSOMNIA,
+        Some(Status1::Asleep { turns: 3 }),
+    ),
     (
         "vital spirit",
         SpeciesId::MANKEY,
         0,
         AbilityId::VITAL_SPIRIT,
-        None,
+        Some(Status1::Asleep { turns: 3 }),
     ),
     (
         "water veil",
@@ -171,6 +182,7 @@ fn guts_and_marvel_scale_read_each_representable_status() {
         Status1::Poisoned,
         Status1::Burned,
         Status1::Frozen,
+        Status1::Asleep { turns: 3 },
     ] {
         let healthy_guts = holder(SpeciesId::RATTATA, 1, Status1::Healthy);
         let sick_guts = holder(SpeciesId::RATTATA, 1, status);
@@ -181,5 +193,24 @@ fn guts_and_marvel_scale_read_each_representable_status() {
         let sick_scale = holder(SpeciesId::MILOTIC, 0, status);
         let base = healthy_scale.defending_stat(Physical).0;
         assert_eq!(sick_scale.defending_stat(Physical).0, base * 150 / 100);
+    }
+}
+
+#[test]
+fn a_zero_duration_sleep_is_a_healthy_holder_for_every_row() {
+    // `Asleep { turns: 0 }` is upstream's cleared sleep bits: the holder
+    // stores as healthy, so even Insomnia and Vital Spirit are admitted.
+    for (name, species, slot, ability, _) in MATRIX {
+        let mon = holder(species, slot, Status1::Asleep { turns: 0 });
+        assert_eq!(mon.status1(), Status1::Healthy, "{name} normalises");
+        assert_eq!(mon.ability(), ability, "{name} fixture ability");
+        let mut rng = SequenceRng::new(admission_script(false));
+        let result = Battle::new(Dex::new(), mon, opponent(), false, &mut rng);
+        assert!(
+            result.is_ok(),
+            "{name} zero-duration sleep must be admitted"
+        );
+        assert_eq!(rng.draws(), 1, "{name} draws only the seed");
+        rng.assert_exhausted();
     }
 }
