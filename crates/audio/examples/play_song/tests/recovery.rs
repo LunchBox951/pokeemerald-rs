@@ -8,6 +8,8 @@ use std::time::Duration;
 
 /// The lifetime error count when playback began in every test below.
 const BASELINE_ERRORS: u64 = 7;
+/// The lifetime count of stream-losing errors when playback began.
+const BASELINE_FATAL: u64 = 3;
 const RING_SAMPLES: usize = 8;
 const FRAME: [f32; RING_SAMPLES] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
@@ -16,6 +18,8 @@ struct FakeStream {
     state: Cell<TransportState>,
     published: RefCell<VecDeque<TransportState>>,
     errors: Cell<u64>,
+    /// How many of `errors` left the stream unusable.
+    fatal: Cell<u64>,
     queued: RefCell<VecDeque<f32>>,
     played: RefCell<Vec<f32>>,
 }
@@ -28,6 +32,7 @@ impl FakeStream {
             state: Cell::new(TransportState::Ready),
             published: RefCell::default(),
             errors: Cell::new(BASELINE_ERRORS),
+            fatal: Cell::new(BASELINE_FATAL),
             queued: RefCell::new(queued.iter().copied().collect()),
             played: RefCell::default(),
         };
@@ -35,6 +40,7 @@ impl FakeStream {
             &mut (),
             |()| stream.published.borrow_mut().pop_front(),
             |()| stream.errors.get(),
+            |()| stream.fatal.get(),
         );
         (stream, health)
     }
@@ -45,6 +51,7 @@ impl FakeStream {
             |()| self.published.borrow_mut().pop_front(),
             |()| self.state.get(),
             |()| self.errors.get(),
+            |()| self.fatal.get(),
         )
     }
 
@@ -71,6 +78,13 @@ impl FakeStream {
         self.errors.set(self.errors.get() + 1);
     }
 
+    /// The callback counts an error that leaves the stream unusable. The
+    /// worker has not supervised, so nothing is published or retired yet.
+    fn fatal_error(&self) {
+        self.errors.set(self.errors.get() + 1);
+        self.fatal.set(self.fatal.get() + 1);
+    }
+
     /// The worker retires a stream whose fatal error was already counted.
     fn retire_counted_stream(&self) {
         let lost = TransportState::Unavailable(TransportFailure::StreamLost);
@@ -81,7 +95,7 @@ impl FakeStream {
     /// The stream fails and is detached. With `rebuilt`, the worker has
     /// already attached a new one by the time the application looks.
     fn lose_stream(&self, rebuilt: bool) {
-        self.errors.set(self.errors.get() + 1);
+        self.fatal_error();
         let lost = TransportState::Unavailable(TransportFailure::StreamLost);
         let mut published = self.published.borrow_mut();
         published.push_back(lost);
@@ -368,7 +382,7 @@ fn a_fatal_error_counted_before_the_worker_publishes_still_fails_the_tail() {
             if sleeps.get() == 1 {
                 // The callback counts a fatal error and raises `lost`; the
                 // worker has not supervised yet, so nothing is published.
-                stream.xrun();
+                stream.fatal_error();
             } else {
                 // The worker's next supervise tick retires the stream.
                 stream.retire_counted_stream();
@@ -399,7 +413,7 @@ fn a_fatal_error_counted_before_the_worker_publishes_still_fails_the_measured_ta
         &policy(),
         || {
             // The target sounds just as the callback counts a fatal error.
-            stream.xrun();
+            stream.fatal_error();
             Some(progress(4, 4))
         },
         || stream.terminal(&mut health),
@@ -415,4 +429,80 @@ fn a_fatal_error_counted_before_the_worker_publishes_still_fails_the_measured_ta
         result,
         Err(DrainError::StreamStoppedDuringTail { errors: 1 })
     ));
+}
+
+#[test]
+fn a_fatal_error_published_after_a_slow_default_query_still_fails_the_tail() {
+    // The worker is blocked in a `default_output()` query for 300 ms, three
+    // times the final look's wait, so it publishes the loss long after the
+    // tail has looked. The callback's own count must decide.
+    let (stream, mut health) = FakeStream::new(&[]);
+    let tail = Duration::from_millis(200);
+    let mut slept = Duration::ZERO;
+
+    let result = wait_for_device_tail(
+        tail,
+        || stream.terminal(&mut health),
+        |duration| {
+            slept += duration;
+            if duration == tail {
+                stream.fatal_error();
+            }
+            // The worker publishes nothing within this test's waits.
+        },
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+        ),
+        "a fatal error counted while the worker was stalled was reported as success: ok={}",
+        result.is_ok()
+    );
+    assert!(
+        stream.published.borrow().is_empty(),
+        "the worker published nothing, so only the count can have decided"
+    );
+    assert_eq!(slept, tail, "the loss is terminal at the first look");
+}
+
+#[test]
+fn a_fatal_error_published_after_a_slow_default_query_still_fails_the_measured_tail() {
+    let (stream, mut health) = FakeStream::new(&[]);
+    let clock = Cell::new(Instant::now());
+
+    let result = wait_for_device_tail_or_measured(
+        Some(4),
+        Duration::from_millis(200),
+        48_000,
+        &policy(),
+        || {
+            stream.fatal_error();
+            Some(progress(4, 4))
+        },
+        || stream.terminal(&mut health),
+        || clock.get(),
+        |duration| clock.set(clock.get() + duration),
+    );
+
+    assert!(matches!(
+        result,
+        Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+    ));
+    assert!(stream.published.borrow().is_empty());
+}
+
+#[test]
+fn a_fatal_error_from_before_playback_began_stays_out_of_the_terminal_reading() {
+    let (stream, mut health) = FakeStream::new(&[]);
+    assert_eq!(stream.terminal(&mut health), None);
+
+    stream.fatal_error();
+    assert_eq!(
+        stream.terminal(&mut health),
+        Some(1),
+        "counted from the baseline"
+    );
+    assert_eq!(stream.terminal(&mut health), Some(1), "and stays terminal");
 }

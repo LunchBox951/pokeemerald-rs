@@ -491,6 +491,20 @@ impl AudioOutput {
         self.shared.stream_errors.load(Ordering::Relaxed)
     }
 
+    /// How many of the [`Self::stream_errors`] left their stream unusable:
+    /// a loss, as opposed to an XRUN, a refused real-time promotion or an
+    /// automatic reroute the stream carries on from.
+    ///
+    /// The callback counts the error here as it reports it, so a caller sees
+    /// a loss at once, without waiting for the transport worker's next poll
+    /// to retire the stream and publish [`TransportState::Unavailable`].
+    /// Like [`Self::stream_errors`] it is a lifetime count across every
+    /// stream the transport builds, and always zero for the null backend.
+    #[must_use]
+    pub fn fatal_stream_errors(&self) -> u64 {
+        self.shared.fatal_stream_errors.load(Ordering::Acquire)
+    }
+
     /// Records one asynchronous stream error as the `cpal` error closure in
     /// `build_stream` does, so a null-backend test can stand in for a device.
     #[doc(hidden)]

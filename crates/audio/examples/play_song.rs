@@ -458,14 +458,17 @@ fn wait_for_device_tail(
     finish_unless_lost(&mut terminal_errors, &mut sleep)
 }
 
-/// How long the transport's worker has to retire a stream whose fatal error
-/// the callback already counted: it supervises on a short poll and only then
-/// publishes the loss, so the final look must outwait that tick.
+/// How long the final look waits for the transport worker to publish a loss
+/// that no callback error counted (a refused `play`, a default output that
+/// changed). Unlike a fatal callback error, which
+/// [`PlaybackHealth::terminal_errors`] sees the moment it is counted, such a
+/// loss is visible only once the worker publishes it, and the platform offers
+/// no acknowledgement that it has looked: this wait is best effort.
 const SUPERVISION_GRACE: Duration = Duration::from_millis(100);
 
 /// The success decision at the end of the tail. A fatal callback error is
-/// counted before the worker publishes the transport as unavailable, so a
-/// look that finds nothing yet is repeated after [`SUPERVISION_GRACE`].
+/// already terminal in the first look; the look repeated after
+/// [`SUPERVISION_GRACE`] is for a loss only the worker can report.
 fn finish_unless_lost(
     terminal_errors: &mut impl FnMut() -> Option<u64>,
     sleep: &mut impl FnMut(Duration),

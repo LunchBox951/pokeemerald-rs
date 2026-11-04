@@ -434,6 +434,7 @@ impl<H: OutputHost> Transport<H> {
             config,
             source,
             Arc::clone(&self.shared.stream_errors),
+            Arc::clone(&self.shared.fatal_stream_errors),
             Arc::clone(&health),
             Arc::clone(&self.shared.playback_clock),
         )
