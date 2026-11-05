@@ -18,9 +18,19 @@
 //! `battle` carries the item but models none of its effects, so
 //! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
 //! item has one; each flow's refusal is documented where it is made. A fresh
-//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
-//! backing record's item bytes alone, as nothing in the port changes a held
-//! item after load.
+//! [`to_save_pokemon`] record files the battler's item, and
+//! [`merge_into_save_pokemon`] writes it over the backing record's, so a
+//! change to the held item reaches the save.
+//!
+//! [`take_held_item`] is the one change the port makes: `CursorCb_TakeItem`'s
+//! `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`, `:3273-3298`).
+//! It moves the item into the bag with `AddBagItem` and clears the battler's
+//! item, so a lead [`flow::lead_screen`](crate::flow) refuses for holding an
+//! item with a battle effect can be made to battle. A full bag refuses the
+//! take and the lead keeps the item; the start menu's TAKE entry shows each
+//! outcome's message in the field message box. Giving an item to a Pokemon
+//! (`GiveItemToMon`, `:1785-1811`) and the party menu's presentation are not
+//! modelled.
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
@@ -128,6 +138,10 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
     )
 )]
 mod starter;
+
+/// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
+mod take_item;
+pub(crate) use take_item::{take_held_item, TakeHeldItem};
 
 /// Why a saved party member could not be converted into a battler.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,7 +431,8 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
 ///
 /// Writes only the fields the battler owns; every retained field stays as
 /// the save wrote it, except EVs, which the merge writes back from
-/// [`battle::BattlePokemon::evs`].
+/// [`battle::BattlePokemon::evs`], and the held item, which it writes back
+/// from [`battle::BattlePokemon::held_item`] so [`take_held_item`] persists.
 ///
 /// The battler's cache, level and HP are filed as they stand
 /// ([`overlay_battle_stats`]); nothing is recomputed or translated. A record
@@ -438,6 +453,7 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
     };
 
     substructures.growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    substructures.growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     substructures.growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     substructures.attacks = encode_attacks(mon);
