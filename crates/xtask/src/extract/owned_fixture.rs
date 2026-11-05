@@ -147,6 +147,12 @@ impl OwnedDir {
         #[cfg(not(unix))]
         let builder = std::fs::DirBuilder::new();
         builder.create(path)?;
+        Self::claim_after_mkdir(path)
+    }
+
+    /// The checks that follow `mkdir` at `path`: the identity reads, the
+    /// pinning handle, and the emptiness `mkdir` guarantees.
+    fn claim_after_mkdir(path: &Path) -> io::Result<Self> {
         let replaced = || {
             io::Error::other(format!(
                 "{} was replaced right after it was created",
@@ -159,6 +165,13 @@ impl OwnedDir {
         // two reads would open its target instead.
         let handle = Self::open_claimed(path)?;
         if identity.is_verifiable() && Identity::of_handle(&handle).as_ref() != Some(&identity) {
+            return Err(replaced());
+        }
+        // `mkdir` made an empty directory. A same-user process can rename a
+        // populated directory over the name before the reads above, and that
+        // directory would then be filled and deleted as the fixture's own;
+        // anything already inside it says it is not the one `mkdir` made.
+        if std::fs::read_dir(path)?.next().is_some() {
             return Err(replaced());
         }
         Ok(Self {
@@ -196,19 +209,31 @@ impl Drop for OwnedDir {
     /// Windows the handle is closed before the removal, since the directory
     /// cannot be removed while it is open.
     ///
+    /// A removal that fails leaves the tree behind, so it panics unless the
+    /// thread is already unwinding: a passing test must not leave its
+    /// fixture on disk unreported.
+    ///
     /// Still exposed: a same-user process that swaps the path between this
     /// check and the removal, and fixture writes that go through `path()`
     /// after a swap. A test fixture in a private temp name accepts both; the
     /// check bounds the damage to a swap landing inside that window.
     fn drop(&mut self) {
+        let mut removal = Ok(());
         if self.identity.is_verifiable()
             && Identity::of(&self.path).as_ref() == Some(&self.identity)
         {
             #[cfg(windows)]
             drop(self.handle.take());
-            let _ = std::fs::remove_dir_all(&self.path);
+            removal = std::fs::remove_dir_all(&self.path);
         }
         drop(self.handle.take());
+        if let Err(error) = removal {
+            assert!(
+                std::thread::panicking(),
+                "removing fixture {} failed: {error}",
+                self.path.display()
+            );
+        }
     }
 }
 
@@ -371,6 +396,56 @@ mod tests {
             std::fs::read(path.join("sentinel")).ok().as_deref(),
             Some(&b"precious"[..]),
             "drop deleted a directory it never claimed"
+        );
+    }
+
+    /// A populated directory renamed over the name between `mkdir` and the
+    /// identity reads is refused: `mkdir` made an empty one.
+    #[test]
+    fn a_populated_directory_swapped_in_before_the_identity_read_is_refused() {
+        let base = private_base("pre-read-swap");
+        let candidate = OwnedDir::candidate(base.path(), "fx", 0);
+        let victim = base.path().join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        std::fs::write(victim.join("sentinel"), "precious").unwrap();
+        std::fs::create_dir(&candidate).unwrap();
+        // The state `claim` would see after a swap that beat its reads.
+        std::fs::remove_dir(&candidate).unwrap();
+        std::fs::rename(&victim, &candidate).unwrap();
+
+        let claimed = OwnedDir::claim_after_mkdir(&candidate);
+
+        assert!(claimed.is_err(), "a populated replacement was claimed");
+        assert_eq!(
+            std::fs::read(candidate.join("sentinel")).unwrap(),
+            b"precious"
+        );
+    }
+
+    /// A tree the fixture cannot remove is reported, not left behind
+    /// silently. Root can remove a read-only child, so this pins only that
+    /// the fixture is either gone or its removal failure surfaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_cleanup_failure_on_drop_is_surfaced_not_left_behind() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = private_base("cleanup");
+        let claimed = OwnedDir::create_in(base.path(), "fx").unwrap();
+        let path = claimed.path().to_path_buf();
+        let child = path.join("locked");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("f"), "x").unwrap();
+        std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claimed)));
+        let removed = !path.exists();
+        if !removed {
+            std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::remove_dir_all(&path).unwrap();
+        }
+        assert!(
+            removed || outcome.is_err(),
+            "drop left {} behind without reporting it",
+            path.display()
         );
     }
 
