@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.106.0] - 2026-11-05
+
+- Battle messages are now shown one at a time in the battle text box at the chosen text speed, with pauses and button prompts as in the original game, as preparation for on-screen battles; the running game does not yet wait on them.
+
 ## [0.0.105.0] - 2026-11-04
 
 - Flame Wheel and Sacred Fire can now be used in battle: they may burn the target, a frozen user thaws as it uses them, and a Fire-type hit thaws a frozen target, as in the original game.
@@ -483,7 +487,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.105.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f6bf3245569fa4d8b950ea850552bbc9999eabd...dev
+[0.0.106.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2a229e58203e1e57864af1465a8d0977f9b7aeba...dev
+[0.0.105.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f6bf3245569fa4d8b950ea850552bbc9999eabd...2a229e58203e1e57864af1465a8d0977f9b7aeba
 [0.0.104.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e88ad8b78d701a396b354fb72944edaaaa12b42e...8f6bf3245569fa4d8b950ea850552bbc9999eabd
 [0.0.103.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/edefb469ae667e0f72ace81c6b8e1d4a5bdb656a...e88ad8b78d701a396b354fb72944edaaaa12b42e
 [0.0.102.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2fe05ed008518da4f1bdcd677f063df29c15512b...edefb469ae667e0f72ace81c6b8e1d4a5bdb656a
