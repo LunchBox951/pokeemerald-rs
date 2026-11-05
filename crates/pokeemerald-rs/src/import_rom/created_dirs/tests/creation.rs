@@ -288,7 +288,15 @@ fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
     );
 }
 
-#[cfg(unix)]
+// The simulated modes drop the owner's read bit, so they need the platforms
+// whose traversal opens pin a level on write and search alone; every other
+// Unix falls back to a read-requiring open.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
 #[test]
 fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it() {
     use std::os::unix::fs::PermissionsExt as _;
