@@ -187,14 +187,13 @@ pub(super) enum Standing {
     /// Removed outright (a link count of 0), or no longer held, so nothing
     /// can be said about it.
     Gone,
-    /// Still linked somewhere; where, if `/proc` can say.
+    /// Still linked somewhere; where, if `/proc` or `F_GETPATH` can say.
     Linked(Option<PathBuf>),
     /// Neither its link count nor a platform path tells: on Apple a
-    /// directory removed while held open still reads a nonzero `st_nlink`
-    /// (the `a_level_removed_and_replaced_after_validation_is_not_reported_as_moved`
-    /// failure on macOS CI), so outside Linux and Android only a count of 0
-    /// is trusted, and a path from `F_GETPATH` only if it resolves to the
-    /// held directory ([`verified_location`]).
+    /// directory removed while held open still reads a nonzero `st_nlink`,
+    /// so outside Linux and Android only a count of 0 is trusted, and a path
+    /// from `F_GETPATH` only if it resolves to the held directory
+    /// ([`verified_location`]).
     Unknown,
     /// Its `fstat` failed: it may still be linked anywhere, so the error is
     /// reported rather than read as its removal.
