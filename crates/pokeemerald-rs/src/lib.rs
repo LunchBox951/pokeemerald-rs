@@ -140,6 +140,8 @@ pub mod overworld;
 mod pack_source;
 mod palette_overlay;
 mod party;
+mod party_menu;
+mod pokemon_summary_screen;
 pub mod scene;
 mod start_menu;
 pub mod starter_chooser;

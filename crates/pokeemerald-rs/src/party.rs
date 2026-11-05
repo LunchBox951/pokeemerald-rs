@@ -124,10 +124,21 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
     not(test),
     expect(
         dead_code,
+        reason = "the party and summary screens' hosts construct the party"
+    )
+)]
+pub(crate) mod records;
+pub(crate) mod sound;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "no production caller until the starter chooser (#1663)"
     )
 )]
 mod starter;
+#[cfg(test)]
+pub(crate) mod test_records;
 
 /// Why a saved party member could not be converted into a battler.
 #[derive(Debug, Clone, PartialEq, Eq)]
