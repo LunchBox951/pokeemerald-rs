@@ -295,3 +295,24 @@ fn a_seeded_battler_that_faints_hands_its_replacement_no_seed() {
     assert_eq!(battle.player().species().0, ZIGZAGOON);
     assert!(!battle.player().volatiles().seeded());
 }
+
+/// A loaded record keeps its HP byte-exact, so a seeder can start above its
+/// maximum; the heal clamps it there and reports no HP gained.
+#[test]
+fn an_above_maximum_saved_hp_seeder_reports_no_heal() {
+    let seeder = mon(RATTATA, &[SPLASH]);
+    let stats = seeder.stats();
+    let seeder = seeder.with_cached_stats(stats, stats.max_hp + 1);
+    let enemy = seeded_by(mon(WURMPLE, &[SPLASH]), BattlerSide::Player);
+
+    let (battle, events) = drain_turn(seeder, enemy);
+
+    assert!(
+        events.contains(&BattleEvent::LeechSeedHealed {
+            by_player: true,
+            healed: 0,
+        }),
+        "{events:?}"
+    );
+    assert_eq!(battle.player().current_hp(), stats.max_hp);
+}

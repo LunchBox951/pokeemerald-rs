@@ -1203,9 +1203,11 @@ impl Battle {
         };
         let before = receiver.current_hp();
         receiver.heal_hp(dealt);
+        // A loaded record keeps its HP byte-exact, so `before` can sit above
+        // the maximum the heal clamps to; that case healed nothing.
         events.push(BattleEvent::LeechSeedHealed {
             by_player: receiver_is_player,
-            healed: receiver.current_hp() - before,
+            healed: receiver.current_hp().saturating_sub(before),
         });
         self.settle_faint(is_player, events);
         fainted
