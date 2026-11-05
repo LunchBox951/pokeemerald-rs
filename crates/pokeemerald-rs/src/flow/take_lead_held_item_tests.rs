@@ -23,15 +23,15 @@ fn berry_total(phase: &OverworldPhase) -> u16 {
         .bag
         .berries
         .iter()
-        .filter(|slot| slot.item_id == ItemId::ORAN_BERRY.0)
+        .filter(|slot| slot.item_id == ItemId::SITRUS_BERRY.0)
         .map(|slot| slot.quantity)
         .sum()
 }
 
-fn phase_leading_with_oran_berry() -> OverworldPhase {
+fn phase_leading_with_sitrus_berry() -> OverworldPhase {
     let mut phase = new_game_phase();
     settle(&mut phase);
-    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::SITRUS_BERRY);
     let record = to_save_pokemon(&Dex::new(), &lead);
     phase.set_backed_lead_for_test(0, record, lead);
     phase
@@ -39,16 +39,16 @@ fn phase_leading_with_oran_berry() -> OverworldPhase {
 
 #[test]
 fn the_item_moves_to_the_bag_and_the_save_follows() {
-    let mut phase = phase_leading_with_oran_berry();
+    let mut phase = phase_leading_with_sitrus_berry();
     assert_eq!(
         ensure_lead_can_battle(phase.lead_for_test().unwrap()),
-        Err(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Err(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
         "setup: the lead is refused"
     );
 
     assert_eq!(
         phase.take_lead_held_item(),
-        Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        Some(TakeHeldItem::Took(ItemId::SITRUS_BERRY))
     );
 
     assert_eq!(berry_total(&phase), 1, "the bag gains one");
@@ -61,31 +61,31 @@ fn the_item_moves_to_the_bag_and_the_save_follows() {
 
 #[test]
 fn a_refused_take_changes_neither_the_lead_nor_the_save() {
-    let mut phase = phase_leading_with_oran_berry();
-    phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+    let mut phase = phase_leading_with_sitrus_berry();
+    phase.save1.bag.berries[0].item_id = ItemId::SITRUS_BERRY.0;
     phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
     let bag = phase.save1().bag.clone();
 
     assert_eq!(
         phase.take_lead_held_item(),
-        Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))
+        Some(TakeHeldItem::BagFull(ItemId::SITRUS_BERRY))
     );
 
     assert_eq!(phase.save1().bag, bag);
     assert_eq!(
         phase.lead_for_test().unwrap().held_item(),
-        ItemId::ORAN_BERRY
+        ItemId::SITRUS_BERRY
     );
     let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
-    assert_eq!(saved.held_item(), ItemId::ORAN_BERRY);
+    assert_eq!(saved.held_item(), ItemId::SITRUS_BERRY);
 }
 
 #[test]
 fn nothing_held_and_no_lead_are_reported_without_a_write() {
-    let mut phase = phase_leading_with_oran_berry();
+    let mut phase = phase_leading_with_sitrus_berry();
     assert_eq!(
         phase.take_lead_held_item(),
-        Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        Some(TakeHeldItem::Took(ItemId::SITRUS_BERRY))
     );
     let bag = phase.save1().bag.clone();
     assert_eq!(phase.take_lead_held_item(), Some(TakeHeldItem::NotHolding));
@@ -101,7 +101,7 @@ fn nothing_held_and_no_lead_are_reported_without_a_write() {
 fn selecting_take_in_the_open_menu_unblocks_a_refused_lead() {
     let temp = TempSave::new("menu-take-item");
     let mut save_slot = temp.slot();
-    let mut phase = phase_leading_with_oran_berry();
+    let mut phase = phase_leading_with_sitrus_berry();
     assert!(ensure_lead_can_battle(phase.lead_for_test().unwrap()).is_err());
 
     phase.open_synthetic_start_menu();
@@ -139,8 +139,8 @@ fn selecting_take_in_the_open_menu_unblocks_a_refused_lead() {
 fn selecting_take_with_a_full_bag_keeps_the_item_on_the_lead() {
     let temp = TempSave::new("menu-take-item-bag-full");
     let mut save_slot = temp.slot();
-    let mut phase = phase_leading_with_oran_berry();
-    phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+    let mut phase = phase_leading_with_sitrus_berry();
+    phase.save1.bag.berries[0].item_id = ItemId::SITRUS_BERRY.0;
     phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
     let bag = phase.save1().bag.clone();
 
@@ -151,7 +151,7 @@ fn selecting_take_with_a_full_bag_keeps_the_item_on_the_lead() {
     assert_eq!(phase.save1().bag, bag);
     assert_eq!(
         phase.lead_for_test().unwrap().held_item(),
-        ItemId::ORAN_BERRY
+        ItemId::SITRUS_BERRY
     );
 }
 
@@ -161,8 +161,8 @@ fn selecting_take_with_a_full_bag_keeps_the_item_on_the_lead() {
 fn a_full_bag_take_shows_the_player_why() {
     let temp = TempSave::new("menu-take-item-bag-full-msg");
     let mut save_slot = temp.slot();
-    let mut phase = phase_leading_with_oran_berry();
-    phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+    let mut phase = phase_leading_with_sitrus_berry();
+    phase.save1.bag.berries[0].item_id = ItemId::SITRUS_BERRY.0;
     phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
 
     phase.open_synthetic_start_menu();
@@ -183,7 +183,7 @@ fn a_full_bag_take_shows_the_player_why() {
 fn a_successful_take_shows_the_message_and_dismissing_it_frees_the_field() {
     let temp = TempSave::new("menu-take-item-msg");
     let mut save_slot = temp.slot();
-    let mut phase = phase_leading_with_oran_berry();
+    let mut phase = phase_leading_with_sitrus_berry();
 
     phase.open_synthetic_start_menu();
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
@@ -215,7 +215,7 @@ fn a_successful_take_shows_the_message_and_dismissing_it_frees_the_field() {
 fn a_take_whose_message_cannot_be_built_leaves_the_item_on_the_lead() {
     let temp = TempSave::new("menu-take-item-no-pack");
     let mut save_slot = temp.slot();
-    let mut phase = phase_leading_with_oran_berry();
+    let mut phase = phase_leading_with_sitrus_berry();
 
     phase.open_synthetic_start_menu();
     // The menu is already open; the pack then becomes unreadable.
@@ -236,14 +236,14 @@ fn a_take_whose_message_cannot_be_built_leaves_the_item_on_the_lead() {
     assert_eq!(berry_total(&phase), 0, "the bag did not gain the item");
     assert_eq!(
         phase.lead_for_test().unwrap().held_item(),
-        ItemId::ORAN_BERRY,
+        ItemId::SITRUS_BERRY,
         "the lead still holds it"
     );
     assert_eq!(
         from_save_pokemon(&Dex::new(), &phase.save1().player_party[0])
             .unwrap()
             .held_item(),
-        ItemId::ORAN_BERRY,
+        ItemId::SITRUS_BERRY,
         "the saved slot still holds it"
     );
 }

@@ -578,7 +578,7 @@ fn a_refused_rival_start_returns_the_lent_lead() {
 #[test]
 fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
     let mut phase = route_103_phase_facing_the_rival();
-    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     phase.rng = engine::rng::Rng::new(1);
 
