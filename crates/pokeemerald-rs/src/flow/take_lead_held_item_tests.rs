@@ -2,10 +2,9 @@
 //! `pokeemerald/src/party_menu.c:3273-3298`) on a lead backed by a saved slot,
 //! driven through a real [`OverworldPhase`].
 //!
-//! Split from [`super::start_menu_tests`], which owns "when may a menu open,
-//! and what does it do to the frame" (`one module = one concept`
-//! `(oop-boundaries)`): this file owns what TAKE does to the lead, the bag
-//! and the saved slot.
+//! This file owns what TAKE does to the lead, the bag and the saved slot,
+//! and what the player sees for each outcome. When a menu may open, and what
+//! opening one does to the frame, is [`super::start_menu_tests`]'s.
 
 use super::overworld_phase::OverworldPhase;
 use super::save_continue_support::{new_game_phase, settle};
