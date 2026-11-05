@@ -213,21 +213,32 @@ impl Drop for OwnedDir {
     /// thread is already unwinding: a passing test must not leave its
     /// fixture on disk unreported.
     ///
+    /// A path whose identity cannot be read at all (the parent lost search
+    /// permission, say) is not a replacement: nothing is removed, and that
+    /// is reported the same way, so the tree is never left behind silently.
+    ///
     /// Still exposed: a same-user process that swaps the path between this
-    /// check and the removal, and fixture writes that go through `path()`
-    /// after a swap. A test fixture in a private temp name accepts both; the
-    /// check bounds the damage to a swap landing inside that window.
+    /// check and the removal, one that swaps an empty directory in between
+    /// `mkdir` and the claim's identity reads, and fixture writes that go
+    /// through `path()` after a swap. POSIX has no atomic create-and-open for
+    /// a directory, and a same-user process can already do anything this
+    /// one can; a test fixture in a private temp name accepts those, and the
+    /// checks bound the damage to a swap landing inside those windows.
     fn drop(&mut self) {
-        let mut removal = Ok(());
-        if self.identity.is_verifiable()
-            && Identity::of(&self.path).as_ref() == Some(&self.identity)
-        {
-            #[cfg(windows)]
-            drop(self.handle.take());
-            removal = std::fs::remove_dir_all(&self.path);
+        let mut outcome = Ok(());
+        if self.identity.is_verifiable() {
+            match std::fs::symlink_metadata(&self.path) {
+                Err(error) => outcome = Err(error),
+                Ok(_) if Identity::of(&self.path).as_ref() == Some(&self.identity) => {
+                    #[cfg(windows)]
+                    drop(self.handle.take());
+                    outcome = std::fs::remove_dir_all(&self.path);
+                }
+                Ok(_) => {}
+            }
         }
         drop(self.handle.take());
-        if let Err(error) = removal {
+        if let Err(error) = outcome {
             assert!(
                 std::thread::panicking(),
                 "removing fixture {} failed: {error}",
@@ -442,6 +453,28 @@ mod tests {
             std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::remove_dir_all(&path).unwrap();
         }
+        assert!(
+            removed || outcome.is_err(),
+            "drop left {} behind without reporting it",
+            path.display()
+        );
+    }
+
+    /// An owned directory whose identity cannot be read (the parent lost
+    /// search permission) is reported on drop, not skipped as a replacement.
+    /// Root reads it regardless, so this pins only that the fixture is
+    /// either gone or its failure surfaced.
+    #[cfg(unix)]
+    #[test]
+    fn an_unverifiable_owned_directory_on_drop_is_surfaced_not_left_behind() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = private_base("unverifiable");
+        let claimed = OwnedDir::create_in(base.path(), "fx").unwrap();
+        let path = claimed.path().to_path_buf();
+        std::fs::set_permissions(base.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claimed)));
+        std::fs::set_permissions(base.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let removed = !path.exists();
         assert!(
             removed || outcome.is_err(),
             "drop left {} behind without reporting it",
