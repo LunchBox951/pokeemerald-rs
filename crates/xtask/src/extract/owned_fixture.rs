@@ -51,13 +51,18 @@ type Token = win_fs::WindowsFileIdentity;
 type Token = ();
 
 impl Identity {
-    /// The identity of the real directory at `path`, or `None` when `path` is
-    /// absent, a symlink or not a directory (on Windows, also when the
-    /// identity cannot be read).
-    fn of(path: &Path) -> Option<Self> {
-        let metadata = std::fs::symlink_metadata(path).ok()?;
+    /// The identity of the real directory at `path`: `Ok(None)` when the
+    /// path is absent, a symlink or not a directory, which says it is not
+    /// the claimed directory; `Err` when the read itself failed, which says
+    /// nothing about what is there.
+    fn of(path: &Path) -> io::Result<Option<Self>> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
         if !metadata.file_type().is_dir() {
-            return None;
+            return Ok(None);
         }
         #[cfg(unix)]
         let token = {
@@ -67,12 +72,11 @@ impl Identity {
         #[cfg(windows)]
         let token = Some(
             win_fs::open_for_verified_delete(path)
-                .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle))
-                .ok()?,
+                .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle))?,
         );
         #[cfg(not(any(unix, windows)))]
         let token: Option<Token> = None;
-        Some(Self { token })
+        Ok(Some(Self { token }))
     }
 
     /// The identity of the directory `handle` is open on, or `None` where the
@@ -159,7 +163,7 @@ impl OwnedDir {
                 path.display()
             ))
         };
-        let identity = Identity::of(path).ok_or_else(replaced)?;
+        let identity = Identity::of(path)?.ok_or_else(replaced)?;
         // The handle pins the identity for the fixture's lifetime. Its own
         // identity must match the path's: a symlink swapped in between the
         // two reads would open its target instead.
@@ -214,8 +218,9 @@ impl Drop for OwnedDir {
     /// fixture on disk unreported.
     ///
     /// A path whose identity cannot be read at all (the parent lost search
-    /// permission, say) is not a replacement: nothing is removed, and that
-    /// is reported the same way, so the tree is never left behind silently.
+    /// permission, say, or on Windows the verifying open failed) is not a
+    /// replacement: nothing is removed, and that is reported the same way,
+    /// so the tree is never left behind silently.
     ///
     /// Still exposed: a same-user process that swaps the path between this
     /// check and the removal, one that swaps an empty directory in between
@@ -227,9 +232,9 @@ impl Drop for OwnedDir {
     fn drop(&mut self) {
         let mut outcome = Ok(());
         if self.identity.is_verifiable() {
-            match std::fs::symlink_metadata(&self.path) {
+            match Identity::of(&self.path) {
                 Err(error) => outcome = Err(error),
-                Ok(_) if Identity::of(&self.path).as_ref() == Some(&self.identity) => {
+                Ok(Some(identity)) if identity == self.identity => {
                     #[cfg(windows)]
                     drop(self.handle.take());
                     outcome = std::fs::remove_dir_all(&self.path);
@@ -321,8 +326,14 @@ mod tests {
         let first = OwnedDir::create_in(base.path(), "fx").unwrap();
         let second = OwnedDir::create_in(base.path(), "fx").unwrap();
         assert!(first.identity.is_verifiable());
-        assert_ne!(Identity::of(first.path()), Identity::of(second.path()));
-        assert_eq!(Identity::of(first.path()).as_ref(), Some(&first.identity));
+        assert_ne!(
+            Identity::of(first.path()).unwrap(),
+            Identity::of(second.path()).unwrap()
+        );
+        assert_eq!(
+            Identity::of(first.path()).unwrap().as_ref(),
+            Some(&first.identity)
+        );
     }
 
     #[cfg(unix)]
