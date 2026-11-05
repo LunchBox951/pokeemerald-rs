@@ -323,3 +323,27 @@ fn a_reserve_the_trainer_cannot_face_is_left_out_with_its_bytes() {
     assert_eq!(phase.rival_battle_outcome(), Some(BattleOutcome::PlayerWon));
     assert_eq!(phase.save1.player_party[1].to_bytes(), before);
 }
+
+/// A lone lead has no reserve to file, but it is a participating member too: its saved slot
+/// carries the fight's experience once the battle ends.
+#[test]
+fn a_lone_rival_lead_is_merged_into_its_saved_slot() {
+    let lead = overwhelming_treecko_lead();
+    let before = lead.experience();
+    let records = [saved(&lead)];
+    let mut phase = rival_phase(&records, 0, lead);
+    for _ in 0..64 {
+        phase.step(ButtonState::new());
+        if phase.rival_battle_outcome().is_some() {
+            break;
+        }
+    }
+    assert_eq!(phase.rival_battle_outcome(), Some(BattleOutcome::PlayerWon));
+    let live = phase.lead_for_test().unwrap().experience();
+    assert!(live > before, "the live lead gained experience");
+    assert_eq!(
+        decoded(&phase.save1.player_party[0]).experience(),
+        live,
+        "the entered lead's saved slot carries the fight"
+    );
+}

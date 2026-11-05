@@ -101,8 +101,12 @@ impl OverworldPhase {
             unplayable_member_remains,
         } = reserves;
         let files_party = !owners.is_empty() || unplayable_member_remains;
+        // The lead is filed into its saved slot whenever a party is saved, so a lone lead's
+        // experience and PP reach the save like an entered reserve's. An unsaved party
+        // (count 0) has no slot to file into.
+        let flushes_lead = files_party || self.save1.player_party_count != 0;
         let entered_owners =
-            self.file_battle_party(&Dex::new(), members, entered, owners, files_party);
+            self.file_battle_party(&Dex::new(), members, entered, owners, flushes_lead);
         FiledParty {
             entered_owners,
             files_party,

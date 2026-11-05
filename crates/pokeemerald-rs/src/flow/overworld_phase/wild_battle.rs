@@ -147,7 +147,7 @@ impl OverworldPhase {
 
     /// Files a finished battle's party: position 0 returns to the lent lead, and each
     /// reserve among the first `entered` members returns to its own owner and is merged
-    /// into its own saved slot. With `files_party` the lead is flushed to the save as
+    /// into its own saved slot. With `flushes_lead` the lead is flushed to the save as
     /// well. Returns the owners that entered, whose live battlers carry state a save record
     /// does not.
     pub(super) fn file_battle_party(
@@ -156,7 +156,7 @@ impl OverworldPhase {
         members: Vec<battle::BattlePokemon>,
         entered: usize,
         reserves: Vec<LoadedLead>,
-        files_party: bool,
+        flushes_lead: bool,
     ) -> Vec<LoadedLead> {
         let mut members = members.into_iter();
         let lead = members
@@ -169,7 +169,7 @@ impl OverworldPhase {
             self.save1.player_party[owner.slot()] = owner.merge_and_save(dex);
             entered_owners.push(owner);
         }
-        if files_party {
+        if flushes_lead {
             self.flush_lead_to_save();
         }
         entered_owners
