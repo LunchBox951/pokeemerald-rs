@@ -159,57 +159,103 @@ impl OverworldPhase {
         ));
     }
 
-    /// The start menu's take-item hook, reached by its TAKE entry
-    /// ([`StartMenuOutcome::TakeItem`]): `CursorCb_TakeItem`
-    /// (`pokeemerald/src/party_menu.c:3273-3298`) on the lead. Moves the
-    /// lead's held item into the bag ([`party::take_held_item`]) and, only
-    /// when it moved, merges the lead into its saved slot so the save
-    /// reflects the change. A refused take (nothing held, or a full bag)
-    /// writes nothing; [`Self::show_take_item_outcome`] shows the message each
-    /// outcome selects.
+    /// Test-only: the start menu's take-item hook without its message box.
+    /// `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273-3298`) on the
+    /// lead: moves the lead's held item into the bag
+    /// ([`party::take_held_item`]) and, only when it moved, merges the lead
+    /// into its saved slot so the save reflects the change. A refused take
+    /// (nothing held, or a full bag) writes nothing. The TAKE entry
+    /// ([`StartMenuOutcome::TakeItem`]) reaches the same staging and commit
+    /// through [`Self::show_take_item_outcome`].
     ///
     /// This is how an imported lead whose item `battle` does not model
     /// (`lead_screen::ensure_lead_can_battle`) becomes able to
     /// battle. `None` when there is no lead to act on, including while it is
     /// lent to a battle.
+    #[cfg(test)]
     pub(in crate::flow) fn take_lead_held_item(&mut self) -> Option<party::TakeHeldItem> {
-        // Split borrow: the lead and the bag are separate fields.
-        let lead = self.lead.as_mut().filter(|lead| !lead.is_lent())?;
-        let outcome = party::take_held_item(lead.battler_mut(), &mut self.save1.bag);
-        if matches!(outcome, party::TakeHeldItem::Took(_)) {
-            self.flush_lead_to_save();
-        }
+        let staged = self.stage_take_lead_held_item()?;
+        let outcome = staged.outcome;
+        self.commit_take_lead_held_item(staged);
         Some(outcome)
+    }
+
+    /// Runs `TryTakeMonItem` on copies of the lead's battler and the bag, so
+    /// the caller can look at the outcome before anything is written.
+    /// `None` when there is no lead to act on, including while it is lent to
+    /// a battle.
+    fn stage_take_lead_held_item(&self) -> Option<StagedTake> {
+        let lead = self.lead.as_ref().filter(|lead| !lead.is_lent())?;
+        let mut battler = lead.battler().clone();
+        let mut bag = self.save1.bag.clone();
+        let outcome = party::take_held_item(&mut battler, &mut bag);
+        Some(StagedTake {
+            outcome,
+            battler,
+            bag,
+        })
+    }
+
+    /// Applies a [`Self::stage_take_lead_held_item`] result: only a
+    /// [`party::TakeHeldItem::Took`] moves the staged battler and bag into
+    /// place and merges the lead into its saved slot. A refused take leaves
+    /// the lead, the bag and the save untouched.
+    fn commit_take_lead_held_item(&mut self, staged: StagedTake) {
+        if !matches!(staged.outcome, party::TakeHeldItem::Took(_)) {
+            return;
+        }
+        if let Some(lead) = self.lead.as_mut().filter(|lead| !lead.is_lent()) {
+            *lead.battler_mut() = staged.battler;
+        }
+        self.save1.bag = staged.bag;
+        self.flush_lead_to_save();
     }
 
     /// Runs the TAKE entry and puts what `CursorCb_TakeItem` tells the player
     /// in the field message box, which holds field input until it is dismissed.
     /// The texts and the cases without an upstream text are
     /// [`take_item_message`]'s.
+    ///
+    /// The message box opens before the take commits: a box that cannot be
+    /// built (an unreadable pack) leaves the lead, the bag and the save as
+    /// they were, so the player is never left with a transfer they were not
+    /// told about.
     fn show_take_item_outcome(&mut self) {
-        let outcome = self.take_lead_held_item();
+        let staged = self.stage_take_lead_held_item();
+        let outcome = staged.as_ref().map(|staged| staged.outcome);
         let nickname = self
             .lead
             .as_ref()
             .map(|lead| take_item_message::nickname_tokens(lead.record()))
             .unwrap_or_default();
-        self.show_field_message(take_item_message::take_item_message(outcome, nickname));
+        if !self.show_field_message(take_item_message::take_item_message(outcome, nickname)) {
+            return;
+        }
+        if let Some(staged) = staged {
+            self.commit_take_lead_held_item(staged);
+        }
     }
 
     /// Opens `tokens` in the field message box (`ShowFieldMessage`), at the
     /// saved text speed. A box that cannot be built is logged and the field
-    /// carries on without it.
-    fn show_field_message(&mut self, tokens: Vec<Token>) {
+    /// carries on without it; the return says whether it opened.
+    fn show_field_message(&mut self, tokens: Vec<Token>) -> bool {
         #[cfg(test)]
         if matches!(self.synthetic_start_menu, super::SyntheticStartMenu::Builds) {
             self.dialog =
                 Some(crate::overworld::dialog::synthetic_dialog(tokens).with_waitbuttonpress());
-            return;
+            return true;
         }
         let text_speed = self.field_dialog_text_speed();
         match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
-            Ok(dialog) => self.dialog = Some(dialog),
-            Err(err) => eprintln!("field message: {err} -- staying in the overworld"),
+            Ok(dialog) => {
+                self.dialog = Some(dialog);
+                true
+            }
+            Err(err) => {
+                eprintln!("field message: {err} -- staying in the overworld");
+                false
+            }
         }
     }
 
@@ -242,6 +288,16 @@ impl OverworldPhase {
             previous_elevation: self.player.previous_elevation(),
         };
     }
+}
+
+/// A `TryTakeMonItem` run on copies, held until its message box has opened
+/// ([`OverworldPhase::stage_take_lead_held_item`]).
+struct StagedTake {
+    outcome: party::TakeHeldItem,
+    /// The lead's battler after the take.
+    battler: battle::BattlePokemon,
+    /// The bag after the take.
+    bag: engine::save::Bag,
 }
 
 /// [`OverworldPhase`] and [`SaveSlot`] as the [`SaveTarget`] of the start menu's

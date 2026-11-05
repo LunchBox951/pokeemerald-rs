@@ -209,3 +209,42 @@ fn a_successful_take_shows_the_message_and_dismissing_it_frees_the_field() {
         "A dismisses the message and the field is free again"
     );
 }
+
+/// A TAKE whose message box cannot be built commits nothing: the player would
+/// never be told the item moved, so it must not move.
+#[test]
+fn a_take_whose_message_cannot_be_built_leaves_the_item_on_the_lead() {
+    let temp = TempSave::new("menu-take-item-no-pack");
+    let mut save_slot = temp.slot();
+    let mut phase = phase_leading_with_oran_berry();
+
+    phase.open_synthetic_start_menu();
+    // The menu is already open; the pack then becomes unreadable.
+    phase.synthetic_start_menu = super::overworld_phase::SyntheticStartMenu::RealPack;
+    let missing: &'static std::path::Path = Box::leak(
+        std::path::PathBuf::from("/nonexistent/take-lead-held-item.pack").into_boxed_path(),
+    );
+    phase.pack_source = crate::pack_source::PackSource::Test(missing);
+
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+    assert!(phase.start_menu().is_none(), "the menu is closed");
+    assert!(
+        phase.start_menu_may_open(pressed(Buttons::START), false),
+        "no message box opened, so the field is free"
+    );
+    assert_eq!(berry_total(&phase), 0, "the bag did not gain the item");
+    assert_eq!(
+        phase.lead_for_test().unwrap().held_item(),
+        ItemId::ORAN_BERRY,
+        "the lead still holds it"
+    );
+    assert_eq!(
+        from_save_pokemon(&Dex::new(), &phase.save1().player_party[0])
+            .unwrap()
+            .held_item(),
+        ItemId::ORAN_BERRY,
+        "the saved slot still holds it"
+    );
+}
