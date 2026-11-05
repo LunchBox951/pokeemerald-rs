@@ -16,10 +16,16 @@ use std::path::{Path, PathBuf};
 const ATTEMPTS: u64 = 64;
 
 /// A directory this process exclusively created, removed on drop.
+///
+/// `handle` stays open on the claimed directory for the fixture's lifetime:
+/// an inode (Unix) or file ID (Windows) is not recycled while something
+/// holds it open, so a directory that is removed and recreated at the same
+/// name cannot inherit the claimed identity and be mistaken for it on drop.
 #[derive(Debug)]
 pub(crate) struct OwnedDir {
     path: PathBuf,
     identity: Identity,
+    handle: Option<std::fs::File>,
 }
 
 /// What `mkdir` created: a real (non-symlink) directory plus, where the
@@ -66,6 +72,25 @@ impl Identity {
         );
         #[cfg(not(any(unix, windows)))]
         let token: Option<Token> = None;
+        Some(Self { token })
+    }
+
+    /// The identity of the directory `handle` is open on, or `None` where the
+    /// platform cannot read one.
+    fn of_handle(handle: &std::fs::File) -> Option<Self> {
+        #[cfg(unix)]
+        let token = {
+            use std::os::unix::fs::MetadataExt as _;
+            let metadata = handle.metadata().ok()?;
+            Some((metadata.dev(), metadata.ino()))
+        };
+        #[cfg(windows)]
+        let token = Some(win_fs::WindowsFileIdentity::of(handle).ok()?);
+        #[cfg(not(any(unix, windows)))]
+        let token: Option<Token> = {
+            let _ = handle;
+            None
+        };
         Some(Self { token })
     }
 
@@ -122,16 +147,37 @@ impl OwnedDir {
         #[cfg(not(unix))]
         let builder = std::fs::DirBuilder::new();
         builder.create(path)?;
-        let identity = Identity::of(path).ok_or_else(|| {
+        let replaced = || {
             io::Error::other(format!(
                 "{} was replaced right after it was created",
                 path.display()
             ))
-        })?;
+        };
+        let identity = Identity::of(path).ok_or_else(replaced)?;
+        // The handle pins the identity for the fixture's lifetime. Its own
+        // identity must match the path's: a symlink swapped in between the
+        // two reads would open its target instead.
+        let handle = Self::open_claimed(path)?;
+        if identity.is_verifiable() && Identity::of_handle(&handle).as_ref() != Some(&identity) {
+            return Err(replaced());
+        }
         Ok(Self {
             path: path.to_path_buf(),
             identity,
+            handle: Some(handle),
         })
+    }
+
+    /// Opens the claimed directory to hold it for the fixture's lifetime.
+    fn open_claimed(path: &Path) -> io::Result<std::fs::File> {
+        #[cfg(windows)]
+        {
+            win_fs::open_for_verified_delete(path)
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::File::open(path)
+        }
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -145,6 +191,11 @@ impl Drop for OwnedDir {
     /// On a target with no readable identity (neither Unix nor Windows) the
     /// directory cannot be told from a replacement, so nothing is removed.
     ///
+    /// The held handle keeps the claimed identity from being recycled, so a
+    /// directory removed and recreated at the name is told apart too. On
+    /// Windows the handle is closed before the removal, since the directory
+    /// cannot be removed while it is open.
+    ///
     /// Still exposed: a same-user process that swaps the path between this
     /// check and the removal, and fixture writes that go through `path()`
     /// after a swap. A test fixture in a private temp name accepts both; the
@@ -153,8 +204,11 @@ impl Drop for OwnedDir {
         if self.identity.is_verifiable()
             && Identity::of(&self.path).as_ref() == Some(&self.identity)
         {
+            #[cfg(windows)]
+            drop(self.handle.take());
             let _ = std::fs::remove_dir_all(&self.path);
         }
+        drop(self.handle.take());
     }
 }
 
@@ -298,6 +352,25 @@ mod tests {
             std::fs::read(path.join("sentinel")).ok().as_deref(),
             Some(&b"precious"[..]),
             "drop deleted the replacement it never claimed"
+        );
+    }
+
+    /// Removing the claimed directory frees its name; a directory recreated
+    /// there would take the next free identity, the claimed one included
+    /// unless the fixture still holds it.
+    #[test]
+    fn drop_removes_nothing_after_the_claimed_directory_is_removed_and_recreated() {
+        let base = private_base("recreate");
+        let claimed = OwnedDir::create_in(base.path(), "fx").unwrap();
+        let path = claimed.path().to_path_buf();
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("sentinel"), "precious").unwrap();
+        drop(claimed);
+        assert_eq!(
+            std::fs::read(path.join("sentinel")).ok().as_deref(),
+            Some(&b"precious"[..]),
+            "drop deleted a directory it never claimed"
         );
     }
 
