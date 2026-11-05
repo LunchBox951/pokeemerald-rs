@@ -226,7 +226,7 @@ impl OverworldPhase {
         let nickname = self
             .lead
             .as_ref()
-            .map(|lead| take_item_message::nickname_tokens(lead.record()))
+            .map(|lead| take_item_message::nickname_tokens(lead.record(), lead.battler().species()))
             .unwrap_or_default();
         if !self.show_field_message(take_item_message::take_item_message(outcome, nickname)) {
             return;

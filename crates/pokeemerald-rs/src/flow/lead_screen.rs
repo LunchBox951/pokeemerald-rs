@@ -26,9 +26,11 @@
 //! The way out is `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273`):
 //! [`crate::party::take_held_item`] moves the item into the bag, and the
 //! start menu's TAKE entry reaches it through
-//! `OverworldPhase::take_lead_held_item`, which also merges the lead into its saved slot. The screen above then admits the
-//! lead in every flow, as it admits one that never held the item. A full bag
-//! refuses the take and the lead keeps the item, so the refusal stays honest.
+//! `OverworldPhase::show_take_item_outcome`, which stages the take, opens
+//! the outcome's message box, and then commits it and merges the lead into
+//! its saved slot. The screen above then admits the lead in every flow, as it
+//! admits one that never held the item. A full bag refuses the take and the
+//! lead keeps the item, so the refusal stays honest.
 
 use battle::{BattleError, BattlePokemon};
 
