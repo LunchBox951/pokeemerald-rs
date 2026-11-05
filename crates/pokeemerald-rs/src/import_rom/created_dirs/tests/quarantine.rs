@@ -676,6 +676,7 @@ fn an_unenterable_name_that_is_not_our_quarantine_is_left_untouched() {
     ) -> rustix::io::Result<std::os::fd::OwnedFd> {
         Err(rustix::io::Errno::ACCESS)
     }
+    use std::os::unix::fs::PermissionsExt as _;
     if !in_rollback_stderr_child() {
         let stderr = rerun_alone_for_stderr(
             "import_rom::created_dirs::tests::quarantine::an_unenterable_name_that_is_not_our_quarantine_is_left_untouched",
@@ -688,7 +689,6 @@ fn an_unenterable_name_that_is_not_our_quarantine_is_left_untouched() {
         );
         return;
     }
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = TempDir::new("quarantine-unenterable-swapped");
     let level = dir.join("new");
     let (name, away) = (dir.join(".undo-s"), dir.join("away"));
@@ -744,7 +744,7 @@ fn rollback_takes_back_every_level_under_umasks_that_strip_owner_access() {
     let mask = std::env::var(MASKS).unwrap();
     let dir = TempDir::new("umask-strips-owner");
     let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(
-        u32::from_str_radix(&mask, 8).unwrap().try_into().unwrap(),
+        rustix::fs::RawMode::from_str_radix(&mask, 8).unwrap(),
     ));
     let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
     super::undo_created_directories(&created);
