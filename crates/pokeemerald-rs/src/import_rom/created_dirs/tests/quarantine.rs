@@ -474,3 +474,284 @@ fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
     assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
     assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
 }
+
+/// The steps with `mkdirat` failing with `err`, as a full filesystem does.
+#[cfg(unix)]
+fn steps_whose_mkdir_fails(err: rustix::io::Errno) -> super::take_back::Steps {
+    // `fn` pointers cannot capture, so each errno has its own.
+    fn no_space(_: std::os::fd::BorrowedFd<'_>, _: &str) -> rustix::io::Result<()> {
+        Err(rustix::io::Errno::NOSPC)
+    }
+    fn over_quota(_: std::os::fd::BorrowedFd<'_>, _: &str) -> rustix::io::Result<()> {
+        Err(rustix::io::Errno::DQUOT)
+    }
+    fn read_only(_: std::os::fd::BorrowedFd<'_>, _: &str) -> rustix::io::Result<()> {
+        Err(rustix::io::Errno::ROFS)
+    }
+    super::take_back::Steps {
+        mkdir: match err {
+            rustix::io::Errno::NOSPC => no_space,
+            rustix::io::Errno::DQUOT => over_quota,
+            _ => read_only,
+        },
+        ..super::take_back::Steps::REAL
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_filesystem_still_takes_back_every_created_level() {
+    // The quarantine's `mkdirat` fails for want of space or quota, so no
+    // quarantine exists; each level is removed in place instead, and
+    // nothing is left or printed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::a_full_filesystem_still_takes_back_every_created_level",
+        );
+        assert!(!stderr.contains("warning:"), "stderr:\n{stderr}");
+        return;
+    }
+    for err in [rustix::io::Errno::NOSPC, rustix::io::Errno::DQUOT] {
+        let dir = TempDir::new("quarantine-no-space");
+        let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
+        assert_eq!(created.len(), 3);
+        super::take_back::undo_created_directories_through(
+            &created,
+            &mut || {},
+            &mut |_, _| {},
+            steps_whose_mkdir_fails(err),
+        );
+        assert!(
+            entry_names(&dir.path).is_empty(),
+            "{err}: {:?}",
+            entry_names(&dir.path)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_filesystem_leaves_a_level_holding_something_and_the_levels_above() {
+    // As above, but `b` holds a file: `c` is removed, `b` is not, and `a`
+    // above it is left too, with the cause in the warning.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::a_full_filesystem_leaves_a_level_holding_something_and_the_levels_above",
+        );
+        assert!(
+            stderr.contains("/a/b is left in place: it could not be removed: "),
+            "stderr:\n{stderr}"
+        );
+        assert!(!stderr.contains("/a is left in place"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("quarantine-no-space-holding");
+    let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
+    fs::write(dir.join("a").join("b").join("data"), b"theirs").unwrap();
+    super::take_back::undo_created_directories_through(
+        &created,
+        &mut || {},
+        &mut |_, _| {},
+        steps_whose_mkdir_fails(rustix::io::Errno::NOSPC),
+    );
+    assert!(!dir.join("a").join("b").join("c").exists());
+    assert_eq!(
+        fs::read(dir.join("a").join("b").join("data")).unwrap(),
+        b"theirs"
+    );
+    assert_eq!(entry_names(&dir.path), ["a"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_filesystem_does_not_remove_an_error_that_is_not_about_space() {
+    // `mkdirat` failing for another reason (here a read-only filesystem) is
+    // not "no room": the level is left standing, as before.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::a_full_filesystem_does_not_remove_an_error_that_is_not_about_space",
+        );
+        assert!(
+            stderr.contains("/new is left in place: could not create cleanup directory "),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-mkdir-rofs");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_through(
+        &created,
+        &mut || {},
+        &mut |_, _| {},
+        steps_whose_mkdir_fails(rustix::io::Errno::ROFS),
+    );
+    assert!(level.is_dir(), "the level is left standing");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_filesystem_leaves_a_directory_swapped_in_before_the_unlink() {
+    // The level is moved away and an empty directory of someone else's takes
+    // its name after the walk's check and before the in-place removal: the
+    // removal checks again, so the replacement is not removed, and the
+    // level is reported where it went.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::a_full_filesystem_leaves_a_directory_swapped_in_before_the_unlink",
+        );
+        assert!(
+            stderr.contains("another entry has taken its name"),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("moved away before rollback could take it back"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-no-space-swap");
+    let level = dir.join("new");
+    let away = dir.join("away");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_through(
+        &created,
+        &mut || {
+            fs::rename(&level, &away).unwrap();
+            fs::create_dir(&level).unwrap();
+        },
+        &mut |_, _| {},
+        steps_whose_mkdir_fails(rustix::io::Errno::NOSPC),
+    );
+    assert!(away.is_dir(), "the level that was moved is untouched");
+    assert!(level.is_dir(), "the replacement was removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_that_cannot_be_entered_is_removed_and_the_level_taken_back() {
+    // The open is refused for permission, as a umask that strips the owner's
+    // read bit does for the unprivileged: the quarantine just made is
+    // removed again by name, no quarantine is available, and the level goes
+    // in place.
+    fn refused(
+        _: std::os::fd::BorrowedFd<'_>,
+        _: &str,
+    ) -> rustix::io::Result<std::os::fd::OwnedFd> {
+        Err(rustix::io::Errno::ACCESS)
+    }
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::a_quarantine_that_cannot_be_entered_is_removed_and_the_level_taken_back",
+        );
+        assert!(!stderr.contains("warning:"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("quarantine-unenterable");
+    let created = super::create_directories(&dir.join("a").join("b")).unwrap();
+    super::take_back::undo_created_directories_through(
+        &created,
+        &mut || {},
+        &mut |_, _| {},
+        super::take_back::Steps {
+            open: refused,
+            ..super::take_back::Steps::REAL
+        },
+    );
+    assert!(
+        entry_names(&dir.path).is_empty(),
+        "{:?}",
+        entry_names(&dir.path)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unenterable_name_that_is_not_our_quarantine_is_left_untouched() {
+    // As above, but the name is swapped for someone else's directory before
+    // the refused open: it is neither entered nor removed, and said so.
+    fn refused(
+        _: std::os::fd::BorrowedFd<'_>,
+        _: &str,
+    ) -> rustix::io::Result<std::os::fd::OwnedFd> {
+        Err(rustix::io::Errno::ACCESS)
+    }
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::quarantine::an_unenterable_name_that_is_not_our_quarantine_is_left_untouched",
+        );
+        assert!(
+            stderr.contains(
+                "is not the private cleanup directory rollback made, so it is left untouched"
+            ),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new("quarantine-unenterable-swapped");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-s"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let outcome = super::take_back::take_back_level_through(
+        parent,
+        &created[0],
+        ".undo-s",
+        &mut || {
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+            fs::set_permissions(&name, fs::Permissions::from_mode(0o755)).unwrap();
+        },
+        super::take_back::Steps {
+            open: refused,
+            ..super::take_back::Steps::REAL
+        },
+    );
+    assert_eq!(outcome, None, "no quarantine was available");
+    assert!(name.is_dir(), "the swapped-in directory was removed");
+    assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_takes_back_every_level_under_umasks_that_strip_owner_access() {
+    // The quarantine's `mkdirat(0700)` yields 0300 under umask 0477 (no
+    // owner read, so an unprivileged `O_RDONLY` open of it is refused) and
+    // 0000 under 0777; under 0277 each level is made 0500 and cannot be moved
+    // into a quarantine until it is writable. Each umask is set through
+    // creation as well as rollback, as for a real import, in a child.
+    const TEST: &str = "import_rom::created_dirs::tests::quarantine::rollback_takes_back_every_level_under_umasks_that_strip_owner_access";
+    const MASKS: &str = "POKEEMERALD_IMPORT_ROLLBACK_UMASKS";
+    if std::env::var_os(MASKS).is_none() {
+        for mask in ["0277", "0477", "0577", "0777"] {
+            let exe = std::env::current_exe().unwrap();
+            let output = std::process::Command::new(exe)
+                .args([TEST, "--exact", "--nocapture"])
+                .env(MASKS, mask)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.contains("1 passed"),
+                "umask {mask}: child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    }
+    let mask = std::env::var(MASKS).unwrap();
+    let dir = TempDir::new("umask-strips-owner");
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(
+        u32::from_str_radix(&mask, 8).unwrap().try_into().unwrap(),
+    ));
+    let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
+    super::undo_created_directories(&created);
+    rustix::process::umask(previous);
+    assert!(
+        entry_names(&dir.path).is_empty(),
+        "umask {mask}: {:?}",
+        entry_names(&dir.path)
+    );
+}

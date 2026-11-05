@@ -14,6 +14,13 @@
 //! as `<name>.restored-<n>`, if it is not ours or holds something. Every
 //! step that leaves a level standing says so on stderr.
 //!
+//! Where no quarantine can be had, because the filesystem has no room for
+//! the directory (`ENOSPC`, `EDQUOT`) or the umask leaves it unenterable
+//! (`EACCES` on the open), each level that still resolves to its captured
+//! identity, checked again just before, is removed in place instead:
+//! `unlinkat(.., REMOVEDIR)`, which allocates nothing and removes only an
+//! empty directory.
+//!
 //! This module walks the levels; the steps live in its children:
 //!
 //! - [`quarantine`] makes, vouches for and removes the quarantine.
@@ -24,12 +31,17 @@
 //! # Accepted residuals
 //!
 //! The approved `rustix` fs scope has no call that unlinks a directory by
-//! descriptor. The quarantine is a directory this rollback just made, owned
-//! by the current user with no group or other bits, under a random 64-bit
-//! name from `/dev/urandom`, so only a writer running as that user can act
-//! inside it, and such a writer can already delete or rewrite everything
-//! the import owns. The residuals of each step are documented with it, in
-//! [`restore`] and [`quarantine`].
+//! descriptor, so the in-place removal above acts on a name: a writer of the
+//! parent who moves the level away and puts an empty directory at its name
+//! between that second identity check and the unlink loses that empty directory, and
+//! the level is reported where it went.
+//!
+//! The quarantine is a directory this rollback just made, owned by the
+//! current user with no group or other bits, under a random 64-bit name from
+//! `/dev/urandom`, so only a writer running as that user can act inside it,
+//! and such a writer can already delete or rewrite everything the import
+//! owns. The residuals of each step are documented with it, in [`restore`]
+//! and [`quarantine`].
 //!
 //! Rollback is also not crash-safe: a process killed after a level was
 //! renamed into its quarantine and before it was removed or put back leaves
@@ -53,15 +65,17 @@ mod restore;
 #[cfg(test)]
 pub(super) use hooks::{
     take_back_level_capture_check_failing, take_back_level_held_stat_failing,
-    take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
-    take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
+    take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_through,
+    take_back_level_via, take_back_level_vouched_by, take_back_level_with_hooks,
+    warn_if_moved_away_held_stat_failing,
 };
-use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
+pub(super) use quarantine::Steps;
+use quarantine::{claim_quarantine, open_quarantine_with, remove_quarantine, Claim};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 #[cfg(test)]
 pub(super) use report::located_beside;
-use report::{warn_if_moved_away, warn_left_standing};
+use report::{standing, warn_if_moved_away, warn_left_standing, Standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
 use restore::{is_this_level, take_back_into};
@@ -96,7 +110,21 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
 ) {
+    undo_created_directories_through(created, before_take, in_quarantine, Steps::REAL);
+}
+
+/// [`undo_created_directories_with_capture_hooks`] with the calls that make
+/// and enter a quarantine replaced by `steps`, where a test fails one.
+pub(super) fn undo_created_directories_through(
+    created: &[CreatedDirectory],
+    before_take: &mut dyn FnMut(),
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    steps: Steps,
+) {
     let mut quarantine = None;
+    // Set once no quarantine can be had, so each level left is removed in
+    // place instead.
+    let mut in_place = false;
     for dir in created.iter().rev() {
         let Some(parent) = dir.parent.as_deref() else {
             // Shedding releases pins outermost first, so every level from
@@ -131,13 +159,18 @@ pub(super) fn undo_created_directories_with_capture_hooks(
         match looked_up {
             Ok((_, true)) => {
                 before_take();
-                if quarantine.is_none() {
-                    quarantine = claim_quarantine(created, dir);
+                if quarantine.is_none() && !in_place {
+                    match claim_quarantine(created, dir, steps) {
+                        Claim::Held(held) => quarantine = Some(held),
+                        Claim::Unavailable(_) => in_place = true,
+                        Claim::Refused => break,
+                    }
                 }
-                let Some(held) = quarantine.as_ref() else {
-                    break;
+                let outcome = match quarantine.as_ref() {
+                    Some(held) => take_back_into(held, parent, dir, in_quarantine),
+                    None => remove_in_place(parent, dir),
                 };
-                match take_back_into(held, parent, dir, in_quarantine) {
+                match outcome {
                     Outcome::Taken => {}
                     Outcome::Stopped => break,
                     Outcome::CrossDevice => {
@@ -148,7 +181,7 @@ pub(super) fn undo_created_directories_with_capture_hooks(
                         if let Some(shared) = quarantine.take() {
                             remove_quarantine(&shared, &mut || {});
                         }
-                        if !take_back_beside(parent, dir) {
+                        if !take_back_beside(parent, dir, steps) {
                             break;
                         }
                     }
@@ -215,13 +248,15 @@ enum Outcome {
 /// Takes `dir` back through a quarantine of its own made beside it, on its
 /// own filesystem, then removes that quarantine; answers whether the walk
 /// may go on.
-fn take_back_beside(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
+fn take_back_beside(parent: &OwnedFd, dir: &CreatedDirectory, steps: Steps) -> bool {
     let Some(name) = quarantine::unguessable_quarantine_name() else {
         warn_left_standing(dir, format_args!("no entropy for a private cleanup name"));
         return false;
     };
-    let Some(local) = open_quarantine(parent.as_fd(), dir, &name, dir, &mut || {}) else {
-        return false;
+    let local = match open_quarantine_with(parent.as_fd(), dir, &name, dir, &mut || {}, steps) {
+        Claim::Held(local) => local,
+        Claim::Unavailable(_) => return remove_in_place(parent, dir) == Outcome::Taken,
+        Claim::Refused => return false,
     };
     let outcome = take_back_into(&local, parent, dir, &mut |_, _| {});
     remove_quarantine(&local, &mut || {});
@@ -234,6 +269,67 @@ fn take_back_beside(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
                 format_args!("it could not be moved into a cleanup directory beside it"),
             );
             false
+        }
+    }
+}
+
+/// Takes `dir` back with no quarantine, for a filesystem that has no room to
+/// make one: its name in `parent` is checked again against the level
+/// rollback made and holds open, since the walk's check came before the
+/// attempt at a quarantine, and `unlinkat(.., REMOVEDIR)` removes it if
+/// empty, without allocating anything.
+///
+/// A writer of `parent` who moves the level away and puts an empty directory
+/// at its name in the one-syscall window between that check and this unlink
+/// loses that empty directory, which `REMOVEDIR` cannot make more than; the
+/// level it moved is then reported where it went, as after a quarantine's
+/// unlink.
+fn remove_in_place(parent: &OwnedFd, dir: &CreatedDirectory) -> Outcome {
+    match rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
+        .and_then(|stat| Ok((stat, is_this_level(dir, &stat)?)))
+    {
+        Ok((_, true)) => {}
+        // Already gone is already taken care of.
+        Err(err) if err == rustix::io::Errno::NOENT => {
+            warn_if_moved_away(dir);
+            return Outcome::Taken;
+        }
+        Ok((_, false)) => {
+            warn_left_standing(
+                dir,
+                format_args!("another entry has taken its name; the levels above it are left too"),
+            );
+            warn_if_moved_away(dir);
+            return Outcome::Stopped;
+        }
+        Err(err) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "it could not be examined: {}; the levels above it are left too",
+                    std::io::Error::from(err)
+                ),
+            );
+            return Outcome::Stopped;
+        }
+    }
+    match rustix::fs::unlinkat(parent, &dir.name, AtFlags::REMOVEDIR) {
+        Ok(()) => {
+            if matches!(standing(dir), Standing::Linked(_) | Standing::Unexamined(_)) {
+                warn_if_moved_away(dir);
+            }
+            Outcome::Taken
+        }
+        Err(err) if err == rustix::io::Errno::NOENT => {
+            warn_if_moved_away(dir);
+            Outcome::Taken
+        }
+        Err(err) => {
+            warn_left_standing(
+                dir,
+                format_args!("it could not be removed: {}", std::io::Error::from(err)),
+            );
+            Outcome::Stopped
         }
     }
 }

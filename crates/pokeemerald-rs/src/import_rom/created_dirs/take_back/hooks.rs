@@ -7,7 +7,8 @@ use rustix::fs::Dir;
 
 use super::super::CreatedDirectory;
 use super::quarantine::{
-    open_quarantine, open_quarantine_vouched_by, remove_quarantine, remove_quarantine_held_as,
+    open_quarantine, open_quarantine_vouched_by, open_quarantine_with, remove_quarantine,
+    remove_quarantine_held_as, Claim, Steps,
 };
 use super::report::{held_standing_as, report_moved_away};
 use super::restore::{holds_this_level, take_back_into, take_back_into_revalidating};
@@ -169,4 +170,32 @@ pub(in super::super) fn take_back_level_with_hooks(
     let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
     remove_quarantine(&quarantine, before_removal);
     taken
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the calls that make and enter the quarantine
+/// replaced by `steps`. Answers `None` when no quarantine was available
+/// (`Claim::Unavailable`, unreported), else whether the level was taken back.
+pub(in super::super) fn take_back_level_through(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    after_mkdir: &mut dyn FnMut(),
+    steps: Steps,
+) -> Option<bool> {
+    let quarantine = match open_quarantine_with(
+        parent.as_fd(),
+        dir,
+        quarantine_name,
+        dir,
+        after_mkdir,
+        steps,
+    ) {
+        Claim::Held(quarantine) => quarantine,
+        Claim::Unavailable(_) => return None,
+        Claim::Refused => return Some(false),
+    };
+    let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
+    remove_quarantine(&quarantine, &mut || {});
+    Some(taken)
 }
