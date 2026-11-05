@@ -124,10 +124,10 @@ impl BattlerState {
     }
 
     /// `CancelMultiTurnMoves` (`src/battle_util.c:877`-`:887`): the one seam
-    /// that releases a lock early. A failed attempt, a full-paralysis or
-    /// confusion self-hit cancellation and an accepted sleep all end here,
-    /// and so will infatuation's immobilisation. Defense Curl and ordinary
-    /// confusion are separate state and stay.
+    /// that releases a lock early. A failed attempt, a Truant loafing turn,
+    /// a full-paralysis or confusion self-hit cancellation and an accepted
+    /// sleep all end here. Defense Curl and ordinary confusion are separate
+    /// state and stay.
     pub(super) fn cancel_multi_turn_moves(&mut self) {
         self.move_lock = None;
     }

@@ -231,8 +231,9 @@
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison, confusion
 //! and the secondary Speed drop) —
-//! the effect of any held item (a mon carries one, and [`ensure_held_item_playable`]
-//! refuses every item that has an effect), every primary status but [`status1::Status1::Paralysed`],
+//! the effect of any held item but Oran Berry's end-turn heal (a mon carries
+//! one, and [`ensure_held_item_playable`] refuses every other item that has
+//! an effect), every primary status but [`status1::Status1::Paralysed`],
 //! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
 //! [`status1::Status1::Asleep`] (toxic — see [`status1`]'s module

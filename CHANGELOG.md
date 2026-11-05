@@ -7,6 +7,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 ## [0.0.107.0] - 2026-11-05
 
 - Leech Seed is now modelled in battle: the seeded Pokémon loses an eighth of its maximum HP at the end of each turn, and whichever Pokémon is in battle on the side that planted the seed recovers the HP lost, even if it replaced the one that planted it; Grass-type Pokémon are immune, as in the original game. Daisy on Route 103 can now be fought and uses it. Liquid Ooze is still being prepared, so a battle that pairs Leech Seed with a Liquid Ooze holder is still refused.
+- Rollout and Ice Ball can now be used in battle: their power doubles over a series of up to five turns, and the series ends early when the move misses or its user is stopped, as in the original game. Isabelle on Route 103 can now be fought and uses Rollout.
+- A Pokémon holding an Oran Berry now eats it at the end of a turn when its HP is at or below half, recovering 10 HP, and the Berry is used up, as in the original game. Battles with other held items that have an effect are still refused.
 
 ## [0.0.106.0] - 2026-11-05
 
