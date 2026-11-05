@@ -26,14 +26,15 @@ use crate::secondary::{
     SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
-    is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat, StatChangeDirection,
-    StatChangeOutcome,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, stage_of, ChangedStat,
+    StatChangeDirection, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod burn;
 mod effect_spore;
 mod pipelines;
 use pipelines::hit_failure_event;
@@ -556,6 +557,7 @@ impl Battle {
                     self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
                 }
                 self.settle_faint(!attacker_is_player, events);
+                self.defrost_target_of_fire_move(attacker_is_player, move_id, hp_lost, events)?;
                 // See `BattleEvent::PoisonedBySynchronize`'s docs for why the
                 // reflection runs here, after the target's own faint check.
                 if poisoned_synchronize_holder {
@@ -623,23 +625,41 @@ impl Battle {
                 }
             }
             SecondaryApplication::SpeedDown => {
-                self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Speed,
+                    events,
+                );
+            }
+            SecondaryApplication::AccuracyDown => {
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Accuracy,
+                    events,
+                );
+            }
+            SecondaryApplication::Burn => {
+                self.apply_secondary_burn(attacker_is_player, move_id, events);
             }
         }
         poisoned_synchronize_holder
     }
 
-    /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
-    /// target that survived the hit. `SetMoveEffect` leads with an `hp == 0`
-    /// guard (`battle_script_commands.c:2261`-`:2264`), and a target already at
-    /// the minimum stage is left alone with no message because
-    /// `ChangeStatBuffs` runs with `flags == 0` (`:7056`-`:7059`,
-    /// `:7094`-`:7095`). Clear Body, White Smoke and Shield Dust never reach
-    /// this point ([`crate::secondary::spend_effect_chance_draw`]).
-    fn apply_secondary_speed_drop(
+    /// `MOVE_EFFECT_SPD_MINUS_1` and `MOVE_EFFECT_ACC_MINUS_1` as secondary
+    /// effects: one `stat` stage off a target that survived the hit.
+    /// `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`), and a target already at the
+    /// minimum stage is left alone with no message because `ChangeStatBuffs`
+    /// runs with `flags == 0` (`:7056`-`:7059`, `:7094`-`:7095`). Clear Body,
+    /// White Smoke and Shield Dust, and Keen Eye for Accuracy, never reach this
+    /// point ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_stat_drop(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
+        stat: ChangedStat,
         events: &mut Vec<BattleEvent>,
     ) {
         let defender = if attacker_is_player {
@@ -647,16 +667,16 @@ impl Battle {
         } else {
             &mut self.player
         };
-        let current_stage = defender.stages().speed;
+        let current_stage = stage_of(defender, stat);
         if defender.is_fainted() || current_stage == StatStage::MIN {
             return;
         }
         let new_stage = current_stage.saturating_add(-1);
-        set_stage(defender, ChangedStat::Speed, new_stage);
+        set_stage(defender, stat, new_stage);
         events.push(BattleEvent::StatFell {
             by_player: attacker_is_player,
             move_id,
-            stat: ChangedStat::Speed,
+            stat,
             new_stage,
             magnitude: 1,
         });
@@ -1145,8 +1165,8 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
-                131, 141, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
+                110, 125, 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1273,8 +1293,9 @@ mod absorbing_ability_tests {
         sp_defense: 31,
     };
 
-    /// No executable Fire move exists, so the executor's Flash Fire arm is
-    /// driven directly with the outcome `damage_core` reports for Ember.
+    /// Drives the executor's Flash Fire arm directly with the outcome
+    /// `damage_core` reports for Ember; `tests/turn_engine/thaw_hit.rs` covers
+    /// the same arm through Flame Wheel on a real `Battle`.
     #[test]
     fn a_flash_fire_outcome_latches_the_defender_and_reports_the_boost_once() {
         let dex = Dex::new();
