@@ -20,6 +20,14 @@
 //! Every rejection occurs before the first RNG draw. This keeps repeated sight-cone checks
 //! from changing the shared stream while a trainer party remains unsupported.
 //!
+//! # Player reserves
+//!
+//! [`start_npc_trainer_battle_with_reserves`] starts a fight whose player side has saved
+//! reserves behind the lead. Every healthy reserve gets the lead's pre-flight against the
+//! trainer's whole party before the first draw ([`ensure_reserve_can_enter`] is the
+//! screen the flow applies to leave one out instead), because the battle crate only
+//! refuses a reserve after the party's OT-id draws.
+//!
 //! # Held-item parties
 //!
 //! Both held-item party shapes carry their items onto the built [`battle::BattlePokemon`],
@@ -35,10 +43,14 @@
 use assets::items::ItemId;
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex};
+#[cfg(test)]
+use battle::BattleOutcome;
+use battle::{Battle, BattleError, BattleEvent, BattlePokemon, Dex};
 use engine::rng::Rng;
 
+#[cfg(test)]
 use super::battle_finalize::finalize_battle_turn;
+use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::first_usable_move::take_first_usable_move_turn;
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
@@ -212,18 +224,124 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
     party_personalities(trainer, &party_entries(trainer.party))
 }
 
-/// Builds a trainer's party and starts its battle on the shared RNG stream.
-///
-/// All validation finishes before party construction, so every error leaves `rng`
-/// unchanged. Successful construction draws each party member's OT ID before battle
-/// initialization.
+/// A trainer's party as the flow builds it: everything [`start_npc_trainer_battle`] knows
+/// about it before the first RNG draw.
+struct TrainerPlan {
+    entries: Vec<PartyEntry>,
+    personalities: Vec<u32>,
+    movesets: Vec<Vec<MoveId>>,
+}
+
+impl TrainerPlan {
+    fn new(trainer: TrainerId) -> Result<Self, NpcTrainerBattleError> {
+        let data = battle::trainer_data(trainer)?;
+        let entries = party_entries(data.party);
+        let personalities = party_personalities(data, &entries)?;
+        let movesets = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .custom_moves
+                    .clone()
+                    .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level))
+            })
+            .collect();
+        Ok(Self {
+            entries,
+            personalities,
+            movesets,
+        })
+    }
+
+    /// The pre-flight screen of the whole party against `target`, which draws nothing.
+    fn ensure_startable_against(
+        &self,
+        dex: &Dex,
+        trainer: TrainerId,
+        target: &BattlePokemon,
+    ) -> Result<(), NpcTrainerBattleError> {
+        let specs: Vec<battle::TrainerPartyMon<'_>> = self
+            .entries
+            .iter()
+            .zip(&self.movesets)
+            .zip(&self.personalities)
+            .map(|((entry, moves), &personality)| battle::TrainerPartyMon {
+                species: entry.species,
+                level: entry.level,
+                moves,
+                personality,
+                held_item: entry.held_item,
+            })
+            .collect();
+        battle::ensure_trainer_party_startable(dex, target, trainer, &specs)?;
+        ensure_lead_can_battle(target)?;
+        Ok(())
+    }
+}
+
+/// Screens a battle against `lead` alone, without drawing: the refusals
+/// [`start_npc_trainer_battle`] raises before its first draw. A caller that retries every
+/// frame runs this first, so a refused trainer costs it nothing else.
 ///
 /// # Errors
 ///
-/// Returns [`NpcTrainerBattleError`] when the lead, trainer data, or party cannot start a
-/// supported battle.
+/// As [`start_npc_trainer_battle`] returns before its first draw.
+pub(super) fn preflight_npc_trainer_battle(
+    lead: &BattlePokemon,
+    trainer: TrainerId,
+) -> Result<(), NpcTrainerBattleError> {
+    if lead.is_fainted() {
+        return Err(BattleError::FaintedBattler(true).into());
+    }
+    TrainerPlan::new(trainer)?.ensure_startable_against(&Dex::new(), trainer, lead)
+}
+
+/// Whether a saved party member can sit on the bench of a fight with `trainer`: the
+/// pre-flight [`start_npc_trainer_battle_with_reserves`] applies to each healthy reserve,
+/// which the battle crate otherwise applies only after the party's OT-id draws.
+///
+/// # Errors
+///
+/// The first refusal the pre-flight raises against `reserve`.
+pub(super) fn ensure_reserve_can_enter(
+    trainer: TrainerId,
+    reserve: &BattlePokemon,
+) -> Result<(), NpcTrainerBattleError> {
+    TrainerPlan::new(trainer)?.ensure_startable_against(&Dex::new(), trainer, reserve)
+}
+
+/// A fight with no player reserves: the lead alone against `trainer`'s party. The flow
+/// starts every fight through [`start_npc_trainer_battle_with_reserves`]; this lead-only
+/// form is the fixtures' shorthand for it.
+///
+/// # Errors
+///
+/// As [`start_npc_trainer_battle_with_reserves`] with no reserves.
+#[cfg(test)]
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
+    trainer: TrainerId,
+    rng: &mut Rng,
+) -> Result<Battle, NpcTrainerBattleError> {
+    start_npc_trainer_battle_with_reserves(player_lead, Vec::new(), trainer, rng)
+}
+
+/// Builds a trainer's party and starts its battle on the shared RNG stream, for a player
+/// whose saved party has `player_reserves` behind the lead, in the order the battle
+/// replaces fainted members ([`battle::Battle::new_trainer_with_player_reserves`]).
+///
+/// All validation finishes before party construction, so every error leaves `rng`
+/// unchanged. The lead and every healthy reserve get the same pre-flight, so a reserve the
+/// battle would refuse leaves `rng` untouched like a refused lead does. Successful
+/// construction draws each party member's OT ID before battle initialization.
+///
+/// # Errors
+///
+/// Returns [`NpcTrainerBattleError`] when the lead, a healthy reserve, trainer data, or
+/// party cannot start a supported battle.
+pub fn start_npc_trainer_battle_with_reserves(
+    player_lead: BattlePokemon,
+    player_reserves: Vec<BattlePokemon>,
     trainer: TrainerId,
     rng: &mut Rng,
 ) -> Result<Battle, NpcTrainerBattleError> {
@@ -231,33 +349,19 @@ pub fn start_npc_trainer_battle(
         return Err(BattleError::FaintedBattler(true).into());
     }
     let dex = Dex::new();
-    let data = battle::trainer_data(trainer)?;
-    let entries = party_entries(data.party);
-    let personalities = party_personalities(data, &entries)?;
-
-    let movesets: Vec<Vec<MoveId>> = entries
+    let plan = TrainerPlan::new(trainer)?;
+    plan.ensure_startable_against(&dex, trainer, &player_lead)?;
+    for reserve in player_reserves
         .iter()
-        .map(|entry| {
-            entry
-                .custom_moves
-                .clone()
-                .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level))
-        })
-        .collect();
-    let specs: Vec<battle::TrainerPartyMon<'_>> = entries
-        .iter()
-        .zip(&movesets)
-        .zip(&personalities)
-        .map(|((entry, moves), &personality)| battle::TrainerPartyMon {
-            species: entry.species,
-            level: entry.level,
-            moves,
-            personality,
-            held_item: entry.held_item,
-        })
-        .collect();
-    battle::ensure_trainer_party_startable(&dex, &player_lead, trainer, &specs)?;
-    ensure_lead_can_battle(&player_lead)?;
+        .filter(|reserve| !reserve.is_fainted())
+    {
+        plan.ensure_startable_against(&dex, trainer, reserve)?;
+    }
+    let TrainerPlan {
+        entries,
+        personalities,
+        movesets,
+    } = plan;
 
     let mut party = Vec::with_capacity(entries.len());
     for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {
@@ -275,9 +379,10 @@ pub fn start_npc_trainer_battle(
         );
     }
 
-    Ok(Battle::new_trainer(
+    Ok(Battle::new_trainer_with_player_reserves(
         dex,
         player_lead,
+        player_reserves,
         trainer,
         party,
         &mut SharedRng::new(rng),
@@ -292,20 +397,9 @@ fn credit_reward_events(money: &mut u32, events: impl IntoIterator<Item = Battle
     }
 }
 
-/// Advances a headless trainer battle by one turn and settles its resulting state.
-///
-/// With no battle menu, the driver selects the first usable move slot (see
-/// [`take_first_usable_move_turn`]). It answers pending move replacement prompts, credits
-/// any reward events, and writes back the player's lead when the battle ends. `None` can
-/// mean no active battle, an ongoing battle, or a failed turn; callers inspect
-/// `battle_slot` to distinguish an active battle.
-pub fn advance_npc_trainer_battle(
-    battle_slot: &mut Option<Battle>,
-    player_lead: &mut Option<BattlePokemon>,
-    money: &mut u32,
-    rng: &mut Rng,
-) -> Option<BattleOutcome> {
-    let battle = battle_slot.as_mut()?;
+/// Plays one headless turn and its move-learn prompts, crediting every reward event, and
+/// reports whether the turn failed.
+fn play_trainer_turn(battle: &mut Battle, money: &mut u32, rng: &mut Rng) -> bool {
     let turn_failed = match take_first_usable_move_turn(battle, rng) {
         Ok(events) => {
             credit_reward_events(money, events);
@@ -317,7 +411,39 @@ pub fn advance_npc_trainer_battle(
         }
     };
     credit_reward_events(money, settle_move_learn_prompts(battle, rng));
+    turn_failed
+}
+
+/// Advances a headless trainer battle by one turn and settles its resulting state.
+///
+/// With no battle menu, the driver selects the first usable move slot (see
+/// [`take_first_usable_move_turn`]). It answers pending move replacement prompts, credits
+/// any reward events, and writes back the player's lead when the battle ends. `None` can
+/// mean no active battle, an ongoing battle, or a failed turn; callers inspect
+/// `battle_slot` to distinguish an active battle.
+#[cfg(test)]
+pub fn advance_npc_trainer_battle(
+    battle_slot: &mut Option<Battle>,
+    player_lead: &mut Option<BattlePokemon>,
+    money: &mut u32,
+    rng: &mut Rng,
+) -> Option<BattleOutcome> {
+    let battle = battle_slot.as_mut()?;
+    let turn_failed = play_trainer_turn(battle, money, rng);
     finalize_battle_turn(battle_slot, turn_failed, player_lead)
+}
+
+/// [`advance_npc_trainer_battle`] for a battle that may carry the player's reserves: on an
+/// ending, including an aborted one with no outcome, returns every player-side member for
+/// the flow to file, since the member active at the end need not be the one that started.
+pub(super) fn advance_npc_trainer_party_battle(
+    battle_slot: &mut Option<Battle>,
+    money: &mut u32,
+    rng: &mut Rng,
+) -> Option<PartyBattleEnd> {
+    let battle = battle_slot.as_mut()?;
+    let turn_failed = play_trainer_turn(battle, money, rng);
+    finalize_party_battle_turn(battle_slot, turn_failed)
 }
 
 #[cfg(test)]
@@ -427,6 +553,67 @@ mod tests {
                 assert_eq!(rng.state(), before, "the refusal must precede every draw");
             }
         }
+    }
+
+    #[test]
+    fn a_reserve_the_battle_would_refuse_is_refused_before_any_ot_id_draw() {
+        const VOLTORB: SpeciesId = SpeciesId(100);
+        for slot in [0, 1] {
+            let reserve = lead_of(VOLTORB).with_ability_slot(slot);
+            let mut rng = Rng::new(1);
+            let before = rng.state();
+            for _ in 0..2 {
+                let result = start_npc_trainer_battle_with_reserves(
+                    lead_of(TREECKO),
+                    vec![reserve.clone()],
+                    TrainerId::MAY_ROUTE_103_MUDKIP,
+                    &mut rng,
+                );
+                assert_eq!(
+                    result.err(),
+                    Some(NpcTrainerBattleError::Battle(
+                        BattleError::AmbiguousPlayerAbility(VOLTORB)
+                    )),
+                );
+                assert_eq!(rng.state(), before, "the refusal must precede every draw");
+            }
+            assert_eq!(
+                ensure_reserve_can_enter(TrainerId::MAY_ROUTE_103_MUDKIP, &reserve).err(),
+                Some(NpcTrainerBattleError::Battle(
+                    BattleError::AmbiguousPlayerAbility(VOLTORB)
+                )),
+            );
+        }
+    }
+
+    #[test]
+    fn a_fainted_reserve_is_not_screened_and_rides_the_bench() {
+        const VOLTORB: SpeciesId = SpeciesId(100);
+        let mut fainted = lead_of(VOLTORB);
+        fainted.apply_damage(fainted.stats().max_hp);
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle_with_reserves(
+            lead_of(TREECKO),
+            vec![fainted],
+            TrainerId::MAY_ROUTE_103_MUDKIP,
+            &mut rng,
+        )
+        .expect("a fainted reserve can never enter");
+        assert_eq!(battle.player_members().count(), 2);
+    }
+
+    #[test]
+    fn a_healthy_reserve_joins_the_roster_in_order() {
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle_with_reserves(
+            lead_of(TREECKO),
+            vec![lead_of(TREECKO)],
+            TrainerId::MAY_ROUTE_103_MUDKIP,
+            &mut rng,
+        )
+        .expect("a single-ability reserve is fightable");
+        assert_eq!(battle.player_members().count(), 2);
+        assert_eq!(battle.player_position(), 0);
     }
 
     #[test]

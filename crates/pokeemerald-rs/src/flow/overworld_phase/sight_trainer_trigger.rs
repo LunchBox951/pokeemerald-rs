@@ -46,7 +46,7 @@ use engine::overworld::{trainer_can_see_player, MapRuntime, PlayerState};
 use crate::flow::npc_trainer_battle;
 
 use super::sight_trainer_approach::SightApproach;
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): the base of the
 /// per-trainer "already fought" flag range `HasTrainerBeenFought` /
@@ -494,8 +494,21 @@ impl OverworldPhase {
         // exactly like every other construction refusal (that function's own
         // module docs, "Nothing is built before the whole party is
         // screened").
-        match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
-            Ok(battle) => {
+        // The pre-flight refuses a trainer this cone cannot fight before the saved party is
+        // inspected, so the per-frame retry of a refused cone logs nothing and draws nothing.
+        let started =
+            npc_trainer_battle::preflight_npc_trainer_battle(&lead, trainer_id).and_then(|()| {
+                let (player_reserves, reserves) = self.trainer_party_reserves(trainer_id);
+                npc_trainer_battle::start_npc_trainer_battle_with_reserves(
+                    lead,
+                    player_reserves,
+                    trainer_id,
+                    &mut self.rng,
+                )
+                .map(|battle| (battle, reserves))
+            });
+        match started {
+            Ok((battle, reserves)) => {
                 let trainer = *live.state();
                 let walk_tiles = approach_walk_tiles(trainer.position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(
@@ -505,6 +518,7 @@ impl OverworldPhase {
                     entry.intro,
                     battle,
                     trainer_id,
+                    reserves,
                 ));
                 SightTrainerOutcome::ApproachStarted
             }
@@ -532,19 +546,25 @@ impl OverworldPhase {
         &mut self,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        let mut returned_lead = None;
-        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
+        let end = npc_trainer_battle::advance_npc_trainer_party_battle(
             &mut slot,
-            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
-        // Back with the owner before the flags, the white-out or any routing.
-        if let Some(lead) = returned_lead {
-            self.restore_lead_battler(lead);
-        }
+        let Some(end) = end else {
+            // Ongoing: the whole variant stays, party included.
+            return slot.map(|battle| ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            });
+        };
+        let outcome = end.outcome;
+        // Back with the owners before the flags, the white-out or any routing.
+        let filed = self.file_trainer_party(end, reserves);
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
@@ -560,17 +580,11 @@ impl OverworldPhase {
                     );
                 }
             }
-            if outcome == battle::BattleOutcome::PlayerLost {
-                self.white_out();
-            }
         }
-        if slot.is_none() {
-            self.reinit_field_tileset_animations();
-        }
-        // `trainer_id` is dropped along with the rest of
-        // `ActiveBattle::SightTrainer` the instant `slot` empties -- an
-        // abort clears it too, not only a reported outcome.
-        slot.map(|battle| ActiveBattle::SightTrainer { battle, trainer_id })
+        self.settle_trainer_party(outcome, filed);
+        self.reinit_field_tileset_animations();
+        // The slot emptied, an abort included: `trainer_id` goes with the variant.
+        None
     }
 }
 

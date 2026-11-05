@@ -62,7 +62,7 @@ use crate::authored_message;
 use crate::overworld::NpcDialog;
 
 use super::sight_trainer_trigger::SightTrainerOutcome;
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// How long the exclamation-mark icon animates, in frames:
 /// `sSpriteAnim_Icons1`'s single `ANIMCMD_FRAME(0, 60)`
@@ -160,7 +160,7 @@ enum ApproachStage {
 /// than built at the end -- see that trigger method's own docs for why
 /// (refusals must not cost a hundred frames of cutscene, and the RNG stream
 /// is unaffected either way).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct SightApproach {
     /// The local ID of the live collection entry that was selected.
     #[cfg_attr(
@@ -185,6 +185,8 @@ pub(super) struct SightApproach {
     /// Which trainer that fight is against, for the defeated flag
     /// [`OverworldPhase::advance_sight_trainer_battle_frame`] sets on a win.
     trainer_id: TrainerId,
+    /// The saved members beside the lead that the fight was built with.
+    reserves: PartyReserves,
     /// Where in the sequence this approach currently is.
     stage: ApproachStage,
 }
@@ -201,6 +203,7 @@ impl SightApproach {
         intro: &'static str,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Self {
         Self {
             local_id,
@@ -209,6 +212,7 @@ impl SightApproach {
             intro,
             battle,
             trainer_id,
+            reserves,
             stage: ApproachStage::LockHandoff {
                 frames_left: LOCK_HANDOFF_FRAMES_AT_REST,
             },
@@ -660,6 +664,7 @@ impl OverworldPhase {
         self.active_battle = Some(ActiveBattle::SightTrainer {
             battle: approach.battle,
             trainer_id: approach.trainer_id,
+            reserves: approach.reserves,
         });
         // Mirrors `begin_route103_rival_battle`'s own
         // `restart_immunity_steps` call -- see that method's own
@@ -724,6 +729,7 @@ impl OverworldPhase {
             "Whoa!",
             battle,
             TrainerId(703),
+            PartyReserves::default(),
         ));
     }
 }
@@ -910,6 +916,7 @@ mod tests {
             "Whoa!",
             stand_in_battle(),
             TrainerId(703),
+            PartyReserves::default(),
         );
         // These tests drive the icon and the walk-up; the lock handoff in
         // front of them has its own coverage in `sight_trainer_tests`.

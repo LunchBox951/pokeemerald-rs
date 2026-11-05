@@ -1,7 +1,7 @@
 //! Active-battle ownership, dispatch, completion, and starter wiring.
 
 use super::test_support::*;
-use super::{ActiveBattle, OverworldPhase, WildBattle};
+use super::{ActiveBattle, OverworldPhase, PartyReserves, WildBattle};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
@@ -89,10 +89,12 @@ fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
         ActiveBattle::Rival {
             battle: rival_battle,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight_battle,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
 
@@ -183,10 +185,12 @@ fn step_dispatches_each_active_battle_variant_to_its_own_driver() {
         ActiveBattle::Rival {
             battle: rival,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
     for variant in variants {
@@ -249,10 +253,12 @@ fn step_drives_each_active_battle_variant_to_completion() {
         ActiveBattle::Rival {
             battle: rival,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
     for variant in variants {
