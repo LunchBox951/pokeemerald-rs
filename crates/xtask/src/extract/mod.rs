@@ -70,7 +70,7 @@
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
 //! - `field-effect/{image,palette}/<name>`
 //! - `layout/<name>/{map,border}`
-//! - `font/<name>/glyphs`
+//! - `font/<name>/glyphs` and `font/keypad_icons`
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/image/down_arrow` and `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
