@@ -22,7 +22,18 @@
 //! [`merge_into_save_pokemon`] both file [`battle::BattlePokemon::held_item`],
 //! so a Berry consumed in battle leaves the save, as `Cmd_removeitem`'s
 //! `ITEM_NONE` does upstream (`pokeemerald/src/battle_script_commands.c:5901`
-//! -`:5909`, `src/load_save.c:196`-`:206`).
+//! -`:5909`, `src/load_save.c:196`-`:206`), and any other change to the held
+//! item reaches the save the same way.
+//!
+//! [`take_held_item`] is the one such change the port makes outside battle:
+//! `CursorCb_TakeItem`'s `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`,
+//! `:3273-3298`). It moves the item into the bag with `AddBagItem` and clears
+//! the battler's item, so a lead [`flow::lead_screen`](crate::flow) refuses
+//! for holding an item with a battle effect can be made to battle. A full bag
+//! refuses the take and the lead keeps the item; the start menu's TAKE entry
+//! shows each outcome's message in the field message box. Giving an item to a
+//! Pokemon (`GiveItemToMon`, `:1785-1811`) and the party menu's presentation
+//! are not modelled.
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
@@ -130,6 +141,10 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
     )
 )]
 mod starter;
+
+/// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
+mod take_item;
+pub(crate) use take_item::{take_held_item, TakeHeldItem};
 
 /// Why a saved party member could not be converted into a battler.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,8 +434,9 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
 ///
 /// Writes only the fields the battler owns; every retained field stays as
 /// the save wrote it, except EVs, which the merge writes back from
-/// [`battle::BattlePokemon::evs`], and the held item, written from
-/// [`battle::BattlePokemon::held_item`].
+/// [`battle::BattlePokemon::evs`], and the held item, which it writes back
+/// from [`battle::BattlePokemon::held_item`] so a Berry consumed in battle and
+/// a [`take_held_item`] both persist.
 ///
 /// The battler's cache, level and HP are filed as they stand
 /// ([`overlay_battle_stats`]); nothing is recomputed or translated. A record
