@@ -30,14 +30,14 @@
 //!   gen-rom-profile` into [`profiles::bpee_rev0`]. It covers every asset
 //!   domain the pack holds: tilesets and their animations, the title
 //!   screen, object-event sprites, map layouts, fonts, text windows,
-//!   interface palettes, and `MUS_TITLE`'s audio tree.
+//!   interface art, and `MUS_TITLE`'s audio tree.
 //! - [`Sha1`] is a hand-rolled FIPS 180-4 implementation, because the hash
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
 //! - `domains` holds one reader per asset domain. Every graphics domain is
 //!   wired: the title screen (`title/image/*`, `title/raw/*`,
-//!   `title/palette/*`), the interface palettes (`interface/palette/*`),
+//!   `title/palette/*`), the interface art (`interface/image/*`, `interface/palette/*`),
 //!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
 //!   tables, animation frames), the map layouts (`layout/*`: metatile grids
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and

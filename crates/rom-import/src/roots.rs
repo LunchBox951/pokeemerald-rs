@@ -259,9 +259,12 @@ pub struct TextWindowRoots {
     pub window_palettes: GbaPtr,
 }
 
-/// Interface palettes the no-save menus need.
+/// Interface art: the text printer's down-arrow sheet and the palettes the
+/// no-save menus need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceRoots {
+    /// Every `interface/image/*` sheet.
+    pub images: &'static [ImageRoot],
     /// Every `interface/palette/*` bank.
     pub palettes: &'static [PaletteRoot],
 }
@@ -699,7 +702,7 @@ pub struct Roots {
     pub fonts: &'static [FontRoot],
     /// Text-window frames and palettes.
     pub text_window: TextWindowRoots,
-    /// Interface palettes.
+    /// Interface images and palettes.
     pub interface: InterfaceRoots,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioRoots,
@@ -757,7 +760,10 @@ impl Roots {
             palettes: &[],
             window_palettes: GbaPtr::AT_BASE,
         },
-        interface: InterfaceRoots { palettes: &[] },
+        interface: InterfaceRoots {
+            images: &[],
+            palettes: &[],
+        },
         audio: AudioRoots {
             song_table: GbaPtr::AT_BASE,
             songs: &[],
@@ -797,6 +803,7 @@ impl Roots {
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
             .chain(self.text_window.images.iter())
+            .chain(self.interface.images.iter())
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())

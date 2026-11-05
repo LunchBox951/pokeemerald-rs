@@ -40,6 +40,8 @@ pub(crate) mod opponent_ai;
 mod rollout_tests;
 #[cfg(test)]
 mod switch_tests;
+#[cfg(test)]
+mod thaw_hit_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
 #[cfg(test)]

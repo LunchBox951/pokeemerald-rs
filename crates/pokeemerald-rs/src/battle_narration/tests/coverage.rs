@@ -37,6 +37,8 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
+        BattleEvent::Burned { by_player, move_id },
+        BattleEvent::TargetDefrosted { by_player, move_id },
         BattleEvent::NoEffect { by_player, move_id },
         BattleEvent::LevitateBlocked { by_player, move_id },
         BattleEvent::WonderGuardBlocked { by_player, move_id },
@@ -217,7 +219,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 75;
+const VARIANTS: usize = 77;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -294,11 +296,13 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FrozenSolid { .. } => 67,
         BattleEvent::Thawed { .. } => 68,
         BattleEvent::ThawedByMove { .. } => 69,
-        BattleEvent::Seeded { .. } => 70,
-        BattleEvent::SappedByLeechSeed { .. } => 71,
-        BattleEvent::LeechSeedHealed { .. } => 72,
-        BattleEvent::ItemRestoredHealth { .. } => 73,
-        BattleEvent::LeechSeedEvaded { .. } => 74,
+        BattleEvent::Burned { .. } => 70,
+        BattleEvent::TargetDefrosted { .. } => 71,
+        BattleEvent::Seeded { .. } => 72,
+        BattleEvent::SappedByLeechSeed { .. } => 73,
+        BattleEvent::LeechSeedHealed { .. } => 74,
+        BattleEvent::ItemRestoredHealth { .. } => 75,
+        BattleEvent::LeechSeedEvaded { .. } => 76,
     }
 }
 
