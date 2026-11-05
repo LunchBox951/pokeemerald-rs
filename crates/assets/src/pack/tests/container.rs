@@ -284,3 +284,17 @@ fn write_pack_does_not_follow_a_preplanted_symlink() {
     );
     assert!(written == bytes, "fixture bytes differ");
 }
+
+#[test]
+fn a_pack_from_the_format_without_the_keypad_sheet_is_refused_on_load() {
+    const PREVIOUS_FORMAT_VERSION: u32 = 12;
+    let path = write_synthetic_pack("keypad-icons-previous-version");
+    let mut bytes = synthetic_pack();
+    bytes[FORMAT_VERSION_FIELD].copy_from_slice(&PREVIOUS_FORMAT_VERSION.to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(
+        AssetPack::load(&path).map(|_| ()),
+        Err(PackError::UnsupportedVersion(PREVIOUS_FORMAT_VERSION))
+    );
+    let _ = std::fs::remove_file(path);
+}

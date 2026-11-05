@@ -1,11 +1,14 @@
-//! Draws text-window frames and revealed glyphs directly into framebuffers.
+//! Draws text-window frames, revealed glyphs, and keypad icons directly into
+//! framebuffers.
 //!
 //! Revealed glyphs have pixel positions inside a window, so they do not fit
-//! the tile-aligned background compositor. Glyphs and frame tiles both draw
-//! with colors read from the loaded window palette `(behavioral-fidelity)`.
+//! the tile-aligned background compositor. Glyphs, keypad icons, and frame
+//! tiles all draw with colors read from the loaded window palette
+//! `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
-use engine::text::render::{ClearedSpan, RevealedGlyph};
+use assets::KeypadIconSheet;
+use engine::text::render::{ClearedSpan, KeypadIconPlacement, RevealedGlyph};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
@@ -202,6 +205,61 @@ pub(crate) fn blit_glyphs_colored_tracked(
     }
 }
 
+/// Draws one keypad icon at its window-local placement, clipped to the
+/// content bounds the same way [`blit_glyphs_colored_tracked`] clips a glyph.
+///
+/// Upstream's `DrawKeypadIcon` blits the sheet rectangle with colour key `0`
+/// and copies every other index unchanged into the window
+/// (`pokeemerald/src/text.c:1609-1623`, `pokeemerald/src/window.c:398-413`), so
+/// an icon pixel indexes the whole window `palette` directly rather than the
+/// printer's glyph-role colours.
+fn blit_keypad_icon(
+    fb: &mut Framebuffer,
+    icon: KeypadIconPlacement,
+    icons: &KeypadIconSheet,
+    palette: &[Rgb888],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    let (content_width, content_height) = content_size;
+    for pixel_y in 0..u32::from(icon.height) {
+        for pixel_x in 0..u32::from(icon.width) {
+            let Some(palette_index) = icons.pixel(icon.id, pixel_x, pixel_y) else {
+                continue;
+            };
+            if usize::from(palette_index) == TRANSPARENT_PALETTE_INDEX {
+                continue;
+            }
+            let Some(&color) = palette.get(usize::from(palette_index)) else {
+                continue;
+            };
+            let (Ok(pixel_x), Ok(pixel_y)) = (i32::try_from(pixel_x), i32::try_from(pixel_y))
+            else {
+                continue;
+            };
+            let (Some(content_x), Some(content_y)) =
+                (icon.x.checked_add(pixel_x), icon.y.checked_add(pixel_y))
+            else {
+                continue;
+            };
+            if content_x < 0
+                || content_y < 0
+                || content_x >= content_width
+                || content_y >= content_height
+            {
+                continue;
+            }
+            set_pixel_checked(
+                fb,
+                &mut Coverage::disabled(),
+                origin.0 + content_x,
+                origin.1 + content_y,
+                color,
+            );
+        }
+    }
+}
+
 /// One retained window effect, in the order the printer produced it.
 ///
 /// A dialog or intro scene keeps these instead of a flat glyph list so a
@@ -215,6 +273,8 @@ pub(crate) enum WindowOp {
     Glyph(Box<RevealedGlyph>),
     /// A span a `CLEAR`/`CLEAR_TO` control erased (`Printer::cleared_span`).
     ClearSpan(ClearedSpan),
+    /// A keypad icon the printer placed (`Printer::keypad_icon`).
+    KeypadIcon(KeypadIconPlacement),
 }
 
 impl WindowOp {
@@ -223,12 +283,13 @@ impl WindowOp {
         match self {
             Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
             Self::ClearSpan(span) => span.y = span.y.saturating_add(dy),
+            Self::KeypadIcon(icon) => icon.y = icon.y.saturating_add(dy),
         }
     }
 }
 
-/// Replays ordered glyph and clear-span ops onto `fb`, which must already
-/// hold the window's frame tiles and nothing else.
+/// Replays ordered glyph, keypad-icon, and clear-span ops onto `fb`, which
+/// must already hold the window's frame tiles and nothing else.
 ///
 /// A `ClearSpan` restores its window-local rectangle from `fb`'s own
 /// pre-glyph pixels -- the window's already-composed background -- covering
@@ -241,6 +302,8 @@ pub(crate) fn compose_window_ops(
     origin: (i32, i32),
     content_size: (i32, i32),
     colors: &[Option<Rgb888>; GLYPH_COLOR_COUNT],
+    icons: &KeypadIconSheet,
+    palette: &[Rgb888],
 ) {
     let background = fb.clone();
     for op in ops {
@@ -253,6 +316,9 @@ pub(crate) fn compose_window_ops(
                     content_size,
                     colors,
                 );
+            }
+            WindowOp::KeypadIcon(icon) => {
+                blit_keypad_icon(fb, *icon, icons, palette, origin, content_size);
             }
             WindowOp::ClearSpan(span) => {
                 restore_cleared_span(fb, &background, *span, origin, content_size);
@@ -384,6 +450,25 @@ fn set_pixel_checked(fb: &mut Framebuffer, coverage: &mut Coverage, x: i32, y: i
         fb.set_pixel(x, y, color);
         coverage.mark(x, y);
     }
+}
+
+/// A keypad-icon sheet that is transparent except at the given sheet
+/// positions, each `(x, y, palette index)`.
+#[cfg(test)]
+pub(crate) fn test_keypad_icons(marks: &[(u32, u32, u8)]) -> KeypadIconSheet {
+    use assets::keypad_icons::{SHEET_HEIGHT, SHEET_WIDTH};
+
+    let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+    for &(x, y, index) in marks {
+        pixels[(y * SHEET_WIDTH + x) as usize] = index;
+    }
+    KeypadIconSheet::new(ImageRef {
+        width: SHEET_WIDTH,
+        height: SHEET_HEIGHT,
+        bit_depth: 4,
+        pixels: &pixels,
+    })
+    .expect("this is the exact real keypad-icon sheet shape")
 }
 
 #[cfg(test)]
@@ -542,6 +627,157 @@ mod tests {
         blit_glyphs_colored(&mut fb, &[glyph], (0, 0), (200, 32), &TEST_GLYPH_COLORS);
 
         assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
+    }
+
+    const ICON_FIRST_COLOR: Rgb888 = Rgb888 { r: 1, g: 2, b: 3 };
+    const ICON_SECOND_COLOR: Rgb888 = Rgb888 { r: 4, g: 5, b: 6 };
+    const ICON_THIRD_COLOR: Rgb888 = Rgb888 { r: 7, g: 8, b: 9 };
+    const ICON_CONTENT_SIZE: (i32, i32) = (200, 32);
+    const ICON_ORIGIN: (i32, i32) = (20, 30);
+    /// Icon `A` (id 0, tile 0, 8x12), drawn at the window origin.
+    const ICON_A_AT_ORIGIN: KeypadIconPlacement = KeypadIconPlacement {
+        x: 0,
+        y: 0,
+        id: 0,
+        width: 8,
+        height: 12,
+    };
+
+    /// A window palette whose slots 1 to 3 are distinct and whose glyph-role
+    /// colors differ from all of them, so an icon recoloured through the
+    /// glyph roles is caught.
+    fn icon_palette() -> Vec<Rgb888> {
+        let mut palette = vec![Rgb888::BLACK; 16];
+        palette[1] = ICON_FIRST_COLOR;
+        palette[2] = ICON_SECOND_COLOR;
+        palette[3] = ICON_THIRD_COLOR;
+        palette
+    }
+
+    fn compose_icon_ops(ops: &[WindowOp], icons: &KeypadIconSheet) -> Framebuffer {
+        let mut fb = Framebuffer::new();
+        compose_window_ops(
+            &mut fb,
+            ops,
+            ICON_ORIGIN,
+            ICON_CONTENT_SIZE,
+            &TEST_GLYPH_COLORS,
+            icons,
+            &icon_palette(),
+        );
+        fb
+    }
+
+    #[test]
+    fn a_keypad_icon_copies_window_palette_indices_and_skips_zero() {
+        let icons = test_keypad_icons(&[(0, 0, 1), (1, 0, 2), (2, 0, 3), (7, 11, 2)]);
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(ICON_A_AT_ORIGIN)], &icons);
+
+        // Index 1 is the window palette's slot 1, not the glyph foreground role.
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_FIRST_COLOR));
+        assert_eq!(pixel_at(&fb, (21, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (22, 30)), Some(ICON_THIRD_COLOR));
+        assert_eq!(pixel_at(&fb, (27, 41)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (23, 30)), Some(Rgb888::BLACK), "index 0");
+    }
+
+    #[test]
+    fn a_keypad_icon_is_drawn_at_its_reported_position_and_confined_to_its_size() {
+        // Marks one pixel right of and one below icon A's 8x12 rectangle.
+        let icons = test_keypad_icons(&[(0, 0, 2), (8, 0, 3), (0, 12, 3)]);
+        let placement = KeypadIconPlacement {
+            x: 10,
+            y: 4,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(placement)], &icons);
+
+        assert_eq!(pixel_at(&fb, (30, 34)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (38, 34)), Some(Rgb888::BLACK), "past width");
+        assert_eq!(pixel_at(&fb, (30, 46)), Some(Rgb888::BLACK), "past height");
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(Rgb888::BLACK), "origin");
+    }
+
+    #[test]
+    fn a_keypad_icon_on_the_third_tile_row_reads_the_sheet_at_its_own_origin() {
+        // Icon 10 (UPDOWN) is tile 0x20: sheet position (0, 16).
+        let icons = test_keypad_icons(&[(0, 16, 3), (0, 0, 2)]);
+        let placement = KeypadIconPlacement {
+            id: 10,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(placement)], &icons);
+
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_THIRD_COLOR));
+    }
+
+    #[test]
+    fn a_keypad_icon_is_clipped_to_the_content_rect() {
+        let rows: Vec<(u32, u32, u8)> = (0..12).map(|y| (0, y, 2)).collect();
+        let icons = test_keypad_icons(&rows);
+        let above = KeypadIconPlacement {
+            y: -6,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(above)], &icons);
+
+        assert_eq!(
+            pixel_at(&fb, (20, 29)),
+            Some(Rgb888::BLACK),
+            "above the window"
+        );
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (20, 35)), Some(ICON_SECOND_COLOR));
+        assert_eq!(
+            pixel_at(&fb, (20, 36)),
+            Some(Rgb888::BLACK),
+            "past the icon"
+        );
+
+        let past_right = KeypadIconPlacement {
+            x: ICON_CONTENT_SIZE.0 - 1,
+            ..ICON_A_AT_ORIGIN
+        };
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(past_right)], &icons);
+        assert_eq!(pixel_at(&fb, (219, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (220, 30)), Some(Rgb888::BLACK), "outside");
+    }
+
+    #[test]
+    fn a_later_clear_span_erases_an_earlier_keypad_icon() {
+        let icons = test_keypad_icons(&[(0, 0, 2)]);
+        let ops = [
+            WindowOp::KeypadIcon(ICON_A_AT_ORIGIN),
+            WindowOp::ClearSpan(ClearedSpan {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 12,
+            }),
+        ];
+
+        let fb = compose_icon_ops(&ops, &icons);
+
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(Rgb888::BLACK));
+    }
+
+    #[test]
+    fn a_window_scroll_moves_a_keypad_icon() {
+        let mut op = WindowOp::KeypadIcon(ICON_A_AT_ORIGIN);
+
+        op.shift_y(-4);
+
+        assert_eq!(
+            op,
+            WindowOp::KeypadIcon(KeypadIconPlacement {
+                y: -4,
+                ..ICON_A_AT_ORIGIN
+            })
+        );
     }
 
     #[test]
