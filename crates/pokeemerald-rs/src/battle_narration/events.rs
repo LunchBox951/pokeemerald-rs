@@ -64,6 +64,7 @@ fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
         Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
+        Status1::Frozen => Ok(BattleBuffer::Status(StatusName::Ice)),
         Status1::Healthy => Err(NarrationError::MissingContext("cured status")),
     }
 }
@@ -95,20 +96,31 @@ pub(super) fn requests(
     lifecycle::requests(narrator, names, event)
 }
 
-/// `CANCELER_ASLEEP`'s and `CANCELER_TRUANT`'s messages, in the user's own
-/// name: `BattleScript_MoveUsedIsAsleep` prints in place of the move
-/// announcement and `BattleScript_MoveUsedWokeUp` ahead of it
-/// (`data/battle_scripts_1.s:3717`-`:3728`);
-/// `BattleScript_MoveUsedLoafingAround` prints `gInobedientStringIds`'s
-/// `B_MSG_LOAFING` entry in place of the announcement (`:4232`-`:4240`).
+/// The sleep, freeze and Truant cancellers' messages, in the user's own
+/// name: `BattleScript_MoveUsedIsAsleep` and `BattleScript_MoveUsedIsFrozen`
+/// print in place of the move announcement, `BattleScript_MoveUsedWokeUp`
+/// and `BattleScript_MoveUsedUnfroze` ahead of it
+/// (`data/battle_scripts_1.s:3717`-`:3728`, `:3755`-`:3765`); the thaw table
+/// `gGotDefrostedStringIds` names the thaw-hit move for `B_MSG_DEFROSTED_BY_MOVE`
+/// (`src/battle_message.c:1102`-`:1106`). `BattleScript_MoveUsedLoafingAround`
+/// prints `gInobedientStringIds`'s `B_MSG_LOAFING` entry in place of the
+/// announcement (`:4232`-`:4240`).
 fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
-    let (template, by_player) = match *event {
-        BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player),
-        BattleEvent::WokeUp { by_player } => (id::PKMNWOKEUP, by_player),
-        BattleEvent::LoafingAround { by_player, .. } => (id::PKMNLOAFING, by_player),
+    let (template, by_player, current_move) = match *event {
+        BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player, None),
+        BattleEvent::WokeUp { by_player } => (id::PKMNWOKEUP, by_player, None),
+        BattleEvent::FrozenSolid { by_player, .. } => (id::PKMNISFROZEN, by_player, None),
+        BattleEvent::Thawed { by_player } => (id::PKMNWASDEFROSTED2, by_player, None),
+        BattleEvent::ThawedByMove { by_player, move_id } => {
+            (id::PKMNWASDEFROSTEDBY, by_player, Some(move_id))
+        }
+        BattleEvent::LoafingAround { by_player, .. } => (id::PKMNLOAFING, by_player, None),
         _ => return None,
     };
-    let context = narrator.context().user_vs_target(Side::user(by_player));
+    let mut context = narrator.context().user_vs_target(Side::user(by_player));
+    if let Some(move_id) = current_move {
+        context = context.with_move(move_id);
+    }
     Some(vec![table(template, context)])
 }
 
@@ -325,6 +337,14 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
         ),
         BattleEvent::Poisoned { by_player, .. } => table(
             id::PKMNWASPOISONED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
+        BattleEvent::Burned { by_player, .. } => table(
+            id::PKMNWASBURNED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
+        BattleEvent::TargetDefrosted { by_player, .. } => table(
+            id::PKMNWASDEFROSTED,
             base.user_vs_target(Side::user(by_player)),
         ),
         BattleEvent::ConfusionInflicted { by_player, .. } => table(

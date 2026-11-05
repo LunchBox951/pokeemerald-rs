@@ -37,12 +37,7 @@ fn phase_with_lead(ot_id: u32, ot_name: [u8; 7]) -> OverworldPhase {
     record.box_data.set_ot_name(ot_name);
     phase.save1.player_party[0] = record;
     phase.save1.player_party_count = 1;
-    phase.lead = Some(LoadedLead::backed_for_test(
-        &battle::Dex::new(),
-        0,
-        lead,
-        record,
-    ));
+    phase.lead = Some(LoadedLead::backed_for_test(0, lead, record));
     phase
 }
 
@@ -95,7 +90,6 @@ fn a_lead_with_no_matching_saved_record_keeps_its_own_classification() {
     let mut phase = phase_with_lead(OWNER_ID, OTHER_NAME);
     let lead = phase.lead_battler().cloned().expect("a lead");
     phase.lead = Some(LoadedLead::backed_for_test(
-        &battle::Dex::new(),
         0,
         lead,
         engine::save::Pokemon::default(),

@@ -142,7 +142,7 @@ fn a_merge_without_a_take_keeps_the_saved_item() {
     let stored = saved_treecko_holding(ItemId::ORAN_BERRY);
     let lead = from_save_pokemon(&dex, &stored).unwrap();
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, &mut 0);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
 
     assert_eq!(
         from_save_pokemon(&dex, &merged).unwrap().held_item(),

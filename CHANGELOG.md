@@ -4,6 +4,35 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.105.0] - 2026-11-04
+
+- Flame Wheel and Sacred Fire can now be used in battle: they may burn the target, a frozen user thaws as it uses them, and a Fire-type hit thaws a frozen target, as in the original game.
+
+## [0.0.104.0] - 2026-11-04
+
+- Mud-Slap can now be used in battle and lowers the target's accuracy, so Mudkip fights with its real level-6 move as in the original game.
+
+## [0.0.103.0] - 2026-11-04
+
+- Wave notes now play for their set length and hold their final sound when the length expires, as part of ongoing work to match the original Game Boy sound.
+
+## [0.0.102.0] - 2026-11-04
+
+- General improvements in preparation for faithful message text: the text printer now honours a minimum letter spacing and clears the gap after each letter as the original game does.
+
+## [0.0.101.0] - 2026-11-04
+
+- General improvements in preparation for the page-prompt arrow in message boxes: both pack sources now carry the text printer's down-arrow graphic.
+
+## [0.0.100.0] - 2026-11-03
+
+- A Pokémon that was frozen when you saved now loads and battles: it thaws on a one-in-five chance each turn and Shed Skin can cure it, as in the original game.
+
+## [0.0.99.0] - 2026-11-03
+
+- A Pokémon that levels up in battle now moves its HP by the change in its maximum HP, as the original game does, and a fainted Pokémon is no longer healed by a level-up. The level-up counts the effort values (EVs) the Pokémon has earned, so its stats grow as they do in the original game.
+- Loading a save now keeps each Pokémon's saved HP and stats exactly as stored instead of recalculating them, and saving writes them back unchanged.
+
 ## [0.0.98.0] - 2026-11-03
 
 - Slakoth and Slaking can now take part in battles, and Truant makes them loaf around every other turn as in the original game.
@@ -454,7 +483,14 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.98.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6872c03dbdd60dfd8998f990bf26b30208724363...dev
+[0.0.105.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f6bf3245569fa4d8b950ea850552bbc9999eabd...dev
+[0.0.104.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e88ad8b78d701a396b354fb72944edaaaa12b42e...8f6bf3245569fa4d8b950ea850552bbc9999eabd
+[0.0.103.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/edefb469ae667e0f72ace81c6b8e1d4a5bdb656a...e88ad8b78d701a396b354fb72944edaaaa12b42e
+[0.0.102.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2fe05ed008518da4f1bdcd677f063df29c15512b...edefb469ae667e0f72ace81c6b8e1d4a5bdb656a
+[0.0.101.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2d7d2cb92c6d6063bccd23184bd166e4d6cc1394...2fe05ed008518da4f1bdcd677f063df29c15512b
+[0.0.100.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/55e109fcfc69d2560f9893324e704aec1b9d84bb...2d7d2cb92c6d6063bccd23184bd166e4d6cc1394
+[0.0.99.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5e349caf800aa892d029bf3f121f00e5fcfb11b3...55e109fcfc69d2560f9893324e704aec1b9d84bb
+[0.0.98.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6872c03dbdd60dfd8998f990bf26b30208724363...5e349caf800aa892d029bf3f121f00e5fcfb11b3
 [0.0.97.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/bef9d280134cd25448aaae14fa68575a038c6e7c...6872c03dbdd60dfd8998f990bf26b30208724363
 [0.0.96.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/63c4acad9535bc7ef3458c4f1417ca6d654f44c9...bef9d280134cd25448aaae14fa68575a038c6e7c
 [0.0.95.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/04a9f5cbecfca3c393094fbc900a96295b0582aa...63c4acad9535bc7ef3458c4f1417ca6d654f44c9

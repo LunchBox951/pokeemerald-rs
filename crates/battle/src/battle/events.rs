@@ -73,6 +73,35 @@ pub enum BattleEvent {
         /// Whether the player's battler woke.
         by_player: bool,
     },
+    /// A frozen battler's canceller draw kept it frozen and its chosen move
+    /// is not a thaw-hit move, so the move was cancelled before any PP was
+    /// spent (`BattleScript_MoveUsedIsFrozen`,
+    /// `src/battle_util.c:2059`-`:2083`).
+    ///
+    /// This follows the sleep canceller and precedes the confusion and
+    /// paralysis cancellers, which do not run for the action.
+    FrozenSolid {
+        /// Whether the player's battler is frozen.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A frozen battler thawed on its canceller draw
+    /// (`BattleScript_MoveUsedUnfroze`, `src/battle_util.c:2073`-`:2079`),
+    /// and its chosen move proceeds through the remaining cancellers.
+    Thawed {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+    },
+    /// A frozen battler's thaw-hit move thawed it after the confusion and
+    /// paralysis cancellers let the move proceed, without a second draw
+    /// (`CANCELER_THAW`, `src/battle_util.c:2250`-`:2262`).
+    ThawedByMove {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+        /// The thaw-hit move that thawed it.
+        move_id: MoveId,
+    },
     /// A confused battler's duration reached zero this action, ending
     /// confusion before the paralysis draw and PP handling run
     /// (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
@@ -370,6 +399,27 @@ pub enum BattleEvent {
         /// Whether the player used the move.
         by_player: bool,
         /// The move that inflicted poison.
+        move_id: MoveId,
+    },
+    /// A burn secondary inflicted [`crate::status1::Status1::Burned`]
+    /// (`BattleScript_MoveEffectBurn`, `data/battle_scripts_1.s:3893`-`:3897`;
+    /// `STRINGID_PKMNWASBURNED` through `gGotBurnedStringIds`).
+    Burned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted the burn.
+        move_id: MoveId,
+    },
+    /// A Fire move thawed a frozen target that survived its damage
+    /// (`MOVEEND_DEFROST`, `battle_script_commands.c:4257`-`:4272`;
+    /// `BattleScript_DefrostedViaFireMove`, `data/battle_scripts_1.s:3767`-`:3771`,
+    /// `STRINGID_PKMNWASDEFROSTED`). It consumes no RNG and precedes the
+    /// target's Synchronize and contact abilities.
+    TargetDefrosted {
+        /// Whether the player used the Fire move; the thawed battler is its
+        /// target.
+        by_player: bool,
+        /// The Fire move that thawed the target.
         move_id: MoveId,
     },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
