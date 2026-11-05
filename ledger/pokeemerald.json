@@ -30341,6 +30341,18 @@
     },
     "src/data/party_menu.h": {
       "artifacts": {
+        "sFieldMoves": {
+          "reason": "party_menu.h:745-764. Modelled: the fourteen field moves and their move ids in table order (FieldMove), matched against a member's four moves in move-slot order to extend the field action list. Not modelled: sFieldMoveCursorCallbacks (badge checks, surroundings checks, per-move setup and messages), which stay with the host that runs a chosen field move.",
+          "rust_target": "crates/pokeemerald-rs/src/party_menu/actions.rs",
+          "spec": "C-5",
+          "status": "stubbed"
+        },
+        "sPartyMenuActions": {
+          "reason": "party_menu.h:695-743 (sPartyMenuAction_* lists and sPartyMenuActionCounts). Modelled: the lists the field and battle callers reach (SUMMARY/SWITCH/CANCEL for eggs, SHIFT and SEND OUT with SUMMARY/CANCEL, SUMMARY/CANCEL, GIVE/TAKE/CANCEL, READ/TAKE/CANCEL) plus the field list built by SetPartyMonFieldSelectionActions. Not modelled: the lists for choose-half, daycare, union room, trade, contest and Battle Pyramid menus, and sCursorOptions text and callbacks.",
+          "rust_target": "crates/pokeemerald-rs/src/party_menu/actions.rs",
+          "spec": "C-5",
+          "status": "stubbed"
+        },
         "sTMHMMoves": {
           "reason": "sTMHMMoves (FOREACH_TMHM(TMHM_MOVE)) slot->MoveId mapping transcribed into SLOT_MOVES",
           "rust_target": "crates/assets/src/tmhm_learnsets.rs",
@@ -33555,6 +33567,12 @@
           "rust_target": "crates/assets/src/items/item_effects.rs",
           "spec": "S-6",
           "status": "rewritten"
+        },
+        "GetMonData": {
+          "reason": "pokemon.c:3722-3960 (GetBoxMonData) and the party-only reads for the party and summary screens. Modelled: MON_DATA_IS_EGG with the Bad Egg rule (header bit, failed checksum, or the IV word's egg flag), held item, the four moves, their PP and the PP bonuses, plus the record's cached HP and mail slot, read without recalculation. Not modelled: every other MON_DATA field, which battle and the save boundary read through their own decoders.",
+          "rust_target": "crates/pokeemerald-rs/src/party/records.rs",
+          "spec": "C-5",
+          "status": "stubbed"
         },
         "GiveBoxMonInitialMoveset": {
           "reason": "pokemon.c:2991-3012. Fully modelled as battle::wild::initial_moveset: walks gLevelUpLearnsets[species] (extracted as assets::LevelUpLearnsets) in table order, breaks at the first entry above the mon's level (upstream's packed moveLevel > (level << 9) is the same comparison on the decoded level), and reproduces both GiveMoveToBoxMon outcomes (:2939-2955) -- MON_ALREADY_KNOWS_MOVE skips without costing a slot, MON_HAS_MAX_MOVES triggers DeleteFirstMoveAndGiveMoveToBoxMon's oldest-first drop (:3010). Draws nothing. PP initialisation is not carried here because crates/battle's MoveSlot derives PP from the move's own data rather than storing a written-through copy; an unknown species yields an empty moveset and fails closed at BattlePokemon::new instead of fabricating one.",

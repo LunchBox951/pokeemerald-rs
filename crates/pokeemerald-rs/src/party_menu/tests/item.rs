@@ -136,3 +136,58 @@ fn a_full_bag_keeps_the_item_on_the_member() {
     assert_eq!(record, before);
     assert_eq!(bag, bag_before);
 }
+
+#[test]
+fn backing_out_of_gives_bag_forgets_the_remembered_side_panel() {
+    let mut screen = field(party((1..=3).map(Mon::new).collect()));
+    let mut pad = Pad::new();
+    taps(
+        &mut screen,
+        &mut pad,
+        &[Buttons::DOWN, Buttons::DOWN, Buttons::LEFT],
+    );
+    assert_eq!(screen.cursor(), PartyCursor::Mon(0));
+    taps(
+        &mut screen,
+        &mut pad,
+        &[Buttons::A, Buttons::DOWN, Buttons::DOWN, Buttons::A],
+    );
+    assert_eq!(
+        tap(&mut screen, &mut pad, Buttons::A),
+        PartyScreenTick::Host(PartyHostRequest::GiveItem { slot: 0 })
+    );
+    screen.resume(PartyResume::ActionMenu);
+    assert!(screen.menu().is_some());
+    tap(&mut screen, &mut pad, Buttons::B);
+    assert_eq!(screen.cursor(), PartyCursor::Mon(0));
+    tap(&mut screen, &mut pad, Buttons::RIGHT);
+    assert_eq!(
+        screen.cursor(),
+        PartyCursor::Mon(1),
+        "slot 1, not the old slot 2"
+    );
+}
+
+#[test]
+fn a_resume_within_the_session_keeps_the_remembered_side_panel() {
+    let mut screen = field(party((1..=3).map(Mon::new).collect()));
+    let mut pad = Pad::new();
+    taps(
+        &mut screen,
+        &mut pad,
+        &[Buttons::DOWN, Buttons::DOWN, Buttons::LEFT],
+    );
+    taps(
+        &mut screen,
+        &mut pad,
+        &[Buttons::A, Buttons::DOWN, Buttons::DOWN, Buttons::A],
+    );
+    tap(&mut screen, &mut pad, Buttons::DOWN);
+    assert_eq!(
+        tap(&mut screen, &mut pad, Buttons::A),
+        PartyScreenTick::Host(PartyHostRequest::TakeItem { slot: 0 })
+    );
+    screen.resume(PartyResume::List);
+    tap(&mut screen, &mut pad, Buttons::RIGHT);
+    assert_eq!(screen.cursor(), PartyCursor::Mon(2));
+}

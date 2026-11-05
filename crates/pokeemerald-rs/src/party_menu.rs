@@ -70,7 +70,7 @@ enum Stage {
     },
     Summary(Box<PokemonSummaryScreen>),
     /// A [`PartyHostRequest`] is out and unanswered.
-    Waiting,
+    Waiting(PartyHostRequest),
     Closed(PartyScreenResult),
 }
 
@@ -159,10 +159,21 @@ impl PartyScreen {
         }
     }
 
-    /// Carries on after a [`PartyHostRequest`].
+    /// Carries on after a [`PartyHostRequest`]. GIVE leaves for the bag and
+    /// READ for the mail screen, and upstream rebuilds the menu on the way
+    /// back with `InitPartyMenu`, which forgets the remembered right-hand
+    /// panel (`party_menu.c:507`, `CB2_GiveHoldItem` at `:3101-3105`,
+    /// `:3393-3398`); a refused field move or a TAKE never leaves the menu,
+    /// so those keep it.
     pub(crate) fn resume(&mut self, resume: PartyResume) {
-        if !matches!(self.stage, Stage::Waiting) {
+        let Stage::Waiting(request) = self.stage else {
             return;
+        };
+        if matches!(
+            request,
+            PartyHostRequest::GiveItem { .. } | PartyHostRequest::ReadMail { .. }
+        ) {
+            self.side = 0;
         }
         self.stage = match resume {
             PartyResume::List => Stage::List,
@@ -203,14 +214,17 @@ impl PartyScreen {
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> PartyScreenTick {
         // Upstream counts key repeat every frame, whoever reads it.
         let repeated = self.repeat.advance(buttons);
-        match std::mem::replace(&mut self.stage, Stage::Waiting) {
+        match std::mem::replace(&mut self.stage, Stage::List) {
             Stage::List => self.list(buttons, repeated),
             Stage::Menu(menu) => self.menu_input(menu, buttons, repeated),
             Stage::Switch { source, target } => {
                 self.switch_input(source, target, buttons, repeated)
             }
             Stage::Summary(summary) => self.summary_input(summary, buttons),
-            Stage::Waiting => PartyScreenTick::Open,
+            Stage::Waiting(request) => {
+                self.stage = Stage::Waiting(request);
+                PartyScreenTick::Open
+            }
             Stage::Closed(result) => {
                 self.stage = Stage::Closed(result);
                 PartyScreenTick::Closed(result)
@@ -370,7 +384,6 @@ impl PartyScreen {
     /// The `CursorCb_*` handlers.
     fn run_action(&mut self, action: PartyAction) -> PartyScreenTick {
         let slot = self.selected_member().unwrap_or(0);
-        let host = |request| PartyScreenTick::Host(request);
         match action {
             PartyAction::Summary => {
                 self.open_summary(slot);
@@ -405,19 +418,19 @@ impl PartyScreen {
                 PartyScreenTick::Open
             }
             PartyAction::SendOut | PartyAction::Shift => self.try_switch_in(slot),
-            PartyAction::Give => self.wait_for(host(PartyHostRequest::GiveItem { slot })),
-            PartyAction::TakeItem => self.wait_for(host(PartyHostRequest::TakeItem { slot })),
-            PartyAction::Read => self.wait_for(host(PartyHostRequest::ReadMail { slot })),
-            PartyAction::TakeMail => self.wait_for(host(PartyHostRequest::TakeMail { slot })),
+            PartyAction::Give => self.wait_for(PartyHostRequest::GiveItem { slot }),
+            PartyAction::TakeItem => self.wait_for(PartyHostRequest::TakeItem { slot }),
+            PartyAction::Read => self.wait_for(PartyHostRequest::ReadMail { slot }),
+            PartyAction::TakeMail => self.wait_for(PartyHostRequest::TakeMail { slot }),
             PartyAction::FieldMove(field_move) => {
-                self.wait_for(host(PartyHostRequest::FieldMove { slot, field_move }))
+                self.wait_for(PartyHostRequest::FieldMove { slot, field_move })
             }
         }
     }
 
-    fn wait_for(&mut self, tick: PartyScreenTick) -> PartyScreenTick {
-        self.stage = Stage::Waiting;
-        tick
+    fn wait_for(&mut self, request: PartyHostRequest) -> PartyScreenTick {
+        self.stage = Stage::Waiting(request);
+        PartyScreenTick::Host(request)
     }
 
     /// `TrySwitchInPokemon` (`:5813-5857`): the refusals in upstream's order.

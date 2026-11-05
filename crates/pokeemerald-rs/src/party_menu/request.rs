@@ -122,7 +122,8 @@ pub(crate) enum PartyHostRequest {
     /// A field move was chosen. The host checks badges and surroundings and
     /// either runs it or refuses (`CursorCb_FieldMove`, `:3702-3760`).
     FieldMove { slot: usize, field_move: FieldMove },
-    /// GIVE: the host opens the bag to pick an item for this member.
+    /// GIVE: the host opens the bag to pick an item for this member and
+    /// answers with [`super::PartyScreen::resume`].
     GiveItem { slot: usize },
     /// TAKE under ITEM: the host runs [`take_held_item`].
     TakeItem { slot: usize },
