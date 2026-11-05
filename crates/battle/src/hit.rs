@@ -23,8 +23,8 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_speed_down_hit_effect,
-    spend_effect_chance_draw, SecondaryApplication,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect,
+    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
 };
 
 const ORDINARY_HIT_EFFECTS: [MoveEffect; 21] = [
@@ -78,8 +78,8 @@ pub enum HitOutcome {
     },
     /// The target's Flash Fire took a Fire move (`battle_util.c:2703-2726`).
     ///
-    /// Upstream also lets a frozen holder be hit. `Status1` cannot represent
-    /// freeze yet, so that exemption has nothing to test.
+    /// Upstream also lets a frozen holder be hit, so a frozen Flash Fire
+    /// holder never produces this outcome.
     FlashFireBlocked {
         /// Whether this activation latches the boost for the first time.
         first_activation: bool,
@@ -122,13 +122,16 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT` and `EFFECT_SPEED_DOWN_HIT`
-    // resolve through this same damage script while keeping their own
-    // trampoline dispatch in `spend_effect_chance_draw`.
+    // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT`, `EFFECT_SPEED_DOWN_HIT`,
+    // `EFFECT_ACCURACY_DOWN_HIT` and `EFFECT_THAW_HIT` resolve through this
+    // same damage script while keeping their own trampoline dispatch in
+    // `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && !is_confuse_hit_effect(move_data.effect)
         && !is_speed_down_hit_effect(move_data.effect)
+        && !is_accuracy_down_hit_effect(move_data.effect)
+        && !is_thaw_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
@@ -415,10 +418,14 @@ fn absorbing_outcome(
         AbilityId::VOLT_ABSORB => move_type == Type::Electric,
         AbilityId::WATER_ABSORB => move_type == Type::Water,
         AbilityId::FLASH_FIRE => {
+            // `!(status1 & STATUS1_FREEZE)` (`battle_util.c:2704`): a frozen
+            // holder takes the Fire move like any other target.
             return Ok(
-                (move_type == Type::Fire).then_some(HitOutcome::FlashFireBlocked {
-                    first_activation: !defender.volatiles().flash_fire,
-                }),
+                (move_type == Type::Fire && !defender.status1().is_frozen()).then_some(
+                    HitOutcome::FlashFireBlocked {
+                        first_activation: !defender.volatiles().flash_fire,
+                    },
+                ),
             );
         }
         _ => return Ok(None),

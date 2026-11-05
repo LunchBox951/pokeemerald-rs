@@ -351,17 +351,6 @@ impl IntroScene {
         if self.printer.cleared_window() {
             self.ops.clear();
         }
-        // Polled right after `tick`: a positive `CLEAR`/`CLEAR_TO` always
-        // ends the frame as `TickEvent::Idle` (`Printer::cleared_span`), so
-        // this never competes with a same-tick glyph.
-        if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
-        }
-        // A keypad icon also ends its frame as `TickEvent::Idle`
-        // (`Printer::keypad_icon`), so it never competes with a glyph either.
-        if let Some(icon) = self.printer.keypad_icon() {
-            self.ops.push(WindowOp::KeypadIcon(icon));
-        }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
@@ -380,6 +369,18 @@ impl IntroScene {
             | TickEvent::PressAccepted
             | TickEvent::Paused
             | TickEvent::PauseFinished => {}
+        }
+        // Polled right after `tick`. Upstream draws a glyph before clearing the
+        // minimum-spacing gap behind it (`text.c:1146-1156`), so the span goes
+        // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
+        // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
+        if let Some(span) = self.printer.cleared_span() {
+            self.ops.push(WindowOp::ClearSpan(span));
+        }
+        // A keypad icon also ends its frame as `TickEvent::Idle`
+        // (`Printer::keypad_icon`), so it never competes with a glyph either.
+        if let Some(icon) = self.printer.keypad_icon() {
+            self.ops.push(WindowOp::KeypadIcon(icon));
         }
 
         if self.finished {

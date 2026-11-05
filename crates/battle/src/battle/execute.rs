@@ -26,14 +26,15 @@ use crate::secondary::{
     SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
-    is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat, StatChangeDirection,
-    StatChangeOutcome,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, stage_of, ChangedStat,
+    StatChangeDirection, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod burn;
 mod effect_spore;
 mod pipelines;
 use pipelines::hit_failure_event;
@@ -45,8 +46,9 @@ const CONFUSION_SELF_HIT_POWER: u8 = 40;
 /// Whether the events one move produced mark `MOVE_RESULT_NO_EFFECT`, the
 /// flag that turns the target's landed-move record into `MOVE_UNAVAILABLE`
 /// (`battle_script_commands.c:4419`-`:4433`). A miss, a type immunity,
-/// Levitate, Wonder Guard, an absorbed or healed-through move, an explicit
-/// failure and a capped primary stat change set it; a blocked status that
+/// Levitate, Wonder Guard, a move an absorbing ability healed through or made
+/// useless, an explicit failure and a capped primary stat change set it
+/// (`data/battle_scripts_1.s:4088`, `:4098`); a blocked status that
 /// leaves `gMoveResultFlags` alone (Limber, Own Tempo, an already-applied
 /// status, Flash Fire) does not.
 fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
@@ -58,6 +60,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
                 | BattleEvent::AbilityHealed { .. }
+                | BattleEvent::AbsorbMadeMoveUseless { .. }
                 | BattleEvent::ButItFailed { .. }
                 | BattleEvent::StatWontGoHigher { .. }
                 | BattleEvent::StatWontGoLower { .. }
@@ -461,7 +464,8 @@ impl Battle {
                 events.push(BattleEvent::AbilityHealed {
                     by_player: attacker_is_player,
                     move_id,
-                    healed: defender.current_hp() - before,
+                    healed: defender.current_hp().saturating_sub(before),
+                    ability: defender.ability(),
                 });
             }
             HitOutcome::FlashFireBlocked { first_activation } => {
@@ -507,9 +511,10 @@ impl Battle {
                 ));
             }
             HitOutcome::Absorbed { healing: 0 } => {
-                events.push(BattleEvent::NoEffect {
+                events.push(BattleEvent::AbsorbMadeMoveUseless {
                     by_player: attacker_is_player,
                     move_id,
+                    ability: self.battlers(attacker_is_player).1.ability(),
                 });
             }
             HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
@@ -531,58 +536,19 @@ impl Battle {
                     damage: hp_lost,
                     is_critical,
                 });
+                self.push_type_effectiveness(attacker_is_player, move_id, events);
                 // `seteffectwithchance` precedes `tryfaintmon`
                 // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
                 // leads with an `hp == 0` guard
                 // (`battle_script_commands.c:2261`-`:2264`), shared by every
                 // arm the trampoline can reach.
-                let mut poisoned_synchronize_holder = false;
-                match resolution.secondary_effect {
-                    SecondaryApplication::None => {}
-                    SecondaryApplication::Poison => {
-                        let defender = if attacker_is_player {
-                            &mut self.enemy
-                        } else {
-                            &mut self.player
-                        };
-                        if !defender.is_fainted() {
-                            defender.set_status1(Status1::Poisoned);
-                            poisoned_synchronize_holder =
-                                defender.ability() == AbilityId::SYNCHRONIZE;
-                            events.push(BattleEvent::Poisoned {
-                                by_player: attacker_is_player,
-                                move_id,
-                            });
-                        }
-                    }
-                    SecondaryApplication::Confuse => {
-                        let target_fainted = if attacker_is_player {
-                            self.enemy.is_fainted()
-                        } else {
-                            self.player.is_fainted()
-                        };
-                        if !target_fainted {
-                            // The duration draw is inside `SetMoveEffect`'s
-                            // own `hp == 0` guard, not before it, so it only
-                            // happens once the target is known to have
-                            // survived this same hit.
-                            let turns = draw_confusion_duration(rng);
-                            let defender = if attacker_is_player {
-                                &mut self.enemy
-                            } else {
-                                &mut self.player
-                            };
-                            defender.volatiles_mut().set_confusion(turns);
-                            events.push(BattleEvent::ConfusionInflicted {
-                                by_player: attacker_is_player,
-                                move_id,
-                            });
-                        }
-                    }
-                    SecondaryApplication::SpeedDown => {
-                        self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
-                    }
-                }
+                let poisoned_synchronize_holder = self.apply_hit_secondary_effect(
+                    attacker_is_player,
+                    move_id,
+                    resolution.secondary_effect,
+                    rng,
+                    events,
+                );
                 // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
                 // same `seteffectwithchance` step, still ahead of the
                 // target's own `tryfaintmon` (`data/battle_scripts_1.s:265`-
@@ -591,6 +557,7 @@ impl Battle {
                     self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
                 }
                 self.settle_faint(!attacker_is_player, events);
+                self.defrost_target_of_fire_move(attacker_is_player, move_id, hp_lost, events)?;
                 // See `BattleEvent::PoisonedBySynchronize`'s docs for why the
                 // reflection runs here, after the target's own faint check.
                 if poisoned_synchronize_holder {
@@ -601,17 +568,98 @@ impl Battle {
         Ok(())
     }
 
-    /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
-    /// target that survived the hit. `SetMoveEffect` leads with an `hp == 0`
-    /// guard (`battle_script_commands.c:2261`-`:2264`), and a target already at
-    /// the minimum stage is left alone with no message because
-    /// `ChangeStatBuffs` runs with `flags == 0` (`:7056`-`:7059`,
-    /// `:7094`-`:7095`). Clear Body, White Smoke and Shield Dust never reach
-    /// this point ([`crate::secondary::spend_effect_chance_draw`]).
-    fn apply_secondary_speed_drop(
+    /// The secondary effect of a landed hit, applied to a target that survived
+    /// it. `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`), shared by every arm the
+    /// trampoline can reach. Returns whether a Synchronize holder was poisoned,
+    /// which [`Self::reflect_synchronize_poison`] settles after the target's
+    /// own faint check.
+    fn apply_hit_secondary_effect(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
+        secondary_effect: SecondaryApplication,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> bool {
+        let mut poisoned_synchronize_holder = false;
+        match secondary_effect {
+            SecondaryApplication::None => {}
+            SecondaryApplication::Poison => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                if !defender.is_fainted() {
+                    defender.set_status1(Status1::Poisoned);
+                    poisoned_synchronize_holder = defender.ability() == AbilityId::SYNCHRONIZE;
+                    events.push(BattleEvent::Poisoned {
+                        by_player: attacker_is_player,
+                        move_id,
+                    });
+                }
+            }
+            SecondaryApplication::Confuse => {
+                let target_fainted = if attacker_is_player {
+                    self.enemy.is_fainted()
+                } else {
+                    self.player.is_fainted()
+                };
+                if !target_fainted {
+                    // The duration draw is inside `SetMoveEffect`'s
+                    // own `hp == 0` guard, not before it, so it only
+                    // happens once the target is known to have
+                    // survived this same hit.
+                    let turns = draw_confusion_duration(rng);
+                    let defender = if attacker_is_player {
+                        &mut self.enemy
+                    } else {
+                        &mut self.player
+                    };
+                    defender.volatiles_mut().set_confusion(turns);
+                    events.push(BattleEvent::ConfusionInflicted {
+                        by_player: attacker_is_player,
+                        move_id,
+                    });
+                }
+            }
+            SecondaryApplication::SpeedDown => {
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Speed,
+                    events,
+                );
+            }
+            SecondaryApplication::AccuracyDown => {
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Accuracy,
+                    events,
+                );
+            }
+            SecondaryApplication::Burn => {
+                self.apply_secondary_burn(attacker_is_player, move_id, events);
+            }
+        }
+        poisoned_synchronize_holder
+    }
+
+    /// `MOVE_EFFECT_SPD_MINUS_1` and `MOVE_EFFECT_ACC_MINUS_1` as secondary
+    /// effects: one `stat` stage off a target that survived the hit.
+    /// `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`), and a target already at the
+    /// minimum stage is left alone with no message because `ChangeStatBuffs`
+    /// runs with `flags == 0` (`:7056`-`:7059`, `:7094`-`:7095`). Clear Body,
+    /// White Smoke and Shield Dust, and Keen Eye for Accuracy, never reach this
+    /// point ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_stat_drop(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        stat: ChangedStat,
         events: &mut Vec<BattleEvent>,
     ) {
         let defender = if attacker_is_player {
@@ -619,16 +667,16 @@ impl Battle {
         } else {
             &mut self.player
         };
-        let current_stage = defender.stages().speed;
+        let current_stage = stage_of(defender, stat);
         if defender.is_fainted() || current_stage == StatStage::MIN {
             return;
         }
         let new_stage = current_stage.saturating_add(-1);
-        set_stage(defender, ChangedStat::Speed, new_stage);
+        set_stage(defender, stat, new_stage);
         events.push(BattleEvent::StatFell {
             by_player: attacker_is_player,
             move_id,
-            stat: ChangedStat::Speed,
+            stat,
             new_stage,
             magnitude: 1,
         });
@@ -775,8 +823,8 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
-        // `FaintClearSetData` resets the battler's history and Perish Song
-        // countdown (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
+        // `FaintClearSetData` resets the battler's history, Perish Song
+        // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
             BattlerState::default();
     }
@@ -1117,8 +1165,8 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
-                131, 141, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
+                110, 125, 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1245,8 +1293,9 @@ mod absorbing_ability_tests {
         sp_defense: 31,
     };
 
-    /// No executable Fire move exists, so the executor's Flash Fire arm is
-    /// driven directly with the outcome `damage_core` reports for Ember.
+    /// Drives the executor's Flash Fire arm directly with the outcome
+    /// `damage_core` reports for Ember; `tests/turn_engine/thaw_hit.rs` covers
+    /// the same arm through Flame Wheel on a real `Battle`.
     #[test]
     fn a_flash_fire_outcome_latches_the_defender_and_reports_the_boost_once() {
         let dex = Dex::new();

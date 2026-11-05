@@ -11,6 +11,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod event_scripts;
 mod evolution_scene;
 mod field_message;
 mod format;
@@ -21,6 +22,7 @@ mod paletted_image;
 mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
+mod text_printer;
 mod text_tokens;
 mod trainer_battler;
 mod trainer_pic;
@@ -57,6 +59,7 @@ pub use paletted_image::PalettedImage;
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
+pub use text_printer::TextPrinterDownArrow;
 
 pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;
@@ -375,6 +378,26 @@ impl AssetPack {
     /// Same as [`palette`](Self::palette).
     pub fn sprite_palette(&self, who: &str) -> Result<PaletteRef<'_>, PackError> {
         self.palette(&format!("sprite/palette/{who}"))
+    }
+
+    /// Look up the `field-effect/image/{name}` sheet (`"tall_grass"`), a
+    /// field-effect picture upstream keeps under `graphics/field_effects/pics`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`image`](Self::image).
+    pub fn field_effect_image(&self, name: &str) -> Result<ImageRef<'_>, PackError> {
+        self.image(&format!("field-effect/image/{name}"))
+    }
+
+    /// Look up the `field-effect/palette/{name}` palette (`"general_1"`), a
+    /// bank upstream keeps under `graphics/field_effects/palettes`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`palette`](Self::palette).
+    pub fn field_effect_palette(&self, name: &str) -> Result<PaletteRef<'_>, PackError> {
+        self.palette(&format!("field-effect/palette/{name}"))
     }
 
     /// Look up a layout's `map.bin` bytes (e.g. `"littleroot_town"`), for

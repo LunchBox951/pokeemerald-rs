@@ -8,15 +8,15 @@ use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
-    field_messages, fonts, inventory, layouts, locate_profile, opening_scene, poke_ball, sprites,
-    starter_chooser, text_window, tilesets, title,
+    field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
+    opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
-    healthbox_frame_ids, healthbox_table_ids, layout_ids, opening_scene_ids, poke_ball_ids,
-    sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS,
-    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
+    poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
+    KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -35,6 +35,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         )
         .chain(layout_ids())
         .chain(text_window_ids())
+        .chain(INTERFACE_IMAGE_IDS.map(str::to_owned))
         .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
         .chain(sprite_sheet_ids())
         // Sprite palettes stay, so deleting a sheet removes only that sheet.
@@ -52,6 +53,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(opening_scene_ids())
         .chain(evolution_scene_ids())
         .chain(battle_interface_ids())
+        .chain(naming_screen_ids())
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
@@ -93,6 +95,10 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             evolution_scene::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_interface" {
             battle_interface::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "naming_screen" {
+            naming_screen::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "interface" {
+            interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
             poke_ball::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
@@ -153,6 +159,7 @@ fn the_fixed_inventory_ids_are_unique() {
         opening_scene_ids(),
         evolution_scene_ids(),
         battle_interface_ids(),
+        naming_screen_ids(),
         poke_ball_ids(),
         trainer_battler_ids(),
     ] {
@@ -277,7 +284,7 @@ fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
 }
 
 #[test]
-fn a_pack_missing_a_starter_battler_root_is_refused() {
+fn a_pack_missing_a_battler_root_is_refused() {
     for id in BATTLERS.iter().flat_map(|battler| battler.ids()) {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battlers");
@@ -468,6 +475,48 @@ fn a_surplus_battle_interface_entry_is_refused_by_id() {
         );
         let mut report = Vec::new();
         let err = battle_interface::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_naming_screen_inventory_is_fifteen_sheets_seven_palettes_and_four_tilemaps() {
+    let ids = naming_screen_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 26);
+    assert_eq!(count("naming-screen/image/"), 15);
+    assert_eq!(count("naming-screen/palette/"), 7);
+    assert_eq!(count("naming-screen/raw/"), 4);
+}
+
+#[test]
+fn a_pack_missing_a_naming_screen_entry_is_refused() {
+    for id in naming_screen_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "naming_screen");
+    }
+}
+
+#[test]
+fn a_surplus_naming_screen_entry_is_refused_by_id() {
+    let surplus = "naming-screen/palette/rival";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-naming-screen", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = naming_screen::locate(ctx, &mut report)
             .map(|_| ())
             .unwrap_err();
         assert!(
@@ -759,6 +808,25 @@ fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
         );
         assert!(report.is_empty(), "{report:?}");
     });
+}
+
+#[test]
+fn a_pack_missing_the_down_arrow_sheet_is_refused() {
+    let id = "interface/image/down_arrow";
+    assert_eq!(INTERFACE_IMAGE_IDS, [id]);
+    assert_refused("no-down-arrow", without(id), id, "interface");
+}
+
+#[test]
+fn an_unrelated_interface_image_does_not_satisfy_the_down_arrow_requirement() {
+    let mut entries = without("interface/image/down_arrow");
+    entries.push(raw_entry("interface/image/other".to_owned(), vec![0]));
+    assert_refused(
+        "other-interface-image",
+        entries,
+        "interface/image/down_arrow",
+        "interface",
+    );
 }
 
 #[test]

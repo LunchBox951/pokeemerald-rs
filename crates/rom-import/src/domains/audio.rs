@@ -1,4 +1,5 @@
-//! The sound engine's data: `audio/sample/*` and `audio/voicegroup/*`.
+//! The sound engine's data: `audio/sample/*`, `audio/voicegroup/*`, and the
+//! species cries (`audio/cry/table`, read by [`cry`]).
 //!
 //! Everything `MUS_TITLE` plays through except the song itself. The ROM
 //! holds the m4a engine's own structs (`pokeemerald/include/gba/m4a_internal.h`)
@@ -13,8 +14,9 @@
 //! the engine's pre-scaled pitch constant and is carried through unchanged.
 //! `status & 0x4000` is the loop flag; a sample without it has no loop, so
 //! `loopStart` is not meaningful and is dropped. A `type != 0` sample is
-//! DPCM-compressed and refused: the pack stores PCM only, and no instrument
-//! in scope is compressed.
+//! DPCM-compressed and refused here: the pack stores PCM only, and no
+//! instrument in scope is compressed. The species cries are, and [`cry`]
+//! decodes them.
 //!
 //! `SoundMainRAM` interpolates toward the byte right after the `size` bytes
 //! (`pokeemerald/src/m4a_1.s:399-407`); `crates/xtask/src/extract/wav.rs`'s
@@ -57,6 +59,10 @@
 //! indices from the recorded `ToneData` linked after it (leaves only), as
 //! the checkout resolver does. A key-split table likewise reads every note
 //! whose byte is a recorded table's declared byte, not only its own subrange.
+
+mod cry;
+
+pub use cry::decode_cry_payloads;
 
 use assets::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice,
@@ -126,6 +132,11 @@ pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result
     }
     for root in audio.voicegroups {
         writer.push(voicegroup(&reader, audio, root)?);
+    }
+    if let Some(cry) = &audio.cry {
+        for entry in decode_cry_payloads(&reader, cry)? {
+            writer.push(entry);
+        }
     }
     Ok(())
 }

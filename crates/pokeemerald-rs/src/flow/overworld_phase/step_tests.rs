@@ -221,8 +221,9 @@ fn the_faced_vigoroth_is_visible_with_a_real_script() {
     let object =
         engine::overworld::facing_object_event(&phase.player, &runtime, &phase.save1.event_data)
             .expect("the Vigoroth at (4, 5) must be visible once its hide flag is cleared");
-    assert_eq!(object.script, "PlayersHouse_1F_EventScript_Vigoroth1");
-    assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
+    let script = object.script.expect("the Vigoroth has a script").id();
+    assert_eq!(script, "PlayersHouse_1F_EventScript_Vigoroth1");
+    assert!(crate::overworld::npc_scripts::script_text(script).is_none());
 }
 
 /// The `"0x0"` NULL-script sentinel and a real unmodelled script differ:
@@ -247,7 +248,7 @@ fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
             &phase.save1.event_data,
         )
         .expect("the corridor attendant at (2, 6) must be visible and faced");
-        assert_eq!(object.script, "0x0", "the NULL-script sentinel");
+        assert_eq!(object.script, None, "the NULL script");
     }
 
     phase.step(pressed(Buttons::A | Buttons::UP));

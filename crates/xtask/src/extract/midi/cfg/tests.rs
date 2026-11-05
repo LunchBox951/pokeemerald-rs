@@ -1,4 +1,4 @@
-use super::{parse_entry_for, MidiCfgEntry};
+use super::{parse_entry_flags, parse_entry_for, MidiCfgEntry};
 use crate::extract::midi::error::MidiError;
 
 const SAMPLE_CFG: &str = "\
@@ -81,4 +81,43 @@ fn default_reverb_is_none_and_default_master_volume_is_127() {
     let entry = parse_entry_for("mus_defaults.mid: -E -G_defaults\n", "mus_defaults.mid").unwrap();
     assert_eq!(entry.reverb, None);
     assert_eq!(entry.master_volume, 127);
+}
+
+#[test]
+fn a_filename_with_two_entries_is_ambiguous() {
+    let text = "mus_x.mid: -E -G_x\nmus_x.mid: -E -G_y\n";
+    assert_eq!(
+        parse_entry_for(text, "mus_x.mid"),
+        Err(MidiError::CfgEntryDuplicate("mus_x.mid".to_owned()))
+    );
+}
+
+#[test]
+fn a_switch_flag_with_an_operand_is_an_error() {
+    for token in ["-Eoops", "-X2", "-Nx"] {
+        let text = format!("mus_x.mid: {token} -G_x\n");
+        assert_eq!(
+            parse_entry_for(&text, "mus_x.mid"),
+            Err(MidiError::CfgMalformedFlag(token.to_owned())),
+            "{token}"
+        );
+    }
+}
+
+#[test]
+fn flags_parse_without_a_voicegroup_but_the_strict_parse_requires_one() {
+    let entry = parse_entry_flags("mus_dummy.mid: -E -R40\n", "mus_dummy.mid").unwrap();
+    assert_eq!(entry.voicegroup_label, "");
+    assert_eq!(entry.reverb, Some(40));
+    assert_eq!(entry.master_volume, 127);
+}
+
+#[test]
+fn a_lowercase_flag_letter_is_accepted() {
+    let entry = parse_entry_for(
+        "se_dex_search.mid: -E -G_rs_sfx_1 -v100\n",
+        "se_dex_search.mid",
+    )
+    .unwrap();
+    assert_eq!(entry.master_volume, 100);
 }

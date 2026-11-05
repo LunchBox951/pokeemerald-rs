@@ -560,6 +560,61 @@ fn clear_to_paints_only_up_to_its_target_column() {
     );
 }
 
+#[test]
+fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
+    // `0x14` is `EXT_CTRL_CODE_MIN_LETTER_SPACING`; upstream copies the glyph
+    // and only then clears the gap up to the minimum (`pokeemerald/src/text.c`
+    // `:1146-1156`), so the opaque glyph's pixels inside the gap must show the
+    // window's background.
+    const MINIMUM: u8 = 12;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: 0x14,
+            args: vec![MINIMUM],
+        },
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue, "reveals 'A'");
+    assert!(
+        matches!(
+            scene.ops.as_slice(),
+            [WindowOp::Glyph(_), WindowOp::ClearSpan(_)]
+        ),
+        "the gap span follows the glyph in the same tick"
+    );
+
+    let fb = scene.compose();
+    let probe = |x: i32| {
+        let (x, y) = box_pixel((STANDARD_PRINTER_ORIGIN.0 + x, STANDARD_PRINTER_ORIGIN.1 + 8));
+        fb.pixel(x, y)
+    };
+    assert_eq!(
+        probe(2),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the glyph's own advance stays"
+    );
+    assert_eq!(
+        probe(NORMAL_A_ADVANCE_WIDTH + 2),
+        Some(SOLID_FRAME_COLOR),
+        "the gap up to the minimum is erased after the glyph draws"
+    );
+    assert_eq!(
+        probe(i32::from(MINIMUM) + 1),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "pixels past the minimum are untouched"
+    );
+}
+
 const _: () = assert!(GLYPH_COUNT == EXPECTED_GLYPH_COUNT);
 
 fn font_entry(fill_palette_index: u8) -> PackEntry {

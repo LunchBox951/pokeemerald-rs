@@ -70,6 +70,7 @@ fn build_with_cute_charm(
     let lead = player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]);
     start_wild_battle_with_lead_effects(
         lead,
+        Vec::new(),
         None,
         cute_charm_gender,
         encounter,
