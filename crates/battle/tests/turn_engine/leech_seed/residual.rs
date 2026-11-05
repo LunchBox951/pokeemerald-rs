@@ -316,3 +316,22 @@ fn an_above_maximum_saved_hp_seeder_reports_no_heal() {
     );
     assert_eq!(battle.player().current_hp(), stats.max_hp);
 }
+
+/// A zero-maximum loaded seeder is clamped to no HP by its own heal; the
+/// script tries both faints, so that one is settled like any other.
+#[test]
+fn a_zero_maximum_seeder_clamped_to_zero_by_the_heal_is_settled() {
+    let seeder = mon(RATTATA, &[SPLASH]);
+    let mut stats = seeder.stats();
+    stats.max_hp = 0;
+    let seeder = seeder.with_cached_stats(stats, 10);
+    let enemy = seeded_by(mon(WURMPLE, &[SPLASH]), BattlerSide::Player);
+
+    let (battle, events) = drain_turn(seeder, enemy);
+
+    assert_eq!(battle.player().current_hp(), 0);
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: true }),
+        "{events:?}"
+    );
+}

@@ -1209,7 +1209,11 @@ impl Battle {
             by_player: receiver_is_player,
             healed: receiver.current_hp().saturating_sub(before),
         });
+        // The script tries both faints (`data/battle_scripts_1.s:3282`-`:3283`):
+        // a receiver whose loaded maximum is zero is clamped to no HP by its
+        // own heal, and that faint is settled like any other.
         self.settle_faint(is_player, events);
+        self.settle_faint(receiver_is_player, events);
         fainted
     }
 
