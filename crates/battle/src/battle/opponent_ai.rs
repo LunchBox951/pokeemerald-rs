@@ -55,8 +55,11 @@ pub(crate) fn choose_enemy_move(enemy: &BattlePokemon, rng: &mut impl BattleRng)
 
 pub(crate) const FIRST_BATTLE_FLEE_HP_PERCENT: u32 = 20;
 
+/// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
+/// so a malformed save can carry a zero maximum; it reads as full-scale rather
+/// than dividing by zero.
 fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp
+    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp.max(1)
 }
 
 fn move_slots_with_pp(pokemon: &BattlePokemon) -> Vec<usize> {
@@ -192,5 +195,21 @@ mod tests {
             EnemyAction::Move(1)
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    #[test]
+    fn a_zero_cached_maximum_does_not_divide_by_zero() {
+        let malformed = mon(BULBASAUR, 5, vec![TACKLE]).with_cached_stats(
+            crate::pokemon::Stats {
+                max_hp: 0,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            1,
+        );
+        assert_eq!(current_hp_percent(&malformed), PERCENT_SCALE);
     }
 }

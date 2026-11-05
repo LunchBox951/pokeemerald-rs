@@ -218,7 +218,7 @@ fn a_move_learned_by_levelling_up_survives_the_round_trip() {
 }
 
 #[test]
-fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
+fn an_experience_total_past_the_next_threshold_is_adopted_without_levelling_the_decoded_mon() {
     let dex = Dex::new();
     let mon = treecko_fixture();
     let mut saved = to_save_pokemon(&dex, &mon);
@@ -229,13 +229,24 @@ fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
     substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_13.to_le_bytes());
     saved.box_data.set_substructures(&substructures);
 
-    let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
-    assert_eq!(restored.level(), 13, "the level follows the experience");
+    let mut restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
+    assert_eq!(
+        restored.level(),
+        12,
+        "`LoadPlayerParty` copies the level byte (`load_save.c:160-178`); \
+         `GetLevelFromMonExp` only runs inside `CalculateMonStats`"
+    );
     assert_eq!(restored.experience(), level_13);
+    assert_eq!(restored.cached_stats(), mon.cached_stats());
+
+    restored
+        .apply_experience(&dex, 1)
+        .expect("no move-learn prompt is pending");
+    assert_eq!(restored.level(), 13, "the next award reconciles the level");
 }
 
 #[test]
-fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
+fn decoding_an_inconsistent_save_keeps_the_saved_level_and_moves() {
     let dex = Dex::new();
     let mon = torchic_before_learning_peck();
     let mut saved = to_save_pokemon(&dex, &mon);
@@ -247,11 +258,7 @@ fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
     saved.box_data.set_substructures(&substructures);
 
     let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
-    assert_eq!(
-        restored.level(),
-        16,
-        "the level still follows the experience"
-    );
+    assert_eq!(restored.level(), 15, "the level byte is adopted as saved");
     assert_eq!(
         restored
             .moves()
@@ -259,7 +266,7 @@ fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
         vec![SCRATCH, GROWL],
-        "but the moveset stays exactly the saved attacks substructure -- \
+        "and the moveset stays exactly the saved attacks substructure -- \
          no Peck: load is not a level-up"
     );
 }
@@ -533,8 +540,8 @@ fn a_disagreeing_ability_slot_survives_the_save_round_trip() {
 }
 
 /// `STATUS1_*` (`pokeemerald/include/constants/battle.h:114-125`): the three
-/// sleep bits count turns left, poison is `0x08`, burn is `0x10`, paralysis
-/// is `0x40`.
+/// sleep bits count turns left, poison is `0x08`, burn is `0x10`, freeze is
+/// `0x20`, paralysis is `0x40`.
 #[test]
 fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     let dex = Dex::new();
@@ -549,6 +556,7 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
         (7, battle::Status1::Asleep { turns: 7 }),
         (8, battle::Status1::Poisoned),
         (16, battle::Status1::Burned),
+        (32, battle::Status1::Frozen),
         (64, battle::Status1::Paralysed),
     ] {
         let mut record = to_save_pokemon(&dex, &treecko_fixture());
@@ -564,7 +572,7 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     }
 }
 
-/// Freeze `0x20`, bad poison `0x80` and its counter bits
+/// Bad poison `0x80` and its counter bits
 /// (`0x0F00`), several conditions at once, a sleep count beside poison, and
 /// bits above `STATUS1_ANY` are not modelled
 /// (`pokeemerald/include/constants/battle.h:117-125`): decoding fails closed
@@ -573,7 +581,6 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
 fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
     let dex = Dex::new();
     for word in [
-        0x20,
         0x80,
         0x180,
         0xF80,
@@ -583,6 +590,7 @@ fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
         0x88,
         0x18,
         0x50,
+        0x30,
         0x11,
         0x8000_0000,
         0x1_0000,
