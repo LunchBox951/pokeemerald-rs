@@ -435,7 +435,12 @@ fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_
 
     let home = std::env::temp_dir().join(format!("pack-format-guard-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
-    let app = home.join(".local").join("share").join("pokeemerald-rs");
+    // The channel's own subdirectory, so the candidate is the path `resolve`
+    // builds on every channel, not only `dev`.
+    let app = home
+        .join(".local")
+        .join("share")
+        .join(super::APP_DATA_SUBDIRECTORY);
     std::fs::create_dir_all(&app).expect("scratch directories");
     // A self-referential symlink where the pack file goes: `metadata` fails
     // with `ELOOP`, which is neither `NotFound` nor `NotADirectory`, so the
@@ -452,9 +457,19 @@ fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_
     let env = move |key: &str| (key == "HOME").then(|| home_env.clone());
     let resolved = resolve(&env, Some(Path::new("/opt/game")), &probe, HostFamily::Xdg);
 
+    let observed = probe(&candidate);
     let _ = std::fs::remove_file(&candidate);
     let _ = std::fs::remove_dir_all(&home);
 
+    assert_eq!(observed, Probe::Unreadable, "ELOOP is not proof of absence");
+    assert!(
+        guard_skips,
+        "the guard must treat an unreadable user pack as stopping resolution"
+    );
+    assert_eq!(
+        resolved, candidate,
+        "resolution hands the unreadable candidate back"
+    );
     if guard_skips {
         return;
     }
