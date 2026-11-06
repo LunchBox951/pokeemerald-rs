@@ -31498,7 +31498,7 @@
           "status": "rewritten"
         },
         "FieldGetPlayerInput": {
-          "reason": "Partially modeled by phase-owned field-input gates. Completed positional steps feed tookStep consumers; completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
+          "reason": "Partially modeled by phase-owned field-input gates. Completed keypad positional steps feed tookStep consumers, except the escalator arrival's walk-off: that east step is held movement (field_player_avatar.c:353-379), so runningState stays NOT_MOVING and tookStep is never set (field_control_avatar.c:118-119); OverworldPhase::take_stepped_onto (flow/overworld_phase/escalator_arrival.rs) withholds its landing from those consumers and leaves it to the encounter gate (:120-121). Completed stationary turns additionally feed checkStandardWildEncounter without positional coord/warp work, after timer drain and subject to forced-tile exclusion (field_control_avatar.c:116-122). Existing tile-center/at-rest button gating remains. Deferred in v1: PLAYER_SPEED_FASTEST screening, pressedSelectButton, pressedBButton, heldDirection2 separate TryDoorWarp read, and dpadDirection outside-gate handling.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
           "spec": "S-5",
           "status": "stubbed"
