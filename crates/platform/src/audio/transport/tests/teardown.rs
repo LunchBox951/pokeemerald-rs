@@ -208,3 +208,64 @@ fn shutdown_seen_after_a_supervision_discovery_keeps_the_stream_and_publishes_no
     assert_eq!(with(&w).builds, 1);
     assert_eq!(with(&w).log, ["build"]);
 }
+
+/// A hook that sets shutdown, as a dropped output would.
+fn shutdown_hook(rig: &Rig) -> WorldHook {
+    let shared = Arc::clone(&rig.shared);
+    Box::new(move |_| shared.shutdown.store(true, Ordering::Release))
+}
+
+#[test]
+fn shutdown_seen_after_a_failed_negotiation_publishes_nothing() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.unsupported = true;
+    });
+    let mut rig = rig(&w, 4);
+    with(&w).during_negotiate = Some(shutdown_hook(&rig));
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), []);
+    assert_eq!(rig.shared.state(), TransportState::Connecting);
+    assert_eq!(rig.transport.failures, 0);
+    assert_eq!(with(&w).builds, 0);
+}
+
+#[test]
+fn shutdown_seen_after_a_failed_supervision_play_publishes_nothing() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+    {
+        let hook = shutdown_hook(&rig);
+        let mut w = with(&w);
+        w.fail_play = true;
+        w.during_play = Some(hook);
+    }
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(1));
+    assert_eq!(rig.events(), []);
+    assert_eq!(rig.transport.failures, 0);
+    assert_eq!(with(&w).log, ["build"]);
+}
+
+#[test]
+fn shutdown_seen_after_a_failed_supervision_pause_publishes_nothing() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+    {
+        let hook = shutdown_hook(&rig);
+        let mut w = with(&w);
+        w.no_hw_pause = true;
+        w.lose_during_pause = true;
+        w.during_pause = Some(hook);
+    }
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(1));
+    assert_eq!(rig.events(), []);
+    assert_eq!(rig.transport.failures, 0);
+    assert_eq!(with(&w).log, ["build"]);
+}

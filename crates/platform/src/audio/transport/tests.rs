@@ -57,6 +57,11 @@ struct World {
     /// Run inside the next `play`, before it fails or succeeds, as a
     /// producer and a `stop` racing a blocked `play` would.
     during_play: Option<WorldHook>,
+    /// Run inside the next `pause`, before it fails or succeeds.
+    during_pause: Option<WorldHook>,
+    /// Run inside the next configuration query, before it answers, as a
+    /// `drop` racing a blocked negotiation would.
+    during_negotiate: Option<WorldHook>,
     /// Block the next discovery, with the world unlocked, until this
     /// channel's sender sends or drops, as a wedged audio server would.
     block_discovery: Option<std::sync::mpsc::Receiver<()>>,
@@ -128,6 +133,9 @@ impl OutputDevice for FakeDevice {
     ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
         let mut w = with(&self.0);
         w.ops += 1;
+        if let Some(hook) = w.during_negotiate.take() {
+            hook(&mut w);
+        }
         if w.unsupported {
             return Ok(Vec::new());
         }
@@ -198,6 +206,9 @@ impl OutputStream for FakeStream {
     fn pause(&self) -> Result<(), cpal::Error> {
         let mut w = with(&self.0);
         w.ops += 1;
+        if let Some(hook) = w.during_pause.take() {
+            hook(&mut w);
+        }
         if w.lose_during_pause {
             let index = self.1;
             (w.streams[index].error)(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
