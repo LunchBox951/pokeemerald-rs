@@ -155,19 +155,25 @@ mod tests {
         ELEMENT_TABLE, TILE_SIDE,
     };
     use super::{png, DIRECTORY};
+    use crate::extract::owned_fixture::{
+        assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+    };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
     const TILE_BYTES: usize = 32;
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-healthbox-elements-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join(DIRECTORY)).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-healthbox-elements-{name}")).unwrap();
+        std::fs::create_dir_all(owned.path().join(DIRECTORY)).unwrap();
+        owned
+    }
+
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     /// An image whose pixel `(x, y)` is `pixel(x, y)`.
@@ -283,17 +289,18 @@ mod tests {
 
     #[test]
     fn every_sheet_converts_to_its_tile_count_in_32_byte_tiles() {
-        let dir = scratch_dir("lengths");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("lengths");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let tile_counts = [12, 9, 15, 11, 18, 1, 4, 1, 15, 15, 15, 1, 1];
         for (sheet, tiles) in ELEMENT_TABLE.into_iter().zip(tile_counts) {
-            let bytes = convert_sheet(&dir, sheet, &mut crate::extract::read_file).unwrap();
+            let bytes = convert_sheet(dir, sheet, &mut crate::extract::read_file).unwrap();
             assert_eq!(bytes.len(), tiles * TILE_BYTES, "{}", sheet.stem);
         }
         let bar_lengths: Vec<_> = BATTLE_BAR_SOURCES
             .into_iter()
             .map(|sheet| {
-                convert_sheet(&dir, sheet, &mut crate::extract::read_file)
+                convert_sheet(dir, sheet, &mut crate::extract::read_file)
                     .unwrap()
                     .len()
             })
@@ -302,15 +309,15 @@ mod tests {
             bar_lengths,
             [18 * TILE_BYTES, 11 * TILE_BYTES, 12 * TILE_BYTES]
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_valid_checkout_yields_fourteen_records_the_typed_handles_read() {
-        let dir = scratch_dir("valid");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("valid");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let mut writer = PackWriter::new();
-        extract_healthbox_elements(&dir, &mut writer).unwrap();
+        extract_healthbox_elements(dir, &mut writer).unwrap();
         assert_eq!(writer.len(), 14);
         let pack_path = dir.join("healthbox-elements.pack");
         std::fs::write(&pack_path, writer.finish().unwrap()).unwrap();
@@ -331,16 +338,15 @@ mod tests {
         ]
         .concat();
         assert_eq!(pack.battle_bar().unwrap().tiles, expected_bar.as_slice());
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_fourteen_record_ids_are_the_table_stems_and_the_battle_bar() {
-        let dir = scratch_dir("ids");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("ids");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let mut writer = PackWriter::new();
-        extract_healthbox_elements(&dir, &mut writer).unwrap();
+        extract_healthbox_elements(dir, &mut writer).unwrap();
         let pack = writer.finish().unwrap();
         let mut ids: Vec<String> = pack_format::parse_directory(&pack)
             .unwrap()
@@ -358,73 +364,73 @@ mod tests {
         declared.sort();
         assert_eq!(ids, expected);
         assert_eq!(declared, expected);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_missing_source_in_a_complete_checkout_fails_closed() {
         for sheet in ELEMENT_TABLE.into_iter().chain(BATTLE_BAR_SOURCES) {
-            let dir = scratch_dir("missing-one");
-            write_valid_checkout(&dir);
+            let owned = scratch_dir("missing-one");
+            let dir = owned.path();
+            write_valid_checkout(dir);
             std::fs::remove_file(dir.join(DIRECTORY).join(format!("{}.png", sheet.stem))).unwrap();
             let mut writer = PackWriter::new();
-            let err = extract_healthbox_elements(&dir, &mut writer).unwrap_err();
+            let err = extract_healthbox_elements(dir, &mut writer).unwrap_err();
             assert!(
                 matches!(&err, ExtractError::ReadFailed(path, _)
                     if path.ends_with(format!("{}.png", sheet.stem))),
                 "{}: {err}",
                 sheet.stem
             );
-            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 
     #[test]
     fn a_sheet_that_is_not_the_upstream_shape_is_rejected() {
-        let dir = scratch_dir("shape");
+        let owned = scratch_dir("shape");
+        let dir = owned.path();
         let sheet = ELEMENT_TABLE[0];
-        let path = write_sheet(&dir, sheet, b"not a png");
+        let path = write_sheet(dir, sheet, b"not a png");
         let read = &mut crate::extract::read_file;
-        let err = convert_sheet(&dir, sheet, read).unwrap_err();
+        let err = convert_sheet(dir, sheet, read).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
 
         let wrong_size = Sheet { width: 88, ..sheet };
-        write_sheet(&dir, sheet, sheet_png(wrong_size, 1));
-        let err = convert_sheet(&dir, sheet, read).unwrap_err();
+        write_sheet(dir, sheet, sheet_png(wrong_size, 1));
+        let err = convert_sheet(dir, sheet, read).unwrap_err();
         assert_eq!(mismatch_path(err), path);
 
-        write_sheet(&dir, sheet, sheet_png(sheet, 1));
-        convert_sheet(&dir, sheet, read).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
+        write_sheet(dir, sheet, sheet_png(sheet, 1));
+        convert_sheet(dir, sheet, read).unwrap();
     }
 
     #[test]
     fn a_wide_index_keeps_its_low_nibble_like_gbagfx() {
-        let dir = scratch_dir("wide-index");
+        let owned = scratch_dir("wide-index");
+        let dir = owned.path();
         let sheet = Sheet {
             stem: "status",
             width: 24,
             height: 40,
         };
-        write_sheet(&dir, sheet, sheet_png(sheet, 0x1C));
-        let bytes = convert_sheet(&dir, sheet, &mut crate::extract::read_file).unwrap();
+        write_sheet(dir, sheet, sheet_png(sheet, 0x1C));
+        let bytes = convert_sheet(dir, sheet, &mut crate::extract::read_file).unwrap();
         assert!(bytes.iter().all(|&byte| byte == 0xCC));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn grayscale_samples_are_inverted_like_gbagfx() {
-        let dir = scratch_dir("grayscale");
+        let owned = scratch_dir("grayscale");
+        let dir = owned.path();
         let sheet = BATTLE_BAR_SOURCES[1];
-        write_sheet(&dir, sheet, sheet_png(sheet, 3));
-        let bytes = convert_sheet(&dir, sheet, &mut crate::extract::read_file).unwrap();
+        write_sheet(dir, sheet, sheet_png(sheet, 3));
+        let bytes = convert_sheet(dir, sheet, &mut crate::extract::read_file).unwrap();
         assert!(bytes.iter().all(|&byte| byte == 0x33));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_sheet_validated_is_the_sheet_converted() {
-        let dir = scratch_dir("single-read");
+        let owned = scratch_dir("single-read");
+        let dir = owned.path();
         let sheet = ELEMENT_TABLE[5];
         let good = sheet_png(sheet, 2);
         let mut reads = 0;
@@ -433,20 +439,16 @@ mod tests {
             // Any read after the first sees bytes that cannot decode.
             Ok(if reads == 1 { good.clone() } else { vec![0] })
         };
-        let bytes = convert_sheet(&dir, sheet, &mut read).unwrap();
+        let bytes = convert_sheet(dir, sheet, &mut read).unwrap();
         assert_eq!(reads, 1);
         assert_eq!(bytes, [0x22; TILE_BYTES]);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn healthbox_elements_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-healthbox-elements-{}.pack",
-            std::process::id()
-        ));
+        let (_owned, path) = scratch_path("healthbox-elements");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
         let elements = pack.healthbox_elements().unwrap();
@@ -482,6 +484,17 @@ mod tests {
         }
         assert!(rest.is_empty());
         assert_eq!(bar.tiles.len(), 41 * TILE_BYTES);
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-healthbox-elements-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-healthbox-elements-pack-ownership-probe",
+            || scratch_path("healthbox-elements-pack-ownership-probe"),
+        );
     }
 }

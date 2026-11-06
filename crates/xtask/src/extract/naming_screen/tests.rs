@@ -5,6 +5,9 @@ use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::scope::{naming_screen_ids, NAMING_SCREEN_DIRECTORY};
 use super::super::{extract_to, repo_root, upstream_present};
 use super::{extract_naming_screen, extract_palette, extract_sheet, extract_tilemap};
+use crate::extract::owned_fixture::{
+    assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+};
 use crate::extract::scope::{NAMING_SCREEN_PALETTES, NAMING_SCREEN_SHEETS};
 use crate::extract::{read_file, ExtractError};
 use pack_format::{EntryKind, PackWriter};
@@ -76,14 +79,17 @@ const TILEMAP_STEMS: [&str; 4] = [
 const CURSORS: [&str; 3] = ["cursor", "cursor_squished", "cursor_filled"];
 const TILEMAP_BYTES: usize = 1280;
 
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-naming-screen-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(NAMING_SCREEN_DIRECTORY)).unwrap();
-    dir
+fn scratch_dir(name: &str) -> OwnedDir {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-naming-screen-{name}")).unwrap();
+    std::fs::create_dir_all(owned.path().join(NAMING_SCREEN_DIRECTORY)).unwrap();
+    owned
+}
+
+/// A fresh directory the test owns, and the pack path inside it.
+fn scratch_path(name: &str) -> (OwnedDir, PathBuf) {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+    let path = owned.path().join(format!("{name}.pack"));
+    (owned, path)
 }
 
 fn source_dir(upstream: &Path) -> PathBuf {
@@ -221,16 +227,17 @@ fn the_manifest_keeps_the_upstream_unused_and_shared_walking_art_out() {
 
 #[test]
 fn a_complete_checkout_yields_every_entry_with_its_kind_shape_and_payload() {
-    let upstream = scratch_dir("valid");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("valid");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     // Unlisted neighbours (upstream's unused rival palette, build outputs,
     // strays) must not change the pack.
-    write(&upstream, "rival.pal", jasc(16, 200));
-    write(&upstream, "menu.4bpp", b"built");
-    write(&upstream, "stray.png", b"not a png");
+    write(upstream, "rival.pal", jasc(16, 200));
+    write(upstream, "menu.4bpp", b"built");
+    write(upstream, "stray.png", b"not a png");
 
     let mut writer = PackWriter::new();
-    extract_naming_screen(&upstream, &mut writer).unwrap();
+    extract_naming_screen(upstream, &mut writer).unwrap();
     assert_eq!(writer.len(), 26);
     let pack = finished(writer);
     let entries = pack_format::parse_directory(&pack).unwrap();
@@ -267,7 +274,6 @@ fn a_complete_checkout_yields_every_entry_with_its_kind_shape_and_payload() {
             }
         }
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 /// The BGR555 little-endian bytes `jasc(16, seed)` converts to.
@@ -283,11 +289,12 @@ fn jasc_colors(seed: u8) -> Vec<u8> {
 
 #[test]
 fn the_palette_is_the_pal_file_not_the_png_plte() {
-    let upstream = scratch_dir("pal-wins");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("pal-wins");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     // `menu.png` carries a PLTE (all 9s) that matches no JASC colour.
     let mut writer = PackWriter::new();
-    extract_naming_screen(&upstream, &mut writer).unwrap();
+    extract_naming_screen(upstream, &mut writer).unwrap();
     let pack = finished(writer);
     let entries = pack_format::parse_directory(&pack).unwrap();
     let menu = entries
@@ -305,33 +312,33 @@ fn the_palette_is_the_pal_file_not_the_png_plte() {
             .count(),
         7
     );
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn a_missing_source_fails_extraction_naming_that_file() {
     for file in source_files() {
-        let upstream = scratch_dir("missing-one");
-        write_valid_checkout(&upstream);
-        std::fs::remove_file(source_dir(&upstream).join(&file)).unwrap();
-        let err = extract_naming_screen(&upstream, &mut PackWriter::new()).unwrap_err();
+        let owned = scratch_dir("missing-one");
+        let upstream = owned.path();
+        write_valid_checkout(upstream);
+        std::fs::remove_file(source_dir(upstream).join(&file)).unwrap();
+        let err = extract_naming_screen(upstream, &mut PackWriter::new()).unwrap_err();
         assert!(
             matches!(&err, ExtractError::ReadFailed(path, _) if path.ends_with(&file)),
             "{file}: {err}"
         );
-        std::fs::remove_dir_all(upstream).unwrap();
     }
 }
 
 #[test]
 fn a_sheet_with_the_wrong_depth_or_size_is_rejected_before_it_is_queued() {
-    let upstream = scratch_dir("sheet-shape");
+    let owned = scratch_dir("sheet-shape");
+    let upstream = owned.path();
     for sheet in NAMING_SCREEN_SHEETS {
         let file = format!("{}.png", sheet.stem);
         let mut writer = PackWriter::new();
 
-        let path = write(&upstream, &file, b"not a png");
-        let err = extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap_err();
+        let path = write(upstream, &file, b"not a png");
+        let err = extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap_err();
         assert!(
             matches!(&err, ExtractError::Png(p, _) if *p == path),
             "{file}"
@@ -339,34 +346,34 @@ fn a_sheet_with_the_wrong_depth_or_size_is_rejected_before_it_is_queued() {
 
         let (w, h) = (sheet.width, sheet.height);
         let eight_bit = png_from_pixels(8, w, h, &vec![1; (w * h) as usize], 9);
-        write(&upstream, &file, eight_bit);
-        let err = extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap_err();
+        write(upstream, &file, eight_bit);
+        let err = extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path, "{file} 8-bit");
 
         let taller = png_from_pixels(4, w, h + 8, &vec![1; (w * (h + 8)) as usize], 9);
-        write(&upstream, &file, taller);
-        let err = extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap_err();
+        write(upstream, &file, taller);
+        let err = extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path, "{file} taller");
 
         let wider = png_from_pixels(4, w + 8, h, &vec![1; ((w + 8) * h) as usize], 9);
-        write(&upstream, &file, wider);
-        let err = extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap_err();
+        write(upstream, &file, wider);
+        let err = extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path, "{file} wider");
 
         assert_eq!(writer.len(), 0, "{file}");
-        write(&upstream, &file, sheet_png(sheet.stem));
-        extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap();
+        write(upstream, &file, sheet_png(sheet.stem));
+        extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap();
         assert_eq!(writer.len(), 1, "{file}");
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn a_cursor_is_its_first_five_tiles_stacked_in_tile_order() {
-    let upstream = scratch_dir("cursor-cut");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("cursor-cut");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     let mut writer = PackWriter::new();
-    extract_naming_screen(&upstream, &mut writer).unwrap();
+    extract_naming_screen(upstream, &mut writer).unwrap();
     let pack = finished(writer);
     let entries = pack_format::parse_directory(&pack).unwrap();
 
@@ -409,12 +416,12 @@ fn a_cursor_is_its_first_five_tiles_stacked_in_tile_order() {
         assert_eq!(recovered, built[..160], "{stem}");
         assert_ne!(strip, &source[..320], "{stem}");
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn a_cursor_with_colour_in_the_dropped_tile_is_rejected() {
-    let upstream = scratch_dir("cursor-dropped-tile");
+    let owned = scratch_dir("cursor-dropped-tile");
+    let upstream = owned.path();
     let sheet = NAMING_SCREEN_SHEETS
         .into_iter()
         .find(|sheet| sheet.stem == "cursor")
@@ -422,54 +429,53 @@ fn a_cursor_with_colour_in_the_dropped_tile_is_rejected() {
     let mut pixels = sheet_pixels("cursor", 16, 24);
     *pixels.last_mut().unwrap() = 3;
     let path = write(
-        &upstream,
+        upstream,
         "cursor.png",
         png_from_pixels(4, 16, 24, &pixels, 9),
     );
     let mut writer = PackWriter::new();
-    let err = extract_sheet(&source_dir(&upstream), sheet, &mut writer).unwrap_err();
+    let err = extract_sheet(&source_dir(upstream), sheet, &mut writer).unwrap_err();
     assert_eq!(mismatch_path(err), path);
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn palettes_that_are_malformed_or_miscounted_are_rejected() {
-    let upstream = scratch_dir("palette");
-    let dir = source_dir(&upstream);
+    let owned = scratch_dir("palette");
+    let upstream = owned.path();
+    let dir = source_dir(upstream);
     let mut writer = PackWriter::new();
 
-    let path = write(&upstream, "keyboard.pal", "not a palette");
+    let path = write(upstream, "keyboard.pal", "not a palette");
     let err = extract_palette(&dir, "keyboard", &mut writer).unwrap_err();
     assert!(matches!(err, ExtractError::Pal(p, _) if p == path));
 
     for colors in [15, 17, 32] {
-        write(&upstream, "keyboard.pal", jasc(colors, 8));
+        write(upstream, "keyboard.pal", jasc(colors, 8));
         let err = extract_palette(&dir, "keyboard", &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path, "{colors} colours");
     }
     assert_eq!(writer.len(), 0);
 
-    write(&upstream, "keyboard.pal", jasc(16, 8));
+    write(upstream, "keyboard.pal", jasc(16, 8));
     extract_palette(&dir, "keyboard", &mut writer).unwrap();
     assert_eq!(writer.len(), 1);
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn tilemaps_of_the_wrong_length_are_rejected() {
-    let upstream = scratch_dir("tilemap-length");
-    let dir = source_dir(&upstream);
+    let owned = scratch_dir("tilemap-length");
+    let upstream = owned.path();
+    let dir = source_dir(upstream);
     let mut writer = PackWriter::new();
     for stem in TILEMAP_STEMS {
         for len in [0, TILEMAP_BYTES - 1, TILEMAP_BYTES + 1] {
-            let path = write(&upstream, &format!("{stem}.bin"), vec![0; len]);
+            let path = write(upstream, &format!("{stem}.bin"), vec![0; len]);
             let err = extract_tilemap(&dir, stem, &mut read_file, &mut writer).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{stem} {len} bytes");
         }
     }
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
@@ -500,25 +506,22 @@ fn a_tilemap_entry_holds_the_validated_bytes() {
 
 #[test]
 fn extraction_is_deterministic() {
-    let upstream = scratch_dir("determinism");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("determinism");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     let build = || {
         let mut writer = PackWriter::new();
-        extract_naming_screen(&upstream, &mut writer).unwrap();
+        extract_naming_screen(upstream, &mut writer).unwrap();
         finished(writer)
     };
     assert_eq!(build(), build());
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn the_real_checkout_yields_the_whole_family() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-naming-screen-{}.pack",
-        std::process::id()
-    ));
+    let (_owned, path) = scratch_path("naming-screen");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = std::fs::read(&path).unwrap();
     let entries = pack_format::parse_directory(&pack).unwrap();
@@ -571,5 +574,15 @@ fn the_real_checkout_yields_the_whole_family() {
             }
         }
     }
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn fixture_directories_never_reuse_an_occupied_name() {
+    assert_claim_spares_occupied_names("pokeemerald-rs-naming-screen-ownership-probe", || {
+        scratch_dir("ownership-probe")
+    });
+    assert_pack_path_spares_occupied_file(
+        "pokeemerald-rs-extract-test-naming-screen-pack-ownership-probe",
+        || scratch_path("naming-screen-pack-ownership-probe"),
+    );
 }

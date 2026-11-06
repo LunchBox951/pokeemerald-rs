@@ -148,6 +148,9 @@ mod tests {
     use super::super::super::png::{self, PngError};
     use super::super::super::{extract_to, repo_root, upstream_present};
     use super::{extract_healthbox_frames, pack_ids, DIRECTORY, FRAME_SOURCES};
+    use crate::extract::owned_fixture::{
+        assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+    };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
@@ -165,14 +168,17 @@ mod tests {
         "battle-interface/palette/ball_display",
     ];
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-healthbox-frames-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join(DIRECTORY)).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-healthbox-frames-{name}")).unwrap();
+        std::fs::create_dir_all(owned.path().join(DIRECTORY)).unwrap();
+        owned
+    }
+
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     /// Each 8x8 tile holds its own index: `column + 3 * row` modulo 16.
@@ -255,12 +261,13 @@ mod tests {
 
     #[test]
     fn a_valid_manifest_yields_five_records_the_typed_accessors_read() {
-        let dir = scratch_dir("valid");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("valid");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         // A neighbour the manifest never reads cannot change the output.
-        write(&dir, "healthbox_doubles_player", b"not a png");
+        write(dir, "healthbox_doubles_player", b"not a png");
         let mut writer = PackWriter::new();
-        extract_healthbox_frames(&dir, &mut writer).unwrap();
+        extract_healthbox_frames(dir, &mut writer).unwrap();
         assert_eq!(writer.len(), 5);
         let bytes = writer.finish().unwrap();
         let mut ids: Vec<_> = pack_format::parse_directory(&bytes)
@@ -306,42 +313,42 @@ mod tests {
             assert_eq!(frames.ball_status_bar_palette.color(index), Some(level));
             assert_eq!(frames.ball_display_palette.color(index), Some(level << 5));
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_missing_source_in_a_complete_checkout_fails_closed() {
         for stem in SOURCES {
-            let dir = scratch_dir("missing-one");
-            write_valid_checkout(&dir);
+            let owned = scratch_dir("missing-one");
+            let dir = owned.path();
+            write_valid_checkout(dir);
             std::fs::remove_file(dir.join(DIRECTORY).join(format!("{stem}.png"))).unwrap();
             let mut writer = PackWriter::new();
-            let err = extract_healthbox_frames(&dir, &mut writer).unwrap_err();
+            let err = extract_healthbox_frames(dir, &mut writer).unwrap_err();
             assert!(
                 matches!(&err, ExtractError::ReadFailed(path, _)
                     if path.ends_with(format!("{stem}.png"))),
                 "{stem}: {err}"
             );
-            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 
     #[test]
     fn the_frames_are_not_interchangeable() {
-        let dir = scratch_dir("swapped");
+        let owned = scratch_dir("swapped");
+        let dir = owned.path();
         // Each side given the other side's otherwise valid sheet.
         for (stem, other_height) in [(PLAYER, 32), (OPPONENT, 64)] {
-            write_valid_checkout(&dir);
-            let path = write(&dir, stem, frame_png(128, other_height, 4));
-            let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+            write_valid_checkout(dir);
+            let path = write(dir, stem, frame_png(128, other_height, 4));
+            let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{stem}");
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn images_off_the_upstream_shape_are_rejected() {
-        let dir = scratch_dir("shape");
+        let owned = scratch_dir("shape");
+        let dir = owned.path();
         let cases = [
             (PLAYER, 64, 128, 4),
             (PLAYER, 128, 64, 8),
@@ -351,9 +358,9 @@ mod tests {
             (SHADOW, 32, 8, 8),
         ];
         for (stem, width, height, depth) in cases {
-            write_valid_checkout(&dir);
-            let path = write(&dir, stem, frame_png(width, height, depth));
-            let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+            write_valid_checkout(dir);
+            let path = write(dir, stem, frame_png(width, height, depth));
+            let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
             assert_eq!(
                 mismatch_path(err),
                 path,
@@ -361,60 +368,56 @@ mod tests {
             );
         }
 
-        write_valid_checkout(&dir);
-        let path = write(&dir, SHADOW, b"not a png");
-        let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+        write_valid_checkout(dir);
+        let path = write(dir, SHADOW, b"not a png");
+        let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn palette_sources_with_the_wrong_colour_count_are_rejected() {
-        let dir = scratch_dir("palette");
+        let owned = scratch_dir("palette");
+        let dir = owned.path();
         for stem in [STATUS_BAR, BALL_DISPLAY] {
             for colors in [15, 17, 32] {
-                write_valid_checkout(&dir);
-                let path = write(&dir, stem, palette_png(colors, status_bar_rgb));
-                let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+                write_valid_checkout(dir);
+                let path = write(dir, stem, palette_png(colors, status_bar_rgb));
+                let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
                 assert_eq!(mismatch_path(err), path, "{stem} with {colors} colours");
             }
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_palette_source_without_a_usable_plte_is_rejected() {
-        let dir = scratch_dir("plte");
-        write_valid_checkout(&dir);
-        let path = write(&dir, STATUS_BAR, tiny_indexed_png(8, 2, 1, &[1, 2]));
-        let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+        let owned = scratch_dir("plte");
+        let dir = owned.path();
+        write_valid_checkout(dir);
+        let path = write(dir, STATUS_BAR, tiny_indexed_png(8, 2, 1, &[1, 2]));
+        let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
         assert!(matches!(
             err,
             ExtractError::Png(error_path, PngError::MissingOrBadPalette) if error_path == path
         ));
 
-        write_valid_checkout(&dir);
+        write_valid_checkout(dir);
         let mut corrupt = palette_png(16, status_bar_rgb);
         let plte_at = corrupt.windows(4).position(|w| w == b"PLTE").unwrap();
         corrupt[plte_at + 4] ^= 0xFF;
-        let path = write(&dir, BALL_DISPLAY, corrupt);
-        let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
+        let path = write(dir, BALL_DISPLAY, corrupt);
+        let err = extract_healthbox_frames(dir, &mut PackWriter::new()).unwrap_err();
         assert!(matches!(
             err,
             ExtractError::Png(error_path, PngError::ChunkCrcMismatch(kind))
                 if error_path == path && &kind == b"PLTE"
         ));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn healthbox_frames_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-healthbox-frames-{}.pack",
-            std::process::id()
-        ));
+        let (_owned, path) = scratch_path("healthbox-frames");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
         let frames = pack.singles_healthbox_frames().unwrap();
@@ -443,6 +446,17 @@ mod tests {
                 .collect();
             assert_eq!(palette.colors().collect::<Vec<_>>(), expected, "{stem}");
         }
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-healthbox-frames-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-healthbox-frames-pack-ownership-probe",
+            || scratch_path("healthbox-frames-pack-ownership-probe"),
+        );
     }
 }
