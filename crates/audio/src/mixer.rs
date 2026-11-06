@@ -22,8 +22,13 @@
 //! The port renders each channel about its midpoint, so CGB voices also report
 //! that removed midpoint per sample; [`Mixer::mix_frame`] restores it for the
 //! saturation and removes it again afterwards, which keeps unclipped output
-//! free of a DC step. The result can therefore fall below `-128` by up to the
-//! summed midpoints, and is not clamped a second time.
+//! free of a DC step. mGBA keeps the offset (it has no DC removal, and its
+//! window after `_applyBias` is `[-128, 127.75]`); the port removes it only as
+//! far as the s8 floor allows, so a sample never falls below `-128`, the level
+//! the transport can carry. That floor binds only when PCM below about `-98`
+//! meets a PSG whose unipolar low state sits at the floor, the same place the
+//! centred clip bound before; the ceiling side needs no floor, since
+//! removing a midpoint only lowers a saturated sample.
 
 use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -494,8 +499,8 @@ impl Mixer {
         // remove the midpoints: native DC removal comes after the clip.
         for (sample, offset) in self.mix_buffer.iter_mut().zip(&self.psg_offsets) {
             *sample = (
-                clip_to_s8(sample.0 + offset.0) - offset.0,
-                clip_to_s8(sample.1 + offset.1) - offset.1,
+                remove_midpoint(clip_to_s8(sample.0 + offset.0), offset.0),
+                remove_midpoint(clip_to_s8(sample.1 + offset.1), offset.1),
             );
         }
 
@@ -510,6 +515,13 @@ fn clip_to_s8(sample: i32) -> i32 {
     sample.clamp(-128, 127)
 }
 
+/// Removes `offset` from a saturated sample without leaving the s8 range the
+/// output transport carries: the clip already bounds the top, so only the floor
+/// can bind (see the module docs).
+fn remove_midpoint(saturated: i32, offset: i32) -> i32 {
+    (saturated - offset).max(-128)
+}
+
 /// Reduce a DirectSound sum to the signed byte lane upstream stores it in:
 /// `mul`/`bic 0xFF0000`/`add ... ror 8` leaves only bits 24..=31 of each voice
 /// term, so the lane wraps modulo 256 with no carry into its neighbour.
@@ -520,9 +532,8 @@ fn wrap_to_s8(sample: i32) -> i32 {
 fn normalise_s8(sample: i32) -> f32 {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "saturated to at most 127 by clip_to_s8 and lowered by at most \
-                  the four channels' midpoints, every value is exactly \
-                  representable in f32"
+        reason = "bounded to [-128, 127] by clip_to_s8 and remove_midpoint, every \
+                  value is exactly representable in f32"
     )]
     let value = sample as f32;
     value / 128.0

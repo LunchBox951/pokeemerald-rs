@@ -15,8 +15,7 @@
 //! - [`mixer`] allocates voices by priority and track, mixes DirectSound
 //!   and CGB output, and produces interleaved stereo `f32` samples. The sum
 //!   saturates as on hardware with each PSG channel's midpoint restored, and the
-//!   midpoint is removed afterwards, so a loud PSG over loud PCM can dip below
-//!   `-1.0` by the summed midpoints (see [`mixer`]).
+//!   midpoint is removed afterwards without leaving `[-1.0, 1.0)` (see [`mixer`]).
 //! - [`sequencer`] handles track timing, LFO modulation, pattern calls,
 //!   repeats, memory-accumulator mutations and conditional jumps, and the
 //!   `xIECV`/`xIECL` pseudo-echo commands.

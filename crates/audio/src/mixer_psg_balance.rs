@@ -279,13 +279,35 @@ fn a_loud_wave_keeps_upstream_clip_headroom_over_loud_pcm() {
 }
 
 #[test]
-fn a_psg_over_negative_pcm_is_not_clamped_again_after_dc_removal() {
-    // Source -128 renders P = -127. The square saturates nothing there
-    // (-127 + 0 stays above -128), so the output is `P + (-30)` = -157/128,
-    // below -1.0: DC removal comes after saturation and is never re-clamped.
+fn a_psg_over_negative_pcm_stays_within_the_transport_range() {
+    // Source -128 renders P = -127. Hardware holds the square at -127 / -67
+    // (unipolar, no clipping; `mgba/src/gba/audio.c:343-351` keeps the offset).
+    // Removing the 30-unit midpoint would give -157 / -97, below the s8 floor
+    // the output transport (`f32_to_i16` clamps at -1.0) can carry, which
+    // would squash the low state anyway while f32 sinks heard a wider swing.
+    // The mixer therefore removes the midpoint only down to -128: -128 / -97,
+    // identical on every sink and no lower than the centred clip it replaced.
     let (pcm, lo, hi) = pcm_level_and_swing(square_voice(HARDWARE_VOLUME_15_TRACK), -128);
     assert_eq!(pcm, -127);
-    assert_eq!((lo, hi), (-157, -97));
+    assert_eq!((lo, hi), (-128, -97));
+}
+
+#[test]
+fn mixed_output_never_leaves_the_transport_range() {
+    // Every PSG kind over every PCM extreme stays in [-1.0, 127/128].
+    for source in [-128, -100, -50, 0, 50, 100, 127] {
+        for voice in [
+            square_voice(HARDWARE_VOLUME_15_TRACK),
+            noise_voice(0, HARDWARE_VOLUME_15_TRACK),
+            wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK),
+            wave_voice(0x00, HARDWARE_VOLUME_15_TRACK),
+        ] {
+            let out = render_cgb_with_pcm(voice, source);
+            let (lo, hi) = extrema(&out);
+            assert!(lo >= -1.0, "source {source}: low {lo}");
+            assert!(hi < 1.0, "source {source}: high {hi}");
+        }
+    }
 }
 
 #[test]
