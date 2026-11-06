@@ -80,6 +80,12 @@ pub const MB_NORTH_ARROW_WARP: u8 = 0x64;
 /// A south-facing arrow warp.
 pub const MB_SOUTH_ARROW_WARP: u8 = 0x65;
 
+/// The Pokemon Center escalator tile that carries the player up.
+pub const MB_UP_ESCALATOR: u8 = 0x6A;
+
+/// The Pokemon Center escalator tile that carries the player down.
+pub const MB_DOWN_ESCALATOR: u8 = 0x6B;
+
 /// A non-animated-door alias: a completed-step warp trigger and an arrival-facing door.
 pub const MB_WATER_DOOR: u8 = 0x6C;
 
@@ -269,6 +275,13 @@ pub const fn is_non_anim_door(behavior: u8) -> bool {
     )
 }
 
+/// Returns whether a behavior is an escalator, per
+/// `MetatileBehavior_IsEscalator` (`metatile_behavior.c:237-243`).
+#[must_use]
+pub const fn is_escalator(behavior: u8) -> bool {
+    matches!(behavior, MB_UP_ESCALATOR | MB_DOWN_ESCALATOR)
+}
+
 /// Returns whether a behavior unconditionally triggers a supported door-shaped warp.
 ///
 /// This is the supported subset of `IsWarpMetatileBehavior`
@@ -278,6 +291,14 @@ pub const fn is_non_anim_door(behavior: u8) -> bool {
 #[must_use]
 pub const fn is_warp_trigger(behavior: u8) -> bool {
     behavior == MB_ANIMATED_DOOR || is_non_anim_door(behavior)
+}
+
+/// Returns whether a behavior is plain tall grass: exactly [`MB_TALL_GRASS`],
+/// `MetatileBehavior_IsTallGrass` (`metatile_behavior.c:729-734`). Long grass
+/// and the other encounter-capable behaviors are not tall grass here.
+#[must_use]
+pub const fn is_tall_grass(behavior: u8) -> bool {
+    behavior == MB_TALL_GRASS
 }
 
 /// Returns whether a behavior permits land encounters.
@@ -566,7 +587,6 @@ mod tests {
     const MB_POND_WATER: u8 = 0x10;
     const MB_DEEP_WATER: u8 = 0x12;
     const MB_LADDER: u8 = 0x61;
-    const MB_UP_ESCALATOR: u8 = 0x6A;
 
     #[test]
     fn supported_door_ids_are_recognized() {
@@ -586,6 +606,13 @@ mod tests {
     fn unported_warp_behaviors_fail_closed() {
         assert!(!is_warp_trigger(MB_LADDER));
         assert!(!is_warp_trigger(MB_UP_ESCALATOR));
+    }
+
+    #[test]
+    fn exactly_the_two_escalator_behaviors_are_escalators() {
+        assert_eq!((MB_UP_ESCALATOR, MB_DOWN_ESCALATOR), (0x6A, 0x6B));
+        let matching: Vec<u8> = (0..=u8::MAX).filter(|b| is_escalator(*b)).collect();
+        assert_eq!(matching, [MB_UP_ESCALATOR, MB_DOWN_ESCALATOR]);
     }
 
     #[test]
@@ -682,6 +709,14 @@ mod tests {
         assert_eq!(MB_INDOOR_ENCOUNTER, 0x0B);
         assert_eq!(MB_ASHGRASS, 0x24);
         assert_eq!(MB_FOOTPRINTS, 0x25);
+    }
+
+    #[test]
+    fn tall_grass_is_exactly_the_tall_grass_behavior() {
+        for behavior in u8::MIN..=u8::MAX {
+            assert_eq!(is_tall_grass(behavior), behavior == 0x02, "{behavior:#04x}");
+        }
+        assert!(!is_tall_grass(MB_LONG_GRASS));
     }
 
     #[test]

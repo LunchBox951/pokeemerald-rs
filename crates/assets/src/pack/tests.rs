@@ -9,6 +9,7 @@ mod battle_interface_elements;
 mod battle_message;
 mod battler;
 mod container;
+mod event_scripts;
 mod evolution_scene;
 mod field_message;
 mod layout;
@@ -19,6 +20,7 @@ mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;
+mod text_printer;
 mod trainer_battler;
 mod trainer_pic;
 

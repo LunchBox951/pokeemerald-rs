@@ -8,16 +8,26 @@
 //! (`:465-484`) and the 5-frame continued delay of `ReadKeys`
 //! (`pokeemerald/src/main.c:250-290`).
 //!
-//! Page-swap and cursor-squish animations belong to presentation. The model
-//! enters a [`PendingTransition`], locks input, and waits for the caller to
+//! [`NamingScene`] composes the pack-backed keyboard pages, controls, and
+//! entry from a [`PageSelection`] and [`NamingVisuals`] without holding any
+//! input state. Page-swap and cursor-squish animations belong to presentation.
+//! The model enters a [`PendingTransition`], locks input, and waits for the caller to
 //! call [`NamingScreenModel::complete_transition`]. Presentation, sound,
 //! preset names, and save writes live outside this module. The `L=A` button
 //! mode that `ReadKeys` remaps is not modelled.
 
+mod compositor;
 mod keyboard;
+#[cfg(test)]
+mod pack_fixture;
+mod page_spec;
 #[cfg(test)]
 mod tests;
 
+pub use compositor::{
+    CursorVariant, FeedbackPose, KeyboardLayer, NamingAvatar, NamingScene, NamingSceneError,
+    NamingVisuals, PageSelection, PLAYER_TITLE,
+};
 pub use keyboard::{
     KeyRole, KeyboardCursor, KeyboardPage, BUTTON_BACK, BUTTON_OK, BUTTON_PAGE, BUTTON_ROWS,
     KEY_ROWS,

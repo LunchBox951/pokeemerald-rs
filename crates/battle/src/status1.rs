@@ -1,9 +1,13 @@
-//! Primary status ([`Status1`]), the full-paralysis gate, poison's and burn's
-//! end-turn damage, and Shed Skin's end-turn cure draw.
+//! Primary status ([`Status1`]), the frozen and full-paralysis gates, poison's,
+//! bad poison's and burn's end-turn damage, and Shed Skin's end-turn cure draw.
 //!
 //! `status1` persists across a switch, unlike the volatile bits in
 //! [`crate::volatile::Volatiles`]. Confusion belongs to those volatile bits
 //! ([`crate::volatile::Volatiles::confusion_turns`]), not to `Status1`.
+//!
+//! Bad poison's counter is stored in the status word, but the residual only
+//! advances the battle copy's own count and never writes the word back
+//! (`pokeemerald/src/battle_util.c:1536`-`:1549`); see [`Status1::BadPoisoned`].
 //!
 //! Upstream's `status1` is a bitfield with one flag per status
 //! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
@@ -17,6 +21,10 @@
 use assets::AbilityId;
 
 use crate::damage::BattleRng;
+
+mod freeze;
+
+pub use freeze::{draw_freeze_canceller, FreezeCanceller};
 
 /// One battler's primary status condition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -37,6 +45,29 @@ pub enum Status1 {
     /// the attacker's physical damage is halved unless it has Guts
     /// ([`crate::ability::burn_halves_damage`]).
     Burned,
+    /// Badly poisoned: `STATUS1_TOXIC_POISON` with the four-bit counter
+    /// `STATUS1_TOXIC_TURN(counter)` in status bits 8-11 (`0x80 | counter << 8`,
+    /// `pokeemerald/include/constants/battle.h:117`, `:123`-`:125`).
+    /// [`bad_poison_residual_damage`] fires every end of turn
+    /// (`ENDTURN_BAD_POISON`, `pokeemerald/src/battle_util.c:1536`-`:1549`).
+    ///
+    /// `counter` is the party's stored word, zero for a fresh toxic
+    /// (`pokeemerald/src/battle_script_commands.c:2457`-`:2489`) and up to
+    /// [`TOXIC_COUNTER_MAX`] for an imported one; it is not the counter the
+    /// battle is advancing. That live count belongs to the battle copy and is
+    /// discarded with it (see `BattlePokemon::clear_battle_scratch`): the
+    /// residual increments it without any status write-back, so a switch-in
+    /// reloads the stored word and a save writes it back untouched. Counter
+    /// zero is still bad poison, never [`Status1::Healthy`].
+    BadPoisoned {
+        /// The counter in the stored status word, `0..=`[`TOXIC_COUNTER_MAX`].
+        counter: u8,
+    },
+    /// Frozen: [`draw_freeze_canceller`] runs after the sleep canceller and
+    /// before the confusion and paralysis cancellers
+    /// (`CANCELER_FROZEN`, `pokeemerald/src/battle_util.c:2059`-`:2083`).
+    /// Freeze has no end-turn residual and no duration.
+    Frozen,
     /// Asleep with `turns` actions left before waking: the canceller
     /// ([`tick_sleep`]) decrements it ahead of every chosen move
     /// (`CANCELER_ASLEEP`, `pokeemerald/src/battle_util.c:2015`-`:2057`).
@@ -63,10 +94,32 @@ impl Status1 {
         matches!(self, Self::Poisoned)
     }
 
+    /// Whether this status is [`Status1::BadPoisoned`], whatever its counter.
+    #[must_use]
+    pub const fn is_bad_poisoned(self) -> bool {
+        matches!(self, Self::BadPoisoned { .. })
+    }
+
+    /// Whether this status is either poison: `STATUS1_PSN_ANY`
+    /// (`pokeemerald/include/constants/battle.h:124`), ordinary
+    /// [`Status1::Poisoned`] or [`Status1::BadPoisoned`]. Only the field
+    /// poison and Immunity checks read this; the two end-turn residuals stay
+    /// separate (`ENDTURN_POISON`, `ENDTURN_BAD_POISON`).
+    #[must_use]
+    pub const fn is_poisoned_any(self) -> bool {
+        matches!(self, Self::Poisoned | Self::BadPoisoned { .. })
+    }
+
     /// Whether this status is [`Status1::Burned`].
     #[must_use]
     pub const fn is_burned(self) -> bool {
         matches!(self, Self::Burned)
+    }
+
+    /// Whether this status is [`Status1::Frozen`].
+    #[must_use]
+    pub const fn is_frozen(self) -> bool {
+        matches!(self, Self::Frozen)
     }
 
     /// Whether this status is [`Status1::Asleep`] with at least one turn left;
@@ -203,6 +256,26 @@ pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     }
 }
 
+/// The largest value of `STATUS1_TOXIC_COUNTER`'s four bits
+/// (`STATUS1_TOXIC_TURN(15)`, `pokeemerald/include/constants/battle.h:123`-`:125`).
+pub const TOXIC_COUNTER_MAX: u8 = 15;
+
+/// `ENDTURN_BAD_POISON` takes max HP / 16 as its base
+/// (`pokeemerald/src/battle_util.c:1539`).
+const BAD_POISON_DAMAGE_DENOMINATOR: u32 = 16;
+
+/// `ENDTURN_BAD_POISON`'s damage for a battler with `max_hp` whose toxic
+/// counter has already been incremented to `counter`: the base of an
+/// sixteenth of max HP, never less than one, times the counter, with no RNG
+/// draw (`pokeemerald/src/battle_util.c:1539`-`:1544`). The base is floored
+/// before it is multiplied, so this is not `max_hp * counter / 16`.
+#[must_use]
+pub const fn bad_poison_residual_damage(max_hp: u32, counter: u8) -> u32 {
+    let base = max_hp / BAD_POISON_DAMAGE_DENOMINATOR;
+    let base = if base == 0 { 1 } else { base };
+    base * counter as u32
+}
+
 /// `ENDTURN_BURN` deals max HP / 8 (`pokeemerald/src/battle_util.c:1553`).
 const BURN_DAMAGE_DENOMINATOR: u32 = 8;
 
@@ -243,6 +316,7 @@ mod tests {
     use super::{
         burn_residual_damage, draw_sleep_duration, draws_full_paralysis, draws_shed_skin_cure,
         poison_residual_damage, tick_sleep, try_inflict_sleep, SleepTick, Status1,
+        TOXIC_COUNTER_MAX,
     };
     use crate::damage::BattleRng;
     use assets::AbilityId;
@@ -297,22 +371,74 @@ mod tests {
 
     #[test]
     fn each_variant_answers_exactly_its_own_predicates() {
-        for (status, healthy, paralysed, poisoned, burned) in [
-            (Status1::Healthy, true, false, false, false),
-            (Status1::Paralysed, false, true, false, false),
-            (Status1::Poisoned, false, false, true, false),
-            (Status1::Burned, false, false, false, true),
-            (Status1::Asleep { turns: 3 }, false, false, false, false),
+        for (status, healthy, paralysed, poisoned, burned, frozen) in [
+            (Status1::Healthy, true, false, false, false, false),
+            (Status1::Paralysed, false, true, false, false, false),
+            (Status1::Poisoned, false, false, true, false, false),
+            (Status1::Burned, false, false, false, true, false),
+            (Status1::Frozen, false, false, false, false, true),
+            (
+                Status1::Asleep { turns: 3 },
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
         ] {
             assert_eq!(status.is_healthy(), healthy, "{status:?}");
             assert_eq!(status.is_paralysed(), paralysed, "{status:?}");
             assert_eq!(status.is_poisoned(), poisoned, "{status:?}");
             assert_eq!(status.is_burned(), burned, "{status:?}");
+            assert_eq!(status.is_frozen(), frozen, "{status:?}");
             assert_eq!(
                 status.is_asleep(),
                 matches!(status, Status1::Asleep { .. }),
                 "{status:?}"
             );
+        }
+    }
+
+    #[test]
+    fn bad_poison_answers_only_its_own_and_the_poison_union_predicates() {
+        for counter in [0, 5, TOXIC_COUNTER_MAX] {
+            let status = Status1::BadPoisoned { counter };
+            assert!(status.is_bad_poisoned(), "{status:?}");
+            assert!(status.is_poisoned_any(), "{status:?}");
+            assert!(!status.is_poisoned(), "{status:?}");
+            assert!(!status.is_healthy(), "counter zero is still bad poison");
+            assert!(!status.is_paralysed() && !status.is_burned() && !status.is_frozen());
+            assert!(!status.is_asleep(), "{status:?}");
+            assert_eq!(status.normalised(), status);
+        }
+        assert!(Status1::Poisoned.is_poisoned_any());
+        assert!(!Status1::Poisoned.is_bad_poisoned());
+        for status in [
+            Status1::Healthy,
+            Status1::Paralysed,
+            Status1::Burned,
+            Status1::Frozen,
+            Status1::Asleep { turns: 3 },
+        ] {
+            assert!(!status.is_poisoned_any(), "{status:?}");
+            assert!(!status.is_bad_poisoned(), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn bad_poison_draws_for_shed_skin_but_for_no_other_gate() {
+        for counter in [0, TOXIC_COUNTER_MAX] {
+            let status = Status1::BadPoisoned { counter };
+            let mut rng = CountingRng { value: 1, draws: 0 };
+            assert!(!draws_full_paralysis(status, &mut rng));
+            assert_eq!(
+                tick_sleep(status, AbilityId::EARLY_BIRD),
+                SleepTick::NotAsleep
+            );
+            assert_eq!(rng.draws, 0, "{status:?}");
+            assert!(!draws_shed_skin_cure(status, &mut rng));
+            assert_eq!(rng.draws, 1, "Shed Skin draws once for {status:?}");
+            assert!(draws_shed_skin_cure(status, &mut FixedRng(0)));
         }
     }
 
@@ -376,6 +502,7 @@ mod tests {
             Status1::Paralysed,
             Status1::Poisoned,
             Status1::Burned,
+            Status1::Frozen,
         ] {
             assert_eq!(
                 tick_sleep(status, AbilityId::EARLY_BIRD),
@@ -400,6 +527,7 @@ mod tests {
             (Status1::Paralysed, AbilityId::NONE),
             (Status1::Poisoned, AbilityId::NONE),
             (Status1::Burned, AbilityId::NONE),
+            (Status1::Frozen, AbilityId::NONE),
             (Status1::Asleep { turns: 2 }, AbilityId::NONE),
             (Status1::Healthy, AbilityId::VITAL_SPIRIT),
             (Status1::Healthy, AbilityId::INSOMNIA),
@@ -436,7 +564,12 @@ mod tests {
 
     #[test]
     fn one_in_three_values_cure_a_statused_shed_skin_holder() {
-        for status in [Status1::Paralysed, Status1::Poisoned, Status1::Burned] {
+        for status in [
+            Status1::Paralysed,
+            Status1::Poisoned,
+            Status1::Burned,
+            Status1::Frozen,
+        ] {
             assert!(draws_shed_skin_cure(status, &mut FixedRng(0)), "{status:?}");
             assert!(draws_shed_skin_cure(status, &mut FixedRng(3)), "{status:?}");
             assert!(

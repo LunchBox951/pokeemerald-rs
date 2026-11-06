@@ -310,6 +310,29 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_second_award_leaves_the_whole_mon_unchanged() {
+        let dex = Dex::new();
+        let mut mon = torchic_with_full_moveset(&dex, BEFORE_PECK_LEVEL);
+        let award = experience_needed_for_level(&dex, &mon, PECK_LEVEL);
+        let _pending = mon.apply_experience(&dex, award).unwrap().unwrap();
+        let before = mon.clone();
+
+        assert_eq!(
+            mon.apply_experience(&dex, ADDITIONAL_EXPERIENCE),
+            Err(BattleError::MoveLearnPending(PECK))
+        );
+        assert_eq!(
+            mon, before,
+            "experience, moves/PP, stats/HP, EVs and prompt unchanged"
+        );
+        assert_eq!(
+            mon.created_at_level(),
+            before.created_at_level(),
+            "the construction level (outside PartialEq) is unchanged"
+        );
+    }
+
+    #[test]
     fn declining_leaves_the_moveset_alone() {
         let dex = Dex::new();
         let mut mon = torchic_with_full_moveset(&dex, BEFORE_PECK_LEVEL);

@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::audio::AudioError;
+use crate::event_scripts::EventScriptError;
 use crate::pokedex::PokedexError;
 use crate::SpeciesId;
 
@@ -173,6 +174,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// The text printer's down-arrow sheet differs from the upstream graphic's shape.
+    MalformedTextPrinterAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -200,6 +208,21 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: BattleAnimationError,
+    },
+    /// The `script/events` entry failed its schema's decode.
+    EventScriptDecode {
+        /// Entry asset id.
+        id: String,
+        /// Underlying schema error.
+        source: EventScriptError,
+    },
+    /// A reference into the `script/events` payload does not resolve: the
+    /// root, table, symbol or standard-script slot is absent.
+    EventScriptResolve {
+        /// Entry asset id.
+        id: String,
+        /// Underlying lookup error.
+        source: EventScriptError,
     },
     /// The `pokedex/data` entry failed its schema's decode.
     PokedexDecode {
@@ -344,6 +367,9 @@ impl fmt::Display for PackError {
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
             }
+            Self::MalformedTextPrinterAsset { id, detail } => {
+                write!(f, "asset pack: text-printer entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
@@ -368,6 +394,18 @@ impl fmt::Display for PackError {
                     "asset pack: battle-animation entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::EventScriptDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: event-script entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::EventScriptResolve { id, source } => {
+                write!(
+                    f,
+                    "asset pack: event-script reference does not resolve in `{id}`: {source}"
+                )
+            }
             Self::PokedexDecode { id, source } => {
                 write!(
                     f,
@@ -385,6 +423,9 @@ impl std::error::Error for PackError {
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::FieldMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
+            Self::EventScriptDecode { source, .. } | Self::EventScriptResolve { source, .. } => {
+                Some(source)
+            }
             Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
@@ -412,7 +453,8 @@ impl std::error::Error for PackError {
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
-            | Self::MalformedBagAsset { .. } => None,
+            | Self::MalformedBagAsset { .. }
+            | Self::MalformedTextPrinterAsset { .. } => None,
         }
     }
 }
