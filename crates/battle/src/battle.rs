@@ -19,6 +19,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::{ensure_admissible, try_run_from_battle};
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
+use crate::leech_seed::leech_seed_residual_damage;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
@@ -36,7 +37,11 @@ mod execute;
 pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 #[cfg(test)]
+mod rollout_tests;
+#[cfg(test)]
 mod switch_tests;
+#[cfg(test)]
+mod thaw_hit_tests;
 pub mod trainer;
 pub(crate) mod trainer_ai;
 #[cfg(test)]
@@ -120,8 +125,9 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
-    /// Move history, Perish Song and Truant state per battler, `[player, enemy]`,
-    /// reset whenever a battler leaves or enters the field.
+    /// Move history, Perish Song, Truant and multi-turn lock state per
+    /// battler, `[player, enemy]`, reset whenever a battler leaves or enters
+    /// the field.
     battler_states: [BattlerState; 2],
 }
 
@@ -679,6 +685,10 @@ impl Battle {
     /// the same PP gate construction used, against the current battlers
     /// rather than the ones construction saw; see the crate root docs for why.
     fn revalidate_enemy_admission(&self) -> Result<(), BattleError> {
+        // A locked enemy can select nothing but its locked move.
+        if let Some(locked) = self.battler_state(BattlerSide::Enemy).locked_move() {
+            return secondary::ensure_admissible(&self.dex, locked, &self.enemy, &self.player);
+        }
         for slot in self.enemy.moves() {
             if slot.pp > 0 {
                 secondary::ensure_admissible(&self.dex, slot.move_id, &self.enemy, &self.player)?;
@@ -690,7 +700,10 @@ impl Battle {
     /// Resolves one player action and returns the resulting events in order.
     ///
     /// The action is validated before RNG is consumed. The opponent then chooses
-    /// an action before a run attempt or move ordering resolves.
+    /// an action before a run attempt or move ordering resolves. A battler
+    /// locked into a move ([`BattlerState::locked_move`]) is not asked: the
+    /// player's submitted action is replaced by the locked move, and the
+    /// opponent's choice draws nothing.
     ///
     /// # Errors
     ///
@@ -798,6 +811,9 @@ impl Battle {
         if self.outcome.is_some() {
             return Err(BattleError::BattleAlreadyOver);
         }
+        if let Some(locked) = self.battler_state(BattlerSide::Player).locked_move() {
+            return self.validate_locked_player_action(action, locked);
+        }
 
         match action {
             PlayerAction::Run => match self.kind {
@@ -836,6 +852,30 @@ impl Battle {
         }
     }
 
+    /// A locked battler never reaches the action menu or the move list
+    /// (`pokeemerald/src/battle_main.c:4160`-`:4163`): whatever the caller
+    /// submitted, the action is the locked move from the slot last chosen,
+    /// which `HandleAction_UseMove` reads without a PP test
+    /// (`pokeemerald/src/battle_util.c:107`-`:110`). Only a slot outside the
+    /// moveset is still refused.
+    fn validate_locked_player_action(
+        &self,
+        action: PlayerAction,
+        locked: MoveId,
+    ) -> Result<ValidatedPlayerAction, BattleError> {
+        if let PlayerAction::UseMove(slot) = action {
+            if slot >= self.player.moves().len() {
+                return Err(BattleError::InvalidMoveSlot(slot));
+            }
+        }
+        ensure_executable(&self.dex, locked)?;
+        secondary::ensure_admissible(&self.dex, locked, &self.player, &self.enemy)?;
+        Ok(ValidatedPlayerAction::UseMove {
+            slot: Some(self.retained_slots[0]),
+            move_id: locked,
+        })
+    }
+
     fn start_turn(&mut self, rng: &mut impl BattleRng) {
         if self.turn_has_started {
             self.turn_counter = self.turn_counter.saturating_add(1);
@@ -845,6 +885,16 @@ impl Battle {
     }
 
     fn choose_enemy_action(&self, rng: &mut impl BattleRng) -> Result<EnemyAction, BattleError> {
+        // A locked enemy skips its AI and consumes no draw
+        // (`pokeemerald/src/battle_main.c:4160`-`:4163`); the slot it last
+        // chose holds the locked move.
+        if self
+            .battler_state(BattlerSide::Enemy)
+            .locked_move()
+            .is_some()
+        {
+            return Ok(EnemyAction::Move(self.retained_slots[1]));
+        }
         match &self.kind {
             BattleKind::FirstBattle => Ok(choose_enemy_action_first_battle(
                 &self.enemy,
@@ -1017,9 +1067,11 @@ impl Battle {
             rng,
         );
         // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
-        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
-        // ENDTURN_POISON before ENDTURN_BURN, and ENDTURN_BURN before
-        // ENDTURN_CHARGE (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
+        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_ITEMS1 (Oran Berry),
+        // ENDTURN_ITEMS1 before ENDTURN_LEECH_SEED, ENDTURN_LEECH_SEED before
+        // ENDTURN_POISON, ENDTURN_POISON before ENDTURN_BURN, and
+        // ENDTURN_BURN before ENDTURN_CHARGE
+        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1560`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -1032,6 +1084,16 @@ impl Battle {
             }
             self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_truant_residual(is_player);
+            self.apply_held_item_residual(is_player, events);
+            if self.apply_leech_seed_residual(is_player, events) {
+                // `BattleScript_LeechSeedTurnDrain` ends in `end2` without
+                // `checkteamslost`, so a drain that fells the battler cannot
+                // end the battle here, unlike poison and burn
+                // (`data/battle_scripts_1.s:3265`-`:3284`, `:3736`-`:3753`).
+                // The rest of this battler's pass is skipped, and the other
+                // battler's pass still runs.
+                continue;
+            }
             self.apply_poison_residual(is_player, events);
             self.apply_bad_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
@@ -1096,6 +1158,64 @@ impl Battle {
             by_player: is_player,
             status,
         });
+    }
+
+    /// `ENDTURN_LEECH_SEED`: a seeded battler loses an eighth of its max HP,
+    /// at least one, and the seeder's slot regains the HP actually lost, with
+    /// no RNG draw. Nothing happens unless the seeder's slot is occupied by a
+    /// living battler (`src/battle_util.c:1509`-`:1523`;
+    /// `data/battle_scripts_1.s:3265`-`:3284`). Reports whether the drain
+    /// felled the seeded battler, after settling that faint.
+    fn apply_leech_seed_residual(
+        &mut self,
+        is_player: bool,
+        events: &mut Vec<BattleEvent>,
+    ) -> bool {
+        let seeded = if is_player { &self.player } else { &self.enemy };
+        let Some(source) = seeded.volatiles().leech_seed_source else {
+            return false;
+        };
+        let receiver_is_player = source == BattlerSide::Player;
+        let receiver = if receiver_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        if seeded.is_fainted() || receiver.is_fainted() {
+            return false;
+        }
+        let damage = leech_seed_residual_damage(seeded.stats().max_hp);
+        let dealt = damage.min(seeded.current_hp());
+        let victim = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        victim.apply_damage(dealt);
+        let fainted = victim.is_fainted();
+        events.push(BattleEvent::SappedByLeechSeed {
+            by_player: is_player,
+            damage: dealt,
+        });
+        let receiver = if receiver_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let before = receiver.current_hp();
+        receiver.heal_hp(dealt);
+        // A loaded record keeps its HP byte-exact, so `before` can sit above
+        // the maximum the heal clamps to; that case healed nothing.
+        events.push(BattleEvent::LeechSeedHealed {
+            by_player: receiver_is_player,
+            healed: receiver.current_hp().saturating_sub(before),
+        });
+        // The script tries both faints (`data/battle_scripts_1.s:3282`-`:3283`):
+        // a receiver whose loaded maximum is zero is clamped to no HP by its
+        // own heal, and that faint is settled like any other.
+        self.settle_faint(is_player, events);
+        self.settle_faint(receiver_is_player, events);
+        fainted
     }
 
     /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_TRUANT` case: a living holder
@@ -1469,6 +1589,9 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
+                // `BattleScript_DoSelfConfusionDmg` cancels the series before
+                // the self-hit lands (`data/battle_scripts_1.s:3802`).
+                self.cancel_multi_turn_moves(player_is_attacker);
                 self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
                 self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
@@ -1480,6 +1603,9 @@ impl Battle {
             self.enemy.status1()
         };
         if draws_full_paralysis(attacker_status1, rng) {
+            // The canceller's own call is commented out; the script cancels
+            // (`data/battle_scripts_1.s:3777`).
+            self.cancel_multi_turn_moves(player_is_attacker);
             events.push(BattleEvent::FullyParalyzed {
                 by_player: player_is_attacker,
                 move_id,
@@ -1516,29 +1642,8 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
-        if let Some(slot) = slot {
-            let slot_pp = if player_is_attacker {
-                self.player.moves()[slot].pp
-            } else {
-                self.enemy.moves()[slot].pp
-            };
-            if slot_pp == 0 {
-                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
-                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
-                // nothing from an empty slot (`:1230`).
-                if move_id != STRUGGLE {
-                    events.push(BattleEvent::FailedNoPp {
-                        by_player: player_is_attacker,
-                        move_id,
-                    });
-                    self.record_cancelled_move(player_is_attacker, move_id)?;
-                    return Ok(());
-                }
-            } else if player_is_attacker {
-                self.player.deduct_pp_by(slot, pp_cost)?;
-            } else {
-                self.enemy.deduct_pp_by(slot, pp_cost)?;
-            }
+        if !self.spend_pp_or_abort(player_is_attacker, move_id, slot, pp_cost, events)? {
+            return Ok(());
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
     }
@@ -1606,8 +1711,8 @@ impl Battle {
     }
 
     /// `CANCELER_TRUANT` follows sleep and the frozen draw and precedes
-    /// every later canceller (`src/battle_util.c:2086`-`:2097`): a holder whose counter is set
-    /// loafs before the confusion and paralysis draws and PP handling.
+    /// every later canceller (`src/battle_util.c:2086`-`:2097`): a holder whose
+    /// counter is set loafs before the confusion and paralysis draws and PP handling.
     /// `BattleScript_MoveUsedLoafingAround` runs `moveendto
     /// MOVEEND_NEXT_TARGET`, which includes `MOVEEND_UPDATE_LAST_MOVES`, so
     /// the cancelled move is recorded like sleep's. Returns whether the
@@ -1629,6 +1734,9 @@ impl Battle {
         {
             return Ok(false);
         }
+        // The canceller releases a multi-turn lock before the script runs
+        // (`src/battle_util.c:2088`).
+        self.cancel_multi_turn_moves(player_is_attacker);
         events.push(BattleEvent::LoafingAround {
             by_player: player_is_attacker,
             move_id,
@@ -1671,6 +1779,48 @@ impl Battle {
                 Ok(false)
             }
         }
+    }
+
+    /// The no-PP abort and `ppreduce` for a chosen slot; `false` means the
+    /// action ended at the abort.
+    ///
+    /// A locked attempt skips both (`Cmd_attackcanceler`,
+    /// `battle_script_commands.c:934`-`:935`; `data/battle_scripts_1.s:1599`-
+    /// `:1600`), so only a series' first attempt spends PP.
+    fn spend_pp_or_abort(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        pp_cost: u8,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<bool, BattleError> {
+        let locked = self
+            .battler_state(BattlerSide::from_is_player(player_is_attacker))
+            .locked_move()
+            .is_some();
+        let Some(slot) = slot.filter(|_| !locked) else {
+            return Ok(true);
+        };
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if attacker.moves()[slot].pp > 0 {
+            attacker.deduct_pp_by(slot, pp_cost)?;
+        } else if move_id != STRUGGLE {
+            // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+            // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+            // nothing from an empty slot (`:1230`).
+            events.push(BattleEvent::FailedNoPp {
+                by_player: player_is_attacker,
+                move_id,
+            });
+            self.record_cancelled_move(player_is_attacker, move_id)?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one

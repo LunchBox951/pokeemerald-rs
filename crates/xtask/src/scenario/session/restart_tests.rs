@@ -34,10 +34,9 @@ fn real_pack_restart_continues_the_game_the_first_boot_saved() {
         first.set_headless_buttons(AppButtons::NONE).unwrap();
         assert!(first.step().unwrap());
     }
-    // START -> SAVE (BAG, player, SAVE) -> YES, then confirm messages.
+    // START opens the menu on SAVE (the cursor starts on the first item) ->
+    // YES, then confirm messages.
     press(&mut first, AppButtons::START);
-    press(&mut first, AppButtons::DOWN);
-    press(&mut first, AppButtons::DOWN);
     let mut frames = 0;
     while !session.save.exists() {
         assert!(frames < SAVE_FLOW_FRAME_BUDGET, "save never written");

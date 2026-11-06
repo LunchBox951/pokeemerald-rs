@@ -1,5 +1,6 @@
 //! Every battle event the turn engine can report has a narration mapping.
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
 
@@ -154,6 +155,21 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             damage: 1,
         },
+        BattleEvent::Seeded { by_player, move_id },
+        BattleEvent::LeechSeedEvaded { by_player, move_id },
+        BattleEvent::SappedByLeechSeed {
+            by_player,
+            damage: 1,
+        },
+        BattleEvent::LeechSeedHealed {
+            by_player,
+            healed: 1,
+        },
+        BattleEvent::ItemRestoredHealth {
+            by_player,
+            item: ItemId::ORAN_BERRY,
+            healed: 10,
+        },
         BattleEvent::ShedSkinCured {
             by_player,
             status: Status1::Poisoned,
@@ -203,7 +219,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 72;
+const VARIANTS: usize = 77;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -282,6 +298,11 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::ThawedByMove { .. } => 69,
         BattleEvent::Burned { .. } => 70,
         BattleEvent::TargetDefrosted { .. } => 71,
+        BattleEvent::Seeded { .. } => 72,
+        BattleEvent::SappedByLeechSeed { .. } => 73,
+        BattleEvent::LeechSeedHealed { .. } => 74,
+        BattleEvent::ItemRestoredHealth { .. } => 75,
+        BattleEvent::LeechSeedEvaded { .. } => 76,
     }
 }
 
@@ -289,12 +310,15 @@ const fn variant(event: &BattleEvent) -> usize {
 fn every_event_variant_maps_to_at_least_the_requests_upstream_prints() {
     let mut narrator = narrator(BattleKind::Trainer);
 
+    // A landed `Hit` and the seeder's `LeechSeedHealed` print nothing upstream.
     for event in every_event() {
         let requests = narrator.requests(&AssetNames, &event);
         assert!(
-            requests.is_ok_and(
-                |requests| !requests.is_empty() || matches!(event, BattleEvent::Hit { .. })
-            ),
+            requests.is_ok_and(|requests| !requests.is_empty()
+                || matches!(
+                    event,
+                    BattleEvent::Hit { .. } | BattleEvent::LeechSeedHealed { .. }
+                )),
             "{event:?} has no narration"
         );
     }

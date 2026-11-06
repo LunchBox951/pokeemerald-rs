@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the nine pipelines
+//! one of the battle scripts this crate reproduces — the eleven pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -41,6 +41,8 @@
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
+//! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
+//! | [`rollout`] | `BattleScript_EffectRollout` ([`rollout::is_rollout_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -229,8 +231,9 @@
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison, confusion
 //! and the secondary Speed drop) —
-//! the effect of any held item (a mon carries one, and [`ensure_held_item_playable`]
-//! refuses every item that has an effect), every primary status but [`status1::Status1::Paralysed`],
+//! the effect of any held item but Oran Berry's end-turn heal (a mon carries
+//! one, and [`ensure_held_item_playable`] refuses every other item that has
+//! an effect), every primary status but [`status1::Status1::Paralysed`],
 //! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
 //! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
@@ -239,7 +242,7 @@
 //! [`status1`]'s module docs; no modelled move inflicts toxic, sleep or freeze
 //! yet, and burn comes only from a burn secondary, so those arrive only
 //! through [`pokemon::BattlePokemon::set_status1`]), every
-//! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
+//! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s tracked set
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! attacker ability that still reaches an unported chance-doubling for a
@@ -247,8 +250,9 @@
 //! [`secondary::ensure_admissible`], which screens the *defender*'s primary
 //! status for a poison or burn landing and the *defender*'s Own
 //! Tempo and Shield Dust — never a primary status — for a confusion
-//! landing) —
-//! and the move effects the nine
+//! landing, and Leech Seed's defender against Liquid Ooze, whose inverted
+//! drain is unmodelled) —
+//! and the move effects the eleven
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
@@ -257,7 +261,7 @@
 //! are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
-//! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
+//! Submission stay refused), OHKO, Counter, Bide and the rest of the end-of-turn
 //! residual family, and so on.
 //!
 //! Paralysis reaches past its own pipeline, so read those two owners before
@@ -281,11 +285,13 @@ pub mod fixed_damage;
 pub mod flag_move;
 pub mod gender;
 pub mod hit;
+pub mod leech_seed;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
 pub mod paralyze;
 pub mod pokemon;
+pub mod rollout;
 pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
@@ -322,6 +328,10 @@ pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move, FixedD
 pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
 pub use gender::Gender;
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
+pub use leech_seed::{
+    is_leech_seed_effect, leech_seed_residual_damage, resolve_leech_seed_move, LeechSeedOutcome,
+    EFFECT_LEECH_SEED,
+};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
 pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
@@ -330,6 +340,9 @@ pub use pokemon::{
     MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
     Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
     SPECIES_SHEDINJA,
+};
+pub use rollout::{
+    is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,
 };
 pub use secondary::{
     is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
