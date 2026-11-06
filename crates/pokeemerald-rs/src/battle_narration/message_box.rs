@@ -23,6 +23,9 @@ pub(super) const MESSAGE_WINDOW: MessageBoxLayout = MessageBoxLayout {
     content_height: 4,
 };
 
+/// The window's content height in pixels: rows below it are never drawn.
+pub(super) const CONTENT_HEIGHT_PX: i32 = MESSAGE_WINDOW.content_height * TILE_PX;
+
 /// `sTextOnWindowsInfo_Normal[B_WIN_MSG]` places text at `x = 0`, `y = 1`
 /// (`src/battle_message.c:1483`-`:1484`).
 pub(super) const PRINTER_ORIGIN: (i32, i32) = (0, 1);

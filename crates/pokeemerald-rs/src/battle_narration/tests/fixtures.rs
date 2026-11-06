@@ -53,7 +53,7 @@ const SELECTORS: &[(&str, u8)] = &[
     ("B_ATK_NAME_WITH_PREFIX_MON1", 0x0D),
 ];
 
-/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, a newline as `FE`,
+/// Encodes `{NAME}` as `FD selector`, `{PAUSE n}` as `FC 08 n`, `{SHIFT_DOWN n}` as `FC 0E n`, a newline as `FE`,
 /// `{PAUSE_UNTIL_PRESS}` as `FC 09`, `\p` as the page clear `FB`, and `\l` as the scroll prompt `FA` (`charmap.txt:1087`-`:1088`).
 pub(super) fn template(source: &str) -> Vec<u8> {
     let mut out = Vec::new();
@@ -64,6 +64,14 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                 let name: String = chars.by_ref().take_while(|&c| c != '}').collect();
                 if name == "PAUSE_UNTIL_PRESS" {
                     out.extend([0xFC, 0x09]);
+                    continue;
+                }
+                if let Some(pixels) = name.strip_prefix("SHIFT_DOWN ") {
+                    out.extend([
+                        0xFC,
+                        0x0E,
+                        pixels.parse().expect("SHIFT_DOWN takes a pixel count"),
+                    ]);
                     continue;
                 }
                 if let Some(frames) = name.strip_prefix("PAUSE ") {

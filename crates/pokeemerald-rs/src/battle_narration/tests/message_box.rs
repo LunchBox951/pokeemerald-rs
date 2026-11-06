@@ -8,6 +8,7 @@
 use engine::text::render::TextSpeed;
 use rendering::{Bgr555, BitDepth, Framebuffer, Palette, Rgb888, ScreenEntry, Tilemap, Tileset};
 
+use super::fixtures::Fixture;
 use super::presentation_support::{
     layer_over, message, run, run_same, submit, text_fixture, TestSheet, A_HELD, A_PRESS, NONE,
 };
@@ -150,4 +151,58 @@ fn a_scroll_carries_the_printed_line_out_of_the_window() {
     let framebuffer = drawn(&layer);
     assert_eq!(pixel(&framebuffer, LEFT, TOP + 1), rgb(color(0, 0, 31)));
     assert_eq!(pixel(&framebuffer, LEFT, TOP + 2), rgb(color(0, 0, 31)));
+}
+
+#[test]
+fn a_glyph_clipped_below_the_window_stays_hidden_after_a_scroll() {
+    let fixture = Fixture::new(&[(110, "{SHIFT_DOWN 31}A\\l")], &[]);
+    let mut layer = layer();
+    submit(&mut layer, &fixture, &[110]);
+    // A lands at window y = 32, wholly below the 32-pixel window.
+    run(&mut layer, &[NONE]);
+    let background = rgb(color(0, 0, 31));
+    for y in 0..HEIGHT {
+        assert_eq!(
+            pixel(&drawn(&layer), LEFT, TOP + y),
+            background,
+            "before scroll y={y}"
+        );
+    }
+    // Answer the prompt and let the 16-pixel scroll run out.
+    let mut ticks = run(&mut layer, &[NONE, A_PRESS]);
+    ticks.extend(run_same(&mut layer, 12, NONE));
+    let framebuffer = drawn(&layer);
+    for y in 0..HEIGHT {
+        assert_eq!(
+            pixel(&framebuffer, LEFT, TOP + y),
+            background,
+            "after scroll y={y}"
+        );
+    }
+}
+
+#[test]
+fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scroll() {
+    let fixture = Fixture::new(&[(110, "{SHIFT_DOWN 30}A\\l")], &[]);
+    let mut layer = layer();
+    submit(&mut layer, &fixture, &[110]);
+    // A lands at window y = 31: its body row is the last window row and its
+    // shadow row falls below the window.
+    run(&mut layer, &[NONE]);
+    let background = rgb(color(0, 0, 31));
+    let body = rgb(color(31, 0, 0));
+    let shadow = rgb(color(0, 31, 0));
+    assert_eq!(pixel(&drawn(&layer), LEFT, TOP + 31), body);
+
+    run(&mut layer, &[NONE, A_PRESS]);
+    run_same(&mut layer, 12, NONE);
+
+    // The scroll moved the body row up 16 pixels; the shadow row was never
+    // drawn, so it does not appear at y = 16.
+    let framebuffer = drawn(&layer);
+    for y in 0..HEIGHT {
+        let expected = if y == 15 { body } else { background };
+        assert_eq!(pixel(&framebuffer, LEFT, TOP + y), expected, "y={y}");
+        assert_ne!(pixel(&framebuffer, LEFT, TOP + y), shadow, "y={y}");
+    }
 }

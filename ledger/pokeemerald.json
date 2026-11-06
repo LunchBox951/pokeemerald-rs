@@ -12936,15 +12936,15 @@
     },
     "graphics/fonts": {
       "artifacts": {
-        "keypad_icons": {
-          "reason": "keypad_icons.png (128x32, 4bpp; the sKeypadIconTiles bitmap, src/text.c:117) extracted into the local gitignored asset pack as font/keypad_icons by crates/xtask/src/extract/fonts.rs (validated 128x32/4bpp at extraction), read back via AssetPack::keypad_icons and validated by KeypadIconSheet::new in crates/assets/src/keypad_icons.rs. The player's own ROM produces the same entry directly: crates/rom-import/src/domains/fonts.rs reads the sheet as plain row-major 4bpp tiles through the ordinary image path, from the root crates/xtask/src/gen_rom_profile/fonts.rs locates by the sheet's packed tiles, and crates/rom-import/tests/equivalence.rs checks it byte-for-byte against this extraction under the font/ prefix.",
-          "rust_target": "crates/xtask/src/extract/fonts.rs",
-          "spec": "S-4",
-          "status": "ported"
-        },
         "down_arrow.png": {
           "reason": "graphics/fonts/down_arrow.png (8x48, 4bpp, sDownArrowTiles, src/text.c:71) is extracted as interface/image/down_arrow by crates/xtask/src/extract/interface.rs and read from the player's own ROM by crates/rom-import/src/domains/interface.rs (raw 4bpp tiles, located by gen-rom-profile), equivalence-checked against the checkout extraction by crates/rom-import/tests/equivalence.rs. AssetPack::text_printer_down_arrow in crates/assets/src/pack/text_printer.rs validates the sheet and exposes the four 8x16 frames TextPrinterDrawDownArrow blits, windows of the sheet starting at pixel rows 0, 1, 2, 1 (sDownArrowYCoords, src/text.c:75,819-829; the two-bit downArrowYPosIdx wraps). The sheet carries no palette entry: the printer blits its indices into the window, where index 0 is transparent (src/blit.c:58-66). Covers extraction and typed access only; drawing the arrow is not modelled.",
           "rust_target": "crates/xtask/src/extract/interface.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keypad_icons": {
+          "reason": "keypad_icons.png (128x32, 4bpp; the sKeypadIconTiles bitmap, src/text.c:117) extracted into the local gitignored asset pack as font/keypad_icons by crates/xtask/src/extract/fonts.rs (validated 128x32/4bpp at extraction), read back via AssetPack::keypad_icons and validated by KeypadIconSheet::new in crates/assets/src/keypad_icons.rs. The player's own ROM produces the same entry directly: crates/rom-import/src/domains/fonts.rs reads the sheet as plain row-major 4bpp tiles through the ordinary image path, from the root crates/xtask/src/gen_rom_profile/fonts.rs locates by the sheet's packed tiles, and crates/rom-import/tests/equivalence.rs checks it byte-for-byte against this extraction under the font/ prefix.",
+          "rust_target": "crates/xtask/src/extract/fonts.rs",
           "spec": "S-4",
           "status": "ported"
         },
@@ -28770,10 +28770,10 @@
     "src/battle_controller_player.c": {
       "artifacts": {
         "CompleteOnInactiveTextPrinter2": {
-          "reason": "src/battle_controller_player.c:1339-1342. A print completes only when its message printer has finished; NarrationGate reports Complete once every earlier batch and every message of its own have printed, including pauses and button prompts.",
+          "reason": "src/battle_controller_player.c:1339-1342. Modelled: a print completes only when its message printer has finished; NarrationGate reports Complete once every earlier batch and every message of its own have printed, including pauses and button prompts. Deferred: upstream also calls PlayerBufferExecCompleted when the printer goes inactive, which completes the controller command. The gate stands in for that exec-flag completion, but no production battle flow consumes it yet: the layer only reports status through NarrationQueue/GateStatus. Waiting on the gates in the live flows is tracked by #3098.",
           "rust_target": "crates/pokeemerald-rs/src/battle_narration/presenter.rs",
           "spec": "S-6",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "CopyPlayerMonData.status1": {
           "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. Modelled: party::from_save_pokemon decodes the save record status word into battle::Status1 -- healthy, ordinary poison (0x08), burn (0x10), freeze (0x20), paralysis (0x40), sleep with 1-7 turns left, and bad poison (0x80 | counter << 8, counter 0-15, into Status1::BadPoisoned with its toxic counter) -- and any other word fails closed with PartyError::UnsupportedStatus, leaving the record bytes untouched, so it is never read as healthy and erased on the next save. Deferred: combined status words, which battle does not model and which therefore cannot be loaded into a battler; a toxic counter without the bad-poison bit, or counter bits above 11, fails closed the same way.",
