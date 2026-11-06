@@ -13,7 +13,10 @@
 //! - [`cgb_pitch`], [`psg`], [`cgb_envelope`], and [`cgb_voice`] implement
 //!   the four CGB channels: two squares, programmable wave, and noise.
 //! - [`mixer`] allocates voices by priority and track, mixes DirectSound
-//!   and CGB output, and produces clipped interleaved stereo `f32` samples.
+//!   and CGB output, and produces interleaved stereo `f32` samples. The sum
+//!   saturates as on hardware with each PSG channel's midpoint restored, and the
+//!   midpoint is removed afterwards, so a loud PSG over loud PCM can dip below
+//!   `-1.0` by the summed midpoints (see [`mixer`]).
 //! - [`sequencer`] handles track timing, LFO modulation, pattern calls,
 //!   repeats, memory-accumulator mutations and conditional jumps, and the
 //!   `xIECV`/`xIECL` pseudo-echo commands.

@@ -26,8 +26,17 @@ const HARDWARE_VOLUME_15_TRACK: u8 = 128;
 /// (`voice.rs:132-157`: full-gain 254 * 2 >> 8 = 1).
 const ONE_FIFO_UNIT_SOURCE: i8 = 2;
 
-fn unit(n: i8) -> f32 {
+fn unit(n: i16) -> f32 {
     f32::from(n) / OUTPUT_SCALE
+}
+
+/// A mixed sample in whole FIFO units; every output is an exact multiple of 1/128.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a rounded sample within a few hundred units fits i32"
+)]
+fn units(sample: f32) -> i32 {
+    (sample * OUTPUT_SCALE).round() as i32
 }
 
 fn frame(mixer: &mut Mixer) -> Vec<f32> {
@@ -46,7 +55,7 @@ fn extrema(out: &[f32]) -> (f32, f32) {
         .fold((f32::MAX, f32::MIN), |(lo, hi), &s| (lo.min(s), hi.max(s)))
 }
 
-fn assert_extrema(out: &[f32], low: i8, high: i8) {
+fn assert_extrema(out: &[f32], low: i16, high: i16) {
     let (lo, hi) = extrema(out);
     assert_eq!(lo.to_bits(), unit(low).to_bits(), "low {lo} vs {low}/128");
     assert_eq!(
@@ -56,7 +65,7 @@ fn assert_extrema(out: &[f32], low: i8, high: i8) {
     );
 }
 
-fn assert_every_sample(out: &[f32], n: i8) {
+fn assert_every_sample(out: &[f32], n: i16) {
     assert!(out.iter().all(|s| s.to_bits() == unit(n).to_bits()));
 }
 
@@ -210,14 +219,126 @@ fn a_noise_mixes_with_a_fifo_unit_at_the_hardware_ratio() {
     assert_extrema(&out, -1, 3);
 }
 
+/// Mixes `voice` over the constant PCM level `source` and returns
+/// `(pcm_only, lo, hi)` in FIFO units after the mixer's output scale.
+fn pcm_level_and_swing(voice: CgbVoice, source: i8) -> (i32, i32, i32) {
+    let pcm_only = {
+        let mut mixer = mixer();
+        assert!(mixer.add_voice(pcm_voice(source)));
+        frame(&mut mixer)
+    };
+    let (p_lo, p_hi) = extrema(&pcm_only);
+    assert_eq!(p_lo.to_bits(), p_hi.to_bits(), "constant PCM");
+    let pcm = units(p_lo);
+    let (lo, hi) = extrema(&render_cgb_with_pcm(voice, source));
+    (pcm, units(lo), units(hi))
+}
+
+// The tests below pin the upstream order of operations. mGBA builds every PSG
+// channel UNIPOLAR (`mgba/src/gb/audio.c:641,543-574,916-918`), sums it into
+// the signed FIFO total (`mgba/src/gba/audio.c:360-389`) and saturates THAT sum
+// in `_applyBias` (`mgba/src/gba/audio.c:343-351`). The port renders each
+// channel about its midpoint, so a saturating sum has to see the midpoint
+// restored first and lose it again afterwards: it saturates `centred + offset`
+// and subtracts the offset (`Mixer::mix_frame`). A volume-15 square (0 or 60
+// units, midpoint 30) therefore has `127 - P` units of headroom over PCM `P`
+// and not the `30 + (127 - P)` that clipping the centred value would leave.
+
 #[test]
-fn the_summed_output_clips_at_the_s8_bounds() {
-    // Settled full-NR32 nibble 15 is +28; source 100 renders 99 and reaches 127.
+fn a_loud_square_keeps_upstream_clip_headroom_over_loud_pcm() {
+    // Source 100 renders P = 99. Upstream: lo = 99, hi = min(99 + 60, 127) = 127,
+    // swing 28; DC removal then subtracts the 30-unit midpoint: 69 and 97.
+    let (pcm, lo, hi) = pcm_level_and_swing(square_voice(HARDWARE_VOLUME_15_TRACK), 100);
+    assert_eq!(pcm, 99);
+    assert_eq!(
+        hi - lo,
+        60.min(127 - pcm),
+        "upstream square swing over PCM {pcm}"
+    );
+    assert_eq!((lo, hi), (69, 97));
+}
+
+#[test]
+fn a_loud_noise_keeps_upstream_clip_headroom_over_loud_pcm() {
+    // Noise is unipolar 0 or 4 * volume as well (`mgba/src/gb/audio.c:641`).
+    // Its latch starts cold at 0 with no midpoint, so judge the settled tail
+    // of the frame, where both states have been latched at volume 15.
+    let out = render_cgb_with_pcm(noise_voice(0, HARDWARE_VOLUME_15_TRACK), 100);
+    let (lo, hi) = extrema(&out[out.len() / 2..]);
+    assert_eq!((units(lo), units(hi)), (69, 97));
+}
+
+#[test]
+fn a_loud_wave_keeps_upstream_clip_headroom_over_loud_pcm() {
+    // Settled full-gain nibble 15 is unipolar 60 with a 32-unit midpoint
+    // (`mgba/src/gb/audio.c:543-574`): 99 + 60 saturates to 127, minus 32.
+    let (pcm, _, _) = pcm_level_and_swing(wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK), 100);
+    assert_eq!(pcm, 99);
+    let out = render_cgb_with_pcm(wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK), 100);
+    assert_eq!(out[out.len() - 1].to_bits(), unit(127 - 32).to_bits());
+}
+
+#[test]
+fn a_psg_over_negative_pcm_is_not_clamped_again_after_dc_removal() {
+    // Source -128 renders P = -127. The square saturates nothing there
+    // (-127 + 0 stays above -128), so the output is `P + (-30)` = -157/128,
+    // below -1.0: DC removal comes after saturation and is never re-clamped.
+    let (pcm, lo, hi) = pcm_level_and_swing(square_voice(HARDWARE_VOLUME_15_TRACK), -128);
+    assert_eq!(pcm, -127);
+    assert_eq!((lo, hi), (-157, -97));
+}
+
+#[test]
+fn the_summed_output_saturates_before_the_wave_midpoint_is_removed() {
+    // Settled full-NR32 nibble 15 is unipolar 60 with a 32-unit midpoint
+    // (+28 centred). Sources 99/100/101 render P = 98/99/100, so P + 60
+    // reaches 158/159/160 and saturates at 127; the midpoint leaves 95.
+    // (Clipping the centred +28 instead, as before, gave 126/127/127.)
     let at = |source: i8| {
         let out = render_cgb_with_pcm(wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK), source);
         out[out.len() - 1]
     };
-    assert_eq!(at(99).to_bits(), unit(126).to_bits());
-    assert_eq!(at(100).to_bits(), unit(127).to_bits());
-    assert_eq!(at(101).to_bits(), unit(127).to_bits());
+    assert_eq!(at(99).to_bits(), unit(95).to_bits());
+    assert_eq!(at(100).to_bits(), unit(95).to_bits());
+    assert_eq!(at(101).to_bits(), unit(95).to_bits());
+    // The saturation edge: sources 67/68/69 render P = 66/67/68 and meet
+    // the 127 ceiling at P = 67.
+    assert_eq!(at(67).to_bits(), unit(94).to_bits());
+    assert_eq!(at(68).to_bits(), unit(95).to_bits());
+    assert_eq!(at(69).to_bits(), unit(95).to_bits());
+}
+
+#[test]
+fn render_with_offsets_reports_the_midpoint_that_restores_the_unipolar_output() {
+    // `signal + offset` must be mGBA's unipolar output: a square is 0 or
+    // twice its midpoint (`mgba/src/gb/audio.c:916-918`), at odd volumes too.
+    for track_volume in [16, 48, 80, 112, HARDWARE_VOLUME_15_TRACK] {
+        let mut voice = square_voice(track_volume);
+        voice.begin_frame(false);
+        let mut acc = vec![(0, 0); SAMPLES_PER_FRAME];
+        let mut offsets = vec![(0, 0); SAMPLES_PER_FRAME];
+        voice.render_with_offsets(&mut acc, Some(&mut offsets), &[], &[]);
+        let midpoint = offsets[0].0;
+        assert!(midpoint > 0, "track volume {track_volume}");
+        for (&(signal, _), &(offset, _)) in acc.iter().zip(&offsets) {
+            assert_eq!(offset, midpoint);
+            assert!(
+                [0, 2 * midpoint].contains(&(signal + offset)),
+                "track volume {track_volume}: {signal} + {offset}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_wave_midpoint_follows_the_nr32_gain_it_latched_under() {
+    // Unipolar nibble 15 at full gain is 60 (`mgba/src/gb/audio.c:543-574`):
+    // +28 centred plus the 32-unit midpoint.
+    let mut voice = wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK);
+    voice.begin_frame(false);
+    let mut acc = vec![(0, 0); SAMPLES_PER_FRAME];
+    let mut offsets = vec![(0, 0); SAMPLES_PER_FRAME];
+    voice.render_with_offsets(&mut acc, Some(&mut offsets), &[], &[]);
+    let last = SAMPLES_PER_FRAME - 1;
+    assert_eq!((acc[last].0, offsets[last].0), (28, 32));
 }

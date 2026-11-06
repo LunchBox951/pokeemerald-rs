@@ -23,7 +23,7 @@
 //! - on expiry it presents the latch its last clock left
 //!   (`mgba/src/gb/audio.c:768-774`).
 
-use super::{CgbChannelNumber, CgbVoice};
+use super::{oscillator::Contribution, CgbChannelNumber, CgbVoice};
 use crate::psg::{FrameSequencer, LengthWrite};
 
 impl CgbVoice {
@@ -119,7 +119,7 @@ impl CgbVoice {
         if self.length.clock() {
             self.length_stopped = true;
             if self.hardware_muted {
-                self.last_contribution = 0;
+                self.last_contribution = Contribution::SILENT;
             }
         }
     }
