@@ -236,9 +236,12 @@ fn a_private_directory_that_is_still_the_verified_one_is_removed() {
     let (parent, name, held) = private_directory_in(&dir.path);
 
     let aside = std::ffi::OsString::from(".import-fedcba9876543210");
-    let removed = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {});
+    let outcome = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {});
 
-    assert!(removed, "the verified directory was not removed");
+    assert!(
+        matches!(outcome, super::acquire::Discard::Removed),
+        "the verified directory was not removed"
+    );
     assert_eq!(entry_names(&dir.path), Vec::<String>::new());
 }
 
@@ -257,7 +260,7 @@ fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() 
     let mut swapped = 0;
 
     let aside = std::ffi::OsString::from(".import-fedcba9876543210");
-    let removed = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {
+    let outcome = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {
         swapped += 1;
         fs::rename(&replacement, &moved).unwrap();
         fs::create_dir(&replacement).unwrap();
@@ -266,8 +269,8 @@ fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() 
     assert_eq!(swapped, 1, "the replacement was put in place once");
     assert!(moved.is_dir(), "the verified directory was removed");
     assert!(
-        !removed,
-        "the verified directory is gone, so nothing was removed"
+        matches!(&outcome, super::acquire::Discard::Foreign { at } if *at == name),
+        "the replacement stands at the private name and is reported there"
     );
     assert!(
         replacement.is_dir(),
@@ -277,6 +280,42 @@ fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() 
         entry_names(&dir.path),
         [".import-0123456789abcdef", "moved"]
     );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_private_directory_that_became_nonempty_is_left_where_the_caller_reports_it() {
+    // The directory is the verified one, moved aside, and then cannot be
+    // unlinked because an entry appeared in it. It stands at the aside name,
+    // not the private one, and that is the pathname and error reported.
+    let dir = TempDir::new("discard-nonempty");
+    let (parent, name, held) = private_directory_in(&dir.path);
+    let aside = std::ffi::OsString::from(".import-fedcba9876543210");
+    let entry = dir.path.join(&name).join("entry");
+
+    let outcome = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {
+        fs::write(&entry, b"x").unwrap();
+    });
+
+    match outcome {
+        super::acquire::Discard::Kept { at, error } => {
+            assert_eq!(at, aside, "reported where it was not left");
+            assert!(
+                dir.path.join(&at).join("entry").is_file(),
+                "the directory is not at the pathname reported"
+            );
+            assert_eq!(
+                error.raw_os_error(),
+                Some(rustix::io::Errno::NOTEMPTY.raw_os_error())
+            );
+        }
+        _ => panic!("a directory that could not be unlinked was not reported as kept"),
+    }
+    assert!(
+        !dir.path.join(&name).exists(),
+        "nothing is left at the private name"
+    );
+    assert_eq!(entry_names(&dir.path), [".import-fedcba9876543210"]);
 }
 
 #[test]

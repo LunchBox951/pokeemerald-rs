@@ -28,8 +28,21 @@
 //! find the private name before it is opened can still exchange it. Such a
 //! writer can already delete or rewrite everything the import owns (see
 //! `take_back`), and a level is refused unless it is a directory of this
-//! user's. A swap after the reopen is `take_back`'s to withstand. A new
-//! level is not required to be empty: a second import creating beneath it
+//! user's. A swap after the reopen is `take_back`'s to withstand.
+//!
+//! The private name defends against an account that cannot predict it, not
+//! against a parent that lets other accounts rename its entries. Where the
+//! parent is writable by others and not sticky (no `S_ISVTX`), any account
+//! that can write it may rename an entry it does not own, and one that lists
+//! the parent finds the private name before it is opened. It can move the
+//! private directory away and put at that name a directory this user owns
+//! that it can move there: the owner check accepts it, the claim renames it
+//! into place, and rollback treats it as the level this run made. This is not
+//! defended against. A sticky parent (`/tmp`, say) confines renames to an
+//! entry's owner; a parent writable by others without the sticky bit is not
+//! covered, and nothing here checks the parent's mode, so a level there is
+//! claimed as in any other parent. Whether to refuse such a parent is
+//! undecided. A new level is not required to be empty: a second import creating beneath it
 //! may legitimately have put an entry there already.
 
 use std::ffi::OsStr;
@@ -144,14 +157,10 @@ pub(super) fn claim_level(
     match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
         Ok(()) => Ok(identity),
         Err(errno) => {
-            if !discard_private(parent, &private, &aside, &held, &mut || {}) {
-                eprintln!(
-                    "warning: could not remove the empty directory {} made while \
-                     creating {}; it is safe to delete",
-                    std::path::Path::new(&private).display(),
-                    std::path::Path::new(name).display()
-                );
-            }
+            report_left_standing(
+                &discard_private(parent, &private, &aside, &held, &mut || {}),
+                name,
+            );
             if no_replace_unsupported(errno) {
                 // This filesystem cannot refuse to replace (an NFS mount, say):
                 // make the level at its final name, as where no such rename
@@ -184,16 +193,39 @@ fn no_replace_unsupported(errno: rustix::io::Errno) -> bool {
     )
 }
 
-/// Removes the empty directory this run made as `private` in `parent`,
-/// which `held` is open on, without ever unlinking a name that was only
-/// checked a moment ago: the entry is first renamed (no-replace) to a fresh
+/// What [`discard_private`] left behind.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+pub(super) enum Discard {
+    /// The directory this run made is gone.
+    Removed,
+    /// This run's directory could not be removed and stands at `at`, a name
+    /// in the parent: `error` says why. It was empty when made and may not be
+    /// now, so it is not to be called empty or safe to delete.
+    Kept {
+        at: std::ffi::OsString,
+        error: io::Error,
+    },
+    /// What stands at `at` was not found to be the directory this run made
+    /// (someone replaced it), so it was not touched beyond being put back.
+    Foreign { at: std::ffi::OsString },
+}
+
+/// Removes the directory this run made as `private` in `parent`, which
+/// `held` is open on, without ever unlinking a name that was only checked a
+/// moment ago: the entry is first renamed (no-replace) to a fresh
 /// unguessable name, and only what is found there to be `held` is removed.
 /// Anything else was put at `private` by someone else after it was vouched
 /// for; it is renamed back if `private` is still free, else left where it
 /// is. `aside` is that fresh name, chosen by the caller so no descriptor is
-/// needed here. Answers whether the directory is gone; a directory left
-/// standing is empty and harmless, and the caller says so. `before_move` is
-/// the test seam that runs just before the entry is moved aside.
+/// needed here. A directory that is not removed is reported with the name it
+/// actually stands at (`private` or `aside`, whichever the last rename left
+/// it under) and, where this run's own directory could not be removed, the
+/// error: unlinking it can fail because an entry appeared in it after it was
+/// moved aside. `before_move` is the test seam that runs just before the
+/// entry is moved aside.
 #[cfg(all(
     unix,
     any(target_os = "linux", target_os = "android", target_vendor = "apple")
@@ -204,7 +236,7 @@ pub(super) fn discard_private(
     aside: &OsStr,
     held: &std::os::fd::OwnedFd,
     before_move: &mut dyn FnMut(),
-) -> bool {
+) -> Discard {
     before_move();
     match take_back::rename_without_replacing(&**parent, private, &**parent, aside) {
         Ok(()) => {}
@@ -217,11 +249,26 @@ pub(super) fn discard_private(
                     .ok()
                     .zip(rustix::fs::fstat(held).ok())
                     .is_some_and(|(found, ours)| same_directory_identity(&found, &ours));
-            return unchanged
-                && rustix::fs::unlinkat(&**parent, private, rustix::fs::AtFlags::REMOVEDIR)
-                    .is_ok();
+            if !unchanged {
+                return Discard::Foreign {
+                    at: private.to_owned(),
+                };
+            }
+            return match rustix::fs::unlinkat(&**parent, private, rustix::fs::AtFlags::REMOVEDIR) {
+                Ok(()) => Discard::Removed,
+                Err(errno) => Discard::Kept {
+                    at: private.to_owned(),
+                    error: errno.into(),
+                },
+            };
         }
-        Err(_) => return false,
+        // Nothing was moved: it still stands at `private`.
+        Err(errno) => {
+            return Discard::Kept {
+                at: private.to_owned(),
+                error: errno.into(),
+            }
+        }
     }
     let ours = match (
         rustix::fs::fstat(held),
@@ -231,10 +278,44 @@ pub(super) fn discard_private(
         _ => false,
     };
     if ours {
-        rustix::fs::unlinkat(&**parent, aside, rustix::fs::AtFlags::REMOVEDIR).is_ok()
+        match rustix::fs::unlinkat(&**parent, aside, rustix::fs::AtFlags::REMOVEDIR) {
+            Ok(()) => Discard::Removed,
+            // It stands at `aside`, not at `private`.
+            Err(errno) => Discard::Kept {
+                at: aside.to_owned(),
+                error: errno.into(),
+            },
+        }
     } else {
-        let _ = take_back::rename_without_replacing(&**parent, aside, &**parent, private);
-        false
+        let at = match take_back::rename_without_replacing(&**parent, aside, &**parent, private) {
+            Ok(()) => private,
+            Err(_) => aside,
+        };
+        Discard::Foreign { at: at.to_owned() }
+    }
+}
+
+/// Says on stderr where a private directory that [`discard_private`] did not
+/// remove now stands, which is the pathname the user can act on, relative to
+/// the level being made (`name`).
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn report_left_standing(outcome: &Discard, name: &OsStr) {
+    let name = std::path::Path::new(name).display();
+    match outcome {
+        Discard::Removed => {}
+        Discard::Kept { at, error } => eprintln!(
+            "warning: could not remove the directory {} made while creating {name}: \
+             {error}; it may no longer be empty, so check it before deleting",
+            std::path::Path::new(at).display()
+        ),
+        Discard::Foreign { at } => eprintln!(
+            "warning: {} was made while creating {name} but was replaced and was left \
+             untouched; it is not this import's to delete",
+            std::path::Path::new(at).display()
+        ),
     }
 }
 
