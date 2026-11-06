@@ -341,6 +341,7 @@ impl OverworldPhase {
         // cutscene included, leaves the field's sprites animating.
         self.scene.seed_tall_grass_placement(&self.player);
         self.step_field_frame(buttons);
+        self.advance_object_events();
         self.scene.advance_tall_grass(&self.player);
     }
 
