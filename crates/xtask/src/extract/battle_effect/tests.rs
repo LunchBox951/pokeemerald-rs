@@ -7,6 +7,9 @@ use assets::{
 };
 use pack_format::PackWriter;
 
+use super::super::owned_fixture::{
+    assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+};
 use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::png::IndexedImage;
 use super::super::{extract_to, repo_root, upstream_present};
@@ -100,6 +103,8 @@ fn jasc(colors: usize, rgb: [u8; 3]) -> String {
 
 struct Fixture {
     dir: PathBuf,
+    /// Claims `dir` and removes it, by identity, when the fixture drops.
+    _owned: OwnedDir,
     constants: String,
     pictures: Vec<String>,
     palettes: Vec<String>,
@@ -126,16 +131,14 @@ impl Fixture {
     /// Tags `A` (3) and `B` (11) joined to `alpha.png` (red palette) and
     /// `beta.png` (green palette); `DEAD` (40) is registered but has no sources.
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-battle-effect-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-battle-effect-{name}")).unwrap();
+        let dir = owned.path().to_path_buf();
         std::fs::create_dir_all(dir.join(SPRITES)).unwrap();
         std::fs::create_dir_all(dir.join("include/constants")).unwrap();
         std::fs::create_dir_all(dir.join("src/data")).unwrap();
         let fixture = Self {
             dir,
+            _owned: owned,
             constants: "// Particle ids.\n#define ANIM_SPRITES_START 10000\n\n\
                 #define ANIM_TAG_A (ANIM_SPRITES_START + 3)\n\
                 #define ANIM_TAG_B                (ANIM_SPRITES_START + 0xB) // unused\n\
@@ -236,10 +239,17 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+impl AsRef<std::path::Path> for Fixture {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.dir
     }
+}
+
+/// A fresh directory the test owns, and the pack path inside it.
+fn scratch_pack(name: &str) -> (OwnedDir, PathBuf) {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+    let path = owned.path().join(format!("{name}.pack"));
+    (owned, path)
 }
 
 fn source_detail(error: ExtractError) -> (PathBuf, usize, String) {
@@ -667,10 +677,7 @@ fn error_messages_name_the_file_line_and_detail() {
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn the_real_checkout_yields_every_inventory_pair() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-battle-effect-{}.pack",
-        std::process::id()
-    ));
+    let (_owned, path) = scratch_pack("battle-effect");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let catalog = pack.battle_animation_catalog().unwrap();
@@ -731,5 +738,15 @@ fn the_real_checkout_yields_every_inventory_pair() {
 
     // `MusicNotes2` keeps its five banks.
     assert_eq!(art(206).palette.color_count, 80);
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn fixture_directories_never_reuse_an_occupied_name() {
+    assert_pack_path_spares_occupied_file(
+        "pokeemerald-rs-extract-test-battle-effect-pack-ownership-probe",
+        || scratch_pack("battle-effect-pack-ownership-probe"),
+    );
+    assert_claim_spares_occupied_names("pokeemerald-rs-battle-effect-ownership-probe", || {
+        Fixture::new("ownership-probe")
+    });
 }
