@@ -19,6 +19,12 @@
 //! (`ExpandBattleTextBuffPlaceholders`, `:2776`-`:2873`), and the replacement
 //! is copied without being expanded again.
 //!
+//! [`BattleMessageLayer`] presents resolved requests: it queues them as
+//! separate messages, prints each through the shared text printer in the
+//! battle message window at the player's text speed, and reports completion
+//! through [`NarrationGate`]s so the action, health-box, effects, capture,
+//! move-learning, and terminal-result stages cannot overtake their text.
+//!
 //! Supported: single battles against a wild Pokémon or a trainer. A placeholder
 //! only link, multi, frontier, or secret-base battles reach is an
 //! [`NarrationError::UnsupportedPlaceholder`].
@@ -28,8 +34,11 @@ mod context;
 mod events;
 mod expand;
 mod lifecycle;
+mod message_box;
 mod names;
 mod narrator;
+mod presenter;
+mod queue;
 mod string_ids;
 
 pub use context::{
@@ -38,6 +47,8 @@ pub use context::{
 pub use expand::expand;
 pub use names::{AssetNames, NarrationNames};
 pub use narrator::{Narrator, Scene};
+pub use presenter::{BattleMessageLayer, LayerStatus, NarrationTick, PresentationError};
+pub use queue::{GateError, GateStatus, NarrationGate};
 
 use std::error::Error;
 use std::fmt;
@@ -132,4 +143,10 @@ mod tests {
     mod expansion;
     mod families;
     mod fixtures;
+    mod gates;
+    mod message_box;
+    mod presentation;
+    mod presentation_support;
+    mod production_flows;
+    mod real_pack;
 }
