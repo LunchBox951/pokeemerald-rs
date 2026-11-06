@@ -36,8 +36,9 @@ impl OutputHost for CpalHost {
 }
 
 /// The longest dropping a [`Worker`] waits for its driver to release the
-/// stream. Shutdown is seen only between transport steps, and no OS audio
-/// call can be interrupted, so a driver blocked in one is detached instead.
+/// stream. No OS audio call can be interrupted, so a driver blocked in one is
+/// detached instead; it sees shutdown when the call returns, before it starts
+/// another, and abandons any stream it built meanwhile unplayed.
 pub(in crate::audio) const SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
 
 /// The thread driving one [`Transport`]. Dropping it stops the driver and
@@ -72,6 +73,11 @@ impl Worker {
                     .with_clock(move || origin.elapsed());
                 while !driver_shared.shutdown.load(Ordering::Acquire) {
                     let next = transport.step(origin.elapsed());
+                    // A step that blocked while the output was dropped must
+                    // not sleep before releasing its stream.
+                    if driver_shared.shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
                     thread::park_timeout(next.saturating_sub(origin.elapsed()));
                 }
             })

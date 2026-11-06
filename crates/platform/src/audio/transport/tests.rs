@@ -60,6 +60,9 @@ struct World {
     /// Block the next discovery, with the world unlocked, until this
     /// channel's sender sends or drops, as a wedged audio server would.
     block_discovery: Option<std::sync::mpsc::Receiver<()>>,
+    /// Block the next stream build, with the world unlocked, until this
+    /// channel's sender sends or drops, as a wedged audio server would.
+    block_build: Option<std::sync::mpsc::Receiver<()>>,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -150,6 +153,10 @@ impl OutputDevice for FakeDevice {
         D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
         E: FnMut(cpal::Error) + Send + 'static,
     {
+        let block = with(&self.0).block_build.take();
+        if let Some(block) = block {
+            let _ = block.recv();
+        }
         let mut w = with(&self.0);
         w.ops += 1;
         let latency = w.build_latency;
