@@ -75,12 +75,13 @@ mod tests {
         FONT_SHEET_HEIGHT, FONT_SHEET_WIDTH, KEYPAD_SHEET_BIT_DEPTH, KEYPAD_SHEET_HEIGHT,
         KEYPAD_SHEET_WIDTH,
     };
+    use crate::extract::owned_fixture::{assert_pack_path_spares_occupied_file, OwnedDir};
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     fn is_normalized_font_pack_id(id: &str) -> bool {
@@ -205,7 +206,7 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn font_glyph_sheets_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("fonts");
+        let (_owned, path) = scratch_path("fonts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
         for font in FONTS.into_iter().chain([KEYPAD_ICONS]) {
@@ -217,6 +218,13 @@ mod tests {
                 font.pack_id
             );
         }
-        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    fn pack_path_never_reuses_an_occupied_name() {
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-fonts-pack-ownership-probe",
+            || scratch_path("fonts-pack-ownership-probe"),
+        );
     }
 }
