@@ -18,8 +18,10 @@
 //! species data outside the save boundary, so callers own them.
 
 use super::block::{SaveBlock1, SaveError, PARTY_SIZE};
+use super::mail::{item_is_mail, MAIL_NONE};
 use super::pokemon::{BoxPokemon, Pokemon, BOX_POKEMON_LEN};
 use super::store::{boxed_zeroed_pokemon_storage, PKMN_STORAGE_PAYLOAD_LEN};
+use assets::items::ItemId;
 
 /// `TOTAL_BOXES_COUNT` (`pokeemerald/include/pokemon_storage_system.h:4`).
 pub const TOTAL_BOXES_COUNT: usize = 14;
@@ -53,13 +55,6 @@ const DIGITS: [u8; 10] = [0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 
 /// `MAX_DEFAULT_WALLPAPER` is `WALLPAPER_SAVANNA`, index 3
 /// (`pokeemerald/src/data/wallpapers.h:2-5,21`).
 const DEFAULT_WALLPAPERS: [u8; 4] = [0, 1, 2, 3];
-
-/// `ITEM_ORANGE_MAIL` through `ITEM_RETRO_MAIL`, the items `ItemIsMail`
-/// accepts (`pokeemerald/include/constants/items.h:139-150`,
-/// `pokeemerald/src/mail_data.c:185-204`).
-const MAIL_ITEMS: std::ops::RangeInclusive<u16> = 121..=132;
-/// `MAIL_NONE` (`pokeemerald/include/constants/items.h:446`).
-const MAIL_NONE: u8 = 0xFF;
 
 const GROWTH_HELD_ITEM_OFFSET: usize = 2;
 /// `isEgg` is bit 30 of the `u32` at `PokemonSubstruct3` offset 4
@@ -159,7 +154,7 @@ fn holds_mail(mon: &BoxPokemon) -> bool {
         growth[GROWTH_HELD_ITEM_OFFSET],
         growth[GROWTH_HELD_ITEM_OFFSET + 1],
     ]);
-    MAIL_ITEMS.contains(&item)
+    item_is_mail(ItemId(item))
 }
 
 /// `ZeroMonData` (`pokeemerald/src/pokemon.c:2163-2178`): all zero except the

@@ -58,6 +58,7 @@ mod sight_trainer_trigger;
 mod start_menu;
 mod step;
 mod take_item_message;
+mod take_mail;
 mod white_out;
 mod wild_battle;
 

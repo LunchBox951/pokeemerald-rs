@@ -1,6 +1,6 @@
 //! Save-dialog messages with paragraph, scroll, and live player-name markers.
 
-use engine::text::{Token, PLACEHOLDER_PLAYER};
+use engine::text::{Token, EXT_CTRL_CODE_PAUSE_UNTIL_PRESS, PLACEHOLDER_PLAYER};
 
 const CONFIRM_SAVE: &str = "Would you like to save the game?";
 
@@ -17,6 +17,51 @@ const SAVING_DONT_TURN_OFF: &str = "SAVING\u{2026}\nDON'T TURN OFF THE POWER.";
 const PLAYER_SAVED_GAME: &str = "{PLAYER} saved the game.";
 
 const SAVE_ERROR: &str = "Save error.{P}Please exchange the\nbackup memory.";
+
+const SEND_MAIL_TO_PC: &str = "Send the removed MAIL to\nyour PC?";
+
+const MAIL_MESSAGE_WILL_BE_LOST: &str = "If the MAIL is removed, the\nmessage will be lost. Okay?";
+
+const MAIL_SENT_TO_PC: &str = "The MAIL was sent to your PC.{PAUSE_UNTIL_PRESS}";
+
+const PC_MAILBOX_FULL: &str = "Your PC's MAILBOX is full.{PAUSE_UNTIL_PRESS}";
+
+const MAIL_TAKEN_FROM_PKMN: &str = "MAIL was taken from the\nPOK\u{e9}MON.{PAUSE_UNTIL_PRESS}";
+
+const BAG_FULL_COULD_NOT_REMOVE_ITEM: &str =
+    "The BAG is full. The POK\u{e9}MON's\nitem could not be removed.{PAUSE_UNTIL_PRESS}";
+
+/// A message `CursorCb_TakeMail` shows (`pokeemerald/src/strings.c:387-400`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MailMessage {
+    /// `gText_SendMailToPC`.
+    SendMailToPc,
+    /// `gText_MailMessageWillBeLost`.
+    MessageWillBeLost,
+    /// `gText_MailSentToPC`.
+    SentToPc,
+    /// `gText_PCMailboxFull`.
+    MailboxFull,
+    /// `gText_MailTakenFromPkmn`.
+    TakenFromPokemon,
+    /// `gText_BagFullCouldNotRemoveItem`, what `BufferBagFullCantTakeItemMessage`
+    /// puts in `gStringVar4`.
+    BagFull,
+}
+
+impl MailMessage {
+    /// Decodes the message into a token stream terminated by [`Token::End`].
+    pub(crate) fn tokens(self) -> Vec<Token> {
+        parse(match self {
+            Self::SendMailToPc => SEND_MAIL_TO_PC,
+            Self::MessageWillBeLost => MAIL_MESSAGE_WILL_BE_LOST,
+            Self::SentToPc => MAIL_SENT_TO_PC,
+            Self::MailboxFull => PC_MAILBOX_FULL,
+            Self::TakenFromPokemon => MAIL_TAKEN_FROM_PKMN,
+            Self::BagFull => BAG_FULL_COULD_NOT_REMOVE_ITEM,
+        })
+    }
+}
 
 /// Prompt or status message shown by the save dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +121,7 @@ struct Marker {
     token: Token,
 }
 
-const MARKERS: [Marker; 3] = [
+const MARKERS: [Marker; 4] = [
     Marker {
         body_and_closing_brace: "P}",
         token: Token::PromptClear,
@@ -84,6 +129,13 @@ const MARKERS: [Marker; 3] = [
     Marker {
         body_and_closing_brace: "L}",
         token: Token::PromptScroll,
+    },
+    Marker {
+        body_and_closing_brace: "PAUSE_UNTIL_PRESS}",
+        token: Token::ExtCtrl {
+            sub: EXT_CTRL_CODE_PAUSE_UNTIL_PRESS,
+            args: Vec::new(),
+        },
     },
     Marker {
         body_and_closing_brace: "PLAYER}",
@@ -109,6 +161,54 @@ mod tests {
             engine::text::encode(&tokens)
                 .unwrap_or_else(|err| panic!("{message:?} is not Gen-3 encodable: {err}"));
             assert_eq!(tokens.last(), Some(&Token::End));
+        }
+    }
+
+    #[test]
+    fn every_mail_message_is_gen3_encodable_and_matches_upstream() {
+        for (message, upstream) in [
+            (
+                MailMessage::SendMailToPc,
+                "Send the removed MAIL to\nyour PC?",
+            ),
+            (
+                MailMessage::MessageWillBeLost,
+                "If the MAIL is removed, the\nmessage will be lost. Okay?",
+            ),
+            (MailMessage::SentToPc, "The MAIL was sent to your PC."),
+            (MailMessage::MailboxFull, "Your PC's MAILBOX is full."),
+            (
+                MailMessage::TakenFromPokemon,
+                "MAIL was taken from the\nPOK\u{e9}MON.",
+            ),
+            (
+                MailMessage::BagFull,
+                "The BAG is full. The POK\u{e9}MON's\nitem could not be removed.",
+            ),
+        ] {
+            let tokens = message.tokens();
+            engine::text::encode(&tokens)
+                .unwrap_or_else(|err| panic!("{message:?} is not Gen-3 encodable: {err}"));
+            let printed: String = tokens
+                .iter()
+                .filter_map(|token| match token {
+                    Token::Char(c) => Some(*c),
+                    Token::Newline => Some('\n'),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(printed, upstream);
+            let pauses = tokens
+                .iter()
+                .any(|token| matches!(token, Token::ExtCtrl { sub, .. } if *sub == EXT_CTRL_CODE_PAUSE_UNTIL_PRESS));
+            assert_eq!(
+                pauses,
+                !matches!(
+                    message,
+                    MailMessage::SendMailToPc | MailMessage::MessageWillBeLost
+                ),
+                "{message:?}: only the results wait for a press"
+            );
         }
     }
 

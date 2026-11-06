@@ -570,6 +570,11 @@ impl OverworldPhase {
         self.undecodable_lead_retained = false;
     }
 
+    /// The record the loaded lead owns, as last merged or edited.
+    pub(in crate::flow) fn lead_record_for_test(&self) -> Option<&engine::save::Pokemon> {
+        self.lead.as_ref().map(crate::party::LoadedLead::record)
+    }
+
     /// The saved slot backing the lead, if one is loaded.
     pub(in crate::flow) fn lead_slot_for_test(&self) -> Option<usize> {
         self.lead.as_ref().map(crate::party::LoadedLead::slot)
