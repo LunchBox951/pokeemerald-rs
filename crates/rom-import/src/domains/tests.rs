@@ -526,6 +526,7 @@ fn the_domain_list_writes_every_root_it_is_given() {
             bg_palettes: at(PALETTE_OFF),
         },
         interface: InterfaceRoots {
+            images: &[],
             palettes: INTERFACE_PALETTES,
         },
         ..Roots::NONE

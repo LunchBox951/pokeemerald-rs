@@ -4,9 +4,9 @@ use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
-    layout_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids,
-    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, TILESETS,
+    layout_ids, naming_screen_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids,
+    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
+    BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -51,10 +51,11 @@ pub fn require_title(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every Latin glyph sheet is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every Latin glyph sheet and the keypad-icon sheet are present.
 pub fn require_fonts(pack: &PackSource) -> Result<(), GenRomProfileError> {
     FONTS
         .into_iter()
+        .chain([KEYPAD_ICONS])
         .try_for_each(|font| pack.get(font.pack_id).map(|_| ()))
 }
 
@@ -87,7 +88,7 @@ pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError>
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter battler image and palette is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every battler image and palette is present.
 pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
     BATTLERS
         .iter()
@@ -207,6 +208,28 @@ pub fn require_poke_ball(pack: &PackSource) -> Result<(), GenRomProfileError> {
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every naming-screen image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `naming-screen/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_naming_screen(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = naming_screen_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("naming-screen/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's naming-screen inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
 /// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
 /// the enemy shadow, and the two ball palettes are present, and with
@@ -285,6 +308,13 @@ pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfile
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every interface image is present.
+pub fn require_interface_images(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    INTERFACE_IMAGE_IDS
+        .into_iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))
+}
+
 /// Refuses every missing fixed root, and any surplus `bag/` entry, before a domain writes a report line.
 pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProfileError> {
     require_tilesets(pack)?;
@@ -297,6 +327,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_field_messages(pack)?;
+    require_interface_images(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;
     require_starter_chooser(pack)?;
@@ -304,6 +335,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_evolution_scene(pack)?;
     require_poke_ball(pack)?;
     require_battle_interface(pack)?;
+    require_naming_screen(pack)?;
     require_trainer_front(pack)?;
     require_trainer_battlers(pack)
 }

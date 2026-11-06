@@ -188,6 +188,13 @@ mod save_continue_window_frame_tests;
 #[cfg(test)]
 mod start_menu_tests;
 
+/// The start menu's TAKE entry on a saved-slot lead (S-6): the
+/// item moves to the bag, the lead and its slot follow, a refusal changes
+/// nothing. Split from [`start_menu_tests`]: one module, one concept
+/// `(oop-boundaries)`.
+#[cfg(test)]
+mod take_lead_held_item_tests;
+
 /// The main menu's B path back to the title (I-2): priority against A and
 /// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own
 /// module for the same reason as its siblings `(oop-boundaries)`.

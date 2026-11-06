@@ -1134,6 +1134,7 @@ impl Sequencer {
                     echo_volume,
                     echo_length,
                 )
+                .with_length(sq.length)
                 .with_pitch_key(pitch_key)
                 .with_priority(priority),
             ),
@@ -1156,6 +1157,7 @@ impl Sequencer {
                     echo_volume,
                     echo_length,
                 )
+                .with_length(sq.length)
                 .with_pitch_key(pitch_key)
                 .with_priority(priority),
             ),
@@ -1179,6 +1181,7 @@ impl Sequencer {
                         echo_volume,
                         echo_length,
                     )
+                    .with_length(w.length)
                     .with_pitch_key(pitch_key)
                     .with_priority(priority),
                 )
@@ -1198,6 +1201,7 @@ impl Sequencer {
                     echo_volume,
                     echo_length,
                 )
+                .with_length(n.length)
                 .with_pitch_key(pitch_key)
                 .with_priority(priority),
             ),
@@ -1238,6 +1242,7 @@ fn startup_tone() -> Instrument {
             release: 0,
         },
         fixed_rate: false,
+        length: 0,
     })
 }
 
