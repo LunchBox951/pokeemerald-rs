@@ -24,8 +24,8 @@ use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEV
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
-    burn_residual_damage, draw_freeze_canceller, draws_full_paralysis, draws_shed_skin_cure,
-    poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
+    bad_poison_residual_damage, burn_residual_damage, draw_freeze_canceller, draws_full_paralysis,
+    draws_shed_skin_cure, poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
@@ -274,7 +274,7 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
+    /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
     /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
@@ -1095,6 +1095,7 @@ impl Battle {
                 continue;
             }
             self.apply_poison_residual(is_player, events);
+            self.apply_bad_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
@@ -1241,6 +1242,32 @@ impl Battle {
             &mut self.enemy
         };
         let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
+    /// `ENDTURN_BAD_POISON`: a living badly poisoned battler raises its toxic
+    /// count (at most 15) and loses `max(1, max HP / 16)` times that count,
+    /// with no RNG draw and no status write-back
+    /// (`pokeemerald/src/battle_util.c:1536`-`:1549`). It reports through the
+    /// same script and message as ordinary poison.
+    fn apply_bad_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if target.is_fainted() {
+            return;
+        }
+        let max_hp = target.stats().max_hp;
+        let Some(counter) = target.advance_toxic_turns() else {
+            return;
+        };
+        let dealt = bad_poison_residual_damage(max_hp, counter).min(target.current_hp());
         target.apply_damage(dealt);
         events.push(BattleEvent::HurtByPoison {
             by_player: is_player,
