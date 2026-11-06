@@ -95,7 +95,7 @@ fn write_save_with_new_game_options(temp: &TempSave, text_speed: u8, window_fram
         .expect("the fixture save must be writable");
 }
 
-/// The real end-to-end counterpart to `crate::flow::tests`' packless pin of
+/// The real end-to-end counterpart to `crate::flow::main_menu_decision_tests`' packless pin of
 /// `new_game_options_for`'s status split (issue #1125; see that function's
 /// own doc comment for the contract): confirms NEW GAME over an `Ok` save
 /// really does carry its options through a real intro and overworld load,

@@ -201,6 +201,47 @@ mod take_lead_held_item_tests;
 #[cfg(test)]
 mod main_menu_back_tests;
 
+/// `AppScene::OverworldLoadFailed`'s retry rule and the failed `Intro` -> `Overworld`
+/// transition: wait for a fresh edge instead of retrying every frame.
+/// Its own module so the load-failure regression is not buried among unrelated
+/// scene tests `(oop-boundaries)`.
+#[cfg(test)]
+mod overworld_load_failure_tests;
+
+/// The title screen's advance press (A or a fresh Start) and its `Title` -> `MainMenu`
+/// transition, including the `title_to_main_menu` subprocess error-prefix check.
+#[cfg(test)]
+mod title_advance_tests;
+
+/// The title screen's confirming-frame clocks: the cloud clock trailing the sprite
+/// clock by one, and the clouds freezing while the sprites keep animating.
+#[cfg(test)]
+mod title_clock_tests;
+
+/// The main menu's A confirmation: the `NEW GAME` and `OPTION` fade-waits, their
+/// deferred dispatch, and the fade-wait frame's palette composition.
+#[cfg(test)]
+mod main_menu_confirm_tests;
+
+/// The pure decisions at the main menu and boot hand-off: `menu_action`,
+/// `window_frame_for`, `new_game_options_for`, and what a corrupt or intact save leaves.
+#[cfg(test)]
+mod main_menu_decision_tests;
+
+/// The main menu's input sequencing: A against a same-frame direction, selection
+/// order, boundary fall-through, and the highlight-only frame after a move.
+#[cfg(test)]
+mod main_menu_input_tests;
+
+/// The rule that no scene outside the overworld writes the save.
+#[cfg(test)]
+mod save_isolation_tests;
+
+/// The `Intro` -> `Overworld` hand-off: the spawn tile and the chosen gender's bedroom
+/// arrival.
+#[cfg(test)]
+mod intro_handoff_tests;
+
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
 /// scene, the tick most recently composed, and whether that frame has been
@@ -744,5 +785,7 @@ pub(crate) fn advance_scene(
     }
 }
 
+/// Shared fixtures for the `flow` test modules (button states, scratch save and pack
+/// files, fade-wait drivers); the scene tests live in the per-concern siblings above.
 #[cfg(test)]
 mod tests;

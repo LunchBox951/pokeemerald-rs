@@ -122,7 +122,7 @@ fn a_saved_games_own_window_frame_choice_borders_its_main_menu() {
 }
 
 /// Set only on the child process below (mirrors
-/// `crate::flow::tests::MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD`).
+/// `crate::flow::title_advance_tests::MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD`).
 const FIELD_START_MENU_FRAME_BOUNDARY_CHILD: &str =
     "POKEEMERALD_RS_1180_FIELD_START_MENU_FRAME_BOUNDARY_CHILD";
 
