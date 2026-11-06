@@ -100,18 +100,14 @@ fn run_flow(
         }
         let buttons = match menu.yes_no_cursor() {
             Some(cursor) => match answers.get(answered).copied().unwrap_or(Answer::Yes) {
-                Answer::Yes => {
+                Answer::No if cursor == 0 => pressed(Buttons::DOWN),
+                Answer::Yes | Answer::No => {
                     answered += 1;
                     pressed(Buttons::A)
                 }
                 Answer::B => {
                     answered += 1;
                     pressed(Buttons::B)
-                }
-                Answer::No if cursor == 0 => pressed(Buttons::DOWN),
-                Answer::No => {
-                    answered += 1;
-                    pressed(Buttons::A)
                 }
             },
             None => pressed(Buttons::A),

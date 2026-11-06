@@ -54,8 +54,8 @@ fn a_full_mailbox_changes_nothing() {
     let mut lead = lead_holding(ItemId::BEAD_MAIL);
     let mut byte = 0;
     let mut all = array_with(0, ItemId::BEAD_MAIL);
-    for slot in MAIL_PARTY_SLOTS..MAIL_COUNT {
-        all[slot] = mail(ItemId::DREAM_MAIL, 3);
+    for entry in all.iter_mut().skip(MAIL_PARTY_SLOTS) {
+        *entry = mail(ItemId::DREAM_MAIL, 3);
     }
     let before = all;
 

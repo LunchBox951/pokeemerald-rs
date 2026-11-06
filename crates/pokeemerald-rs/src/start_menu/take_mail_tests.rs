@@ -43,18 +43,14 @@ fn drive(target: &mut FakeTarget, answers: &[Answer]) -> Run {
                 run.opened_on.push(cursor);
             }
             match answers.get(answered).copied().unwrap_or(Answer::Yes) {
-                Answer::Yes => {
+                Answer::NoRow if cursor == 0 => pressed(Buttons::DOWN),
+                Answer::Yes | Answer::NoRow => {
                     answered += 1;
                     pressed(Buttons::A)
                 }
                 Answer::B => {
                     answered += 1;
                     pressed(Buttons::B)
-                }
-                Answer::NoRow if cursor == 0 => pressed(Buttons::DOWN),
-                Answer::NoRow => {
-                    answered += 1;
-                    pressed(Buttons::A)
                 }
             }
         } else {

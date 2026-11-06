@@ -37,7 +37,7 @@ impl OverworldPhase {
         let mut mail = self.save1.mail;
         match party::take_mail_from_mon_and_save(&mut battler, &mut mon_mail, &mut mail) {
             Ok(_) => {
-                self.commit_mail_take(battler, mon_mail, mail, None);
+                self.commit_mail_take(battler, mon_mail, &mail, None);
                 SendMailToPc::Sent
             }
             Err(party::TakeMailError::MailboxFull) => SendMailToPc::MailboxFull,
@@ -70,7 +70,7 @@ impl OverworldPhase {
         }
         match party::take_mail_from_mon(&mut battler, &mut mon_mail, &mut mail) {
             Ok(true) => {
-                self.commit_mail_take(battler, mon_mail, mail, Some(bag));
+                self.commit_mail_take(battler, mon_mail, &mail, Some(bag));
                 ReturnMailToBag::Taken
             }
             Ok(false) | Err(_) => ReturnMailToBag::NothingToReturn,
@@ -84,14 +84,14 @@ impl OverworldPhase {
         &mut self,
         battler: battle::BattlePokemon,
         mon_mail: u8,
-        mail: [engine::save::Mail; engine::save::MAIL_COUNT],
+        mail: &[engine::save::Mail; engine::save::MAIL_COUNT],
         bag: Option<engine::save::Bag>,
     ) {
         let Some(lead) = self.lead.as_mut().filter(|lead| !lead.is_lent()) else {
             return;
         };
         lead.install_mail_take(battler, mon_mail);
-        self.save1.mail = mail;
+        self.save1.mail = *mail;
         if let Some(bag) = bag {
             self.save1.bag = bag;
         }
