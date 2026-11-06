@@ -18,6 +18,7 @@ use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type
 
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
@@ -621,6 +622,12 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// Gender from the species ratio and the personality's low byte.
+    #[must_use]
+    pub const fn gender(&self) -> Gender {
+        Gender::of_personality(self.base_stats.gender_ratio, self.personality)
     }
 
     /// Ability selected by [`BattlePokemon::ability_slot`].

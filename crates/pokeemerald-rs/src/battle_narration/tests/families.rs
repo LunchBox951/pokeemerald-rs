@@ -32,6 +32,10 @@ const SLOTS: &[(u16, &str)] = &[
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
     (46, "{B_EFF_NAME_WITH_PREFIX} was burned!"),
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
+    (69, "{B_DEF_NAME_WITH_PREFIX}\nfell in love!"),
+    (70, "{B_ATK_NAME_WITH_PREFIX} is in love\nwith {B_SCR_ACTIVE_NAME_WITH_PREFIX}!"),
+    (71, "{B_ATK_NAME_WITH_PREFIX} is\nimmobilized by love!"),
+    (200, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nprevents romance!"),
     (104, "{B_DEF_NAME_WITH_PREFIX} was seeded!"),
     (105, "{B_DEF_NAME_WITH_PREFIX} evaded\nthe attack!"),
     (106, "{B_ATK_NAME_WITH_PREFIX}'s health is\nsapped by LEECH SEED!"),
@@ -481,6 +485,39 @@ fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
         [
             "Wild RATTATA evaded\nthe attack!",
             "TORCHIC evaded\nthe attack!",
+        ]
+    );
+}
+
+#[test]
+fn attract_names_the_target_and_the_infatuated_actor_with_its_attractor() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::ATTRACT;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Infatuated {
+                    by_player: true,
+                    move_id,
+                },
+                BattleEvent::InLove { by_player: false },
+                BattleEvent::ImmobilizedByLove {
+                    by_player: false,
+                    move_id,
+                },
+                BattleEvent::ObliviousPreventsAttraction {
+                    by_player: false,
+                    move_id,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA\nfell in love!",
+            "Wild RATTATA is in love\nwith TORCHIC!",
+            "Wild RATTATA is\nimmobilized by love!",
+            "TORCHIC's OBLIVIOUS\nprevents romance!",
         ]
     );
 }

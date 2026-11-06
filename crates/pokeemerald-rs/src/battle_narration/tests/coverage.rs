@@ -31,6 +31,10 @@ fn move_events() -> Vec<BattleEvent> {
             damage: 3,
         },
         BattleEvent::FullyParalyzed { by_player, move_id },
+        BattleEvent::InLove { by_player },
+        BattleEvent::ImmobilizedByLove { by_player, move_id },
+        BattleEvent::Infatuated { by_player, move_id },
+        BattleEvent::ObliviousPreventsAttraction { by_player, move_id },
         BattleEvent::FastAsleep { by_player, move_id },
         BattleEvent::WokeUp { by_player },
         BattleEvent::LoafingAround { by_player, move_id },
@@ -219,7 +223,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 77;
+const VARIANTS: usize = 81;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -303,6 +307,10 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::LeechSeedHealed { .. } => 74,
         BattleEvent::ItemRestoredHealth { .. } => 75,
         BattleEvent::LeechSeedEvaded { .. } => 76,
+        BattleEvent::InLove { .. } => 77,
+        BattleEvent::ImmobilizedByLove { .. } => 78,
+        BattleEvent::Infatuated { .. } => 79,
+        BattleEvent::ObliviousPreventsAttraction { .. } => 80,
     }
 }
 
