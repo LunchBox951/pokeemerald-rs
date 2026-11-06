@@ -41,14 +41,20 @@ use super::report::{
 /// The entry name a captured level sits under inside its quarantine.
 pub(in super::super) const QUARANTINE_ENTRY: &str = "level";
 
-/// A fresh quarantine basename no other account can predict.
-pub(in super::super) fn unguessable_quarantine_name() -> Option<String> {
+/// Sixteen hex digits from `/dev/urandom` that no other account can predict,
+/// for the private names this run makes in a directory others can write.
+/// Opening `/dev/urandom` needs a descriptor, so the error says if the table
+/// is full.
+pub(in super::super) fn unguessable_hex() -> std::io::Result<String> {
     use std::io::Read as _;
     let mut bytes = [0u8; 8];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut urandom| urandom.read_exact(&mut bytes))
-        .ok()?;
-    Some(format!(".undo-{:016x}", u64::from_ne_bytes(bytes)))
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(format!("{:016x}", u64::from_ne_bytes(bytes)))
+}
+
+/// A fresh quarantine basename no other account can predict.
+pub(in super::super) fn unguessable_quarantine_name() -> Option<String> {
+    unguessable_hex().ok().map(|hex| format!(".undo-{hex}"))
 }
 
 /// Whether `quarantine` is an empty directory owned by this user with no

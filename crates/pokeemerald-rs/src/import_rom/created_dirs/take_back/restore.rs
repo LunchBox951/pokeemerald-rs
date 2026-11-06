@@ -83,7 +83,7 @@ pub(super) fn holds_this_level(
 /// `renameat` that refuses to replace an existing destination where the
 /// platform can say so (Linux, Android, Apple); elsewhere it refuses with
 /// `ENOSYS` rather than emulate that with a racy check.
-fn rename_without_replacing(
+pub(in super::super) fn rename_without_replacing(
     from_dir: impl AsFd,
     from: impl rustix::path::Arg + Copy,
     to_dir: impl AsFd,

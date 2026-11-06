@@ -56,12 +56,16 @@ pub(super) use hooks::{
     take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
     take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
 };
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) use quarantine::unguessable_hex;
 use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 #[cfg(test)]
 pub(super) use report::located_beside;
 use report::{warn_if_moved_away, warn_left_standing};
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) use restore::rename_without_replacing;
 #[cfg(test)]
 pub(super) use restore::restore_capture;
 use restore::{is_this_level, take_back_into};
