@@ -46,15 +46,10 @@ impl OverworldPhase {
     /// defers a completed step to the call after the one that drained its
     /// animation (`step`'s "Frame shape" section owns the derivation).
     /// `field_input_suppressed` withholds a forced landing from every
-    /// completed-step consumer, per upstream's `tookStep`/
-    /// `checkStandardWildEncounter` exclusion
-    /// (`field_control_avatar.c:116-122`). The escalator arrival's east step
-    /// is held movement (`field_effect.c:1813-1818`), so its landing never
-    /// sets `tookStep` (`field_control_avatar.c:118-119`): it reaches only
-    /// the encounter gate, as a stationary turn's tile-centre observation
-    /// does (`:120-121`), and `runningState` staying `NOT_MOVING` ends the
-    /// keypad's moving streak (`CheckMovementInputNotOnBike`,
-    /// `field_player_avatar.c:587-595`).
+    /// completed-step consumer (`field_control_avatar.c:116-122`). The
+    /// escalator arrival's walk-off landing is held movement (see the module
+    /// docs): it is withheld from them and left to the encounter gate as a
+    /// pending turn, and it ends the keypad's moving streak.
     pub(super) fn take_stepped_onto(&mut self) -> Option<TilePos> {
         let stepped_onto = self
             .pending_landing
@@ -81,7 +76,8 @@ impl OverworldPhase {
     }
 
     /// Latches the arrival step's landing tile when `walk_off_step` says the
-    /// frame's input was that step and its `outcome` began it; a blocked or preempted step has no landing.
+    /// frame's input was that step and its `outcome` began it; a blocked or
+    /// preempted step has no landing.
     pub(super) fn latch_escalator_walk_off_landing(
         &mut self,
         walk_off_step: bool,
