@@ -173,6 +173,7 @@ fn locate_profile(
         sprites: sprites::locate(ctx, lines)?,
         layouts: layouts::locate(ctx, lines)?,
         fonts: fonts::locate(ctx, lines)?,
+        font_images: fonts::locate_keypad_icons(ctx, lines)?,
         text_window: text_window::locate(ctx, lines)?,
         interface: interface::locate(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
