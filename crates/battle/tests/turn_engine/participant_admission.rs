@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 25] {
+fn refused() -> [(BattlePokemon, AbilityId); 28] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -58,6 +58,20 @@ fn refused() -> [(BattlePokemon, AbilityId); 25] {
         ),
         (
             mon(SpeciesId::SNORLAX, 0, Status1::Poisoned),
+            AbilityId::IMMUNITY,
+        ),
+        // Immunity cures bad poison too, whatever its stored counter
+        // (`battle_util.c:2878`-`:2883`).
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 0 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 5 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 15 }),
             AbilityId::IMMUNITY,
         ),
         (
