@@ -470,8 +470,7 @@ fn a_run_caught_by_a_cone_stands_once_the_lock_sees_it_settle() {
 /// CB1's `ProcessPlayerFieldInput`/`PlayerStep` only
 /// (`overworld.c:1445-1455`), while the held movement runs from CB2's
 /// `AnimateSprites` afterwards (`:1469`, `main.c:188-195`), so skipping that
-/// frame's tick stalls the walk animation by exactly one frame (PR #407
-/// review). That call site itself is driven end to end through `step` by
+/// frame's tick stalls the walk animation by exactly one frame. That call site itself is driven end to end through `step` by
 /// `real_parties` (each fighter's real cone) and by the stand-in cones in
 /// this module; this test pins the method both frames share directly, so the
 /// tick is checked without depending on any party.

@@ -20,34 +20,28 @@
 //!
 //! # The stand-in party (`seed_battle`)
 //!
-//! Where real parties stand today (pinned by
-//! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`
-//! and that module's `real_party_outcome` tests): six of the Route 103
-//! sight trainers' real parties construct through
-//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] and play to
-//! a win -- Daisy, Andrew, Rhett, Marcos, Pete and Isabelle. Only Miguel
-//! (his Skitty's Cute Charm ability) and Amy & Liv (a double battle; their
-//! party also stops on Helping Hand) are still refused, and
-//! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
-//! nothing, forever") cover what that costs. `real_parties` drives four of
-//! the six (Andrew, Rhett, Marcos, Pete) from their own cones to their
-//! conclusions with no borrowed party; Daisy's and Isabelle's construction
-//! and win are pinned in `sight_trainer_trigger` but not driven from their
-//! cones here.
+//! Which real Route 103 parties construct, and which are refused and why, is
+//! owned and pinned by `sight_trainer_trigger`
+//! (`begin_sight_trainer_approach_if_seen`'s docs, `FIGHTING_TRAINERS`, and
+//! `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`);
+//! this module does not repeat that list. `real_parties` drives Andrew,
+//! Rhett, Marcos and Pete from their own cones to their conclusions with no
+//! borrowed party.
 //!
-//! The stand-in below is therefore a choice for determinism and isolation,
-//! not a workaround for an unavailable production path. A borrowed party
-//! keeps these tests off any one trainer's moveset and AI scoring, so a
-//! `battle`-crate change to Rhett's or Andrew's moves cannot move a timing,
-//! flag or RNG-draw pin that is about this module's own glue. Through
+//! The stand-in below is a choice for determinism and isolation, not a
+//! workaround for an unavailable production path. A borrowed party keeps
+//! these tests off any one trainer's moveset and AI scoring, so a
+//! `battle`-crate change to a real party cannot move a timing, flag or
+//! RNG-draw pin that is about this module's own glue. Through
 //! `synthetic_sight_trainer` it also makes a false-positive cone observable
 //! as a started approach whichever single-battle trainer the scan wrongly
-//! selects, including the refused Miguel, whose real party would mask it.
-//! Amy and Liv are not covered that way: the scan sets double battles aside
-//! before selection, so the stand-in is never reached for them. The `trigger` tests that need a refusal at Rhett's geometry
-//! borrow, through the same field, the id of a party that stops at Taillow's
-//! Headbutt (`TRAINER_REFUSED_FOR_MOVE`), because Rhett's own party constructs;
-//! the real refusals (Miguel, Amy) have their own cone tests.
+//! selects, including a trainer whose real party is refused. Double battles
+//! are not covered that way: the scan sets them aside before selection, so
+//! the stand-in is never reached for them. The `trigger` tests that need a
+//! refusal at Rhett's geometry borrow, through the same field, the id of a
+//! party that stops at Taillow's Headbutt (`TRAINER_REFUSED_FOR_MOVE`),
+//! because Rhett's own party constructs; the real refusals have their own
+//! cone tests.
 //!
 //! The win/loss/defeated-flag *driver* half
 //! ([`OverworldPhase::advance_sight_trainer_battle_frame`][advance]) is a
