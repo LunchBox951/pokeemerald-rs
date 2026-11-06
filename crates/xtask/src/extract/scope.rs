@@ -388,6 +388,16 @@ pub(crate) const MAIN_MENU_BG_PALETTE_ID: &str = "interface/palette/main_menu_bg
 /// Every interface palette pack id extraction writes and the generator requires.
 pub(crate) const INTERFACE_PALETTE_IDS: [&str; 1] = [MAIN_MENU_BG_PALETTE_ID];
 
+/// The pack id of the text printer's page-prompt arrow sheet.
+pub(crate) const DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow";
+
+/// The checkout path of that sheet, relative to the checkout root
+/// (`sDownArrowTiles`, `src/text.c:71`).
+pub(crate) const DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow.png";
+
+/// Every interface image pack id extraction writes and the generator requires.
+pub(crate) const INTERFACE_IMAGE_IDS: [&str; 1] = [DOWN_ARROW_IMAGE_ID];
+
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {
     let images = TITLE_SCREEN_IMAGES.map(|s| format!("title/image/{s}"));
@@ -427,6 +437,13 @@ pub(crate) const FONTS: [FontSource; 5] = [
         pack_id: "font/small_narrow/glyphs",
     },
 ];
+
+/// The keypad-icon sheet (`graphics/fonts/keypad_icons.png`), the bitmap
+/// `sKeypadIconTiles` holds (`pokeemerald/src/text.c:117`).
+pub(crate) const KEYPAD_ICONS: FontSource = FontSource {
+    filename: "keypad_icons.png",
+    pack_id: "font/keypad_icons",
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct LayoutSource {

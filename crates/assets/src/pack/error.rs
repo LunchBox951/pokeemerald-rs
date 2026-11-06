@@ -174,6 +174,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// The text printer's down-arrow sheet differs from the upstream graphic's shape.
+    MalformedTextPrinterAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -360,6 +367,9 @@ impl fmt::Display for PackError {
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
             }
+            Self::MalformedTextPrinterAsset { id, detail } => {
+                write!(f, "asset pack: text-printer entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
@@ -443,7 +453,8 @@ impl std::error::Error for PackError {
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
-            | Self::MalformedBagAsset { .. } => None,
+            | Self::MalformedBagAsset { .. }
+            | Self::MalformedTextPrinterAsset { .. } => None,
         }
     }
 }
