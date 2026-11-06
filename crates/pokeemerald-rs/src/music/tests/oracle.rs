@@ -1,5 +1,6 @@
 //! Compares an offline `mus_title` render with a local mGBA capture.
 
+use std::cell::Cell;
 use std::env;
 use std::fs;
 
@@ -17,6 +18,15 @@ const MIN_REFERENCE_RMS: f64 = 1e-4;
 const SEED_STRIDE_FRAMES: usize = 128;
 /// Frames between prefix-error checks that drop a losing alignment.
 const PRUNE_BLOCK_FRAMES: usize = 64;
+
+thread_local! {
+    /// Squared-difference terms summed on this thread by the error functions.
+    static ERROR_TERMS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn count_error_terms(terms: usize) {
+    ERROR_TERMS.with(|count| count.set(count.get() + terms));
+}
 
 fn read_pcm_f32(path: &str) -> Vec<f32> {
     let bytes = fs::read(path).unwrap_or_else(|e| panic!("reading `{path}`: {e}"));
@@ -46,6 +56,7 @@ fn rms_error(reference: &[f32], candidate: &[f32], offset_frames: usize, frames:
         "rms_error called without a full {frames}-frame stereo window at frame offset \
          {offset_frames}"
     );
+    count_error_terms(len);
     let sum_sq: f64 = reference[start..start + len]
         .iter()
         .zip(&candidate[..len])
@@ -92,6 +103,7 @@ fn rms_error_within(
         .chunks(PRUNE_BLOCK_FRAMES * 2)
         .zip(candidate.chunks(PRUNE_BLOCK_FRAMES * 2))
     {
+        count_error_terms(r_block.len());
         for (&r, &c) in r_block.iter().zip(c_block) {
             let diff = f64::from(r) - f64::from(c);
             sum_sq += diff * diff;
@@ -454,4 +466,22 @@ fn fast_alignment_matches_brute_force_on_unrelated_audio() {
 #[should_panic(expected = "NaN or infinite")]
 fn oracle_rejects_non_finite_samples() {
     let _ = check_against_reference(&[f32::NAN; 16], &[0.0; 8], 2, 4);
+}
+
+#[test]
+fn fast_alignment_prunes_most_of_the_exhaustive_work() {
+    let (search, compare, planted) = (769, 4097, 513);
+    let reference = lcg_samples(0x3115, 2 * (search + compare));
+    let candidate = &reference[2 * planted..2 * (planted + compare)];
+    ERROR_TERMS.with(|c| c.set(0));
+    assert_eq!(
+        best_alignment(&reference, candidate, search, compare),
+        planted
+    );
+    let terms = ERROR_TERMS.with(Cell::get);
+    let exhaustive = 2 * search * compare;
+    assert!(
+        terms * 10 < exhaustive,
+        "alignment summed {terms} error terms; the exhaustive scan sums {exhaustive}"
+    );
 }
