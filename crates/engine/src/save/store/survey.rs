@@ -300,8 +300,22 @@ impl SlotSurvey {
     /// and a legacy head over a coherent older tail keeps reading intact.
     /// The one exception is the first tail position, see
     /// [`Self::first_tail_position_is_unusable`].
+    ///
+    /// Blanks count only against an identity head, the one shape a torn
+    /// rotation-zero write leaves. A head with its ids permuted among
+    /// positions 0-4 is a five-sector write at a nonzero rotation: a
+    /// 14-sector write lays ids 0-4 within positions 0-4 only at rotation
+    /// zero (`pokeemerald/src/save.c:176-184`), so no blank in the tail is
+    /// such a head's torn sector and none is held against it.
     fn tail_unusable_count(&self) -> usize {
-        self.tail_failed_count + usize::from(self.tail_unsigned_count == 1)
+        self.tail_failed_count + usize::from(self.blank_tail_position_may_be_torn())
+    }
+
+    /// Whether a lone blank tail position may be a torn write's sector in
+    /// flight: only when the head is an identity head (see
+    /// [`Self::tail_unusable_count`]) and the tail holds exactly one blank.
+    fn blank_tail_position_may_be_torn(&self) -> bool {
+        self.head_is_identity && self.tail_unsigned_count == 1
     }
 
     /// Whether the first tail position (5) is unusable, blank or failing.
@@ -311,9 +325,11 @@ impl SlotSurvey {
     /// that has laid the five head sectors reaches position 5 next. A blank
     /// there is that write's sixth sector, torn after its erase, whatever
     /// else the older tail holds; blanks elsewhere lie in the older tail's
-    /// own rotation, which the head's write never reached.
+    /// own rotation, which the head's write never reached. A nonidentity
+    /// head is no rotation-zero write, so a blank at 5 is not its sixth
+    /// sector and only a failing signed sector there is held against it.
     fn first_tail_position_is_unusable(&self) -> bool {
-        self.tail_unsigned_at_first_tail_position
+        (self.head_is_identity && self.tail_unsigned_at_first_tail_position)
             || (self.tail_failed_count == 1 && self.tail_failed_at_first_tail_position)
     }
 

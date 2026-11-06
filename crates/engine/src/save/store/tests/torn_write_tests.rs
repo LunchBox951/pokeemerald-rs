@@ -602,3 +602,77 @@ fn a_blank_at_the_next_position_over_a_rotation_zero_tail_stays_legacy() {
         assert!(scan.legacy, "blanks at 5 and {blank}");
     }
 }
+
+/// Slot 1: a rotation-1 counter-12 generation whose tail position 9 carries
+/// the head's counter 14, under a five-sector head written at
+/// `head_rotation` (counter 14), with `blanks` erased. Slot 0 is an intact
+/// full generation at counter 13, the one a rejected slot 1 rolls back to.
+fn rotated_legacy_head_over_a_tail_sharing_its_counter(
+    head_rotation: u16,
+    blanks: &[usize],
+) -> SaveStore {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 0, 0, 13);
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    let shared = store.read_physical(1, 9);
+    let len = sector_payload_len(shared.id()).unwrap();
+    store.write_physical(1, 9, &Sector::write(shared.id(), &shared.data()[..len], 14));
+    write_legacy_slot_rotated(
+        &mut store,
+        1,
+        &sample_block1(),
+        &sample_block2(),
+        14,
+        head_rotation,
+    );
+    for &blank in blanks {
+        store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    }
+    store
+}
+
+/// A rotated five-sector head is no 14-sector write, so a blank at position 5
+/// is not its torn sixth sector: with one blank or several beside a tail
+/// footer sharing its counter, it stays an intact legacy head and `load`
+/// keeps its newer counter instead of rolling back to the older sibling.
+#[test]
+fn a_rotated_legacy_head_over_a_blank_tail_position_stays_legacy() {
+    for head_rotation in 1..5 {
+        for blanks in [&[5][..], &[5, 11], &[11], &[6, 11]] {
+            let mut store =
+                rotated_legacy_head_over_a_tail_sharing_its_counter(head_rotation, blanks);
+            let label = format!("head rotation {head_rotation}, blanks {blanks:?}");
+            let scan = store.scan_slot(1);
+            assert_eq!(scan.integrity, SlotIntegrity::Ok, "{label}");
+            assert!(scan.legacy, "{label}");
+            let outcome = store.load();
+            assert_eq!(outcome.status, SaveStatus::Ok, "{label}");
+            assert_eq!(store.save_counter(), 14, "{label}");
+        }
+    }
+}
+
+/// The identity head over the same tail is a rotation-zero write torn after
+/// its fifth sector, so a blank at position 5 still refuses it, alone or
+/// beside another blank, and `load` rolls back to the intact sibling.
+#[test]
+fn an_identity_head_over_a_blank_first_tail_position_still_reads_error() {
+    for blanks in [&[5][..], &[5, 11]] {
+        let mut store = SaveStore::new();
+        write_full_slot_rotated(&mut store, 0, 0, 13);
+        write_full_slot_rotated(&mut store, 1, 1, 12);
+        let shared = store.read_physical(1, 9);
+        let len = sector_payload_len(shared.id()).unwrap();
+        store.write_physical(1, 9, &Sector::write(shared.id(), &shared.data()[..len], 14));
+        tear_rotation_zero_write(&mut store, 1, 5, 14);
+        for &blank in blanks {
+            store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+        }
+        let label = format!("blanks {blanks:?}");
+        let scan = store.scan_slot(1);
+        assert_eq!(scan.integrity, SlotIntegrity::Error, "{label}");
+        assert!(!scan.legacy, "{label}");
+        assert_eq!(store.load().status, SaveStatus::Error, "{label}");
+        assert_eq!(store.save_counter(), 13, "{label}");
+    }
+}
