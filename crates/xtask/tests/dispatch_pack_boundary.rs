@@ -98,61 +98,101 @@ fn scenario_ignores_an_existing_override_without_the_checkout_pack() {
     dispatch_fails_without_checkout_pack(&["scenario", "--name", "boot-to-main-menu"], "scenario");
 }
 
-/// Restores `snapshots/` after a child `record-snapshot` publishes into it:
-/// removes only generation directories the child created and puts the
-/// `title.generation` pointer back as it was, so the real-pack test leaves
-/// the checkout as it found it (the command's output directory is fixed at
-/// `<repo root>/snapshots`; there is no scratch-directory input).
+/// Restores `snapshots/` after a child `record-snapshot` publishes into it,
+/// so the real-pack test leaves the checkout as it found it (the command's
+/// output directory is fixed at `<repo root>/snapshots`; there is no
+/// scratch-directory input).
+///
+/// It touches only what its own child created: the generation directory the
+/// child reported ([`Self::own_generation_from_stdout`]), and the
+/// `title.generation` pointer only while that pointer still names such a
+/// generation. A generation or pointer from a concurrent publisher is left
+/// as that publisher wrote it.
 struct SnapshotsRestore {
     dir: PathBuf,
     dir_existed: bool,
     pointer: PathBuf,
     pointer_before: Option<Vec<u8>>,
-    entries_before: std::collections::BTreeSet<std::ffi::OsString>,
+    own_generations: Vec<String>,
 }
 
 impl SnapshotsRestore {
     fn capture() -> Self {
-        let dir = repo_root().join("snapshots");
+        Self::capture_in(repo_root().join("snapshots"))
+    }
+
+    /// # Panics
+    ///
+    /// When the pointer exists but cannot be read: recording that as absent
+    /// would delete a file this guard never understood.
+    fn capture_in(dir: PathBuf) -> Self {
         let pointer = dir.join("title.generation");
-        let entries_before = list_entries(&dir);
+        let pointer_before = match std::fs::read(&pointer) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!(
+                "cannot read the existing snapshot pointer {}: {error}",
+                pointer.display()
+            ),
+        };
         Self {
             dir_existed: dir.exists(),
-            pointer_before: std::fs::read(&pointer).ok(),
-            entries_before,
+            pointer_before,
+            own_generations: Vec::new(),
             dir,
             pointer,
         }
     }
-}
 
-fn list_entries(dir: &Path) -> std::collections::BTreeSet<std::ffi::OsString> {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.file_name())
-        .collect()
+    /// Records the generation directory named by `record-snapshot`'s
+    /// success line (`... to <dir>/title.rgb (+ ...`), when it sits directly
+    /// under this guard's directory.
+    fn own_generation_from_stdout(&mut self, stdout: &str) {
+        let Some((_, rest)) = stdout.split_once(" snapshot (") else {
+            return;
+        };
+        let Some((_, rest)) = rest.split_once(" to ") else {
+            return;
+        };
+        let Some((rgb_dir, _)) = rest.split_once("/title.rgb") else {
+            return;
+        };
+        let generation = Path::new(rgb_dir);
+        if generation.parent() != Some(self.dir.as_path()) {
+            return;
+        }
+        if let Some(name) = generation.file_name().and_then(|name| name.to_str()) {
+            if name.starts_with("title.generation-") {
+                self.own_generations.push(name.to_owned());
+            }
+        }
+    }
 }
 
 impl Drop for SnapshotsRestore {
     fn drop(&mut self) {
-        for name in list_entries(&self.dir).difference(&self.entries_before) {
-            // Only the generation directories this child published; the
-            // pointer and staging names are handled or already gone.
-            if name.to_string_lossy().starts_with("title.generation-") {
-                let _ = std::fs::remove_dir_all(self.dir.join(name));
+        if self.own_generations.is_empty() {
+            return;
+        }
+        // Restore the pointer only while it still names a generation this
+        // guard's child created; another publisher's pointer stays.
+        let pointer_is_ours = std::fs::read_to_string(&self.pointer)
+            .is_ok_and(|text| self.own_generations.iter().any(|own| own == text.trim()));
+        if pointer_is_ours {
+            match &self.pointer_before {
+                Some(bytes) => {
+                    let _ = std::fs::write(&self.pointer, bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_file(&self.pointer);
+                }
             }
         }
-        match &self.pointer_before {
-            Some(bytes) => {
-                let _ = std::fs::write(&self.pointer, bytes);
-            }
-            None => {
-                let _ = std::fs::remove_file(&self.pointer);
-            }
+        for name in &self.own_generations {
+            let _ = std::fs::remove_dir_all(self.dir.join(name));
         }
         if !self.dir_existed {
+            // Fails, harmlessly, when anything else is in it.
             let _ = std::fs::remove_dir(&self.dir);
         }
     }
@@ -178,8 +218,9 @@ fn record_snapshot_reads_the_checkout_pack_even_with_a_missing_override() {
         "run `cargo xtask extract` first: {}",
         checkout_pack().display()
     );
-    let _restore = SnapshotsRestore::capture();
+    let mut restore = SnapshotsRestore::capture();
     let output = run_xtask(&["record-snapshot", "--scene", "title"], MISSING_PACK);
+    restore.own_generation_from_stdout(&String::from_utf8_lossy(&output.stdout));
     assert_succeeds(&output, "record-snapshot");
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("recorded `title` snapshot"),
@@ -204,4 +245,88 @@ fn scenario_reads_the_checkout_pack_even_with_a_missing_override() {
         "expected the dispatch success line, got:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+/// A scratch `snapshots/` stand-in owned by one regression test.
+fn scratch_snapshots(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "dispatch-pack-boundary-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    dir
+}
+
+#[test]
+#[cfg(unix)]
+fn adjudicator_restore_keeps_a_pointer_it_could_not_read() {
+    let dir = scratch_snapshots("unreadable-pointer");
+    let pointer = dir.join("title.generation");
+    // A self-referential symlink: it exists, but reading it fails with
+    // ELOOP, which is not "absent".
+    std::os::unix::fs::symlink(&pointer, &pointer).expect("symlink");
+    let captured = std::panic::catch_unwind(|| SnapshotsRestore::capture_in(dir.clone()));
+    assert!(
+        captured.is_err(),
+        "capture must abort on an unreadable pointer rather than record it as absent"
+    );
+    drop(captured);
+    assert!(
+        std::fs::symlink_metadata(&pointer).is_ok(),
+        "an unreadable pointer must survive"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshots_restore_keeps_a_concurrent_publishers_generation() {
+    let dir = scratch_snapshots("concurrent-publisher");
+    let restore = SnapshotsRestore::capture_in(dir.clone());
+    // Another publisher lands a generation and repoints the pointer while
+    // the guard is held; this guard's own child published nothing.
+    let other = dir.join("title.generation-4294967295-0");
+    std::fs::create_dir(&other).expect("other generation");
+    std::fs::write(other.join("title.rgb"), b"rgb").expect("payload");
+    std::fs::write(
+        dir.join("title.generation"),
+        b"title.generation-4294967295-0\n",
+    )
+    .expect("pointer");
+    drop(restore);
+    assert!(
+        other.join("title.rgb").exists(),
+        "a generation this guard's child did not create must survive"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-4294967295-0\n",
+        "a pointer written by another publisher must be left alone"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshots_restore_removes_only_its_own_generation_and_restores_the_pointer() {
+    let dir = scratch_snapshots("own-generation");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    // The child publishes its generation and repoints the pointer.
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-77-0\n").expect("pointer");
+    restore.own_generation_from_stdout(&format!(
+        "recorded `title` snapshot (1 byte(s)) to {}/title.rgb (+ {}/title.meta); rgb hash 0\n",
+        own.display(),
+        own.display()
+    ));
+    drop(restore);
+    assert!(!own.exists(), "the child's own generation is removed");
+    assert!(dir.join("title.generation-1-0").exists());
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-1-0\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
