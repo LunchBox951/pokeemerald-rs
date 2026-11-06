@@ -496,7 +496,7 @@ mod path_probe {
         fs::create_dir(&level).unwrap();
         assert_eq!(
             verified_location(Ok(candidate(&level)), &stat_of(&level)),
-            Some(PathBuf::from(&level))
+            Ok(Some(PathBuf::from(&level)))
         );
     }
 
@@ -510,7 +510,7 @@ mod path_probe {
         let own = held(&level).unwrap();
         let held = rustix::fs::fstat(&own).unwrap();
         fs::remove_dir(&level).unwrap();
-        assert_eq!(verified_location(Ok(candidate(&level)), &held), None);
+        assert_eq!(verified_location(Ok(candidate(&level)), &held), Ok(None));
     }
 
     #[test]
@@ -524,7 +524,7 @@ mod path_probe {
         fs::remove_dir(&level).unwrap();
         fs::create_dir(&level).unwrap();
         assert_ne!(stat_of(&level).st_ino, held.st_ino);
-        assert_eq!(verified_location(Ok(candidate(&level)), &held), None);
+        assert_eq!(verified_location(Ok(candidate(&level)), &held), Ok(None));
     }
 
     #[test]
@@ -535,7 +535,7 @@ mod path_probe {
         std::os::unix::fs::symlink(&level, &link).unwrap();
         assert_eq!(
             verified_location(Ok(candidate(&link)), &stat_of(&level)),
-            None
+            Ok(None)
         );
     }
 
@@ -545,13 +545,45 @@ mod path_probe {
         let held = stat_of(&dir.path);
         assert_eq!(
             verified_location(Err(rustix::io::Errno::NOENT), &held),
-            None
+            Ok(None)
         );
         let cwd = stat_of(Path::new("."));
         assert_eq!(
             verified_location(Ok(candidate(Path::new("."))), &cwd),
-            None,
+            Ok(None),
             "a relative path says nothing about where the directory is"
+        );
+    }
+
+    #[test]
+    fn a_path_whose_examination_fails_is_not_reported_as_vacant() {
+        // A file where a directory should be makes the path unexaminable
+        // (`ENOTDIR`), which is not the entry being vacant (`ENOENT`).
+        let dir = TempDir::new("verified-location-unexaminable");
+        let (file, level) = (dir.join("file"), dir.join("level"));
+        fs::write(&file, b"").unwrap();
+        fs::create_dir(&level).unwrap();
+        let held = stat_of(&level);
+        assert_eq!(
+            verified_location(Ok(candidate(&file.join("level"))), &held),
+            Err(rustix::io::Errno::NOTDIR),
+            "an examination that failed is an error, not a vacant path"
+        );
+        let vacant = dir.join("vacant");
+        assert_eq!(
+            verified_location(Ok(candidate(&vacant)), &held),
+            Ok(None),
+            "a vacant path is not a location"
+        );
+    }
+
+    #[test]
+    fn a_platform_answer_that_failed_unexpectedly_is_an_error() {
+        let dir = TempDir::new("verified-location-getpath-failed");
+        let held = stat_of(&dir.path);
+        assert_eq!(
+            verified_location(Err(rustix::io::Errno::ACCESS), &held),
+            Err(rustix::io::Errno::ACCESS)
         );
     }
 }
