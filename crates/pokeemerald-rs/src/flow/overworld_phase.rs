@@ -44,6 +44,7 @@ pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod connections;
+mod escalator_arrival;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -190,6 +191,13 @@ pub(crate) struct OverworldPhase {
     /// Feeds only the wild-encounter gate -- never the positional
     /// coord/warp consumers `pending_landing` feeds.
     pending_turn: Option<TilePos>,
+    /// An escalator warp just landed and its arrival's east step is still
+    /// due ([`escalator_arrival`]); consumed by the next field frame.
+    escalator_arrival_walk: Option<engine::overworld::Direction>,
+    /// The tile the arrival's east step is walking onto, until its landing is
+    /// consumed: that landing is held movement, not a took-step
+    /// ([`escalator_arrival`]).
+    escalator_walk_off_landing: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -600,6 +608,8 @@ impl OverworldPhase {
             save2: block2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -748,6 +758,8 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
