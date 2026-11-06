@@ -27,8 +27,11 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 pub(super) const TRAINER_RHETT: u16 = 703;
 
 /// The trainer whose party Taillow knows Headbutt (`EFFECT_FLINCH_HIT`), which
-/// the battle crate does not execute: its construction is refused for a move,
-/// so tests use its id as the refused party.
+/// the battle crate does not execute: its construction is refused for a move
+/// (`npc_trainer_battle`'s `an_oran_berry_party_is_refused_for_its_move_before_any_ot_id_draw`).
+/// It is not a Route 103 sight trainer, so tests borrow its id, through
+/// `synthetic_sight_trainer`, as a refused party at a cone whose own real
+/// party constructs.
 pub(super) const TRAINER_REFUSED_FOR_MOVE: u16 = 292;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
@@ -50,10 +53,11 @@ pub(super) const RHETT_TILE: (i32, i32) = (67, 5);
 pub(super) const ANDREW_TILE: (i32, i32) = (50, 8);
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
-/// `TrainerParty::ItemDefaultMoves` Skitty holding an Oran Berry
+/// `TrainerParty::ItemDefaultMoves` Skitty holding an Oran Berry. The Berry is
+/// admitted; [`crate::flow::npc_trainer_battle`] still refuses to construct
+/// the party for its selected Cute Charm ability
 /// (`begin_sight_trainer_approach_if_seen`'s own "Refusals cost nothing,
-/// forever") -- [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
-/// event stands at `(56, 13)`, elevation 3, facing east, sight range 5.
+/// forever"). His object event stands at `(56, 13)`, elevation 3, facing east, sight range 5.
 pub(super) const MIGUEL_TILE: (i32, i32) = (56, 13);
 
 /// `TRAINER_AMY_AND_LIV_1` (`include/constants/opponents.h`): Amy's own

@@ -1,6 +1,7 @@
-//! The four Route 103 sight trainers whose real parties fight (Andrew,
-//! Rhett, Marcos, Pete), each driven end to end through the production
-//! path: the player steps into the trainer's real cone, the trigger builds
+//! Four of the six Route 103 sight trainers whose real parties fight
+//! (Andrew, Rhett, Marcos, Pete; Daisy's and Isabelle's construction and win
+//! are pinned in `sight_trainer_trigger`'s `real_party_outcome` tests), each
+//! driven end to end through the production path: the player steps into the trainer's real cone, the trigger builds
 //! the real extracted party, the approach plays out, the headless battle runs
 //! to its conclusion, and the defeated flag and prize money land.
 //!

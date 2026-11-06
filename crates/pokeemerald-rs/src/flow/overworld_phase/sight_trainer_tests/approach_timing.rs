@@ -11,13 +11,14 @@ use super::support::*;
 
 // -- The approach sequence (S-5, issue #300) ---------------------------------
 //
-// Same honest cut as `support::seed_battle`, one stage earlier: no real Route
-// 103 sight trainer's party constructs today, so
-// `begin_sight_trainer_approach_if_seen` can never *reach* the approach with
-// a real party -- but the sequence it would run is real, and so is the
-// object event it runs on. `seed_approach` therefore builds the approach the
-// trigger would build, from Rhett's own real extracted object event, around
-// the same proven-constructible stand-in battle.
+// Same isolation choice as `support::seed_battle`, one stage earlier. Rhett's
+// real party does construct and `real_parties` runs his approach through the
+// production trigger, so this is not a gap in what can be reached. The timing
+// pins below are about the approach sequence, not any one trainer's party, so
+// `seed_approach` builds the approach the trigger would build, from Rhett's
+// own real extracted object event, around the same proven-constructible
+// stand-in battle: its RNG draws and moveset stay independent of Rhett's
+// moveset and AI scoring.
 
 /// The approach's tile-by-tile timing, through the real
 /// [`OverworldPhase::step`], with a direction held down the whole way: the
@@ -470,11 +471,10 @@ fn a_run_caught_by_a_cone_stands_once_the_lock_sees_it_settle() {
 /// (`overworld.c:1445-1455`), while the held movement runs from CB2's
 /// `AnimateSprites` afterwards (`:1469`, `main.c:188-195`), so skipping that
 /// frame's tick stalls the walk animation by exactly one frame (PR #407
-/// review). That call site itself cannot be driven from a test today -- no
-/// fixture here drives a refused sight trainer's party to construction, so
-/// `step` never reaches its `ApproachStarted` arm for them
-/// (`sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`)
-/// -- so the method both frames now share is what gets pinned.
+/// review). That call site itself is driven end to end through `step` by
+/// `real_parties` (each fighter's real cone) and by the stand-in cones in
+/// this module; this test pins the method both frames share directly, so the
+/// tick is checked without depending on any party.
 #[test]
 fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
     let (rx, ry) = RHETT_TILE;
