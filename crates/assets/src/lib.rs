@@ -49,6 +49,7 @@ pub mod experience;
 pub mod fonts;
 pub mod hidden_item_flags;
 pub mod items;
+pub mod keypad_icons;
 pub mod level_up_learnsets;
 pub mod map_events;
 pub mod map_headers;
@@ -92,6 +93,7 @@ pub use fonts::{
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
 };
+pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
@@ -131,7 +133,8 @@ pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
     PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle,
-    StarterSpecies, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    StarterSpecies, TextPrinterDownArrow, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle,
+    WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,

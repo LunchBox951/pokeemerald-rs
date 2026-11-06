@@ -91,9 +91,8 @@ fn every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
     }
 }
 
-/// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder -- the
-/// item the battle crate refuses by name -- so the refusal rows above
-/// describe a party that really carries it.
+/// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder, so the
+/// refusal rows above describe a party that really carries it.
 #[test]
 fn miguel_carries_an_oran_berry_party() {
     let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
@@ -217,8 +216,8 @@ fn only_a_refusal_leaves_the_frame_alone() {
 }
 
 /// The construction wall that remains, pinned rather than left as prose:
-/// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the four
-/// that fight (Andrew, Rhett, Marcos, Pete: `real_party_outcome` below)
+/// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the six
+/// that fight (Daisy, Andrew, Rhett, Marcos, Pete, Isabelle: `real_party_outcome` below)
 /// fails to construct through
 /// [`npc_trainer_battle::start_npc_trainer_battle`], each for the first
 /// move this battle engine does not yet implement or score, or for the
@@ -244,14 +243,9 @@ fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reaso
     // refusal its real extracted party currently produces. The move ids
     // are the first move in that trainer's own level-up-derived moveset
     // that some screen refuses. Miguel's Skitty is refused for its selected
-    // Cute Charm before the ability screen reaches its Attract or its Oran
-    // Berry, each of which the later screens would refuse in turn.
+    // Cute Charm before the ability screen reaches its Attract, which the
+    // later screens would refuse in turn.
     let expected = [
-        (
-            "Daisy",
-            TrainerId(36),
-            Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
-        ),
         (
             "Amy & Liv",
             TrainerId(481),
@@ -263,11 +257,6 @@ fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reaso
             Battle(BattleError::UnportedAbilityInteraction(
                 assets::AbilityId::CUTE_CHARM,
             )),
-        ),
-        (
-            "Isabelle",
-            TrainerId(736),
-            Battle(BattleError::UnsupportedMoveEffect(assets::MoveId::ROLLOUT)),
         ),
     ];
 
@@ -311,12 +300,14 @@ fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reaso
     }
 }
 
+const DAISY: TrainerId = TrainerId(36);
 const ANDREW: TrainerId = TrainerId(336);
 const RHETT: TrainerId = TrainerId(703);
 const MARCOS: TrainerId = TrainerId(702);
 const PETE: TrainerId = TrainerId(735);
-/// The four sight trainers whose real parties construct and fight.
-const FIGHTING_TRAINERS: [TrainerId; 4] = [ANDREW, RHETT, MARCOS, PETE];
+const ISABELLE: TrainerId = TrainerId(736);
+/// The six sight trainers whose real parties construct and fight.
+const FIGHTING_TRAINERS: [TrainerId; 6] = [DAISY, ANDREW, RHETT, MARCOS, PETE, ISABELLE];
 
 /// Plays `trainer`'s real party against a strong lead and returns the
 /// outcome.
@@ -350,6 +341,28 @@ fn real_party_outcome(trainer: TrainerId) -> Option<battle::BattleOutcome> {
         }
     }
     outcome
+}
+
+/// Daisy (`CheckBadMove` only) has Leech Seed on her Shroomish, which the
+/// seeded-drain pipeline executes and `AI_CBM_LeechSeed` scores, so her
+/// party constructs and plays out.
+#[test]
+fn daisys_real_party_constructs_and_plays_to_a_win() {
+    assert_eq!(
+        real_party_outcome(DAISY),
+        Some(battle::BattleOutcome::PlayerWon)
+    );
+}
+
+/// Isabelle (`CheckBadMove` only) has Rollout on her Marill, which the
+/// Rollout pipeline executes and the trainer AI scores like an ordinary
+/// hit, so her party constructs and plays out.
+#[test]
+fn isabelles_real_party_constructs_and_plays_to_a_win() {
+    assert_eq!(
+        real_party_outcome(ISABELLE),
+        Some(battle::BattleOutcome::PlayerWon)
+    );
 }
 
 /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which

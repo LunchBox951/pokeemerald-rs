@@ -430,18 +430,18 @@ impl OverworldPhase {
     /// by this module's
     /// `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`:
     ///
-    /// - **Four trainers fight**: Andrew, Rhett, Marcos and Pete carry
-    ///   `NoItemDefaultMoves` parties -- real level-up movesets
+    /// - **Six trainers fight**: Daisy, Andrew, Rhett, Marcos, Pete and
+    ///   Isabelle carry `NoItemDefaultMoves` parties -- real level-up movesets
     ///   ([`battle::initial_moveset`]) whose every move the engine executes
     ///   and the trainer AI scores.
     /// - **Held items are carried, not dropped**:
     ///   [`crate::flow::npc_trainer_battle`] threads each member's item onto
     ///   its `BattlePokemon`, and the battle crate refuses only an item whose
     ///   effect it does not model ([`battle::ensure_held_item_playable`]).
-    ///   Miguel's Skitty holds an Oran Berry and is refused earlier still,
-    ///   for its selected Cute Charm.
-    /// - **Daisy, Isabelle, Miguel and Amy & Liv** stop on a move, an
-    ///   ability or (for Amy & Liv) a double battle this port does not field.
+    ///   Miguel's Skitty holds an Oran Berry, which the battle crate admits,
+    ///   and is refused for its selected Cute Charm.
+    /// - **Miguel and Amy & Liv** stop on an ability or (for Amy & Liv) a
+    ///   double battle this port does not field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
         let scan = find_sight_trainer(

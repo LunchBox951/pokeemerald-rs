@@ -80,6 +80,12 @@ pub const MB_NORTH_ARROW_WARP: u8 = 0x64;
 /// A south-facing arrow warp.
 pub const MB_SOUTH_ARROW_WARP: u8 = 0x65;
 
+/// The Pokemon Center escalator tile that carries the player up.
+pub const MB_UP_ESCALATOR: u8 = 0x6A;
+
+/// The Pokemon Center escalator tile that carries the player down.
+pub const MB_DOWN_ESCALATOR: u8 = 0x6B;
+
 /// A non-animated-door alias used only to determine arrival facing.
 pub const MB_WATER_DOOR: u8 = 0x6C;
 
@@ -253,6 +259,13 @@ pub const fn is_forced_movement_input_tile(behavior: u8) -> bool {
 #[must_use]
 pub const fn is_door(behavior: u8) -> bool {
     matches!(behavior, MB_NON_ANIMATED_DOOR | MB_ANIMATED_DOOR)
+}
+
+/// Returns whether a behavior is an escalator, per
+/// `MetatileBehavior_IsEscalator` (`metatile_behavior.c:237-243`).
+#[must_use]
+pub const fn is_escalator(behavior: u8) -> bool {
+    matches!(behavior, MB_UP_ESCALATOR | MB_DOWN_ESCALATOR)
 }
 
 /// Returns whether a behavior unconditionally triggers a supported door-shaped warp.
@@ -557,7 +570,6 @@ mod tests {
     const MB_POND_WATER: u8 = 0x10;
     const MB_DEEP_WATER: u8 = 0x12;
     const MB_LADDER: u8 = 0x61;
-    const MB_UP_ESCALATOR: u8 = 0x6A;
 
     #[test]
     fn supported_door_ids_are_recognized() {
@@ -577,6 +589,13 @@ mod tests {
     fn unported_warp_behaviors_fail_closed() {
         assert!(!is_warp_trigger(MB_LADDER));
         assert!(!is_warp_trigger(MB_UP_ESCALATOR));
+    }
+
+    #[test]
+    fn exactly_the_two_escalator_behaviors_are_escalators() {
+        assert_eq!((MB_UP_ESCALATOR, MB_DOWN_ESCALATOR), (0x6A, 0x6B));
+        let matching: Vec<u8> = (0..=u8::MAX).filter(|b| is_escalator(*b)).collect();
+        assert_eq!(matching, [MB_UP_ESCALATOR, MB_DOWN_ESCALATOR]);
     }
 
     #[test]
