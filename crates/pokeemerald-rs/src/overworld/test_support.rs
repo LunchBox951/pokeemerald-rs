@@ -22,6 +22,42 @@ pub(super) struct Entry {
 const SYNTHETIC_ROOM_MAP: assets::MapId = assets::MapId("MAP_ROUTE122");
 
 impl super::OverworldScene {
+    /// The OAM entries [`Self::compose_live`] would draw for `graphics_id`'s
+    /// frame block, read from `objects`' *live* tiles and facings (the
+    /// template-seeded [`Self::sprite_entries`] cannot see a walked object).
+    #[must_use]
+    pub(crate) fn live_entries_for_test(
+        &self,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        player: &engine::overworld::PlayerState,
+        event_data: &engine::event_data::EventData,
+        graphics_id: &str,
+    ) -> Vec<super::obj_vram::SheetSprite> {
+        let binding = self.sprites.bindings()[graphics_id];
+        let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
+        self.sprites
+            .live_entries(objects, player, event_data, &self.grass)
+            .into_iter()
+            .filter(|entry| frame_block.contains(&entry.tile_index()))
+            .collect()
+    }
+
+    /// The palette bank `graphics_id` is bound to.
+    #[must_use]
+    pub(crate) fn npc_palette_bank_for_test(&self, graphics_id: &str) -> u8 {
+        self.sprites.bindings()[graphics_id].palette_bank()
+    }
+
+    /// Where the player's own OBJ sits on screen: an object `n` tiles from
+    /// the player draws `n * 16` pixels from this origin.
+    #[must_use]
+    pub(crate) fn player_obj_origin_for_test() -> (i16, u8) {
+        (
+            i16::try_from(super::avatar::PLAYER_OBJ_X).expect("the column fits a screen"),
+            super::avatar::PLAYER_OBJ_Y,
+        )
+    }
+
     /// [`Self::runtime`] answering from `events` in place of the visit's own,
     /// for the one test that injects a trigger stack.
     #[must_use]

@@ -60,7 +60,9 @@ fn stat_change_buffer(rose: bool, magnitude: u8) -> BattleBuffer {
 
 fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     match status {
-        Status1::Poisoned => Ok(BattleBuffer::Status(StatusName::Poison)),
+        Status1::Poisoned | Status1::BadPoisoned { .. } => {
+            Ok(BattleBuffer::Status(StatusName::Poison))
+        }
         Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
@@ -76,6 +78,9 @@ pub(super) fn requests(
     event: &BattleEvent,
 ) -> Result<Vec<NarrationRequest>, NarrationError> {
     if let Some(requests) = announcements(narrator, event) {
+        return Ok(requests);
+    }
+    if let Some(requests) = setseeded_results(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = sleep_results(narrator, event) {
@@ -94,6 +99,23 @@ pub(super) fn requests(
         return Ok(requests);
     }
     lifecycle::requests(narrator, names, event)
+}
+
+/// `BattleScript_DoLeechSeed`'s `printfromtable gLeechSeedStringIds`
+/// (`data/battle_scripts_1.s:1164`-`:1170`), with the user as attacker and
+/// the seeded or evading battler as target: the set entry, and the miss
+/// entry that both an accuracy miss (`accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed`, `:1163`) and a reseed select, which names the
+/// target (`src/battle_message.c:962`-`:963`) where a generic miss names the
+/// attacker.
+fn setseeded_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let (template, by_player) = match *event {
+        BattleEvent::Seeded { by_player, .. } => (id::PKMNSEEDED, by_player),
+        BattleEvent::LeechSeedEvaded { by_player, .. } => (id::PKMNEVADEDATTACK, by_player),
+        _ => return None,
+    };
+    let context = narrator.context().user_vs_target(Side::user(by_player));
+    Some(vec![table(template, context)])
 }
 
 /// The sleep, freeze and Truant cancellers' messages, in the user's own
@@ -339,6 +361,14 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             id::PKMNWASPOISONED,
             base.user_vs_target(Side::user(by_player)),
         ),
+        BattleEvent::Burned { by_player, .. } => table(
+            id::PKMNWASBURNED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
+        BattleEvent::TargetDefrosted { by_player, .. } => table(
+            id::PKMNWASDEFROSTED,
+            base.user_vs_target(Side::user(by_player)),
+        ),
         BattleEvent::ConfusionInflicted { by_player, .. } => table(
             id::PKMNWASCONFUSED,
             base.user_vs_target(Side::user(by_player)),
@@ -435,6 +465,30 @@ fn end_turn_and_spore_results(
             let mut context = base;
             context.attacker = Some(Side::user(by_player));
             table(id::PKMNHURTBYBURN, context)
+        }
+        // `BattleScript_LeechSeedTurnDrain` prints `gLeechSeedStringIds`'s
+        // drain entry once, after both HP updates (`data/battle_scripts_1.s:3265`-
+        // `:3284`), naming the seeded battler as the attacker
+        // (`src/battle_util.c:1509`-`:1523`); the seeder's share prints nothing.
+        BattleEvent::SappedByLeechSeed { by_player, .. } => {
+            let mut context = base;
+            context.attacker = Some(Side::user(by_player));
+            table(id::PKMNSAPPEDBYLEECHSEED, context)
+        }
+        BattleEvent::LeechSeedHealed { .. } => return Some(Vec::new()),
+        // `ItemBattleEffects` names the holder as both the attacker and the
+        // scripting battler, with its item as the last used one, before
+        // `BattleScript_ItemHealHP_RemoveItem` prints
+        // (`src/battle_util.c:3266`, `:3331`-`:3346`, `:3603`-`:3606`).
+        BattleEvent::ItemRestoredHealth {
+            by_player, item, ..
+        } => {
+            let holder = Side::user(by_player);
+            let mut context = base;
+            context.attacker = Some(holder);
+            context.scripting = Some(holder);
+            context.last_item = Some(item);
+            table(id::PKMNSITEMRESTOREDHEALTH, context)
         }
         BattleEvent::AsleepByEffectSpore { by_player, .. } => reflected(
             id::PKMNMADESLEEP,

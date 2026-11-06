@@ -114,10 +114,14 @@ pub(super) fn fixed_square_voice(
 }
 
 pub(super) fn wave_voice(fixed_rate: bool, note: TestNote) -> CgbVoice {
+    wave_voice_with_adsr(CgbAdsr::flat(), fixed_rate, note)
+}
+
+pub(super) fn wave_voice_with_adsr(adsr: CgbAdsr, fixed_rate: bool, note: TestNote) -> CgbVoice {
     CgbVoice::wave(
         Arc::from("full-swing"),
         full_swing_wave(),
-        CgbAdsr::flat(),
+        adsr,
         fixed_rate,
         note.note_key,
         note.fine_pitch,
