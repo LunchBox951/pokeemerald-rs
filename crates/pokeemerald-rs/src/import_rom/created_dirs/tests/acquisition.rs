@@ -395,118 +395,16 @@ fn a_private_directory_whose_open_fails_is_not_left_behind_silently() {
     );
 }
 
-/// Installs, on this thread, a seccomp filter that fails every `renameat2`
-/// carrying `RENAME_NOREPLACE` with `EINVAL`, as an NFS mount does. `false`
-/// if the sandbox refuses a filter, where the test has nothing to check.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn refuse_noreplace_like_nfs() -> bool {
-    #[repr(C)]
-    struct SockFilter {
-        code: u16,
-        jt: u8,
-        jf: u8,
-        k: u32,
-    }
-    #[repr(C)]
-    struct SockFprog {
-        len: u16,
-        filter: *const SockFilter,
-    }
-    extern "C" {
-        fn prctl(option: i32, a: usize, b: usize, c: usize, d: usize) -> i32;
-    }
-    const PR_SET_NO_NEW_PRIVS: i32 = 38;
-    const PR_SET_SECCOMP: i32 = 22;
-    const SECCOMP_MODE_FILTER: usize = 2;
-    const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
-    const NR_RENAMEAT2: u32 = 316;
-    const RENAME_NOREPLACE: u32 = 1;
-    const RET_ERRNO: u32 = 0x0005_0000;
-    const RET_ALLOW: u32 = 0x7fff_0000;
-    const EINVAL: u32 = 0x16;
-    let ins = |code, jt, jf, k| SockFilter { code, jt, jf, k };
-    let program = [
-        // Load the architecture; anything but x86_64 is allowed.
-        ins(0x20, 0, 0, 4),
-        ins(0x15, 0, 5, AUDIT_ARCH_X86_64),
-        // Load the syscall number; anything but renameat2 is allowed.
-        ins(0x20, 0, 0, 0),
-        ins(0x15, 0, 3, NR_RENAMEAT2),
-        // Load `flags` (the fifth argument); fail those with NOREPLACE.
-        ins(0x20, 0, 0, 48),
-        ins(0x45, 0, 1, RENAME_NOREPLACE),
-        ins(0x06, 0, 0, RET_ERRNO | EINVAL),
-        ins(0x06, 0, 0, RET_ALLOW),
-    ];
-    let fprog = SockFprog {
-        len: u16::try_from(program.len()).unwrap(),
-        filter: program.as_ptr(),
-    };
-    // SAFETY: `prctl` takes plain integers here; the second call's third
-    // argument is the address of `fprog`, which points at `program`, and
-    // both outlive the call. The kernel copies the filter before returning.
-    unsafe {
-        prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0
-            && prctl(
-                PR_SET_SECCOMP,
-                SECCOMP_MODE_FILTER,
-                std::ptr::addr_of!(fprog) as usize,
-                0,
-                0,
-            ) == 0
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_missing_level_is_created_where_noreplace_rename_is_unsupported() {
     // On a filesystem that cannot refuse to replace (Linux NFS answers
     // `EINVAL`), the private-name claim cannot finish. Creating the level
     // must still work, at its final name, and leave no private directory.
-    // The filter is per thread and permanent, so the test reruns itself in
-    // a child.
-    const CHILD: &str = "POKEEMERALD_NOREPLACE_EINVAL_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "import_rom::created_dirs::tests::acquisition::a_missing_level_is_created_where_noreplace_rename_is_unsupported",
-                "--exact",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stdout.contains("1 passed"),
-            "child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        );
-        return;
-    }
+    // Every no-replace rename on this thread answers `EINVAL`, through the
+    // seam in `acquire`, so this runs wherever the platform renames at all.
     let dir = TempDir::new("noreplace-einval");
-    if !refuse_noreplace_like_nfs() {
-        eprintln!(
-            "a_missing_level_is_created_where_noreplace_rename_is_unsupported: \
-             skipped -- the sandbox refused a seccomp filter"
-        );
-        return;
-    }
-    // The filter is live: a no-replace rename now fails as on NFS.
-    let probe_from = dir.join("probe");
-    fs::create_dir(&probe_from).unwrap();
-    assert_eq!(
-        rustix::fs::renameat_with(
-            rustix::fs::CWD,
-            &probe_from,
-            rustix::fs::CWD,
-            dir.join("probe2"),
-            rustix::fs::RenameFlags::NOREPLACE
-        ),
-        Err(rustix::io::Errno::INVAL)
-    );
-    fs::remove_dir(&probe_from).unwrap();
-
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
     let target = dir.join("a").join("b");
     let owner = rustix::process::geteuid().as_raw();
     let result = create_as(&target, owner, &mut || {});
@@ -518,4 +416,11 @@ fn a_missing_level_is_created_where_noreplace_rename_is_unsupported() {
     assert!(target.is_dir());
     assert_eq!(private_entries(&dir.path), Vec::<String>::new());
     assert_eq!(private_entries(&dir.join("a")), Vec::<String>::new());
+    // One refused claim per level, and the cleanup after each: a pass
+    // without them would not have exercised the fallback.
+    assert!(
+        super::acquire::tests_seam::refusals() >= 2,
+        "the fallback ran for {} renames, expected at least one per level",
+        super::acquire::tests_seam::refusals()
+    );
 }

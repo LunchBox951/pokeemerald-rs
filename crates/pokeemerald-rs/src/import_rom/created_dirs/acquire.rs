@@ -154,7 +154,7 @@ pub(super) fn claim_level(
                 ),
             ))
         })?;
-    match take_back::rename_without_replacing(&**parent, &private, &**parent, name) {
+    match rename_no_replace(parent, &private, parent, name) {
         Ok(()) => Ok(identity),
         Err(errno) => {
             report_left_standing(
@@ -176,6 +176,63 @@ pub(super) fn claim_level(
                 );
             }
             Err(ClaimError::from_errno(errno))
+        }
+    }
+}
+
+/// [`take_back::rename_without_replacing`] for the moves this module makes,
+/// where a test can make the filesystem answer as one with no such rename
+/// (an NFS mount) without any process-wide state.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn rename_no_replace(
+    from_dir: &std::os::fd::OwnedFd,
+    from: &OsStr,
+    to_dir: &std::os::fd::OwnedFd,
+    to: &OsStr,
+) -> rustix::io::Result<()> {
+    #[cfg(test)]
+    if let Some(errno) = tests_seam::REFUSED.with(std::cell::Cell::get) {
+        tests_seam::REFUSALS.with(|count| count.set(count.get() + 1));
+        return Err(errno);
+    }
+    take_back::rename_without_replacing(from_dir, from, to_dir, to)
+}
+
+/// The test seam behind [`rename_no_replace`]: the errno every no-replace
+/// rename made on this thread answers with.
+#[cfg(all(
+    test,
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+pub(super) mod tests_seam {
+    thread_local! {
+        pub(super) static REFUSED: std::cell::Cell<Option<rustix::io::Errno>> =
+            const { std::cell::Cell::new(None) };
+        pub(super) static REFUSALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Makes no-replace renames on this thread fail with `errno` until the
+    /// guard drops.
+    pub(in super::super) struct Refusing;
+
+    pub(in super::super) fn refuse_noreplace(errno: rustix::io::Errno) -> Refusing {
+        REFUSED.with(|cell| cell.set(Some(errno)));
+        REFUSALS.with(|count| count.set(0));
+        Refusing
+    }
+
+    /// How many renames the seam has failed since it was installed.
+    pub(in super::super) fn refusals() -> usize {
+        REFUSALS.with(std::cell::Cell::get)
+    }
+
+    impl Drop for Refusing {
+        fn drop(&mut self) {
+            REFUSED.with(|cell| cell.set(None));
         }
     }
 }
@@ -238,7 +295,7 @@ pub(super) fn discard_private(
     before_move: &mut dyn FnMut(),
 ) -> Discard {
     before_move();
-    match take_back::rename_without_replacing(&**parent, private, &**parent, aside) {
+    match rename_no_replace(parent, private, parent, aside) {
         Ok(()) => {}
         Err(errno) if no_replace_unsupported(errno) => {
             // No rename that refuses to replace here, so the name is checked
@@ -287,7 +344,7 @@ pub(super) fn discard_private(
             },
         }
     } else {
-        let at = match take_back::rename_without_replacing(&**parent, aside, &**parent, private) {
+        let at = match rename_no_replace(parent, aside, parent, private) {
             Ok(()) => private,
             Err(_) => aside,
         };
