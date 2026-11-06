@@ -198,6 +198,43 @@ fn a_palette_stored_twice_takes_the_copy_its_table_row_names() {
 }
 
 #[test]
+fn an_unreferenced_lower_sheet_copy_does_not_hide_the_tabled_one() {
+    let rom = fixture()
+        .write(STRAY_SHEET, &lz77_literals(&sheet_tiles()))
+        .finish();
+    with_context("poke-ball-stray-sheet", &rom, entries(), |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located");
+        assert_eq!(plan.sheet_table, bus(SHEET_TABLE));
+        assert_eq!(plan.sheet.addr, bus(SHEET));
+        let line = report
+            .iter()
+            .find(|line| line.id == "poke-ball/image/poke")
+            .expect("a report line");
+        assert_eq!(line.addr, bus(SHEET));
+        assert_eq!(line.resolution, Resolution::StructDerived);
+    });
+}
+
+#[test]
+fn a_sheet_repeated_past_the_search_cap_is_refused_not_truncated() {
+    // The search keeps only the lowest copies; a capped set could omit the one
+    // the table names, so it must be refused rather than treated as complete.
+    let mut fixture = fixture();
+    for copy in 0..17 {
+        fixture = fixture.write(STRAY_SHEET - 0x1000 * copy, &lz77_literals(&sheet_tiles()));
+    }
+    let rom = fixture.finish();
+    with_context("poke-ball-capped-sheet", &rom, entries(), |ctx| {
+        let err = locate(ctx, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::Ambiguous { id, .. } if id == "poke-ball/image/poke"),
+            "{err}"
+        );
+    });
+}
+
+#[test]
 fn a_sheet_row_with_the_wrong_size_or_tag_pins_no_table() {
     for row in [
         sheet_row(bus(SHEET), SHEET_BYTES + 32, POKE_BALL_TAG),

@@ -17,16 +17,19 @@
 //!   palette's address: upstream names the same `gTrainerPalette_*` symbol in
 //!   both palette tables, so the two rows must point at the one stream, not at
 //!   two streams that happen to hold the same colours.
+//!
+//!   A sheet the ROM stores more than once is the copy its table row points
+//!   at, not the lowest address.
 
 use super::error::GenRomProfileError;
-use super::images::{locate_images, ImageQuery};
+use super::images::{locate_image_copies, ImageQuery};
 use super::inventory;
 use super::locate::camel_case;
 use super::plan::{
     ImagePlan, PalettePlan, ReportLine, SymbolExpectation, TrainerBackPlan, TrainerBattlerPlan,
     TrainerFrontPicPlan, TrainerFrontPlan,
 };
-use super::trainer_front::{find_table, Row};
+use super::trainer_front::{find_table, row_pointer, Row};
 use super::Context;
 use crate::extract::scope::TRAINER_BATTLERS;
 
@@ -77,9 +80,7 @@ pub fn locate(
         .iter()
         .map(|trainer| ImageQuery::raw(trainer.back_id))
         .collect();
-    let first_line = report.len();
-    let sheets = locate_images(ctx, &queries, report)?;
-    name_back_symbols(&mut report[first_line..]);
+    let sheet_copies = locate_image_copies(ctx, &queries)?;
 
     let back_pics: Vec<u16> = TRAINER_BATTLERS
         .iter()
@@ -93,8 +94,8 @@ pub fn locate(
         .collect();
     let picture_rows: Vec<(u16, Vec<u32>)> = back_pics
         .iter()
-        .zip(&sheets)
-        .map(|(&back_pic, sheet)| (back_pic, vec![sheet.addr]))
+        .zip(&sheet_copies)
+        .map(|(&back_pic, copies)| (back_pic, copies.addrs()))
         .collect();
     let palette_rows: Vec<(u16, Vec<u32>)> = back_pics
         .iter()
@@ -119,6 +120,19 @@ pub fn locate(
         BACK_TABLE_ROWS,
         report,
     )?;
+
+    // Each back sheet is the copy its table row points at.
+    let first_line = report.len();
+    let mut sheets = Vec::with_capacity(TRAINER_BATTLERS.len());
+    for ((trainer, &back_pic), copies) in TRAINER_BATTLERS.iter().zip(&back_pics).zip(&sheet_copies)
+    {
+        let addr =
+            row_pointer(ctx, back_table, back_pic).ok_or_else(|| GenRomProfileError::NotFound {
+                id: trainer.back_id.to_owned(),
+            })?;
+        sheets.push(copies.plan_at(ctx, addr, report)?);
+    }
+    name_back_symbols(&mut report[first_line..]);
 
     let backs = back_pics
         .iter()
@@ -203,7 +217,7 @@ fn repeat_report_line(
 /// Require a linker map to name each back sheet `gTrainerBackPic_<Name>`.
 ///
 /// The shared image classifier knows no trainer naming convention, so the
-/// expectation is set here on the lines [`locate_images`] just reported.
+/// expectation is set here on the lines [`super::images::ImageCopies::plan_at`] just reported.
 fn name_back_symbols(lines: &mut [ReportLine]) {
     for trainer in &TRAINER_BATTLERS {
         if let Some(line) = lines.iter_mut().find(|line| line.id == trainer.back_id) {
