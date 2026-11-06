@@ -28,10 +28,12 @@ const fn always_refused(ability: AbilityId) -> bool {
 /// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
 /// Speed Boost's end-turn Speed stage (`:2601-2652`), Color Change (`:2749-2766`),
 /// Trace's ability copy (`:2575-2580`, `:3017-3073`), Flame Body (`:2836-2850`; burn infliction by a contact hit is
-/// unmodelled), Cute Charm (`:2851-2870`; infatuation is unmodelled), or the switch-in weather setters
+/// unmodelled), Cute Charm (`:2851-2870`; its contact infatuation is unmodelled), or the switch-in weather setters
 /// Drizzle, Sand Stream, and Drought (`:2532-2558`), whose weather lifecycle is unmodelled.
 /// A seeded Liquid Ooze holder is refused too: the inverted drain
-/// (`data/battle_scripts_1.s:3275`-`:3276`) is unmodelled.
+/// (`data/battle_scripts_1.s:3275`-`:3276`) is unmodelled. So is an
+/// infatuated Oblivious holder, whose move-end cure (`battle_util.c:2923`-
+/// `:2941`) is unmodelled.
 ///
 /// # Errors
 ///
@@ -41,12 +43,14 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
     let status = participant.status1();
     let confused = participant.volatiles().confused();
     let seeded = participant.volatiles().seeded();
+    let infatuated = participant.volatiles().infatuated();
     let unported_interaction = match ability {
         AbilityId::LIMBER => status == Status1::Paralysed,
         AbilityId::IMMUNITY => status.is_poisoned_any(),
         AbilityId::WATER_VEIL => status == Status1::Burned,
         AbilityId::MAGMA_ARMOR => status == Status1::Frozen,
         AbilityId::OWN_TEMPO => confused,
+        AbilityId::OBLIVIOUS => infatuated,
         AbilityId::LIQUID_OOZE => seeded,
         AbilityId::INSOMNIA | AbilityId::VITAL_SPIRIT => status.is_asleep(),
         _ => always_refused(ability),

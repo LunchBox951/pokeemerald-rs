@@ -31,6 +31,8 @@ use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod attract_tests;
 pub mod battler_state;
 mod events;
 mod execute;
@@ -1391,6 +1393,7 @@ impl Battle {
         // first, so the trainer's replacement scores against `MOVE_NONE`
         // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
         self.player.clear_battle_scratch();
+        self.clear_infatuation_from(BattlerSide::Player);
         self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1507,6 +1510,12 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
+        // The departing member's own copy went with its scratch; the player's
+        // battler is the only other holder, and `context` still borrows
+        // `self.kind`.
+        self.player
+            .volatiles_mut()
+            .clear_infatuation_from(BattlerSide::Enemy);
         self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1541,7 +1550,7 @@ impl Battle {
 
     /// Runs one battler's turn-order slot: the sleep decrement, the frozen
     /// draw, the Truant loafing gate, the confusion decrement, the
-    /// full-paralysis draw, the thaw-hit thaw, the Soundproof block, PP
+    /// full-paralysis draw, the infatuation coin, the thaw-hit thaw, the Soundproof block, PP
     /// handling, then
     /// execution.
     ///
@@ -1611,6 +1620,11 @@ impl Battle {
                 move_id,
             });
             self.record_cancelled_move(player_is_attacker, move_id)?;
+            return Ok(());
+        }
+        // `CANCELER_IN_LOVE` follows paralysis and precedes the thaw
+        // (`src/battle_util.c:2188`-`:2262`).
+        if self.cancels_for_love(player_is_attacker, move_id, rng, events)? {
             return Ok(());
         }
         if thaws_with_move {

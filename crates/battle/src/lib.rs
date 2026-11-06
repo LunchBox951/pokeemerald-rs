@@ -271,6 +271,7 @@
 
 pub mod ability;
 pub mod accuracy;
+pub mod attract;
 pub mod battle;
 pub mod confuse;
 pub mod critical;
@@ -304,6 +305,9 @@ pub mod wild;
 mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
+pub use attract::{
+    draws_love_immobility, is_attract_effect, resolve_attract_move, AttractOutcome, EFFECT_ATTRACT,
+};
 pub use battle::admission::ensure_participant_admissible;
 pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{
