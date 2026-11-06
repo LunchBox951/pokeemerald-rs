@@ -634,7 +634,9 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
-    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`): the
+    /// `ENDTURN_POISON` tick and the `ENDTURN_BAD_POISON` tick, which share
+    /// `BattleScript_PoisonTurnDmg`.
     HurtByPoison {
         /// Whether the player's battler was hurt.
         by_player: bool,
