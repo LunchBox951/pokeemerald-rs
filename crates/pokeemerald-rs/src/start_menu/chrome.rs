@@ -10,7 +10,7 @@ use platform::{ButtonState, Buttons};
 use rendering::{Framebuffer, Rgb888};
 
 use crate::overworld::NpcDialog;
-use crate::textbox::{self, FrameAssets};
+use crate::textbox::{self, DownArrowSheet, FrameAssets};
 
 use super::StartMenuError;
 
@@ -60,6 +60,7 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 pub(crate) struct StartMenuChrome {
     font_sources: OwnedGlyphSources,
     keypad_icons: KeypadIconSheet,
+    down_arrow: DownArrowSheet,
     pub(super) std_frame: FrameAssets,
     pub(super) message_frame: FrameAssets,
 }
@@ -82,6 +83,7 @@ impl StartMenuChrome {
                 Ok::<_, StartMenuError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
             })?,
             keypad_icons: KeypadIconSheet::new(pack.keypad_icons()?)?,
+            down_arrow: DownArrowSheet::new(&pack.text_printer_down_arrow()?),
             std_frame: FrameAssets::from_handle(pack.text_window_frame(window_frame)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
@@ -93,6 +95,7 @@ impl StartMenuChrome {
             self.font_sources.clone(),
             self.message_frame.clone(),
             self.keypad_icons.clone(),
+            self.down_arrow.clone(),
             tokens,
             text_speed,
         )
@@ -220,6 +223,7 @@ impl StartMenuChrome {
         Self {
             font_sources,
             keypad_icons: textbox::test_keypad_icons(&[]),
+            down_arrow: textbox::test_blank_down_arrow(),
             std_frame: synthetic_frame(STANDARD_FRAME_SIZE_TILES),
             message_frame: synthetic_frame(MESSAGE_FRAME_SIZE_TILES),
         }

@@ -135,6 +135,7 @@ fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
         synthetic_sources(pixels),
         transparent_message_box(),
         crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
         speed,
         NewGameOptions::DEFAULT,
     )
@@ -366,6 +367,7 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
         synthetic_sources(&pixels),
         solid_red_message_box(),
         crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
         TextSpeed::Mid,
         NewGameOptions::DEFAULT,
     );
@@ -406,6 +408,7 @@ fn a_keypad_icon_draws_at_the_printers_placement_and_the_next_glyph_follows_it()
         synthetic_sources(&pixels),
         transparent_message_box(),
         crate::textbox::test_keypad_icons(&[(0, 0, 2), (3, 5, 3)]),
+        crate::textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -453,6 +456,7 @@ fn clear_paints_the_erased_span_with_the_windows_background() {
         synthetic_sources(&pixels),
         solid_red_message_box(),
         crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -516,6 +520,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
         synthetic_sources(&pixels),
         solid_red_message_box(),
         crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -572,6 +577,7 @@ fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
         synthetic_sources(&pixels),
         solid_red_message_box(),
         crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -1091,4 +1097,78 @@ fn the_composed_first_glyph_top_left_pixel_is_at_16_121() {
     assert_eq!(fb.pixel(16, 121), Some(DARK_GREY_GLYPH_COLOR));
     assert_ne!(fb.pixel(15, 121), Some(DARK_GREY_GLYPH_COLOR));
     assert_ne!(fb.pixel(16, 120), Some(DARK_GREY_GLYPH_COLOR));
+}
+
+/// Birch's `{P}` and `{L}` prompts wait on the shared printer's down arrow
+/// (`pokeemerald/src/text.c:787-882`): it draws a frame after the wait begins,
+/// erases the glyph pixels under its 8x16 rectangle, and is gone once A or B
+/// advances the page.
+#[test]
+fn a_page_prompt_shows_the_down_arrow_until_a_or_b_advances_it() {
+    const ARROW_WIDTH: i32 = 8;
+    const ARROW_HEIGHT: i32 = 16;
+    const MARKER_PALETTE_INDEX: u8 = 2;
+    for (prompt, press) in [
+        (Token::PromptClear, PRESS_A),
+        (Token::PromptClear, PRESS_B),
+        (Token::PromptScroll, PRESS_A),
+        (Token::PromptScroll, PRESS_B),
+    ] {
+        let pixels = dark_grey_glyph_sheet_pixels();
+        let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+        scene.down_arrow = crate::textbox::test_down_arrow(MARKER_PALETTE_INDEX);
+        scene
+            .printer
+            .restart(vec![Token::Char('A'), prompt, Token::Char('B'), Token::End]);
+
+        // 'A' prints, then the tick that reaches the prompt arms the wait.
+        for _ in 0..2 {
+            assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+        }
+        let (cursor_x, cursor_y) = scene.printer.cursor();
+        let pixel_in_arrow = |scene: &IntroScene, dx: i32, dy: i32| {
+            let (x, y) = box_pixel((cursor_x + dx, cursor_y + dy));
+            scene.compose().pixel(x, y)
+        };
+        assert_eq!(
+            pixel_in_arrow(&scene, 1, 0),
+            Some(DARK_GREY_GLYPH_COLOR),
+            "no arrow yet: the glyph's pixels still fill the rectangle"
+        );
+
+        assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+        assert_eq!(pixel_in_arrow(&scene, 0, 0), Some(DARK_GREY_GLYPH_COLOR));
+        for dy in 0..ARROW_HEIGHT {
+            for dx in 0..ARROW_WIDTH {
+                let expected = if (dx, dy) == (0, 0) {
+                    DARK_GREY_GLYPH_COLOR
+                } else {
+                    Rgb888::BLACK
+                };
+                assert_eq!(
+                    pixel_in_arrow(&scene, dx, dy),
+                    Some(expected),
+                    "arrow frame 0 at ({dx}, {dy})"
+                );
+            }
+        }
+
+        // Nine waiting frames later the bob advances to frame 1.
+        for _ in 0..9 {
+            assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+        }
+        assert_eq!(pixel_in_arrow(&scene, 0, 0), Some(Rgb888::BLACK));
+        assert_eq!(pixel_in_arrow(&scene, 0, 1), Some(DARK_GREY_GLYPH_COLOR));
+
+        assert_eq!(scene.tick(press), IntroStatus::Continue);
+        for dy in 0..ARROW_HEIGHT {
+            for dx in 0..ARROW_WIDTH {
+                assert_eq!(
+                    pixel_in_arrow(&scene, dx, dy),
+                    Some(Rgb888::BLACK),
+                    "the arrow is gone after the press, at ({dx}, {dy})"
+                );
+            }
+        }
+    }
 }

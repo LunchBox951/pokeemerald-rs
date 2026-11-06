@@ -26,7 +26,7 @@ use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
 use crate::new_game::{NewGameIdentity, NewGameOptions};
-use crate::textbox::{self, FrameAssets, WindowOp};
+use crate::textbox::{self, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 pub use speech::NUM_PAGES;
 
@@ -186,6 +186,8 @@ const fn normalized_text_speed(raw: u8) -> u8 {
 pub struct IntroScene {
     frame: FrameAssets,
     icons: KeypadIconSheet,
+    down_arrow: DownArrowSheet,
+    prompt_arrow: PromptArrow,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
@@ -214,6 +216,7 @@ impl IntroScene {
         sources: OwnedGlyphSources,
         frame: FrameAssets,
         icons: KeypadIconSheet,
+        down_arrow: DownArrowSheet,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
@@ -230,6 +233,8 @@ impl IntroScene {
         Self {
             frame,
             icons,
+            down_arrow,
+            prompt_arrow: PromptArrow::default(),
             pages,
             page_index: 0,
             printer,
@@ -299,12 +304,13 @@ impl IntroScene {
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
         let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
+        let down_arrow = DownArrowSheet::new(&pack.text_printer_down_arrow()?);
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sources, frame, icons, speed, options))
+        Ok(Self::new(sources, frame, icons, down_arrow, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -351,6 +357,14 @@ impl IntroScene {
         if self.printer.cleared_window() {
             self.ops.clear();
         }
+        // The speech's `{P}` and `{L}` prompts wait on the same arrow a field
+        // message does (`PromptArrow::tick`).
+        self.prompt_arrow.tick(
+            &event,
+            self.printer.cursor(),
+            &self.down_arrow,
+            &mut self.ops,
+        );
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
@@ -491,6 +505,7 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         sources,
         frame,
         textbox::test_keypad_icons(&[]),
+        textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
