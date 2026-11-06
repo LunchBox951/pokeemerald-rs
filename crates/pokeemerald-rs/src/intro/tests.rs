@@ -1172,3 +1172,56 @@ fn a_page_prompt_shows_the_down_arrow_until_a_or_b_advances_it() {
         }
     }
 }
+
+fn scene_has_down_arrow(scene: &IntroScene) -> bool {
+    scene
+        .ops
+        .iter()
+        .any(|op| matches!(op, WindowOp::DownArrow(_)))
+}
+
+/// Upstream prints "What's your name?" (ends in `$`, `birch_speech.inc:38-40`)
+/// and then waits for A/B in `Task_NewGameBirchSpeech_WaitPressBeforeNameChoice`
+/// (`main_menu.c:1588-1595`) with no down arrow. The synthetic `{P}` standing in
+/// for that wait must not draw one.
+#[test]
+fn whats_your_name_wait_draws_no_down_arrow() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.down_arrow = crate::textbox::test_down_arrow(2);
+    scene.page_index = 4;
+    scene.printer.restart(super::speech::pages()[4].clone());
+    for _ in 0..120 {
+        assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+        assert_eq!(scene.page_index, 4);
+    }
+    assert!(
+        !scene_has_down_arrow(&scene),
+        "a down arrow was drawn during the synthetic What's-your-name wait"
+    );
+}
+
+/// Each page draws the arrow exactly when upstream's text for it has a real
+/// `\p`/`\l` (`birch_speech.inc`); pages 3 to 5 end in `$`, so their closing
+/// `{P}` is a stand-in wait. Waiting well past the first prompt, the arrow is
+/// up on every genuine page and never on a synthetic one.
+#[test]
+fn only_pages_with_genuine_prompts_draw_the_down_arrow() {
+    const GENUINE: [bool; NUM_PAGES] = [true, true, true, false, false, false, true, true];
+    // The longest lead-in is page 1's 96-frame pause.
+    const TICKS_PAST_FIRST_PROMPT: usize = 400;
+    for (page, genuine) in GENUINE.into_iter().enumerate() {
+        let pixels = dark_grey_glyph_sheet_pixels();
+        let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+        scene.down_arrow = crate::textbox::test_down_arrow(2);
+        scene.page_index = page;
+        scene.printer.restart(super::speech::pages()[page].clone());
+        let mut drew = false;
+        for _ in 0..TICKS_PAST_FIRST_PROMPT {
+            assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+            drew |= scene_has_down_arrow(&scene);
+        }
+        assert_eq!(drew, genuine, "page {page}");
+        assert_eq!(scene.page_index, page, "page {page} still waits");
+    }
+}

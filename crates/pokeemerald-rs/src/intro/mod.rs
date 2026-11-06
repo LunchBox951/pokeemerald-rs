@@ -357,14 +357,17 @@ impl IntroScene {
         if self.printer.cleared_window() {
             self.ops.clear();
         }
-        // The speech's `{P}` and `{L}` prompts wait on the same arrow a field
-        // message does (`PromptArrow::tick`).
-        self.prompt_arrow.tick(
-            &event,
-            self.printer.cursor(),
-            &self.down_arrow,
-            &mut self.ops,
-        );
+        // The speech's genuine `\p` and `\l` prompts wait on the same arrow a
+        // field message does (`PromptArrow::tick`); a page whose `{P}` only
+        // stands in for a wait upstream draws none (`speech::pages`' table).
+        if speech::page_draws_down_arrow(self.page_index) {
+            self.prompt_arrow.tick(
+                &event,
+                self.printer.cursor(),
+                &self.down_arrow,
+                &mut self.ops,
+            );
+        }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {

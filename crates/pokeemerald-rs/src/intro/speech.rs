@@ -11,6 +11,35 @@ use crate::new_game::DEFAULT_PLAYER_NAME;
 /// Number of dialogue pages in Birch's introduction.
 pub const NUM_PAGES: usize = 8;
 
+/// Whether each page's `{P}` waits are real `\p` prompts that upstream's text
+/// printer draws the down arrow for (`pokeemerald/src/text.c:787-882`), per
+/// `pokeemerald/data/text/birch_speech.inc` and `src/main_menu.c`.
+///
+/// A page that ends in `$` with no `\p` shows no arrow upstream; its `{P}`
+/// here only stands in for a wait or transition the intro does not model,
+/// so it draws none:
+///
+/// | page | upstream text                  | arrow |
+/// |------|--------------------------------|-------|
+/// | 0    | `gText_Birch_Welcome`, `\p` x4 | yes   |
+/// | 1    | `gText_Birch_Pokemon`, one `\p` (the 96-frame `{PAUSE}` stands in for `NewGameBirchSpeech_WaitForThisIsPokemonText`) | yes |
+/// | 2    | `gText_Birch_MainSpeech`, `\p`/`\l` | yes |
+/// | 3    | `gText_Birch_AndYouAre` ends in `$`; `Task_NewGameBirchSpeech_AndYouAre` holds | no |
+/// | 4    | `gText_Birch_WhatsYourName` ends in `$`; `Task_NewGameBirchSpeech_WaitPressBeforeNameChoice` (`main_menu.c:1588-1595`) waits | no |
+/// | 5    | `gText_Birch_SoItsPlayer` ends in `$`; the Yes/No menu follows | no |
+/// | 6    | `gText_Birch_YourePlayer`, `\p`/`\l` | yes   |
+/// | 7    | `gText_Birch_AreYouReady`, `\p` x4 | yes   |
+const PAGE_DRAWS_DOWN_ARROW: [bool; NUM_PAGES] =
+    [true, true, true, false, false, false, true, true];
+
+/// Whether `page`'s prompts draw the printer's down arrow; see
+/// [`PAGE_DRAWS_DOWN_ARROW`] for each page's upstream basis. A page index past
+/// the last page draws none.
+#[must_use]
+pub(crate) fn page_draws_down_arrow(page: usize) -> bool {
+    PAGE_DRAWS_DOWN_ARROW.get(page).copied().unwrap_or(false)
+}
+
 /// Returns every dialogue page in display order.
 ///
 /// # Panics
