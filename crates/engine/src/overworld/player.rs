@@ -414,6 +414,14 @@ impl PlayerState {
         self.forced_input_tile_center
     }
 
+    /// Ends the keypad's moving streak after a step upstream drives as held
+    /// movement, which leaves `runningState` at `NOT_MOVING`
+    /// (`field_player_avatar.c:353-379`), so a held direction that differs from
+    /// the facing turns first (`CheckMovementInputNotOnBike`, `:587-595`).
+    pub const fn end_movement_streak(&mut self) {
+        self.movement_streak_active = false;
+    }
+
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
