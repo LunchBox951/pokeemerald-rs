@@ -10,13 +10,12 @@
 //!   `unlinkat(.., REMOVEDIR)` removes only an empty directory, so the
 //!   worst outcome is the loss of one empty directory. A level that writer
 //!   moved out of the quarantine before that unlink is reported where it
-//!   went on Linux and Android, where the held original's link count says
-//!   whether it was moved or removed; elsewhere (Apple), a directory
-//!   removed while held open still reads a nonzero `st_nlink`, so the two
-//!   cannot be told apart without a trace after every rollback, and that
-//!   moved level goes unreported. Where a level is reported missing from
-//!   its name on such a platform, the warning says it may have been moved
-//!   rather than claiming it was.
+//!   went, where the held original's link count says whether it was moved
+//!   or removed (Linux, Android), or where the path the platform gives for
+//!   it still resolves to it (Apple, whose removed directories keep a
+//!   nonzero `st_nlink`). On a platform with neither, that moved level goes
+//!   unreported, and where a level is reported missing from its name the
+//!   warning says it may have been moved rather than claiming it was.
 //!
 //! The name-based steps here are the no-replace renames, which fail rather
 //! than replace anything, so they cannot destroy data.
@@ -184,9 +183,9 @@ pub(super) fn take_back_into_revalidating(
             // The unlink acts on a name: had another writer moved this level
             // out and put an empty directory in its place, the replacement
             // went and the level stands wherever it was moved, so it is
-            // reported there. Only where a removed directory's link count
-            // reads 0 can that be told apart from the level's own removal;
-            // elsewhere this is an accepted residual (module doc).
+            // reported there. Only where a link count of 0 or a path that
+            // resolves to the held level tells it from the level's own
+            // removal; elsewhere this is an accepted residual (module doc).
             Ok(()) => {
                 if matches!(standing(dir), Standing::Linked(_) | Standing::Unexamined(_)) {
                     warn_if_moved_away(dir);

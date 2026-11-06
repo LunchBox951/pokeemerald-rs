@@ -60,7 +60,7 @@ use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 #[cfg(test)]
-pub(super) use report::located_beside;
+pub(super) use report::{located_beside, verified_location};
 use report::{warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
