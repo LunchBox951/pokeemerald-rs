@@ -194,6 +194,8 @@ mod start_menu_tests;
 /// `(oop-boundaries)`.
 #[cfg(test)]
 mod take_lead_held_item_tests;
+#[cfg(test)]
+mod take_lead_mail_tests;
 
 /// The main menu's B path back to the title (I-2): priority against A and
 /// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own

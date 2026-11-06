@@ -18,6 +18,7 @@ use rendering::{Framebuffer, PaletteStage};
 
 mod chrome;
 mod save_dialog;
+mod take_mail_dialog;
 mod text;
 
 use chrome::{
@@ -27,12 +28,19 @@ use chrome::{
 };
 use save_dialog::{SaveDialog, SaveDialogOutcome};
 pub(crate) use save_dialog::{SaveMode, SaveTarget};
+pub(crate) use take_mail_dialog::{ReturnMailToBag, SendMailToPc, TakeMailTarget};
+use take_mail_dialog::{TakeMailDialog, TakeMailOutcome};
+#[cfg(test)]
+pub(crate) use text::MailMessage;
 
 /// An action selectable from the field start menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartMenuItem {
     Save,
-    /// Takes the lead's held item into the bag. Upstream has no such start-menu
+    /// Takes the lead's held item into the bag, or, for a lead holding mail, runs
+    /// `CursorCb_TakeMail`'s flow (`party_menu.c:3399`, reached when
+    /// `SetPartyMonFieldSelectionActions` offers `MENU_MAIL`, `:2631-2634`).
+    /// Upstream has no such start-menu
     /// entry: the action is the party menu's `CursorCb_TakeItem`
     /// (`pokeemerald/src/party_menu.c:3273`), reached through `POKéMON`, then
     /// the Pokémon, then ITEM, then TAKE. This stands in until that menu
@@ -106,10 +114,11 @@ pub(crate) enum StartMenuOutcome {
     Open,
     /// The menu is done; the caller drops it and resumes field control.
     Closed,
-    /// [`StartMenuItem::TakeItem`] was selected: the menu is done, and the
-    /// caller drops it, takes the lead's held item into the bag and resumes
-    /// field control. The menu cannot take the item itself; the party and bag
-    /// belong to the caller.
+    /// [`StartMenuItem::TakeItem`] was selected. For a lead holding an item,
+    /// the caller drops the menu, takes the item into the bag and resumes field
+    /// control. For a lead holding mail it calls [`StartMenu::begin_take_mail`]
+    /// and keeps the menu open for `CursorCb_TakeMail`'s prompts. The menu
+    /// cannot decide either itself; the party and bag belong to the caller.
     TakeItem,
 }
 
@@ -126,6 +135,8 @@ pub(crate) struct StartMenu {
     /// `Some` while the SAVE flow owns the menu; `None` while item input
     /// does.
     save: Option<SaveDialog>,
+    /// `Some` while the TAKE MAIL flow owns the menu.
+    mail: Option<TakeMailDialog>,
     /// Whether EXIT was selected and is waiting for the next tick to close
     /// the menu (see [`Self::tick`]).
     exit_pending: bool,
@@ -152,6 +163,7 @@ impl StartMenu {
             yes_no_glyphs,
             cursor,
             save: None,
+            mail: None,
             exit_pending: false,
         }
     }
@@ -172,10 +184,19 @@ impl StartMenu {
     pub(crate) fn tick(
         &mut self,
         buttons: ButtonState,
-        target: &mut impl SaveTarget,
+        target: &mut (impl SaveTarget + TakeMailTarget),
     ) -> StartMenuOutcome {
         if self.exit_pending {
             return StartMenuOutcome::Closed;
+        }
+        if let Some(dialog) = &mut self.mail {
+            return match dialog.run(buttons, &self.chrome, target) {
+                TakeMailOutcome::InProgress => StartMenuOutcome::Open,
+                TakeMailOutcome::Done => {
+                    self.mail = None;
+                    StartMenuOutcome::Closed
+                }
+            };
         }
         if let Some(dialog) = &mut self.save {
             return match dialog.run(buttons, &self.chrome, target) {
@@ -224,6 +245,28 @@ impl StartMenu {
         };
     }
 
+    /// Starts the TAKE MAIL flow (`CursorCb_TakeMail`) over the open menu. The
+    /// caller does this after [`StartMenuOutcome::TakeItem`] when the lead
+    /// holds mail, and keeps the menu open.
+    pub(crate) fn begin_take_mail(&mut self) {
+        self.mail = Some(TakeMailDialog::new());
+    }
+
+    /// The TAKE MAIL messages opened so far, in order; empty with no flow.
+    #[cfg(test)]
+    pub(crate) fn mail_messages_shown(&self) -> Vec<MailMessage> {
+        self.mail
+            .as_ref()
+            .map(|mail| mail.shown().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Whether the TAKE MAIL flow owns the menu.
+    #[cfg(test)]
+    pub(crate) const fn taking_mail(&self) -> bool {
+        self.mail.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn selected(&self) -> StartMenuItem {
         self.items[self.cursor]
@@ -244,7 +287,9 @@ impl StartMenu {
     /// or `None` when no prompt is open.
     #[cfg(test)]
     pub(crate) fn yes_no_cursor(&self) -> Option<u8> {
-        self.save.as_ref()?.yes_no().map(|menu| menu.cursor)
+        let save = self.save.as_ref().and_then(|save| save.yes_no());
+        let mail = self.mail.as_ref().and_then(TakeMailDialog::yes_no);
+        save.or(mail).map(|menu| menu.cursor)
     }
 
     /// Composites the menu, and whatever the SAVE flow has open, over an
@@ -265,17 +310,24 @@ impl StartMenu {
         // The item window is removed only once its replacement save message
         // exists, never a frame earlier
         // (`pokeemerald/src/start_menu.c:978-993`).
-        let save_message = self.save.as_ref().and_then(SaveDialog::message);
-        if save_message.is_none() {
+        let message = self
+            .save
+            .as_ref()
+            .and_then(SaveDialog::message)
+            .or_else(|| self.mail.as_ref().and_then(TakeMailDialog::message));
+        if message.is_none() {
             self.draw_items(&mut base);
         }
-        if let Some(message) = save_message {
+        if let Some(message) = message {
             base = message.compose_over(base);
         }
-        if let Some(dialog) = &self.save {
-            if let Some(yes_no) = dialog.yes_no() {
-                self.draw_yes_no(&mut base, yes_no);
-            }
+        let yes_no = self
+            .save
+            .as_ref()
+            .and_then(SaveDialog::yes_no)
+            .or_else(|| self.mail.as_ref().and_then(TakeMailDialog::yes_no));
+        if let Some(yes_no) = yes_no {
+            self.draw_yes_no(&mut base, yes_no);
         }
         base
     }
@@ -361,5 +413,7 @@ mod pack_fixture;
 mod palette_tests;
 #[cfg(test)]
 mod save_input_tests;
+#[cfg(test)]
+mod take_mail_tests;
 #[cfg(test)]
 mod test_support;

@@ -10,6 +10,7 @@ mod consumed_berry;
 mod create_mon;
 mod cute_charm_wild_gender;
 mod loaded_lead;
+mod mail;
 mod merge_hp;
 mod merge_stats;
 mod retained_record;

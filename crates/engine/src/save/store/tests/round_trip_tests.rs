@@ -101,6 +101,26 @@ fn an_old_build_save_back_at_the_same_position_leaves_the_pair_untrusted() {
 }
 
 #[test]
+fn mail_in_the_party_and_pc_slots_survives_a_save_and_load() {
+    use crate::save::{Mail, MAIL_COUNT};
+    let mut block1 = sample_block1();
+    for slot in [0, 5, 6, MAIL_COUNT - 1] {
+        block1.mail[slot] = Mail {
+            words: [0x0101 * u16::try_from(slot).unwrap() + 1; 9],
+            player_name: [u8::try_from(slot).unwrap() + 1; 8],
+            trainer_id: [9; 4],
+            species: 0x0123,
+            item_id: assets::items::ItemId::SHADOW_MAIL,
+            padding: [0xA5, 0x5A],
+        };
+    }
+    let mut store = SaveStore::new();
+    store.save(&block1, &sample_block2());
+    let reopened = store.load().block1;
+    assert_eq!(reopened.mail, block1.mail);
+}
+
+#[test]
 fn save_then_load_round_trips_identical_state() {
     let mut store = SaveStore::new();
     let block1 = sample_block1();

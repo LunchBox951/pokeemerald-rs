@@ -1,6 +1,6 @@
 //! Fake save medium and input helpers shared by start-menu test suites.
 
-use super::{SaveMode, SaveTarget};
+use super::{ReturnMailToBag, SaveMode, SaveTarget, SendMailToPc, TakeMailTarget};
 use crate::game_save::SaveFileStatus;
 use engine::text::render::TextSpeed;
 use engine::text::Token;
@@ -21,6 +21,12 @@ pub(super) struct FakeTarget {
     pub(super) write_succeeds: bool,
     /// Every mode `try_saving_data` was called with, in order.
     pub(super) writes: Vec<SaveMode>,
+    /// What the next mail transfers report.
+    pub(super) send_result: SendMailToPc,
+    pub(super) return_result: ReturnMailToBag,
+    /// How many times each mail transfer ran.
+    pub(super) sends: u32,
+    pub(super) returns: u32,
 }
 
 impl FakeTarget {
@@ -30,6 +36,10 @@ impl FakeTarget {
             different_save_file,
             write_succeeds: true,
             writes: Vec::new(),
+            send_result: SendMailToPc::Sent,
+            return_result: ReturnMailToBag::Taken,
+            sends: 0,
+            returns: 0,
         }
     }
 }
@@ -62,6 +72,22 @@ impl SaveTarget for FakeTarget {
             self.different_save_file = false;
         }
         self.write_succeeds
+    }
+}
+
+impl TakeMailTarget for FakeTarget {
+    fn mail_text_speed(&self) -> TextSpeed {
+        TextSpeed::Mid
+    }
+
+    fn send_mail_to_pc(&mut self) -> SendMailToPc {
+        self.sends += 1;
+        self.send_result
+    }
+
+    fn return_mail_to_bag(&mut self) -> ReturnMailToBag {
+        self.returns += 1;
+        self.return_result
     }
 }
 

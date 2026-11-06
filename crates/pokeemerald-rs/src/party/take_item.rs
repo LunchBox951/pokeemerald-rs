@@ -13,9 +13,11 @@ pub(crate) enum TakeHeldItem {
     NotHolding,
     /// The Pokemon holds mail (`ItemIsMail`, `mail_data.c:185`). Not a
     /// `TryTakeMonItem` outcome: the party menu offers `CursorCb_TakeMail`
-    /// in place of TAKE ITEM for a mail holder (`SetPartyMonFieldSelectionActions`, `party_menu.c:2631-2634`), so this
-    /// port refuses here, unchanged, rather than take mail without clearing
-    /// its record.
+    /// in place of TAKE ITEM for a mail holder
+    /// (`SetPartyMonFieldSelectionActions`, `party_menu.c:2631-2634`), and the
+    /// start menu sends a mail holder to that flow (see [`super::mail`])
+    /// before this runs. The refusal is a guard against a caller that skips
+    /// that dispatch: mail is never taken without clearing its record.
     HoldsMail(assets::items::ItemId),
     /// `AddBagItem` refused the item (`return 1`, "bag full, could not
     /// remove"); the bag and the Pokemon are exactly as they were.
@@ -28,8 +30,8 @@ pub(crate) enum TakeHeldItem {
 /// `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`), the effect of
 /// `CursorCb_TakeItem` (`:3273-3298`): moves `mon`'s held item into `bag`.
 ///
-/// Mail is refused untouched ([`TakeHeldItem::HoldsMail`]); that check is the
-/// port's stand-in for the menu never offering TAKE ITEM there, not part of
+/// Mail is refused untouched ([`TakeHeldItem::HoldsMail`]); that check is a
+/// guard for callers that skip the menu's mail dispatch, not part of
 /// `TryTakeMonItem` itself.
 ///
 /// `AddBagItem(item, 1)` runs before the item is cleared, so a bag that cannot
@@ -40,7 +42,7 @@ pub(crate) fn take_held_item(mon: &mut BattlePokemon, bag: &mut engine::save::Ba
     if item == assets::items::ItemId::NONE {
         return TakeHeldItem::NotHolding;
     }
-    if item_is_mail(item) {
+    if engine::save::item_is_mail(item) {
         return TakeHeldItem::HoldsMail(item);
     }
     if !bag.add_item(item, 1) {
@@ -48,11 +50,4 @@ pub(crate) fn take_held_item(mon: &mut BattlePokemon, bag: &mut engine::save::Ba
     }
     *mon = mon.clone().with_held_item(assets::items::ItemId::NONE);
     TakeHeldItem::Took(item)
-}
-
-/// `ItemIsMail` (`pokeemerald/src/mail_data.c:185`): the twelve mail ids,
-/// `ITEM_ORANGE_MAIL..=ITEM_RETRO_MAIL`. Not an item-type test: Master Ball
-/// shares mail's `ItemType(0)`.
-fn item_is_mail(item: assets::items::ItemId) -> bool {
-    (assets::items::ItemId::ORANGE_MAIL..=assets::items::ItemId::RETRO_MAIL).contains(&item)
 }

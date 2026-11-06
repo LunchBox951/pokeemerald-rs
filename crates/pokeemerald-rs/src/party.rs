@@ -88,9 +88,10 @@
 use std::ops::Range;
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
-use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN};
+use engine::save::{
+    BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, MAIL_NONE, SUBSTRUCTURE_LEN,
+};
 
-const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
 const GROWTH_SPECIES: Range<usize> = 0..2;
@@ -141,6 +142,12 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
     )
 )]
 mod starter;
+
+/// The start menu's TAKE entry for a mail holder: `CursorCb_TakeMail`'s transfers.
+mod mail;
+pub(crate) use mail::{
+    holds_valid_mail, take_mail_from_mon, take_mail_from_mon_and_save, TakeMailError,
+};
 
 /// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
 mod take_item;
@@ -883,6 +890,21 @@ impl LoadedLead {
     /// The backing save record as last merged.
     pub(crate) fn record(&self) -> &Pokemon {
         &self.record
+    }
+
+    /// Installs the result of a mail transfer ([`take_mail_from_mon`],
+    /// [`take_mail_from_mon_and_save`]): the battler with its mail item gone and
+    /// the record's `mail` byte. The merge keeps the record's `mail` byte, so
+    /// this is the only way it changes after load; the caller files the lead
+    /// into the save afterwards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn install_mail_take(&mut self, battler: BattlePokemon, mail: u8) {
+        assert!(self.battler.is_some(), "{LENT_OUT}");
+        self.battler = Some(battler);
+        self.record.mail = mail;
     }
 
     /// Whether [`Self::take_battler`] has lent the battler out and it has not
