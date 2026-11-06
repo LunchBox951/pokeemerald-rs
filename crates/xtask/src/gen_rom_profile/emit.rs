@@ -125,6 +125,8 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     }
     let _ = writeln!(out, "    ],");
 
+    image_slice(&mut out, "    ", "font_images", &plan.font_images);
+
     text_window_roots(&mut out, plan);
 
     let _ = writeln!(out, "    interface: InterfaceRoots {{");
@@ -1250,6 +1252,7 @@ mod bag_field_tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one field per profile family")]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
         let plan = ProfilePlan {
@@ -1267,6 +1270,7 @@ mod bag_field_tests {
             },
             layouts: vec![],
             fonts: vec![],
+            font_images: vec![],
             text_window: TextWindowPlan {
                 images: vec![],
                 palettes: vec![],

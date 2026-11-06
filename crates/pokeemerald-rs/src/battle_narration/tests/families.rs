@@ -1,6 +1,7 @@
 //! One test per message family, driving [`Narrator`] with events and expanding
 //! the requests against upstream template text.
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
 
@@ -319,6 +320,77 @@ fn end_turn_poison_and_burn_name_the_battler_they_hurt() {
         [
             "TORCHIC is hurt\nby its burn!",
             "Wild RATTATA is hurt\nby poison!"
+        ]
+    );
+}
+
+/// `gLeechSeedStringIds` prints its set entry for the seeded target
+/// (`data/battle_scripts_1.s:1164`-`:1170`) and its drain entry once for the
+/// seeded battler, as the attacker, after both HP updates (`:3265`-`:3284`);
+/// the seeder's share prints nothing. `BattleScript_ItemHealHP_RemoveItem`
+/// names the holder as the scripting battler and its item as the last used one.
+#[test]
+fn leech_seed_and_oran_berry_print_their_own_messages() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Seeded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::SappedByLeechSeed {
+                    by_player: false,
+                    damage: 1,
+                },
+                BattleEvent::LeechSeedHealed {
+                    by_player: true,
+                    healed: 1,
+                },
+                BattleEvent::ItemRestoredHealth {
+                    by_player: true,
+                    item: ItemId::ORAN_BERRY,
+                    healed: 10,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA was seeded!",
+            "Wild RATTATA's health is\nsapped by LEECH SEED!",
+            "TORCHIC's ORAN BERRY\nrestored health!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed` on a miss (`data/battle_scripts_1.s:1163`), and
+/// `Cmd_setseeded` picks `B_MSG_LEECH_SEED_MISS` for that miss and for an
+/// already-seeded target alike (`src/battle_script_commands.c:6720`-`:6724`),
+/// so either failure names the target (`gLeechSeedStringIds`,
+/// `src/battle_message.c:963`) rather than the attacker's generic miss.
+#[test]
+fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::LeechSeedEvaded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::LeechSeedEvaded {
+                    by_player: false,
+                    move_id: MoveId::LEECH_SEED,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA evaded\nthe attack!",
+            "TORCHIC evaded\nthe attack!",
         ]
     );
 }

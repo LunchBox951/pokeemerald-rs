@@ -38,6 +38,8 @@ pub enum PresentationError {
     Pack(PackError),
     /// A font sheet could not be decoded.
     Font(assets::AssetError),
+    /// The keypad-icon sheet could not be decoded.
+    KeypadIcons(assets::AssetError),
     /// The battle textbox graphics could not be decoded.
     Graphics(RenderError),
     /// A request in the batch could not be expanded; its gate has failed and
@@ -57,6 +59,7 @@ impl fmt::Display for PresentationError {
         match self {
             Self::Pack(error) => write!(f, "battle message layer: {error}"),
             Self::Font(error) => write!(f, "battle message layer: {error}"),
+            Self::KeypadIcons(error) => write!(f, "battle message layer: keypad icons: {error}"),
             Self::Graphics(error) => write!(f, "battle message layer: textbox: {error:?}"),
             Self::Expansion {
                 request_index,
@@ -117,13 +120,15 @@ impl BattleMessageLayer<OwnedFontGlyphSheet> {
     ///
     /// # Errors
     ///
-    /// Returns [`PresentationError`] when the pack lacks or malforms a font or
-    /// the battle interface graphics.
+    /// Returns [`PresentationError`] when the pack lacks or malforms a font,
+    /// the keypad-icon sheet or the battle interface graphics.
     pub fn from_pack(pack: &AssetPack, raw_text_speed: u8) -> Result<Self, PresentationError> {
         let sources: OwnedGlyphSources = GlyphSources::try_from_fn(|font| {
             Ok::<_, PresentationError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
         })?;
-        let textbox = BattleTextbox::from_handle(pack.battle_interface()?.textbox)
+        let icons = assets::keypad_icons::KeypadIconSheet::new(pack.keypad_icons()?)
+            .map_err(PresentationError::KeypadIcons)?;
+        let textbox = BattleTextbox::from_handle(pack.battle_interface()?.textbox, icons)
             .map_err(PresentationError::Graphics)?;
         Ok(Self::new(
             sources,
@@ -297,6 +302,11 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         }
         if let Some(span) = self.printer.cleared_span() {
             self.ops.push(WindowOp::ClearSpan(span));
+        }
+        // A keypad icon also ends its frame as `TickEvent::Idle`
+        // (`Printer::keypad_icon`), so it never competes with a glyph.
+        if let Some(icon) = self.printer.keypad_icon() {
+            self.ops.push(WindowOp::KeypadIcon(icon));
         }
         let mut completed = None;
         if event == TickEvent::Finished {

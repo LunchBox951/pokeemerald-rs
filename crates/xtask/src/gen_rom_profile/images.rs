@@ -74,7 +74,7 @@ struct Variant {
 /// cannot list it), or `None` for a global root.
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
-/// `list_menu.c:290`, `text_window.c:10-28`, `naming_screen.c:185-186`,
+/// `list_menu.c:290`, `text_window.c:10-28`, `naming_screen.c:185-186`, `text.c:117`,
 /// `evolution_scene.c:71`, `evolution_graphics.c:42`, `text.c:71`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
@@ -87,6 +87,7 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
             .then(|| format!("sTitleScreen{camel}Gfx"));
     }
     match id {
+        "font/keypad_icons" => Some("sKeypadIconTiles".to_owned()),
         "naming-screen/image/pc_icon_off" => Some("sPCIconOff_Gfx".to_owned()),
         "naming-screen/image/pc_icon_on" => Some("sPCIconOn_Gfx".to_owned()),
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),

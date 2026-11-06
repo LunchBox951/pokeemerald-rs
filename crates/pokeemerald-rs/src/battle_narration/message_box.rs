@@ -5,6 +5,7 @@
 //! `src/battle_bg.c:859`-`:865`), not from the field dialogue frame, and it
 //! uses the battle window's own palette indices rather than the field ones.
 
+use assets::keypad_icons::KeypadIconSheet;
 use assets::pack::{BattleTextboxHandle, ImageRef};
 use engine::text::window::MessageBoxLayout;
 use rendering::{
@@ -46,12 +47,19 @@ pub(super) struct BattleTextbox {
     tileset: Tileset,
     palette: Palette,
     tilemap: Tilemap,
+    /// The keypad-icon sheet a `{A_BUTTON}`-style control draws from, over
+    /// the window's own palette bank.
+    icons: KeypadIconSheet,
 }
 
 impl BattleTextbox {
     /// Decodes the pack's battle textbox: the 128x128 4bpp tile sheet, the two
-    /// palette banks, and the 64x32 tilemap.
-    pub(super) fn from_handle(handle: BattleTextboxHandle<'_>) -> Result<Self, RenderError> {
+    /// palette banks, and the 64x32 tilemap. `icons` is the pack's validated
+    /// keypad-icon sheet.
+    pub(super) fn from_handle(
+        handle: BattleTextboxHandle<'_>,
+        icons: KeypadIconSheet,
+    ) -> Result<Self, RenderError> {
         let mut colors = [Bgr555::default(); Palette::LEN];
         for (slot, raw) in colors.iter_mut().zip(handle.palette.colors()) {
             *slot = Bgr555::from_raw(raw);
@@ -65,15 +73,18 @@ impl BattleTextbox {
             tileset: Tileset::decode(BitDepth::Bpp4, &packed_tiles(handle.image))?,
             palette: Palette::new(colors),
             tilemap: Tilemap::new(TEXTBOX_MAP_SIDE_TILES.0, TEXTBOX_MAP_SIDE_TILES.1, entries)?,
+            icons,
         })
     }
 
+    /// A textbox over a blank keypad-icon sheet, for crate tests.
     #[cfg(test)]
-    pub(super) const fn from_parts(tileset: Tileset, palette: Palette, tilemap: Tilemap) -> Self {
+    pub(super) fn from_parts(tileset: Tileset, palette: Palette, tilemap: Tilemap) -> Self {
         Self {
             tileset,
             palette,
             tilemap,
+            icons: textbox::test_keypad_icons(&[]),
         }
     }
 
@@ -92,7 +103,22 @@ impl BattleTextbox {
         let mut roles = [None; 4];
         roles[GLYPH_FOREGROUND_ROLE] = Some(self.color(FOREGROUND_INDEX));
         roles[GLYPH_SHADOW_ROLE] = Some(self.color(SHADOW_INDEX));
-        textbox::compose_window_ops(framebuffer, ops, origin, size, &roles);
+        textbox::compose_window_ops(
+            framebuffer,
+            ops,
+            origin,
+            size,
+            &roles,
+            &self.icons,
+            &self.window_palette(),
+        );
+    }
+
+    /// Palette bank 0 as the window's icon colours, in local index order.
+    fn window_palette(&self) -> Vec<Rgb888> {
+        (0..Palette::BANK_LEN)
+            .map(|index| self.color(u8::try_from(index).unwrap_or(u8::MAX)))
+            .collect()
     }
 
     fn color(&self, index: u8) -> Rgb888 {
