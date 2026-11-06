@@ -85,7 +85,7 @@ impl Fixture {
         let mut entries = synthetic_options_entries();
         entries.extend(extra);
         write_scratch_exclusive(&pack_path, pack_bytes_with_fonts(entries));
-        // `PackSource::Test` needs a `'static` path, as `flow::tests` does.
+        // `PackSource::Test` needs a `'static` path, as `flow::main_menu_confirm_tests` does.
         let leaked: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
         Self {
             pack_path,

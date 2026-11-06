@@ -5,7 +5,7 @@
 //! is done (`:1109-1120`). The press frame is P0; as for A's fade, P21 is the
 //! frame whose update reports done and P22 is the first the task observes it.
 
-use super::tests::{held, pressed, TempSave};
+use super::tests::{empty_slot, held, pack_free_menu, pressed, TempSave};
 use super::{advance_scene, AnimatedTitle, AppScene, MainMenuState};
 use crate::main_menu::{synthetic_scene, MainMenuItem, MainMenuType};
 use crate::pack_source::{pack_loads_on_this_thread, PackSource};
@@ -293,4 +293,27 @@ fn returning_title_honours_the_retained_l_equals_a() {
         matches!(next, AppScene::TitleFadeWait(_)),
         "a fresh L under the retained L=A must advance the title like A"
     );
+}
+
+/// `Task_HandleMainMenuInput` checks B ahead of the D-pad
+/// (`main_menu.c:895-902`): B, alone or with Down, begins the white fade
+/// back to the title on either boot-menu type, never staying or navigating.
+#[test]
+fn main_menu_b_leaves_the_menu_on_both_types() {
+    for menu_type in [MainMenuType::NoSavedGame, MainMenuType::SavedGame] {
+        for keys in [Buttons::B, Buttons::B | Buttons::DOWN] {
+            let (_temp, mut save_slot) = empty_slot("b-cancel");
+            let scene = pack_free_menu(menu_type, &mut save_slot);
+            let (next, _) = advance_scene(
+                scene,
+                pressed(keys),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
+            assert!(
+                !matches!(next, AppScene::MainMenu(_) | AppScene::MainMenuHighlight(_)),
+                "{menu_type:?} with {keys:?} must take the B cancel path"
+            );
+        }
+    }
 }
