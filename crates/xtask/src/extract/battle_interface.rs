@@ -183,6 +183,7 @@ pub(super) use healthbox_frames::pack_ids as healthbox_frame_pack_ids;
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
@@ -213,14 +214,10 @@ mod tests {
         "textbox_map.bin",
     ];
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-battle-interface-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join(DIRECTORY)).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-battle-interface-{name}")).unwrap();
+        std::fs::create_dir_all(owned.path().join(DIRECTORY)).unwrap();
+        owned
     }
 
     fn png_bytes(bit_depth: u8, width: u32, height: u32) -> Vec<u8> {
@@ -286,10 +283,12 @@ mod tests {
     fn the_fixed_inventory_is_the_ids_extraction_emits() {
         assert_eq!(pack_ids(), MANIFEST_IDS);
 
-        let dir = scratch_dir("inventory");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("inventory");
+
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let mut writer = PackWriter::new();
-        extract_battle_interface(&dir, &mut writer).unwrap();
+        extract_battle_interface(dir, &mut writer).unwrap();
         let pack = writer.finish().unwrap();
         let emitted: Vec<String> = pack_format::parse_directory(&pack)
             .unwrap()
@@ -299,15 +298,15 @@ mod tests {
         let mut inventory = pack_ids();
         inventory.sort();
         assert_eq!(emitted, inventory);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_valid_manifest_yields_the_records_the_typed_handle_reads() {
-        let dir = scratch_dir("valid");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("valid");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let mut writer = PackWriter::new();
-        extract_battle_interface(&dir, &mut writer).unwrap();
+        extract_battle_interface(dir, &mut writer).unwrap();
         assert_eq!(writer.len(), MANIFEST_IDS.len());
         let pack_path = dir.join("battle-interface.pack");
         std::fs::write(&pack_path, writer.finish().unwrap()).unwrap();
@@ -321,88 +320,86 @@ mod tests {
         assert_eq!(handle.textbox.palette.color(16), Some(0x7FFF));
         assert_eq!(handle.textbox.palette.color(31), Some(0x7FFF));
         assert_eq!(handle.textbox.tilemap.len(), TEXTBOX_TILEMAP_BYTES);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_missing_file_in_a_complete_checkout_fails_closed() {
         for file in SOURCE_FILES {
-            let dir = scratch_dir("missing-one");
-            write_valid_checkout(&dir);
+            let owned = scratch_dir("missing-one");
+            let dir = owned.path();
+            write_valid_checkout(dir);
             std::fs::remove_file(dir.join(DIRECTORY).join(file)).unwrap();
             let mut writer = PackWriter::new();
-            let err = extract_battle_interface(&dir, &mut writer).unwrap_err();
+            let err = extract_battle_interface(dir, &mut writer).unwrap_err();
             assert!(
                 matches!(&err, ExtractError::ReadFailed(path, _) if path.ends_with(file)),
                 "{file}: {err}"
             );
-            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 
     #[test]
     fn a_textbox_that_is_not_the_upstream_sheet_is_rejected() {
-        let dir = scratch_dir("textbox");
+        let owned = scratch_dir("textbox");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
 
-        let path = write(&dir, "textbox.png", b"not a png");
-        let err = extract_textbox_image(&dir, &mut writer).unwrap_err();
+        let path = write(dir, "textbox.png", b"not a png");
+        let err = extract_textbox_image(dir, &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
 
-        write(&dir, "textbox.png", png_bytes(4, 64, 64));
-        let err = extract_textbox_image(&dir, &mut writer).unwrap_err();
+        write(dir, "textbox.png", png_bytes(4, 64, 64));
+        let err = extract_textbox_image(dir, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path);
 
-        write(&dir, "textbox.png", png_bytes(8, 128, 128));
-        let err = extract_textbox_image(&dir, &mut writer).unwrap_err();
+        write(dir, "textbox.png", png_bytes(8, 128, 128));
+        let err = extract_textbox_image(dir, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path);
 
         assert_eq!(writer.len(), 0);
-        write(&dir, "textbox.png", png_bytes(4, 128, 128));
-        extract_textbox_image(&dir, &mut writer).unwrap();
+        write(dir, "textbox.png", png_bytes(4, 128, 128));
+        extract_textbox_image(dir, &mut writer).unwrap();
         assert_eq!(writer.len(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn palette_files_that_are_malformed_or_miscounted_are_rejected() {
-        let dir = scratch_dir("palette");
+        let owned = scratch_dir("palette");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
-        let path = write(&dir, "textbox_1.pal", "not a palette");
-        write(&dir, "textbox_0.pal", jasc(16, 8));
-        let err = extract_palette(&dir, PALETTES[0], &mut writer).unwrap_err();
+        let path = write(dir, "textbox_1.pal", "not a palette");
+        write(dir, "textbox_0.pal", jasc(16, 8));
+        let err = extract_palette(dir, PALETTES[0], &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Pal(error_path, _) if error_path == path));
 
         for colors in [15, 17, 32] {
-            write(&dir, "textbox_1.pal", jasc(colors, 8));
+            write(dir, "textbox_1.pal", jasc(colors, 8));
             assert_eq!(
-                mismatch_path(extract_palette(&dir, PALETTES[0], &mut writer).unwrap_err()),
+                mismatch_path(extract_palette(dir, PALETTES[0], &mut writer).unwrap_err()),
                 path,
                 "{colors} colours"
             );
         }
         assert_eq!(writer.len(), 0);
 
-        write(&dir, "textbox_1.pal", jasc(16, 8));
-        extract_palette(&dir, PALETTES[0], &mut writer).unwrap();
+        write(dir, "textbox_1.pal", jasc(16, 8));
+        extract_palette(dir, PALETTES[0], &mut writer).unwrap();
         assert_eq!(writer.len(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn tilemaps_of_the_wrong_length_are_rejected() {
-        let dir = scratch_dir("tilemap-length");
+        let owned = scratch_dir("tilemap-length");
+        let dir = owned.path();
         let path = dir.join(DIRECTORY).join("textbox_map.bin");
         let mut writer = PackWriter::new();
         for len in [0, TEXTBOX_TILEMAP_BYTES - 1, TEXTBOX_TILEMAP_BYTES + 1] {
             std::fs::write(&path, vec![0; len]).unwrap();
             let err =
-                extract_tilemap(&dir, &mut crate::extract::read_file, &mut writer).unwrap_err();
+                extract_tilemap(dir, &mut crate::extract::read_file, &mut writer).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{len} bytes");
         }
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -435,10 +432,8 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn battle_interface_is_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-battle-interface-{}.pack",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-extract-test-battle-interface").unwrap();
+        let path = owned.path().join("battle-interface.pack");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
         let handle = pack.battle_interface().unwrap();
@@ -469,6 +464,13 @@ mod tests {
             handle.pp_text_palette.colors().collect::<Vec<_>>(),
             bank("text_pp.pal")
         );
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-battle-interface-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
     }
 }

@@ -196,22 +196,25 @@ mod tests {
         validate_text_window_manifest, validate_text_window_pixels, ExtractError, ImageDimensions,
         COLORS_PER_GBA_PALETTE_BANK, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
     };
+    use crate::extract::owned_fixture::{
+        assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+    };
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    fn scratch_dir(name: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-text-window-{name}-test")).unwrap()
+    }
+
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     #[test]
     fn text_window_manifest_rejects_each_missing_required_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-text-window-manifest-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let owned = scratch_dir("manifest");
+        let dir = owned.path();
 
         let required: Vec<_> = TEXT_WINDOW_IMAGE_STEMS
             .iter()
@@ -229,25 +232,19 @@ mod tests {
         for filename in &required {
             let missing = dir.join(filename);
             std::fs::remove_file(&missing).unwrap();
-            let err = validate_text_window_manifest(&dir).unwrap_err();
+            let err = validate_text_window_manifest(dir).unwrap_err();
             assert!(
                 matches!(err, ExtractError::MissingTextWindowAsset(path) if path == missing),
                 "wrong error for missing `{filename}`"
             );
             std::fs::write(&missing, []).unwrap();
         }
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn text_window_manifest_rejects_unexpected_assets() {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-text-window-unexpected-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let owned = scratch_dir("unexpected");
+        let dir = owned.path();
 
         for stem in TEXT_WINDOW_IMAGE_STEMS {
             std::fs::write(dir.join(format!("{stem}.png")), []).unwrap();
@@ -259,15 +256,13 @@ mod tests {
         for filename in ["new_frame.png", "text_pal5.pal"] {
             let unexpected = dir.join(filename);
             std::fs::write(&unexpected, []).unwrap();
-            let err = validate_text_window_manifest(&dir).unwrap_err();
+            let err = validate_text_window_manifest(dir).unwrap_err();
             assert!(
                 matches!(err, ExtractError::UnexpectedTextWindowAsset(path) if path == unexpected),
                 "wrong error for unexpected text-window asset `{filename}`"
             );
             std::fs::remove_file(unexpected).unwrap();
         }
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -391,7 +386,7 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn text_window_frames_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("text-window");
+        let (_owned, path) = scratch_path("text-window");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
 
@@ -414,6 +409,17 @@ mod tests {
                 "missing pack entry id `{id}`"
             );
         }
-        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-text-window-ownership-probe-test",
+            || scratch_dir("ownership-probe"),
+        );
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-text-window-pack-ownership-probe",
+            || scratch_path("text-window-pack-ownership-probe"),
+        );
     }
 }

@@ -102,13 +102,16 @@ mod tests {
         extract_title_screen, ExtractError, PackWriter, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS,
         TITLE_SCREEN_FILE_PALETTES, TITLE_SCREEN_IMAGES, TITLE_SCREEN_TILEMAPS,
     };
+    use crate::extract::owned_fixture::{
+        assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+    };
     use crate::extract::{extract_to, upstream_present};
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     fn assert_pack_contains_entry_id(bytes: &[u8], id: &str) {
@@ -149,13 +152,9 @@ mod tests {
 
     /// Write a synthetic `graphics/title_screen` holding exactly the fixed
     /// inventory, and return the upstream root and the title directory.
-    fn synthetic_title_checkout(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let dir = upstream.join("graphics/title_screen");
+    fn synthetic_title_checkout(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let upstream = OwnedDir::create(&format!("pokeemerald-rs-extract-{name}")).unwrap();
+        let dir = upstream.path().join("graphics/title_screen");
         std::fs::create_dir_all(&dir).unwrap();
         for stem in TITLE_SCREEN_IMAGES {
             std::fs::write(dir.join(format!("{stem}.png")), TINY_PNG).unwrap();
@@ -180,8 +179,7 @@ mod tests {
     fn the_fixed_inventory_extracts_from_a_synthetic_checkout() {
         let (upstream, _) = synthetic_title_checkout("title-baseline");
         let mut writer = PackWriter::new();
-        let result = extract_title_screen(&upstream, &mut writer);
-        let _ = std::fs::remove_dir_all(&upstream);
+        let result = extract_title_screen(upstream.path(), &mut writer);
         result.unwrap();
         let bytes = writer.finish().unwrap();
         for id in crate::extract::scope::title_ids() {
@@ -202,8 +200,7 @@ mod tests {
         std::fs::write(dir.join("logo_shine.bin"), b"UNTRACKED").unwrap();
         std::fs::write(dir.join("unused.png"), b"not a png").unwrap();
         let mut writer = PackWriter::new();
-        let result = extract_title_screen(&upstream, &mut writer);
-        let _ = std::fs::remove_dir_all(&upstream);
+        let result = extract_title_screen(upstream.path(), &mut writer);
         result.unwrap();
         let bytes = writer.finish().unwrap();
         assert_eq!(pack_ids_with_prefix(&bytes, "title/"), 14);
@@ -224,12 +221,8 @@ mod tests {
 
     #[test]
     fn a_title_directory_missing_a_required_source_is_refused() {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-title-source-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let dir = upstream.join("graphics/title_screen");
+        let upstream = OwnedDir::create("pokeemerald-rs-extract-missing-title-source").unwrap();
+        let dir = upstream.path().join("graphics/title_screen");
         std::fs::create_dir_all(&dir).unwrap();
         // Every required source except `rayquaza.bin`; contents are never
         // read because the presence check runs first.
@@ -243,8 +236,7 @@ mod tests {
             std::fs::write(dir.join(format!("{stem}.pal")), b"").unwrap();
         }
 
-        let err = extract_title_screen(&upstream, &mut PackWriter::new()).unwrap_err();
-        let _ = std::fs::remove_dir_all(&upstream);
+        let err = extract_title_screen(upstream.path(), &mut PackWriter::new()).unwrap_err();
         assert!(
             matches!(&err, ExtractError::ReadFailed(path, _) if path == &dir.join("rayquaza.bin")),
             "{err:?}"
@@ -255,13 +247,24 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn embedded_palette_sheets_get_a_title_palette_entry() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("embedded-palettes");
+        let (_owned, path) = scratch_path("embedded-palettes");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
         for name in TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
             let id = format!("title/palette/{name}");
             assert_pack_contains_entry_id(&bytes, &id);
         }
-        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-title-pack-ownership-probe",
+            || scratch_path("title-pack-ownership-probe"),
+        );
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-extract-title-checkout-ownership-probe",
+            || synthetic_title_checkout("title-checkout-ownership-probe").0,
+        );
     }
 }

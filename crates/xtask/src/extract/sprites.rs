@@ -68,16 +68,14 @@ mod tests {
         extract_sprites, object_sheet_path, sprite_palette_ids, ExtractError, ObjectSheet,
         PackWriter, OBJECT_SHEETS, PEOPLE_SHEETS,
     };
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use crate::extract::scope::sprite_sheet_ids;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     /// A synthetic checkout holding every pinned sprite source, each decodable.
-    fn synthetic_sprite_checkout(tag: &str) -> PathBuf {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-{tag}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
+    fn synthetic_sprite_checkout(tag: &str) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-{tag}")).unwrap();
+        let upstream = owned.path();
         let people = upstream.join("graphics/object_events/pics/people");
         let palettes = upstream.join("graphics/object_events/palettes");
         let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
@@ -98,13 +96,12 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
             std::fs::write(path, &png).expect("object sheet");
         }
-        upstream
+        owned
     }
 
     fn packed_ids(upstream: &Path) -> Vec<String> {
         let mut writer = PackWriter::new();
         let result = extract_sprites(upstream, &mut writer);
-        let _ = std::fs::remove_dir_all(upstream);
         result.expect("complete");
         let bytes = writer.finish().expect("finish");
         pack_format::parse_directory(&bytes)
@@ -116,7 +113,8 @@ mod tests {
 
     #[test]
     fn untracked_people_files_are_not_packed_and_ids_match_the_manifest() {
-        let upstream = synthetic_sprite_checkout("untracked-sprite");
+        let owned = synthetic_sprite_checkout("untracked-sprite");
+        let upstream = owned.path();
         let people = upstream.join("graphics/object_events/pics/people");
         // Neither decodable nor in the manifest: a manifest-driven extractor
         // never opens them, so a directory walk would fail on them.
@@ -133,16 +131,13 @@ mod tests {
         let mut expected: Vec<String> = sprite_sheet_ids();
         expected.extend(sprite_palette_ids());
         expected.sort();
-        assert_eq!(packed_ids(&upstream), expected);
+        assert_eq!(packed_ids(upstream), expected);
     }
 
     #[test]
     fn a_checkout_missing_a_required_sprite_sheet_is_refused() {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-sprite-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
+        let owned = OwnedDir::create("pokeemerald-rs-extract-missing-sprite").unwrap();
+        let upstream = owned.path();
         let people = upstream.join("graphics/object_events/pics/people");
         let palettes = upstream.join("graphics/object_events/palettes");
         let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
@@ -163,10 +158,10 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
             std::fs::write(path, &png).expect("object sheet");
         }
-        extract_sprites(&upstream, &mut PackWriter::new()).expect("complete");
+        extract_sprites(upstream, &mut PackWriter::new()).expect("complete");
 
         std::fs::remove_file(people.join("brendan/walking.png")).expect("remove");
-        let walking = extract_sprites(&upstream, &mut PackWriter::new());
+        let walking = extract_sprites(upstream, &mut PackWriter::new());
         std::fs::write(people.join("brendan/walking.png"), &png).expect("restore");
         let truck = object_sheet_path(
             &pics,
@@ -176,11 +171,10 @@ mod tests {
             },
         );
         std::fs::remove_file(&truck).expect("remove truck");
-        let object = extract_sprites(&upstream, &mut PackWriter::new());
+        let object = extract_sprites(upstream, &mut PackWriter::new());
         std::fs::remove_file(people.join("may/running.png")).expect("remove");
         std::fs::remove_dir_all(&people).expect("remove all");
-        let domain = extract_sprites(&upstream, &mut PackWriter::new());
-        std::fs::remove_dir_all(&upstream).expect("cleanup");
+        let domain = extract_sprites(upstream, &mut PackWriter::new());
 
         let walking = walking.expect_err("walking");
         assert!(
@@ -196,6 +190,14 @@ mod tests {
         assert!(
             matches!(&domain, ExtractError::ReadFailed(p, _) if p == &people.join(format!("{}.png", PEOPLE_SHEETS[0]))),
             "{domain:?}"
+        );
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-extract-sprites-ownership-probe",
+            || synthetic_sprite_checkout("sprites-ownership-probe"),
         );
     }
 }

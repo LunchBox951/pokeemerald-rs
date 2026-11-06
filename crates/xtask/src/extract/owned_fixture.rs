@@ -202,6 +202,12 @@ impl OwnedDir {
     }
 }
 
+impl AsRef<Path> for OwnedDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl Drop for OwnedDir {
     /// Removes the tree only while the path still names the directory `mkdir`
     /// created; a replacement (symlink or another directory) is left alone.
@@ -251,6 +257,165 @@ impl Drop for OwnedDir {
             );
         }
     }
+}
+
+/// Names a fixture claiming under `prefix` must step around: the unsuffixed
+/// `{prefix}-{pid}` the fixtures used to build, the first claim candidate, and
+/// (on Unix) the second candidate as a symlink to a populated directory.
+#[cfg(test)]
+struct Planted {
+    dirs: Vec<PathBuf>,
+    links: Vec<PathBuf>,
+}
+
+#[cfg(test)]
+impl Planted {
+    /// Plants a populated directory at `path`, refusing a name already taken.
+    fn dir(&mut self, path: &Path) {
+        std::fs::create_dir(path)
+            .unwrap_or_else(|error| panic!("{} is already taken: {error}", path.display()));
+        self.dirs.push(path.to_path_buf());
+        std::fs::write(path.join("sentinel"), "precious").unwrap();
+    }
+
+    /// Asserts every planted entry still holds exactly its sentinel.
+    fn assert_untouched(&self) {
+        for path in &self.dirs {
+            let names: Vec<_> = std::fs::read_dir(path)
+                .unwrap_or_else(|error| panic!("{} was removed: {error}", path.display()))
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["sentinel"], "{} was modified", path.display());
+            assert_eq!(std::fs::read(path.join("sentinel")).unwrap(), b"precious");
+        }
+        for link in &self.links {
+            assert!(link.is_symlink(), "{} was replaced", link.display());
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for Planted {
+    fn drop(&mut self) {
+        for link in &self.links {
+            let _ = std::fs::remove_file(link);
+        }
+        for dir in &self.dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// Proves a fixture's directory claim steps around entries it did not create.
+///
+/// Plants the names `Planted` describes under `prefix`, runs `claim`, and
+/// requires the claimed directory to be a different, fresh path whose use and
+/// removal leaves every planted entry (and the target behind the symlink)
+/// exactly as planted. `claim` returns the claimed directory; `prefix` is the
+/// name prefix the fixture builds, which the claimed name must carry so a
+/// fixture that drifts to another name cannot pass vacuously.
+#[cfg(test)]
+pub(crate) fn assert_claim_spares_occupied_names<C: AsRef<Path>>(
+    prefix: &str,
+    claim: impl FnOnce() -> C,
+) {
+    let base = std::env::temp_dir();
+    let mut planted = Planted {
+        dirs: Vec::new(),
+        links: Vec::new(),
+    };
+    let legacy = base.join(format!("{prefix}-{}", std::process::id()));
+    planted.dir(&legacy);
+    planted.dir(&OwnedDir::candidate(&base, prefix, 0));
+    #[cfg(unix)]
+    let victim = {
+        let victim = OwnedDir::create(&format!("{prefix}-victim")).unwrap();
+        std::fs::write(victim.path().join("sentinel"), "precious").unwrap();
+        let link = OwnedDir::candidate(&base, prefix, 1);
+        std::os::unix::fs::symlink(victim.path(), &link).unwrap();
+        planted.links.push(link);
+        victim
+    };
+
+    let claimed = claim();
+    let claimed_path = claimed.as_ref().to_path_buf();
+    assert!(
+        claimed_path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(prefix)),
+        "{} does not carry the fixture prefix {prefix}",
+        claimed_path.display()
+    );
+    assert!(
+        planted.dirs.iter().all(|dir| dir != &claimed_path)
+            && planted.links.iter().all(|link| link != &claimed_path),
+        "the claim reused the occupied name {}",
+        claimed_path.display()
+    );
+    std::fs::write(claimed_path.join("written-by-the-fixture"), "fixture").unwrap();
+    drop(claimed);
+
+    planted.assert_untouched();
+    #[cfg(unix)]
+    {
+        let names: Vec<_> = std::fs::read_dir(victim.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            names,
+            ["sentinel"],
+            "the symlink target was written through"
+        );
+    }
+}
+
+/// A file planted at a name the fixture must not use, removed on drop.
+#[cfg(test)]
+struct PlantedFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for PlantedFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Proves a fixture's pack output path steps around a file it did not create.
+///
+/// Plants the unsuffixed `{prefix}-{pid}.pack` file the fixtures used to write
+/// through, runs `claim`, and requires the returned output path to be a
+/// different path inside the returned owned directory, whose write and removal
+/// leaves the planted file as planted.
+#[cfg(test)]
+pub(crate) fn assert_pack_path_spares_occupied_file(
+    prefix: &str,
+    claim: impl FnOnce() -> (OwnedDir, PathBuf),
+) {
+    let legacy = std::env::temp_dir().join(format!("{prefix}-{}.pack", std::process::id()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&legacy)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, b"precious"))
+        .unwrap_or_else(|error| panic!("{} is already taken: {error}", legacy.display()));
+    let _planted = PlantedFile(legacy.clone());
+
+    let (owned, path) = claim();
+    assert!(
+        path.starts_with(owned.path()),
+        "{} is outside the owned directory",
+        path.display()
+    );
+    assert_ne!(path, legacy, "the claim reused the occupied pack path");
+    std::fs::write(&path, "fixture").unwrap();
+    drop(owned);
+
+    assert_eq!(
+        std::fs::read(&legacy).unwrap(),
+        b"precious",
+        "the planted pack was modified"
+    );
 }
 
 #[cfg(test)]

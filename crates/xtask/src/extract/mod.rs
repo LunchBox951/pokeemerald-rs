@@ -331,35 +331,38 @@ fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
 #[cfg(test)]
 mod tests {
     use super::{extract_to, jasc_pal, upstream_present, ExtractError};
+    use crate::extract::owned_fixture::{assert_pack_path_spares_occupied_file, OwnedDir};
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    fn scratch_dir(name: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap()
+    }
+
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = scratch_dir(name);
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn full_extraction_round_trips_locally() {
         assert!(upstream_present(), "run ./init.sh first");
-        let report = extract_to(&scratch_path("full-round-trip"))
-            .expect("extraction should succeed against a real checkout");
+        let (_owned, path) = scratch_path("full-round-trip");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         assert!(report.entry_count > 0);
         assert!(report.pack_size > 0);
         assert!(report.output_path.is_file());
-        let _ = std::fs::remove_file(report.output_path);
     }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn extraction_is_byte_identical_across_runs() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("determinism");
+        let (_owned, path) = scratch_path("determinism");
         let first = std::fs::read(extract_to(&path).unwrap().output_path).unwrap();
         let second = std::fs::read(extract_to(&path).unwrap().output_path).unwrap();
         assert_eq!(first, second);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -375,12 +378,8 @@ mod tests {
         let count = usize::from(u16::MAX) + 1;
         let text = format!("JASC-PAL\r\n0100\r\n{count}\r\n");
 
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-oversized-jasc-test-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("oversized.pal");
+        let owned = scratch_dir("oversized-jasc");
+        let path = owned.path().join("oversized.pal");
         std::fs::write(&path, &text).unwrap();
 
         let mut writer = pack_format::PackWriter::new();
@@ -395,19 +394,12 @@ mod tests {
             "wrong error for a {count}-colour JASC palette: {err:?}"
         );
         assert_eq!(writer.len(), 0, "oversized palette must not be serialized");
-
-        std::fs::remove_file(&path).unwrap();
-        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]
     fn zero_colour_jasc_palette_is_rejected_without_queuing_an_entry() {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-zero-jasc-test-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("zero.pal");
+        let owned = scratch_dir("zero-jasc");
+        let path = owned.path().join("zero.pal");
         std::fs::write(&path, "JASC-PAL\r\n0100\r\n0\r\n").unwrap();
 
         let mut writer = pack_format::PackWriter::new();
@@ -422,8 +414,13 @@ mod tests {
             "wrong error for a zero-colour JASC palette: {err:?}"
         );
         assert_eq!(writer.len(), 0, "zero-colour palette must not be queued");
+    }
 
-        std::fs::remove_file(&path).unwrap();
-        std::fs::remove_dir(&dir).unwrap();
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-mod-ownership-probe",
+            || scratch_path("mod-ownership-probe"),
+        );
     }
 }

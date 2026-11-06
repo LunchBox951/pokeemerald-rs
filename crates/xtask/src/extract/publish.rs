@@ -379,6 +379,7 @@ impl StagedPack {
 #[cfg(test)]
 mod tests {
     use super::{write_pack_atomically_with_names, ExtractError};
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use crate::staging_names::path_with_value as staging_path_with_value;
 
     /// A fixed staging candidate value the deterministic tests hand to
@@ -386,19 +387,14 @@ mod tests {
     /// unpredictable walk.
     const TEST_STAGING_VALUE: u64 = 0x00AB_CDEF_0123;
 
-    fn scratch_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-atomic-write-test-{label}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("creating scratch dir");
-        dir
+    fn scratch_dir(label: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-extract-atomic-write-test-{label}")).unwrap()
     }
 
     #[test]
     fn a_failed_staging_write_leaves_the_existing_pack_untouched() {
-        let dir = scratch_dir("write");
+        let owned = scratch_dir("write");
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         let original = b"an existing, usable pack";
         std::fs::write(&output_path, original).unwrap();
@@ -421,13 +417,12 @@ mod tests {
             original,
             "a failed staging write destroyed the pack that was already on disk"
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_failed_rename_retains_the_staging_file_and_leaves_the_destination_untouched() {
-        let dir = scratch_dir("rename");
+        let owned = scratch_dir("rename");
+        let dir = owned.path();
         let output_path = dir.join("destination");
         std::fs::create_dir(&output_path).unwrap();
         let marker_path = output_path.join("marker");
@@ -455,13 +450,12 @@ mod tests {
             "the retained staging file must be named: {err}"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), b"unchanged");
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_staging_file_that_was_never_created_is_not_reported_as_abandoned() {
-        let dir = scratch_dir("never-created");
+        let owned = scratch_dir("never-created");
+        let dir = owned.path();
         let output_path = dir.join("absent").join("pokeemerald.pack");
         let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
 
@@ -480,13 +474,12 @@ mod tests {
             !err.to_string().contains("was left in place"),
             "nothing was staged, so no staging file was left in place: {err}"
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_colliding_first_candidate_is_left_untouched_in_favor_of_the_next_free_name() {
-        let dir = scratch_dir("collision-retry");
+        let owned = scratch_dir("collision-retry");
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         let occupied = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
         let free = staging_path_with_value(&output_path, TEST_STAGING_VALUE + 1);
@@ -512,14 +505,13 @@ mod tests {
             std::fs::read(&output_path).unwrap(),
             b"a freshly built pack"
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_symlink_planted_at_the_staging_name_is_never_followed_or_published() {
-        let dir = scratch_dir("staging-symlink");
+        let owned = scratch_dir("staging-symlink");
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         let original = b"an existing, usable pack";
         std::fs::write(&output_path, original).unwrap();
@@ -560,8 +552,6 @@ mod tests {
                 .is_ok_and(|meta| meta.file_type().is_symlink()),
             "the published pack path must not become a planted symlink"
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A concurrent writer stand-in whose `Drop` runs once the staging file
@@ -609,7 +599,8 @@ mod tests {
 
     #[cfg(unix)]
     fn assert_post_creation_swap_is_refused(label: &str, replacement: Replacement) {
-        let dir = scratch_dir(label);
+        let owned = scratch_dir(label);
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         let original = b"an existing, usable pack";
         std::fs::write(&output_path, original).unwrap();
@@ -679,8 +670,6 @@ mod tests {
                 );
             }
         }
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
@@ -787,7 +776,8 @@ mod tests {
         label: &str,
         plant: impl FnOnce(&std::path::Path, &std::path::Path),
     ) {
-        let dir = scratch_dir(label);
+        let owned = scratch_dir(label);
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         let bystander = dir.join("bystander");
         std::fs::write(&bystander, b"not a pack").unwrap();
@@ -822,8 +812,6 @@ mod tests {
             std::fs::symlink_metadata(&output_path).is_ok(),
             "an unverified destination must be left in place, not unlinked"
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(any(unix, windows))]
@@ -855,7 +843,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_file_replacing_the_staged_one_after_the_hold_is_released_is_refused_before_the_rename() {
-        let dir = scratch_dir("windows-replaced-after-release");
+        let owned = scratch_dir("windows-replaced-after-release");
+        let dir = owned.path();
         let output_path = dir.join("pokeemerald.pack");
         std::fs::write(&output_path, b"existing destination").unwrap();
         let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
@@ -880,14 +869,13 @@ mod tests {
         );
         assert_eq!(std::fs::read(&staging_path).unwrap(), b"an intruder's file");
         assert_eq!(std::fs::read(&carried).unwrap(), b"our pack");
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_replacement_landing_after_a_failed_rename_is_never_unlinked() {
-        let dir = scratch_dir("swap-after-failed-rename");
+        let owned = scratch_dir("swap-after-failed-rename");
+        let dir = owned.path();
         let output_path = dir.join("destination");
         std::fs::create_dir(&output_path).unwrap();
         let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
@@ -916,7 +904,13 @@ mod tests {
             b"an intruder's file",
             "failure cleanup removed a file it could not prove was its own"
         );
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-extract-atomic-write-test-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
     }
 }

@@ -302,6 +302,7 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
@@ -350,14 +351,10 @@ mod tests {
             .collect()
     }
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-pokedex-graphics-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join(DIRECTORY)).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-pokedex-graphics-{name}")).unwrap();
+        std::fs::create_dir_all(owned.path().join(DIRECTORY)).unwrap();
+        owned
     }
 
     /// An indexed PNG whose every pixel is `pixel` and whose `PLTE` holds
@@ -512,10 +509,11 @@ mod tests {
 
     #[test]
     fn a_valid_manifest_yields_the_ids_the_typed_handle_reads() {
-        let dir = scratch_dir("valid");
-        write_valid_checkout(&dir);
+        let owned = scratch_dir("valid");
+        let dir = owned.path();
+        write_valid_checkout(dir);
         let mut writer = PackWriter::new();
-        extract_pokedex_graphics(&dir, &mut writer).unwrap();
+        extract_pokedex_graphics(dir, &mut writer).unwrap();
         assert_eq!(writer.len(), MANIFEST_ENTRY_COUNT);
         let pack_path = dir.join("pokedex.pack");
         std::fs::write(&pack_path, writer.finish().unwrap()).unwrap();
@@ -523,22 +521,21 @@ mod tests {
         let pack = AssetPack::load(&pack_path).unwrap();
         let handle = pack.pokedex_graphics().unwrap();
         assert_eq!(handle.cry_screen_bg_raw, [0x5A; 32]);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn missing_sources_fail_instead_of_being_skipped() {
-        let dir = scratch_dir("missing");
+        let owned = scratch_dir("missing");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
-        let err = extract_pokedex_graphics(&dir, &mut writer).unwrap_err();
-        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+        let err = extract_pokedex_graphics(dir, &mut writer).unwrap_err();
+        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
         assert_eq!(writer.len(), 0);
 
-        let err = extract_palette(&dir, PALETTES[0], &mut writer).unwrap_err();
+        let err = extract_palette(dir, PALETTES[0], &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::ReadFailed(..)));
         let err = extract_raw(
-            &dir,
+            dir,
             RAW_FILES[0],
             &mut crate::extract::read_file,
             &mut writer,
@@ -546,160 +543,158 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, ExtractError::ReadFailed(..)));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_missing_file_in_a_complete_checkout_fails_closed() {
         for file in source_files() {
-            let dir = scratch_dir("missing-one");
-            write_valid_checkout(&dir);
+            let owned = scratch_dir("missing-one");
+            let dir = owned.path();
+            write_valid_checkout(dir);
             std::fs::remove_file(dir.join(DIRECTORY).join(&file)).unwrap();
             let mut writer = PackWriter::new();
-            let err = extract_pokedex_graphics(&dir, &mut writer).unwrap_err();
+            let err = extract_pokedex_graphics(dir, &mut writer).unwrap_err();
             assert!(
                 matches!(&err, ExtractError::ReadFailed(path, _) if path.ends_with(&file)),
                 "{file}: {err}"
             );
-            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 
     #[test]
     fn sheets_that_are_not_png_are_rejected() {
-        let dir = scratch_dir("not-png");
-        let path = write_sheet(&dir, area_marker(), b"not a png");
+        let owned = scratch_dir("not-png");
+        let dir = owned.path();
+        let path = write_sheet(dir, area_marker(), b"not a png");
         let mut writer = PackWriter::new();
-        let err = extract_sheet(&dir, area_marker(), &mut writer).unwrap_err();
+        let err = extract_sheet(dir, area_marker(), &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sheets_of_the_wrong_geometry_are_rejected() {
-        let dir = scratch_dir("geometry");
+        let owned = scratch_dir("geometry");
+        let dir = owned.path();
         let source = area_marker();
-        let path = write_sheet(&dir, source, &png_bytes(4, 16, 8, 16, 0));
+        let path = write_sheet(dir, source, &png_bytes(4, 16, 8, 16, 0));
         let mut writer = PackWriter::new();
-        let err = extract_sheet(&dir, source, &mut writer).unwrap_err();
+        let err = extract_sheet(dir, source, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path);
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sheets_of_the_wrong_bit_depth_are_rejected() {
-        let dir = scratch_dir("bit-depth");
+        let owned = scratch_dir("bit-depth");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
         let bank = area_marker();
-        let path = write_sheet(&dir, bank, &png_bytes(8, 16, 16, 16, 0));
+        let path = write_sheet(dir, bank, &png_bytes(8, 16, 16, 16, 0));
         assert_eq!(
-            mismatch_path(extract_sheet(&dir, bank, &mut writer).unwrap_err()),
+            mismatch_path(extract_sheet(dir, bank, &mut writer).unwrap_err()),
             path
         );
         let full = region_map();
-        let path = write_sheet(&dir, full, &png_bytes(4, 128, 120, 16, 0));
+        let path = write_sheet(dir, full, &png_bytes(4, 128, 120, 16, 0));
         assert_eq!(
-            mismatch_path(extract_sheet(&dir, full, &mut writer).unwrap_err()),
+            mismatch_path(extract_sheet(dir, full, &mut writer).unwrap_err()),
             path
         );
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sheets_with_a_wrong_count_embedded_palette_are_rejected() {
-        let dir = scratch_dir("embedded-count");
+        let owned = scratch_dir("embedded-count");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
         let source = area_marker();
         for colors in [15, 17] {
-            let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, colors, 0));
+            let path = write_sheet(dir, source, &png_bytes(4, 16, 16, colors, 0));
             assert_eq!(
-                mismatch_path(extract_sheet(&dir, source, &mut writer).unwrap_err()),
+                mismatch_path(extract_sheet(dir, source, &mut writer).unwrap_err()),
                 path,
                 "{colors} colours"
             );
         }
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sheets_with_an_empty_embedded_palette_are_rejected() {
-        let dir = scratch_dir("embedded-empty");
+        let owned = scratch_dir("embedded-empty");
+        let dir = owned.path();
         let source = area_marker();
-        let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, 0, 0));
+        let path = write_sheet(dir, source, &png_bytes(4, 16, 16, 0, 0));
         let mut writer = PackWriter::new();
-        let err = extract_sheet(&dir, source, &mut writer).unwrap_err();
+        let err = extract_sheet(dir, source, &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
         assert_eq!(writer.len(), 0);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sheets_with_a_pixel_outside_the_palette_are_rejected() {
-        let dir = scratch_dir("pixel");
+        let owned = scratch_dir("pixel");
+        let dir = owned.path();
         let source = SheetSource {
             colors: 8,
             ..area_marker()
         };
         let mut writer = PackWriter::new();
-        let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, 8, 9));
+        let path = write_sheet(dir, source, &png_bytes(4, 16, 16, 8, 9));
         assert_eq!(
-            mismatch_path(extract_sheet(&dir, source, &mut writer).unwrap_err()),
+            mismatch_path(extract_sheet(dir, source, &mut writer).unwrap_err()),
             path
         );
         assert_eq!(writer.len(), 0);
 
-        write_sheet(&dir, source, &png_bytes(4, 16, 16, 8, 7));
-        extract_sheet(&dir, source, &mut writer).unwrap();
+        write_sheet(dir, source, &png_bytes(4, 16, 16, 8, 7));
+        extract_sheet(dir, source, &mut writer).unwrap();
         assert_eq!(writer.len(), 2);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn palette_files_that_are_malformed_or_miscounted_are_rejected() {
-        let dir = scratch_dir("palette");
+        let owned = scratch_dir("palette");
+        let dir = owned.path();
         let source = PALETTES[5];
         let path = dir.join(DIRECTORY).join("size_silhouette.pal");
         let mut writer = PackWriter::new();
 
         std::fs::write(&path, "not a palette").unwrap();
-        let err = extract_palette(&dir, source, &mut writer).unwrap_err();
+        let err = extract_palette(dir, source, &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Pal(error_path, _) if error_path == path));
 
         for colors in [15, 17] {
             std::fs::write(&path, jasc(colors)).unwrap();
             assert_eq!(
-                mismatch_path(extract_palette(&dir, source, &mut writer).unwrap_err()),
+                mismatch_path(extract_palette(dir, source, &mut writer).unwrap_err()),
                 path
             );
         }
         assert_eq!(writer.len(), 0);
 
         std::fs::write(&path, jasc(16)).unwrap();
-        extract_palette(&dir, source, &mut writer).unwrap();
+        extract_palette(dir, source, &mut writer).unwrap();
         assert_eq!(writer.len(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn raw_files_of_the_wrong_length_are_rejected() {
-        let dir = scratch_dir("raw-length");
+        let owned = scratch_dir("raw-length");
+        let dir = owned.path();
         for source in RAW_FILES {
             let path = dir.join(DIRECTORY).join(source.file);
             let mut writer = PackWriter::new();
             for len in [0, source.byte_len - 1, source.byte_len + 1] {
                 std::fs::write(&path, vec![0; len]).unwrap();
-                let err = extract_raw(&dir, source, &mut crate::extract::read_file, &mut writer)
+                let err = extract_raw(dir, source, &mut crate::extract::read_file, &mut writer)
                     .unwrap_err();
                 assert_eq!(mismatch_path(err), path, "{} at {len}", source.file);
             }
             assert_eq!(writer.len(), 0);
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -737,10 +732,8 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn pokedex_graphics_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-pokedex-graphics-{}.pack",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-extract-test-pokedex-graphics").unwrap();
+        let path = owned.path().join("pokedex-graphics.pack");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
 
@@ -771,6 +764,13 @@ mod tests {
         }
         let handle = pack.pokedex_graphics().unwrap();
         assert_eq!(handle.cry_screen_bg_raw.len(), 32);
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-pokedex-graphics-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
     }
 }
