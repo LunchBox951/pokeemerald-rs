@@ -74,8 +74,12 @@ fn pcm_voice(source: i8) -> Voice {
 }
 
 fn wave_voice(nibbles: u8, track_volume: u8) -> CgbVoice {
+    wave_asset_voice("balance", nibbles, track_volume)
+}
+
+fn wave_asset_voice(asset: &str, nibbles: u8, track_volume: u8) -> CgbVoice {
     CgbVoice::wave(
-        Arc::from("balance"),
+        Arc::from(asset),
         WaveChannel::decode_wave_ram(&[nibbles; 16]),
         CgbAdsr::flat(),
         false,
@@ -363,4 +367,32 @@ fn a_wave_midpoint_follows_the_nr32_gain_it_latched_under() {
     voice.render_with_offsets(&mut acc, Some(&mut offsets), &[], &[]);
     let last = SAMPLES_PER_FRAME - 1;
     assert_eq!((acc[last].0, offsets[last].0), (28, 32));
+}
+
+#[test]
+fn an_inherited_wave_latch_saturates_on_the_midpoint_it_latched_under() {
+    // A settled full-gain nibble 15 over PCM P = 100 is 160 unipolar, so it
+    // saturates at 127 and the 32-unit midpoint leaves 95. A replacement
+    // inherits the latch together with that midpoint on both paths: the same
+    // asset keeps rotating (`continue_rotation_from`), a new asset is uploaded
+    // with the held output (`continue_latch_from`). Without the midpoint the
+    // replacement's first sample would saturate the centred +28 and report 127.
+    for asset in ["balance", "other"] {
+        let mut mixer = mixer();
+        assert!(mixer.add_voice(pcm_voice(101)));
+        assert!(mixer.add_cgb_voice(wave_voice(0xFF, HARDWARE_VOLUME_15_TRACK)));
+        let settled = frame(&mut mixer);
+        assert_eq!(
+            settled[settled.len() - 1].to_bits(),
+            unit(95).to_bits(),
+            "{asset}: settled"
+        );
+        assert!(mixer.add_cgb_voice(wave_asset_voice(asset, 0xFF, HARDWARE_VOLUME_15_TRACK)));
+        let replaced = frame(&mut mixer);
+        assert_eq!(
+            replaced[0].to_bits(),
+            unit(95).to_bits(),
+            "{asset}: the replacement's first sample"
+        );
+    }
 }
