@@ -29,6 +29,7 @@
 //! only link, multi, frontier, or secret-base battles reach is an
 //! [`NarrationError::UnsupportedPlaceholder`].
 
+mod attract;
 mod context;
 mod events;
 mod expand;

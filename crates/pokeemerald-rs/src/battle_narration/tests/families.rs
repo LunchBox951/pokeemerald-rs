@@ -396,6 +396,39 @@ fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
 }
 
 #[test]
+fn attract_names_the_target_and_the_infatuated_actor_with_its_attractor() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::ATTRACT;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Infatuated {
+                    by_player: true,
+                    move_id,
+                },
+                BattleEvent::InLove { by_player: false },
+                BattleEvent::ImmobilizedByLove {
+                    by_player: false,
+                    move_id,
+                },
+                BattleEvent::ObliviousPreventsAttraction {
+                    by_player: false,
+                    move_id,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA\nfell in love!",
+            "Wild RATTATA is in love\nwith TORCHIC!",
+            "Wild RATTATA is\nimmobilized by love!",
+            "TORCHIC's OBLIVIOUS\nprevents romance!",
+        ]
+    );
+}
+
+#[test]
 fn a_replacement_is_named_after_the_faint_that_precedes_it() {
     let mut narrator = narrator(BattleKind::Trainer);
     let events = [
