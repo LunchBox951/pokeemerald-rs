@@ -7,7 +7,9 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use crate::extract::owned_fixture::OwnedDir;
 
 const SENTINEL: &str = "sentinel";
@@ -18,6 +20,10 @@ const ATTEMPTS: usize = 64;
 /// The suffixes the guard occupies; the rest stay free so the fixture can
 /// still claim one.
 const OCCUPIED_CANDIDATES: usize = 2;
+/// How long planting waits for a name a concurrent run of the same fixture
+/// holds. The fixture test runs once per process and holds its name for
+/// milliseconds, so a name still occupied after this is a leftover.
+const PLANT_WAIT: Duration = Duration::from_secs(10);
 
 /// Entries the guard created, removed on drop whatever the fixture did.
 struct Planted(Vec<PathBuf>);
@@ -34,55 +40,40 @@ impl Drop for Planted {
     }
 }
 
-/// The names planted for one fixture.
-struct Names {
-    /// Names only a predictable-path fixture uses: `{prefix}-{pid}` and, for
-    /// a fixture that appended `line!()`, `{prefix}-{pid}-{line}` for every
-    /// line up to the limit outside the `OwnedDir` range. Nothing else
-    /// creates these, so each must be planted.
-    predictable: Vec<PathBuf>,
-    /// The first names `OwnedDir` tries. A sibling run of the same fixture
-    /// may hold one, so only some must be planted.
-    candidates: Vec<PathBuf>,
-}
-
-fn names(prefix: &str, line_limit: Option<usize>) -> Names {
+/// Every name planted for one fixture: the predictable `{prefix}-{pid}`,
+/// `{prefix}-{pid}-{line}` for a fixture that appended `line!()` (every line
+/// up to `line_limit` outside the `OwnedDir` range), and the first
+/// `OwnedDir` candidates `{prefix}-{pid}-{n}`.
+fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
     let base = std::env::temp_dir();
     let pid = std::process::id();
-    let mut predictable = vec![base.join(format!("{prefix}-{pid}"))];
+    let mut names = vec![base.join(format!("{prefix}-{pid}"))];
+    names.extend((0..OCCUPIED_CANDIDATES).map(|n| base.join(format!("{prefix}-{pid}-{n}"))));
     if let Some(limit) = line_limit {
-        predictable
-            .extend((ATTEMPTS..=limit).map(|line| base.join(format!("{prefix}-{pid}-{line}"))));
+        names.extend((ATTEMPTS..=limit).map(|line| base.join(format!("{prefix}-{pid}-{line}"))));
     }
-    let candidates = (0..OCCUPIED_CANDIDATES)
-        .map(|n| base.join(format!("{prefix}-{pid}-{n}")))
-        .collect();
-    Names {
-        predictable,
-        candidates,
-    }
+    names
 }
 
-/// Plants an entry with `plant` at each name. Panics when a predictable name
-/// cannot be planted, or when no candidate name can.
-fn plant_all(prefix: &str, names: &Names, plant: impl Fn(&Path) -> io::Result<()>) -> Planted {
+/// Plants an entry with `plant` at every name. A name held by a concurrent
+/// run of the same fixture is waited for, so the guard owns every name
+/// before the fixture runs; one still held after `PLANT_WAIT`, or any other
+/// failure, panics.
+fn plant_all(prefix: &str, names: &[PathBuf], plant: impl Fn(&Path) -> io::Result<()>) -> Planted {
     let mut planted = Planted(Vec::new());
-    for path in &names.predictable {
-        plant(path).unwrap_or_else(|e| panic!("{prefix}: cannot plant {}: {e}", path.display()));
+    let deadline = Instant::now() + PLANT_WAIT;
+    for path in names {
+        loop {
+            match plant(path) {
+                Ok(()) => break,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(e) => panic!("{prefix}: cannot plant {}: {e}", path.display()),
+            }
+        }
         planted.0.push(path.clone());
     }
-    let before = planted.0.len();
-    planted.0.extend(
-        names
-            .candidates
-            .iter()
-            .filter(|p| plant(p).is_ok())
-            .cloned(),
-    );
-    assert!(
-        planted.0.len() > before,
-        "{prefix}: cannot plant any OwnedDir candidate name"
-    );
     planted
 }
 
@@ -96,8 +87,8 @@ fn listing(dir: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
-fn populate(dir: &Path) {
-    std::fs::write(dir.join(SENTINEL), PRECIOUS).unwrap();
+fn populate(dir: &Path) -> io::Result<()> {
+    std::fs::write(dir.join(SENTINEL), PRECIOUS)
 }
 
 fn untouched(dir: &Path) -> bool {
@@ -124,7 +115,7 @@ pub(crate) fn assert_fixture_ignores_planted_names(
 
     let dirs = plant_all(prefix, &names, |path| {
         std::fs::create_dir(path)?;
-        std::fs::write(path.join(SENTINEL), PRECIOUS)
+        populate(path)
     });
     fixture();
     let disturbed: Vec<_> = dirs.0.iter().filter(|p| !untouched(p)).cloned().collect();
@@ -137,7 +128,7 @@ pub(crate) fn assert_fixture_ignores_planted_names(
     #[cfg(unix)]
     {
         let victim = OwnedDir::create("pokeemerald-rs-fixture-guard-victim").unwrap();
-        populate(victim.path());
+        populate(victim.path()).unwrap();
         let links = plant_all(prefix, &names, |path| {
             std::os::unix::fs::symlink(victim.path(), path)
         });
@@ -158,5 +149,49 @@ pub(crate) fn assert_fixture_ignores_planted_names(
             victim_untouched,
             "{prefix}: fixture wrote through a planted symlink"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extract::owned_fixture::OwnedDir;
+
+    const PREFIX: &str = "pokeemerald-rs-fixture-guard-sibling";
+
+    /// Joins the thread on drop, so a panic unwinding past it still waits.
+    struct Join(Option<std::thread::JoinHandle<()>>);
+    impl Drop for Join {
+        fn drop(&mut self) {
+            self.0.take().unwrap().join().unwrap();
+        }
+    }
+
+    /// Stands in for a fixture reverted to a predictable path: it reuses
+    /// the first `OwnedDir` candidate name, deleting and rewriting it.
+    fn fixture_reusing_candidate_zero() {
+        let dir = std::env::temp_dir().join(format!("{PREFIX}-{}-0", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("scratch"), "x").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A concurrent run of the same fixture holds candidate 0 while the guard
+    /// plants. The guard must wait for it and still plant candidate 0, so the
+    /// reverted fixture's reuse of that name is caught.
+    #[test]
+    #[should_panic(expected = "disturbed populated directories")]
+    fn guard_catches_a_fixture_that_reuses_candidate_zero_while_a_sibling_held_it_at_planting() {
+        let (claimed, claimed_rx) = std::sync::mpsc::channel();
+        let sibling = std::thread::spawn(move || {
+            let held = OwnedDir::create(PREFIX).unwrap();
+            claimed.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            drop(held);
+        });
+        claimed_rx.recv().unwrap();
+        let _join = Join(Some(sibling));
+        assert_fixture_ignores_planted_names(PREFIX, None, fixture_reusing_candidate_zero);
     }
 }
