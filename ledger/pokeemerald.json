@@ -31572,7 +31572,7 @@
         "TryStartWarpEventScript": {
           "reason": "The completed-step door and escalator branches (field_control_avatar.c:702-714, with IsWarpMetatileBehavior :753-765). engine::overworld::warp::trigger_door_warp and trigger_escalator_warp resolve GetWarpEventAtMapPosition on the arrived tile, with no direction gate; OverworldPhase::step (crates/pokeemerald-rs/src/flow/overworld_phase/step.rs) polls both at the retained previous elevation as one completed-step warp, ahead of the wild-encounter roll and the arrow poll. Pinned for both Oldale Pokemon Center escalators (1F warp 2 to 2F warp 0, and back) by the checkpoint regressions in flow/overworld_phase/warp_tests/checkpoint.rs. Not modelled: StoreInitialPlayerAvatarState, SetupWarp's escape-warp bookkeeping, and the ladder, Lavaridge, Aqua Hideout, Union Room, Mt. Pyre and Mossdeep branches (:715-745), whose behaviors is_warp_trigger does not accept.",
           "rust_target": "crates/engine/src/overworld/warp.rs",
-          "spec": "I-3",
+          "spec": "S-5",
           "status": "stubbed"
         },
         "UpdatePoisonStepCounter": {
@@ -31596,7 +31596,7 @@
         "FieldCallback_EscalatorWarpIn": {
           "reason": "Partly modelled (field_effect.c:1690-1702, Task_EscalatorWarpIn :1707-1722,1800-1818). OverworldPhase::begin_escalator_arrival faces the player east and the next field frame's input becomes one east step (EscalatorWarpIn_Init's face-east hold and EscalatorWarpIn_End's GetWalkNormalMovementAction(DIR_EAST)), so an escalator-triggered warp ends one tile east of the destination warp tile, facing east; the walk goes through PlayerState::step, so collision takes the normal path. That step is held movement, not keypad movement (field_player_avatar.c:353-379), so runningState stays NOT_MOVING and FieldGetPlayerInput sets no tookStep (field_control_avatar.c:118-119): OverworldPhase::step withholds its landing from the took-step consumers (coord event, completed-step warp, step-count script and its poison counter, :155-161) and keeps the encounter-gate observation, which needs only T_TILE_CENTER (:120-121). OverworldPhase::step starts it only after a completed-step escalator warp lands. Not modelled: the arrival fade (WarpFadeInScreen), Overworld_PlaySpecialMapMusic, the field-control lock and camera freeze while the escalator settles, and StopEscalator's tile animation (fldeff_escalator.c).  runningState staying NOT_MOVING also makes a held direction other than east turn before it steps (field_player_avatar.c:587-595): the walk-off's landing ends the keypad's moving streak.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/escalator_arrival.rs",
-          "spec": "I-3",
+          "spec": "S-5",
           "status": "stubbed"
         }
       },
@@ -31828,7 +31828,7 @@
         "DoEscalatorWarp": {
           "reason": "Partly modelled (field_screen_effect.c:528-532). engine::overworld::warp::trigger_escalator_warp is the typed shell for the warp DoEscalatorWarp starts: OverworldPhase::step polls it on the arrived tile and warps through OverworldPhase::warp_to at once, then runs the arrival's face-east and east step (see FieldCallback_EscalatorWarpIn). Not modelled: LockPlayerFieldControls and StartEscalatorWarp's ride (the Task_EscalatorWarpOut screen fade and the diagonal ride animation, field_effect.c), so the warp is instant with no input lock. Deferred: the escalator ride animation, tracked by issue #3033.",
           "rust_target": "crates/engine/src/overworld/warp.rs",
-          "spec": "I-3",
+          "spec": "S-5",
           "status": "stubbed"
         }
       },
@@ -32821,7 +32821,7 @@
         "MetatileBehavior_IsEscalator": {
           "reason": "Reimplemented as metatile_behavior::is_escalator, exactly MB_UP_ESCALATOR (0x6A) or MB_DOWN_ESCALATOR (0x6B) (metatile_behavior.c:237-243). Consumed by engine::overworld::warp::trigger_escalator_warp, the escalator branch of TryStartWarpEventScript; is_warp_trigger stays door-only.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
-          "spec": "I-3",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsForcedMovementTile": {
