@@ -16,11 +16,13 @@ use crate::error::BattleError;
 use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
+use crate::leech_seed::{is_leech_seed_effect, resolve_leech_seed_move, LeechSeedOutcome};
 use crate::multi_hit::is_multi_hit_effect;
 use crate::paralyze::{
     is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection, ParalyzeOutcome,
     SynchronizeReflectionOutcome,
 };
+use crate::rollout::is_rollout_effect;
 use crate::secondary::{
     poison_point_can_land, resolve_synchronize_poison_reflection, SecondaryApplication,
     SynchronizePoisonReflectionOutcome,
@@ -37,6 +39,7 @@ use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 mod burn;
 mod effect_spore;
 mod pipelines;
+mod rollout;
 use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
@@ -56,6 +59,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
         matches!(
             event,
             BattleEvent::Missed { .. }
+                | BattleEvent::LeechSeedEvaded { .. }
                 | BattleEvent::NoEffect { .. }
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
@@ -86,6 +90,8 @@ pub(super) enum MovePipeline {
     DefenseCurl,
     Paralyze,
     Confuse,
+    LeechSeed,
+    Rollout,
     OrdinaryHit,
 }
 
@@ -129,6 +135,10 @@ impl MovePipeline {
             (Self::Paralyze, crate::paralyze::ensure_resolvable)
         } else if is_confuse_effect(effect) {
             (Self::Confuse, crate::confuse::ensure_resolvable)
+        } else if is_leech_seed_effect(effect) {
+            (Self::LeechSeed, crate::leech_seed::ensure_resolvable)
+        } else if is_rollout_effect(effect) {
+            (Self::Rollout, crate::rollout::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -189,6 +199,14 @@ impl Battle {
         move_id: MoveId,
     ) -> Result<(), BattleError> {
         self.record_move_end(attacker_is_player, move_id, LastLandedMove::Unavailable)
+    }
+
+    /// `CancelMultiTurnMoves` for one battler (`src/battle_util.c:877`-
+    /// `:887`): the single place every cancellation releases the battler's
+    /// multi-turn lock through.
+    pub(super) fn cancel_multi_turn_moves(&mut self, battler_is_player: bool) {
+        self.battler_states[BattlerSide::from_is_player(battler_is_player).index()]
+            .cancel_multi_turn_moves();
     }
 
     /// Confusion's self-hit ends the action with the attacker as its own
@@ -435,6 +453,12 @@ impl Battle {
             }
             MovePipeline::Confuse => {
                 self.execute_confuse_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::LeechSeed => {
+                self.execute_leech_seed_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Rollout => {
+                self.execute_rollout_move(attacker_is_player, move_id, rng, events)
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -1035,6 +1059,54 @@ impl Battle {
         Ok(())
     }
 
+    /// `BattleScript_EffectLeechSeed`'s `setseeded` (`Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6718`-`:6738`). An accuracy miss and an
+    /// already-seeded target both report [`BattleEvent::LeechSeedEvaded`]
+    /// (their shared `B_MSG_LEECH_SEED_MISS`, which names the target rather
+    /// than the attacker's generic miss), and a Grass-type target reports
+    /// [`BattleEvent::NoEffect`] (`B_MSG_LEECH_SEED_FAIL`).
+    fn execute_leech_seed_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            resolve_leech_seed_move(&self.dex, move_id, attacker, defender, rng)?
+        };
+        match outcome {
+            LeechSeedOutcome::Miss | LeechSeedOutcome::AlreadySeeded => {
+                events.push(BattleEvent::LeechSeedEvaded {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            LeechSeedOutcome::GrassImmune => {
+                events.push(BattleEvent::NoEffect {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            LeechSeedOutcome::Applied => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                defender
+                    .volatiles_mut()
+                    .set_seeded_by(BattlerSide::from_is_player(attacker_is_player));
+                events.push(BattleEvent::Seeded {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Reflects a Synchronize holder's freshly-applied paralysis back onto
     /// the original attacker, re-entering `SetMoveEffect` for
     /// `MOVE_EFFECT_AFFECTS_USER` (`src/battle_util.c:2971`-`:2984`).
@@ -1163,6 +1235,8 @@ mod pipeline_agreement_tests {
         (&[156], MovePipeline::DefenseCurl),
         (&[67], MovePipeline::Paralyze),
         (&[49], MovePipeline::Confuse),
+        (&[84], MovePipeline::LeechSeed),
+        (&[117], MovePipeline::Rollout),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
@@ -1197,7 +1271,9 @@ mod pipeline_agreement_tests {
                     || crate::flag_move::ensure_resolvable(dex, move_id).is_ok()
                     || crate::defense_curl::ensure_resolvable(dex, move_id).is_ok()
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok();
                 if accepted {
                     Ok(())
                 } else {
