@@ -103,6 +103,7 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use std::collections::BTreeSet;
 
     use assets::{AssetPack, BattlerDirection, PaletteVariant, SpeciesId};
@@ -114,14 +115,8 @@ mod tests {
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
-    fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-battler-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-battler-{name}")).unwrap()
     }
 
     /// The species the pack carries, as the manifest must list them.
@@ -170,19 +165,19 @@ mod tests {
 
     #[test]
     fn missing_sources_fail_instead_of_being_skipped() {
-        let dir = scratch_dir("missing");
+        let owned = scratch_dir("missing");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
 
-        let err = extract_battlers(&dir, &mut writer).unwrap_err();
-        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+        let err = extract_battlers(dir, &mut writer).unwrap_err();
+        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
-        let dir = scratch_dir("shape");
+        let owned = scratch_dir("shape");
+        let dir = owned.path();
         let source = BATTLERS[0];
         let upstream = dir.join("graphics/pokemon").join(source.name);
         std::fs::create_dir_all(&upstream).unwrap();
@@ -197,7 +192,7 @@ mod tests {
         std::fs::write(upstream.join("shiny.pal"), palette(16)).unwrap();
         let mut writer = PackWriter::new();
 
-        let err = extract_battlers(&dir, &mut writer).unwrap_err();
+        let err = extract_battlers(dir, &mut writer).unwrap_err();
         assert!(matches!(
             err,
             ExtractError::BattlerAssetMismatch { path, .. } if path == upstream.join("normal.pal")
@@ -205,11 +200,9 @@ mod tests {
 
         std::fs::write(upstream.join("normal.pal"), palette(16)).unwrap();
         std::fs::write(upstream.join("front.png"), b"not a png").unwrap();
-        let err = extract_battlers(&dir, &mut writer).unwrap_err();
+        let err = extract_battlers(dir, &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Png(path, _) if path == upstream.join("front.png")));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A 64-wide all-zero image of `height` rows at `bit_depth` with a
@@ -253,7 +246,8 @@ mod tests {
         let palette = "JASC-PAL\n0100\n16\n".to_string() + &"0 0 0\n".repeat(16);
         for bad_file in ["front.png", "back.png"] {
             for wrong in [2u8, 8] {
-                let dir = scratch_dir("bit-depth");
+                let owned = scratch_dir("bit-depth");
+                let dir = owned.path();
                 let upstream = dir.join("graphics/pokemon").join(source.name);
                 std::fs::create_dir_all(&upstream).unwrap();
                 std::fs::write(upstream.join("normal.pal"), &palette).unwrap();
@@ -264,7 +258,7 @@ mod tests {
                 }
                 let mut writer = PackWriter::new();
 
-                let err = extract_battlers(&dir, &mut writer).unwrap_err();
+                let err = extract_battlers(dir, &mut writer).unwrap_err();
                 match &err {
                     ExtractError::BattlerAssetMismatch { path, detail } => {
                         assert_eq!(path, &upstream.join(bad_file));
@@ -276,7 +270,6 @@ mod tests {
                     other => panic!("{bad_file} at {wrong}-bit: wrong error {other:?}"),
                 }
                 assert_eq!(writer.len(), 0);
-                std::fs::remove_dir_all(dir).unwrap();
             }
         }
     }
@@ -287,17 +280,18 @@ mod tests {
 
     #[test]
     fn poochyenas_front_sheet_is_extracted_whole() {
-        let dir = scratch_dir("sheet");
+        let owned = scratch_dir("sheet");
+        let dir = owned.path();
         let source = source_of(SpeciesId::POOCHYENA);
         write_source(
-            &dir,
+            dir,
             source,
             sheet_png(4, 256, 0x33, 0xFF),
             battler_png(4, 64),
         );
         let mut writer = PackWriter::new();
 
-        extract_battler(&dir, source, &mut writer).unwrap();
+        extract_battler(dir, source, &mut writer).unwrap();
 
         assert_eq!(writer.len(), 4);
         let pack = writer.finish().unwrap();
@@ -310,7 +304,6 @@ mod tests {
         assert_eq!(pixels.len(), 64 * 256);
         assert!(pixels[..64 * 64].iter().all(|&p| p == 3));
         assert!(pixels[64 * 64..].iter().all(|&p| p == 15));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -355,7 +348,8 @@ mod tests {
             ),
         ];
         for (species, bad_file, rows, message) in cases {
-            let dir = scratch_dir("tall");
+            let owned = scratch_dir("tall");
+            let dir = owned.path();
             let source = source_of(species);
             let front_rows = if species == SpeciesId::POOCHYENA {
                 256
@@ -372,10 +366,10 @@ mod tests {
                 };
                 battler_png(4, height)
             };
-            let upstream = write_source(&dir, source, png("front.png"), png("back.png"));
+            let upstream = write_source(dir, source, png("front.png"), png("back.png"));
             let mut writer = PackWriter::new();
 
-            let err = extract_battler(&dir, source, &mut writer).unwrap_err();
+            let err = extract_battler(dir, source, &mut writer).unwrap_err();
 
             match &err {
                 ExtractError::BattlerAssetMismatch { path, detail } => {
@@ -388,7 +382,6 @@ mod tests {
                 ),
             }
             assert_eq!(writer.len(), 0);
-            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 
@@ -396,10 +389,8 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn every_battler_is_extracted_and_resolves_through_the_typed_lookup() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-battler-{}.pack",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-extract-test-battler").unwrap();
+        let path = owned.path().join("battler.pack");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
         let upstream = repo_root().join("pokeemerald");
@@ -428,6 +419,12 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names("pokeemerald-rs-battler-ownership-probe", || {
+            scratch_dir("ownership-probe")
+        });
     }
 }

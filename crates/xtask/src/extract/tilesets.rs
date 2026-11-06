@@ -75,16 +75,14 @@ pub(super) fn extract_tileset(
 #[cfg(test)]
 mod tests {
     use super::{extract_tileset, ExtractError, PackWriter, TILESET_PALETTE_COUNT};
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use crate::extract::scope::{TilesetSource, TILESETS};
 
     /// A synthetic checkout holding every source `extract_tileset` reads for
     /// `source`, each decodable.
-    fn synthetic_tileset_checkout(tag: &str, source: TilesetSource) -> std::path::PathBuf {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-{tag}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
+    fn synthetic_tileset_checkout(tag: &str, source: TilesetSource) -> OwnedDir {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-{tag}")).unwrap();
+        let upstream = owned.path();
         let base = upstream
             .join("data/tilesets")
             .join(source.category)
@@ -105,14 +103,15 @@ mod tests {
                 std::fs::write(dir.join(format!("{n}.png")), &png).expect("frame");
             }
         }
-        upstream
+        owned
     }
 
     #[test]
     fn untracked_animation_pngs_are_not_packed_and_ids_match_the_manifest() {
         for source in [TILESETS[0], TILESETS[1]] {
             assert!(!source.animations.is_empty(), "{}", source.name);
-            let upstream = synthetic_tileset_checkout("untracked-anim", source);
+            let owned = synthetic_tileset_checkout("untracked-anim", source);
+            let upstream = owned.path();
             let anim = upstream
                 .join("data/tilesets")
                 .join(source.category)
@@ -133,8 +132,7 @@ mod tests {
             std::fs::write(anim.join(first).join("98.png"), &png).expect("stray");
 
             let mut writer = PackWriter::new();
-            let result = extract_tileset(&upstream, source, &mut writer);
-            let _ = std::fs::remove_dir_all(&upstream);
+            let result = extract_tileset(upstream, source, &mut writer);
             result.expect("complete");
             let bytes = writer.finish().expect("finish");
             let ids: Vec<String> = pack_format::parse_directory(&bytes)
@@ -161,11 +159,8 @@ mod tests {
     #[test]
     fn a_checkout_missing_a_required_animation_frame_is_refused() {
         let general = TILESETS[0];
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-anim-frame-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
+        let owned = OwnedDir::create("pokeemerald-rs-extract-missing-anim-frame").unwrap();
+        let upstream = owned.path();
         let base = upstream
             .join("data/tilesets")
             .join(general.category)
@@ -188,17 +183,16 @@ mod tests {
                 std::fs::write(anim.join(name).join(format!("{n}.png")), &png).expect("frame");
             }
         }
-        extract_tileset(&upstream, general, &mut PackWriter::new()).expect("complete");
+        extract_tileset(upstream, general, &mut PackWriter::new()).expect("complete");
 
         std::fs::remove_file(anim.join("water/7.png")).expect("remove");
-        let one = extract_tileset(&upstream, general, &mut PackWriter::new());
+        let one = extract_tileset(upstream, general, &mut PackWriter::new());
 
         std::fs::remove_dir_all(anim.join("water")).expect("remove animation");
-        let whole = extract_tileset(&upstream, general, &mut PackWriter::new());
+        let whole = extract_tileset(upstream, general, &mut PackWriter::new());
 
         std::fs::remove_dir_all(&anim).expect("remove all");
-        let domain = extract_tileset(&upstream, general, &mut PackWriter::new());
-        std::fs::remove_dir_all(&upstream).expect("cleanup");
+        let domain = extract_tileset(upstream, general, &mut PackWriter::new());
 
         let one = one.expect_err("one frame");
         assert!(
@@ -214,6 +208,14 @@ mod tests {
         assert!(
             matches!(&domain, ExtractError::ReadFailed(p, _) if p == &anim.join("flower/0.png")),
             "{domain:?}"
+        );
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-extract-tilesets-ownership-probe",
+            || synthetic_tileset_checkout("tilesets-ownership-probe", TILESETS[0]),
         );
     }
 }

@@ -233,6 +233,7 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -257,14 +258,8 @@ mod tests {
             .collect()
     }
 
-    fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-starter-chooser-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-starter-chooser-{name}")).unwrap()
     }
 
     #[test]
@@ -308,36 +303,34 @@ mod tests {
 
     #[test]
     fn missing_sources_fail_instead_of_being_skipped() {
-        let dir = scratch_dir("missing");
+        let owned = scratch_dir("missing");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
 
-        let err = extract_starter_chooser(&dir, &mut writer).unwrap_err();
-        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+        let err = extract_starter_chooser(dir, &mut writer).unwrap_err();
+        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn tilemaps_of_the_wrong_length_are_rejected() {
-        let dir = scratch_dir("tilemap-length");
+        let owned = scratch_dir("tilemap-length");
+        let dir = owned.path();
         let tilemap = TILEMAPS[0];
         let path = dir.join(tilemap.path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; tilemap.byte_len - 2]).unwrap();
         let mut writer = PackWriter::new();
 
-        let err = extract_tilemap(&dir, tilemap, &mut writer).unwrap_err();
+        let err = extract_tilemap(dir, tilemap, &mut writer).unwrap_err();
         assert!(matches!(
             err,
             ExtractError::StarterChooserAssetMismatch { path: error_path, .. } if error_path == path
         ));
 
         std::fs::write(&path, vec![0u8; tilemap.byte_len]).unwrap();
-        extract_tilemap(&dir, tilemap, &mut writer).unwrap();
+        extract_tilemap(dir, tilemap, &mut writer).unwrap();
         assert_eq!(writer.len(), 1);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -384,18 +377,17 @@ mod tests {
 
     #[test]
     fn sheets_that_are_not_png_are_rejected() {
-        let dir = scratch_dir("bad-sheet");
+        let owned = scratch_dir("bad-sheet");
+        let dir = owned.path();
         let sheet = SHEETS[0];
         let path = dir.join(sheet.directory).join(sheet.png);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not a png").unwrap();
         let mut writer = PackWriter::new();
 
-        let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+        let err = extract_sheet(dir, sheet, &mut writer).unwrap_err();
         assert!(matches!(err, ExtractError::Png(error_path, _) if error_path == path));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A sheet-shaped PNG at `bit_depth` with the sheet's own palette size.
@@ -421,13 +413,14 @@ mod tests {
         for (sheet, (png, depth)) in SHEETS.into_iter().zip(required) {
             assert_eq!(sheet.png, png);
             for wrong in [2u8, 4, 8].into_iter().filter(|&d| d != depth) {
-                let dir = scratch_dir("bit-depth");
+                let owned = scratch_dir("bit-depth");
+                let dir = owned.path();
                 let path = dir.join(sheet.directory).join(sheet.png);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(&path, sheet_png(sheet, wrong)).unwrap();
                 let mut writer = PackWriter::new();
 
-                let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+                let err = extract_sheet(dir, sheet, &mut writer).unwrap_err();
                 match &err {
                     ExtractError::StarterChooserAssetMismatch {
                         path: error_path,
@@ -445,9 +438,8 @@ mod tests {
                 assert_eq!(writer.len(), 0);
 
                 std::fs::write(&path, sheet_png(sheet, depth)).unwrap();
-                extract_sheet(&dir, sheet, &mut writer).unwrap();
+                extract_sheet(dir, sheet, &mut writer).unwrap();
                 assert_eq!(writer.len(), 2);
-                std::fs::remove_dir_all(dir).unwrap();
             }
         }
     }
@@ -466,12 +458,13 @@ mod tests {
         }
         let plte = vec![7; sheet.colors * 3];
         let png = indexed_png_from_raw_with_plte(8, sheet.width, sheet.height, &raw, &plte);
-        let dir = scratch_dir("tiles-nibble");
+        let owned = scratch_dir("tiles-nibble");
+        let dir = owned.path();
         let path = dir.join(sheet.directory).join(sheet.png);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, png).unwrap();
         let mut writer = PackWriter::new();
-        extract_sheet(&dir, sheet, &mut writer).unwrap();
+        extract_sheet(dir, sheet, &mut writer).unwrap();
         let pack = writer.finish().unwrap();
         let entries = pack_format::parse_directory(&pack).unwrap();
         let image = entries.iter().find(|e| e.id == sheet.image_id).unwrap();
@@ -480,17 +473,14 @@ mod tests {
         assert_eq!(payload, expected.as_slice());
         let palette = entries.iter().find(|e| e.id == sheet.palette_id).unwrap();
         assert_eq!(palette.length, 32 * 2);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn starter_chooser_graphics_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-starter-chooser-{}.pack",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-extract-test-starter-chooser").unwrap();
+        let path = owned.path().join("starter-chooser.pack");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
 
@@ -520,6 +510,13 @@ mod tests {
         ] {
             pack.starter_preview(starter).unwrap();
         }
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names(
+            "pokeemerald-rs-starter-chooser-ownership-probe",
+            || scratch_dir("ownership-probe"),
+        );
     }
 }

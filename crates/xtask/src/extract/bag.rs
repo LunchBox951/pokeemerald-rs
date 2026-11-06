@@ -481,8 +481,9 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::owned_fixture::{assert_claim_spares_occupied_names, OwnedDir};
     use std::collections::BTreeSet;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use assets::items::{ItemId, ITEMS_COUNT};
     use assets::{AssetPack, ItemDisplayTable};
@@ -510,12 +511,8 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
     [ITEM_B] = {gItemIcon_Box, gItemIconPalette_Blue},\n\
     [ITEMS_COUNT] = {gItemIcon_Q, gItemIconPalette_Red},\n};\n";
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("pokeemerald-rs-bag-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch_dir(name: &str) -> OwnedDir {
+        OwnedDir::create(&format!("pokeemerald-rs-bag-{name}")).unwrap()
     }
 
     fn fixed_ids() -> Vec<&'static str> {
@@ -671,20 +668,20 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
 
     #[test]
     fn missing_sources_fail_instead_of_being_skipped() {
-        let dir = scratch_dir("missing");
+        let owned = scratch_dir("missing");
+        let dir = owned.path();
         let mut writer = PackWriter::new();
 
-        let err = extract_bag(&dir, &mut writer).unwrap_err();
-        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+        let err = extract_bag(dir, &mut writer).unwrap_err();
+        assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
         assert_eq!(writer.len(), 0);
-        assert!(icon_rows(&dir).is_err());
-
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(icon_rows(dir).is_err());
     }
 
     #[test]
     fn sheets_and_palettes_that_are_malformed_are_rejected() {
-        let dir = scratch_dir("malformed");
+        let owned = scratch_dir("malformed");
+        let dir = owned.path();
         let image_path = dir.join("menu.png");
         std::fs::write(&image_path, b"not a png").unwrap();
         let mut writer = PackWriter::new();
@@ -699,15 +696,15 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             ExtractError::BagAssetMismatch { path, .. } if path == palette_path
         ));
         assert_eq!(writer.len(), 0);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_menu_info_sheet_is_narrowed_to_4bpp_like_gbagfx() {
         use super::super::png::tests::indexed_png_from_raw_with_plte;
 
-        let dir = scratch_dir("menu-info-narrowing");
+        let owned = scratch_dir("menu-info-narrowing");
+
+        let dir = owned.path();
         let path = dir.join("menu_info.png");
         // One 8-bit row of indices spanning all three 16-colour banks.
         let indices: Vec<u8> = (0..128u32).map(|n| u8::try_from(n % 48).unwrap()).collect();
@@ -745,8 +742,6 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
         std::fs::write(&path, narrow).unwrap();
         let err = extract_image(&path, source, &mut PackWriter::new()).unwrap_err();
         assert!(matches!(err, ExtractError::BagAssetMismatch { path: bad, .. } if bad == path));
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn display_rows(upstream: &Path) -> Vec<(usize, String, String)> {
@@ -813,10 +808,8 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn ordinary_bag_graphics_and_item_text_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-bag-{}.pack",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-extract-test-bag").unwrap();
+        let path = owned.path().join("bag.pack");
         extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = AssetPack::load(&path).unwrap();
         let upstream = repo_root().join("pokeemerald");
@@ -915,6 +908,12 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
                 (name.as_str(), description.as_str())
             );
         }
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixture_directories_never_reuse_an_occupied_name() {
+        assert_claim_spares_occupied_names("pokeemerald-rs-bag-ownership-probe", || {
+            scratch_dir("ownership-probe")
+        });
     }
 }
