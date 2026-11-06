@@ -66,13 +66,14 @@ pub(super) fn extract_layouts(
 #[cfg(test)]
 mod tests {
     use super::LAYOUTS;
+    use crate::extract::owned_fixture::{assert_pack_path_spares_occupied_file, OwnedDir};
     use crate::extract::{extract_to, upstream_present};
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     fn assert_pack_contains_entry_id(bytes: &[u8], id: &str) {
@@ -105,7 +106,7 @@ mod tests {
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn layout_grids_are_extracted() {
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("layouts");
+        let (_owned, path) = scratch_path("layouts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
         for layout in LAYOUTS {
@@ -114,6 +115,13 @@ mod tests {
                 assert_pack_contains_entry_id(&bytes, &id);
             }
         }
-        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    fn pack_path_never_reuses_an_occupied_name() {
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-layouts-pack-ownership-probe",
+            || scratch_path("layouts-pack-ownership-probe"),
+        );
     }
 }
