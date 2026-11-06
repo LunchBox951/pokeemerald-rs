@@ -19,7 +19,7 @@ use crate::event_data::EventData;
 
 #[path = "live_object_events.rs"]
 mod live_object_events;
-pub use live_object_events::{LiveObjectEvent, ObjectEventCollection};
+pub use live_object_events::{FrameContext, LiveObjectEvent, ObjectEventCollection};
 
 /// Returns whether an object's hide flag permits it to spawn.
 ///
@@ -326,6 +326,25 @@ impl ObjectEventState {
         self.previous_position = self.position;
         let (dx, dy) = direction.delta();
         self.position = (self.position.0 + dx, self.position.1 + dy);
+    }
+
+    /// Settles the previous tile onto the current one without changing facing, as the
+    /// fixed-facing face action does when it re-faces the current direction
+    /// (`FaceDirection` and `ShiftStillObjectEventCoords`,
+    /// `event_object_movement.c:2162-2164,5048-5056`).
+    pub const fn face_in_place(&mut self) {
+        self.previous_position = self.position;
+    }
+
+    /// Restores the position, movement type, and initial facing a respawn gives an object from
+    /// this value's template snapshots, so a coordinate or movement override survives
+    /// (`InitObjectEventStateFromTemplate` reads the saved template,
+    /// `event_object_movement.c:1287-1330`). Elevation and the snapshots themselves are kept.
+    pub const fn reinit_from_template_snapshots(&mut self) {
+        self.position = self.template_position;
+        self.previous_position = self.template_position;
+        self.movement_type = self.template_movement_type;
+        self.facing = initial_facing_direction(self.template_movement_type);
     }
 
     /// Changes the current movement type.

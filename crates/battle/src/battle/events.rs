@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
 
 use crate::error::BattleError;
@@ -401,6 +402,27 @@ pub enum BattleEvent {
         /// The move that inflicted poison.
         move_id: MoveId,
     },
+    /// A burn secondary inflicted [`crate::status1::Status1::Burned`]
+    /// (`BattleScript_MoveEffectBurn`, `data/battle_scripts_1.s:3893`-`:3897`;
+    /// `STRINGID_PKMNWASBURNED` through `gGotBurnedStringIds`).
+    Burned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted the burn.
+        move_id: MoveId,
+    },
+    /// A Fire move thawed a frozen target that survived its damage
+    /// (`MOVEEND_DEFROST`, `battle_script_commands.c:4257`-`:4272`;
+    /// `BattleScript_DefrostedViaFireMove`, `data/battle_scripts_1.s:3767`-`:3771`,
+    /// `STRINGID_PKMNWASDEFROSTED`). It consumes no RNG and precedes the
+    /// target's Synchronize and contact abilities.
+    TargetDefrosted {
+        /// Whether the player used the Fire move; the thawed battler is its
+        /// target.
+        by_player: bool,
+        /// The Fire move that thawed the target.
+        move_id: MoveId,
+    },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
     /// back onto the original attacker after the target's own faint settlement
     /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
@@ -612,7 +634,9 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
-    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`): the
+    /// `ENDTURN_POISON` tick and the `ENDTURN_BAD_POISON` tick, which share
+    /// `BattleScript_PoisonTurnDmg`.
     HurtByPoison {
         /// Whether the player's battler was hurt.
         by_player: bool,
@@ -628,6 +652,67 @@ pub enum BattleEvent {
         by_player: bool,
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
+    },
+    /// Leech Seed took hold of its target (`STRINGID_PKMNSEEDED`,
+    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss
+    /// or an already-seeded target reports [`BattleEvent::LeechSeedEvaded`],
+    /// and a Grass-type target [`BattleEvent::NoEffect`], instead
+    /// (`gLeechSeedStringIds`, `src/battle_message.c:960`-`:967`).
+    Seeded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that planted the seed.
+        move_id: MoveId,
+    },
+    /// Leech Seed missed its accuracy check or found its target already
+    /// seeded (`B_MSG_LEECH_SEED_MISS`, `Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6720`-`:6724`). Unlike
+    /// [`BattleEvent::Missed`], this names the target:
+    /// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+    /// `BattleScript_DoLeechSeed` on a miss too (`data/battle_scripts_1.s:1163`),
+    /// so both failures print `gLeechSeedStringIds`' `STRINGID_PKMNEVADEDATTACK`
+    /// (`src/battle_message.c:963`). Marks `MOVE_RESULT_MISSED` like a miss.
+    LeechSeedEvaded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that failed.
+        move_id: MoveId,
+    },
+    /// `STRINGID_PKMNSAPPEDBYLEECHSEED` (`data/battle_scripts_1.s:3265`-
+    /// `:3284`): the seeded battler's `ENDTURN_LEECH_SEED` loss, which
+    /// precedes its [`BattleEvent::HurtByPoison`] slot
+    /// (`pokeemerald/src/battle_util.c:1509`-`:1523`). Always followed by the
+    /// seeder's [`BattleEvent::LeechSeedHealed`].
+    SappedByLeechSeed {
+        /// Whether the player's battler was drained.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the drain.
+        damage: u32,
+    },
+    /// The seeder's share of a [`BattleEvent::SappedByLeechSeed`]: it regains
+    /// exactly the HP the seeded battler lost (`copyword gBattleMoveDamage,
+    /// gHpDealt`, `data/battle_scripts_1.s:3270`), capped at its maximum HP.
+    LeechSeedHealed {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// HP actually gained, zero for a full-HP seeder.
+        healed: u32,
+    },
+    /// `STRINGID_PKMNSITEMRESTOREDHEALTH`,
+    /// `BattleScript_ItemHealHP_RemoveItem` (`data/battle_scripts_1.s:4356`-
+    /// `:4364`): a living holder at or below half HP regained its item's HP
+    /// in the end-turn item pass and consumed the item
+    /// (`ItemBattleEffects`' `ITEMEFFECT_NORMAL`,
+    /// `pokeemerald/src/battle_util.c:3331`-`:3346`). That pass precedes the
+    /// battler's [`BattleEvent::SappedByLeechSeed`] slot
+    /// (`:1442`-`:1461`).
+    ItemRestoredHealth {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// The item consumed.
+        item: ItemId,
+        /// HP actually gained, capped at the holder's maximum HP.
+        healed: u32,
     },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin

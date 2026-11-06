@@ -133,7 +133,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// [`OverworldPhase::advance_intro_message`]'s actual
 /// `NpcDialog::open_at_speed` call and its `opened` latch also have a
 /// synthetic-pack sibling in `step_tests` (issue #1444); its `Err` fallback
-/// path (`sight_trainer_approach.rs`'s own module doc comment) does not, and
+/// path (`sight_trainer_approach`'s own module doc comment) does not, and
 /// still only runs here. This one drives the real icon, the real
 /// zero-tile turn, and the real message box -- open, print every glyph, and
 /// dismiss through the script's own `waitbuttonpress` -- against the

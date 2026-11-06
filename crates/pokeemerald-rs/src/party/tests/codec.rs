@@ -572,19 +572,68 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     }
 }
 
-/// Bad poison `0x80` and its counter bits
-/// (`0x0F00`), several conditions at once, a sleep count beside poison, and
-/// bits above `STATUS1_ANY` are not modelled
+/// `STATUS1_TOXIC_POISON | STATUS1_TOXIC_TURN(counter)` is `0x80 | counter <<
+/// 8`, every one of the sixteen counters
+/// (`pokeemerald/include/constants/battle.h:117,123-125`): each decodes to its
+/// counter, merges back byte for byte, and encodes from a fresh battler.
+#[test]
+fn every_bad_poison_word_decodes_and_encodes_back_to_itself() {
+    let dex = Dex::new();
+    for counter in 0u8..=15 {
+        let word = 0x80 | u32::from(counter) << 8;
+        let expected = battle::Status1::BadPoisoned { counter };
+        let mut record = to_save_pokemon(&dex, &treecko_fixture());
+        record.status = word;
+
+        assert_eq!(
+            from_save_pokemon(&dex, &record).unwrap().status1(),
+            expected,
+            "word {word:#x}"
+        );
+        let mut loaded = LoadedLead::load(&dex, &[record]).expect("a toxic word decodes");
+        assert_eq!(loaded.battler().status1(), expected, "word {word:#x}");
+        assert_eq!(loaded.merge_and_save(&dex).status, word, "word {word:#x}");
+        let mut fresh = treecko_fixture();
+        fresh.set_status1(expected);
+        assert_eq!(to_save_pokemon(&dex, &fresh).status, word, "word {word:#x}");
+    }
+    assert_eq!(0x80 | 5u32 << 8, 0x580, "the issue's worked example");
+}
+
+#[test]
+fn a_toxic_counter_beyond_the_status_words_four_bits_is_refused_rather_than_truncated() {
+    let mut lead = treecko_fixture();
+    lead.set_status1(battle::Status1::BadPoisoned { counter: 15 });
+    assert_eq!(to_save_pokemon(&Dex::new(), &lead).status, 0xF80);
+
+    // The battle crate refuses an out-of-range counter at the setter; the
+    // encoder carries its own guard against a bypass.
+    let outcome = std::panic::catch_unwind(|| {
+        let mut lead = treecko_fixture();
+        lead.set_status1(battle::Status1::BadPoisoned { counter: 16 });
+        to_save_pokemon(&Dex::new(), &lead)
+    });
+    assert!(outcome.is_err(), "counter 16 would otherwise set bit 12");
+}
+
+/// A counter without the toxic flag, several conditions at once (toxic
+/// beside poison, burn or sleep included), a sleep count beside poison, and
+/// bits above the counter are not modelled
 /// (`pokeemerald/include/constants/battle.h:117-125`): decoding fails closed
 /// and names the original word, never masking it to a neighbour.
 #[test]
 fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
     let dex = Dex::new();
     for word in [
-        0x80,
-        0x180,
-        0xF80,
         0x100,
+        0xF00,
+        0x188,
+        0x81,
+        0x90,
+        0xA0,
+        0xC0,
+        0x1080,
+        0x1F80,
         0x9,
         0x48,
         0x88,

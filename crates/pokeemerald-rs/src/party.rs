@@ -15,12 +15,25 @@
 //! [`from_save_pokemon`] reads the growth substructure's held item
 //! (`MON_DATA_HELD_ITEM`, `pokeemerald/src/pokemon.c:3833`) onto the battler
 //! through [`battle::BattlePokemon::with_held_item`], whatever its id.
-//! `battle` carries the item but models none of its effects, so
+//! `battle` models Oran Berry's end-turn heal and no other hold effect, so
 //! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
-//! item has one; each flow's refusal is documented where it is made. A fresh
-//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
-//! backing record's item bytes alone, as nothing in the port changes a held
-//! item after load.
+//! item has any other one; each flow's refusal is documented where it is made. The battler
+//! owns the item afterwards: [`to_save_pokemon`] and
+//! [`merge_into_save_pokemon`] both file [`battle::BattlePokemon::held_item`],
+//! so a Berry consumed in battle leaves the save, as `Cmd_removeitem`'s
+//! `ITEM_NONE` does upstream (`pokeemerald/src/battle_script_commands.c:5901`
+//! -`:5909`, `src/load_save.c:196`-`:206`), and any other change to the held
+//! item reaches the save the same way.
+//!
+//! [`take_held_item`] is the one such change the port makes outside battle:
+//! `CursorCb_TakeItem`'s `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`,
+//! `:3273-3298`). It moves the item into the bag with `AddBagItem` and clears
+//! the battler's item, so a lead [`flow::lead_screen`](crate::flow) refuses
+//! for holding an item with a battle effect can be made to battle. A full bag
+//! refuses the take and the lead keeps the item; the start menu's TAKE entry
+//! shows each outcome's message in the field message box. Giving an item to a
+//! Pokemon (`GiveItemToMon`, `:1785-1811`) and the party menu's presentation
+//! are not modelled.
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
@@ -47,11 +60,15 @@
 //! encoders write [`battle::BattlePokemon::status1`] into the record's status
 //! word, so an inflicted or cured condition reaches the save, and
 //! [`from_save_pokemon`] reads it back. Only healthy, ordinary poison,
-//! burn, freeze, paralysis, and sleep (`1..=7` turns left) are modelled
+//! burn, freeze, paralysis, bad poison with any of its sixteen counters
+//! (`0x80 | counter << 8`), and sleep (`1..=7` turns left) are modelled
 //! (`pokeemerald/include/constants/battle.h:114-125`); a record whose word is
-//! anything else -- bad poison, several conditions, or stray
-//! bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather than
-//! reading as healthy and losing the condition on the next save.
+//! anything else -- a counter without the toxic flag, several conditions, or
+//! stray bits -- fails to decode with [`PartyError::UnsupportedStatus`] rather
+//! than reading as healthy and losing the condition on the next save.
+//! A bad-poison counter is the party's stored one: the battle's own advancing
+//! count is discarded with the battle copy, as upstream's residual never
+//! writes it back (`pokeemerald/src/battle_util.c:1536-1549`).
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -129,6 +146,10 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
 )]
 mod starter;
 
+/// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
+mod take_item;
+pub(crate) use take_item::{take_held_item, TakeHeldItem};
+
 /// Why a saved party member could not be converted into a battler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PartyError {
@@ -200,17 +221,36 @@ const STATUS1_POISON: u32 = 1 << 3;
 const STATUS1_BURN: u32 = 1 << 4;
 const STATUS1_FREEZE: u32 = 1 << 5;
 const STATUS1_PARALYSIS: u32 = 1 << 6;
+/// `STATUS1_TOXIC_POISON` and `STATUS1_TOXIC_COUNTER`, whose four bits
+/// `STATUS1_TOXIC_TURN(n)` shifts left by eight
+/// (`pokeemerald/include/constants/battle.h:117`, `:123`-`:125`). The counter is
+/// only meaningful beside the toxic flag.
+const STATUS1_TOXIC_POISON: u32 = 1 << 7;
+const STATUS1_TOXIC_COUNTER_SHIFT: u32 = 8;
+const STATUS1_TOXIC_COUNTER_MASK: u32 = 0xF << STATUS1_TOXIC_COUNTER_SHIFT;
 
 /// Decodes the save record's primary status word (`MON_DATA_STATUS`, copied
 /// into the battler by `CopyPlayerMonData`,
 /// `pokeemerald/src/battle_controller_player.c:1636-1640`) into the battle
 /// model's [`battle::Status1`].
 ///
-/// Exactly one modelled condition decodes; bad poison, any
-/// combination, the toxic counter bits, and anything above `STATUS1_ANY`
+/// Exactly one modelled condition decodes. Bad poison decodes with its
+/// counter, all sixteen values of it; a counter without the toxic flag, any
+/// combination, and anything above the counter's four bits
 /// (`battle.h:125`) fail closed rather than being masked into a neighbour.
 fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
     match word {
+        _ if word & STATUS1_TOXIC_POISON != 0
+            && word & !(STATUS1_TOXIC_POISON | STATUS1_TOXIC_COUNTER_MASK) == 0 =>
+        {
+            Ok(battle::Status1::BadPoisoned {
+                // Four bits, so at most fifteen.
+                counter: u8::try_from(
+                    (word & STATUS1_TOXIC_COUNTER_MASK) >> STATUS1_TOXIC_COUNTER_SHIFT,
+                )
+                .unwrap_or(u8::MAX),
+            })
+        }
         0 => Ok(battle::Status1::Healthy),
         1..=STATUS1_SLEEP_MASK => Ok(battle::Status1::Asleep {
             // At most seven: the mask above bounds it.
@@ -233,9 +273,10 @@ fn status1_from_word(word: u32) -> Result<battle::Status1, PartyError> {
 ///
 /// # Panics
 ///
-/// Panics if a sleep count exceeds the three bits the word holds; a modelled
-/// infliction draws two to five turns, so a larger one is a broken invariant
-/// that would otherwise corrupt the neighbouring status bits.
+/// Panics if a sleep count exceeds the three bits the word holds, or a toxic
+/// counter the four bits above bit 8; a modelled infliction draws two to five
+/// turns and a decoded counter is at most fifteen, so a larger one is a broken
+/// invariant that would otherwise corrupt the neighbouring status bits.
 fn status1_to_word(status1: battle::Status1) -> u32 {
     match status1.normalised() {
         battle::Status1::Healthy | battle::Status1::Asleep { turns: 0 } => 0,
@@ -243,6 +284,13 @@ fn status1_to_word(status1: battle::Status1) -> u32 {
         battle::Status1::Poisoned => STATUS1_POISON,
         battle::Status1::Burned => STATUS1_BURN,
         battle::Status1::Frozen => STATUS1_FREEZE,
+        battle::Status1::BadPoisoned { counter } => {
+            assert!(
+                counter <= battle::status1::TOXIC_COUNTER_MAX,
+                "a toxic counter of {counter} does not fit STATUS1_TOXIC_COUNTER's four bits"
+            );
+            STATUS1_TOXIC_POISON | u32::from(counter) << STATUS1_TOXIC_COUNTER_SHIFT
+        }
         battle::Status1::Asleep { turns } => {
             let word = u32::from(turns);
             assert!(
@@ -417,7 +465,9 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
 ///
 /// Writes only the fields the battler owns; every retained field stays as
 /// the save wrote it, except EVs, which the merge writes back from
-/// [`battle::BattlePokemon::evs`].
+/// [`battle::BattlePokemon::evs`], and the held item, which it writes back
+/// from [`battle::BattlePokemon::held_item`] so a Berry consumed in battle and
+/// a [`take_held_item`] both persist.
 ///
 /// The battler's cache, level and HP are filed as they stand
 /// ([`overlay_battle_stats`]); nothing is recomputed or translated. A record
@@ -438,6 +488,7 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
     };
 
     substructures.growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    substructures.growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     substructures.growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     substructures.attacks = encode_attacks(mon);

@@ -1,6 +1,7 @@
 //! One test per message family, driving [`Narrator`] with events and expanding
 //! the requests against upstream template text.
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
 
@@ -29,10 +30,16 @@ const SLOTS: &[(u16, &str)] = &[
     (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
     (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
     (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
+    (46, "{B_EFF_NAME_WITH_PREFIX} was burned!"),
     (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
+    (104, "{B_DEF_NAME_WITH_PREFIX} was seeded!"),
+    (105, "{B_DEF_NAME_WITH_PREFIX} evaded\nthe attack!"),
+    (106, "{B_ATK_NAME_WITH_PREFIX}'s health is\nsapped by LEECH SEED!"),
+    (298, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_LAST_ITEM}\nrestored health!"),
     (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
     (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
     (51, "{B_ATK_NAME_WITH_PREFIX} is\nfrozen solid!"),
+    (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
@@ -222,6 +229,42 @@ fn a_frozen_user_prints_frozen_solid_and_a_thaw_names_the_move_that_caused_it() 
     );
 }
 
+/// `STRINGID_PKMNWASBURNED` names the effect battler and
+/// `STRINGID_PKMNWASDEFROSTED` the defender, which is the move's target in
+/// both (`battle_message.c:94,101`).
+#[test]
+fn a_burn_and_a_fire_move_defrost_name_the_target_not_the_user() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Burned {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::Burned {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "Foe RATTATA was burned!",
+            "Foe RATTATA was\ndefrosted!",
+            "TORCHIC was burned!",
+            "TORCHIC was\ndefrosted!"
+        ]
+    );
+}
+
 #[test]
 fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
     let mut narrator = narrator(BattleKind::Trainer);
@@ -367,6 +410,77 @@ fn end_turn_poison_and_burn_name_the_battler_they_hurt() {
         [
             "TORCHIC is hurt\nby its burn!",
             "Wild RATTATA is hurt\nby poison!"
+        ]
+    );
+}
+
+/// `gLeechSeedStringIds` prints its set entry for the seeded target
+/// (`data/battle_scripts_1.s:1164`-`:1170`) and its drain entry once for the
+/// seeded battler, as the attacker, after both HP updates (`:3265`-`:3284`);
+/// the seeder's share prints nothing. `BattleScript_ItemHealHP_RemoveItem`
+/// names the holder as the scripting battler and its item as the last used one.
+#[test]
+fn leech_seed_and_oran_berry_print_their_own_messages() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Seeded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::SappedByLeechSeed {
+                    by_player: false,
+                    damage: 1,
+                },
+                BattleEvent::LeechSeedHealed {
+                    by_player: true,
+                    healed: 1,
+                },
+                BattleEvent::ItemRestoredHealth {
+                    by_player: true,
+                    item: ItemId::ORAN_BERRY,
+                    healed: 10,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA was seeded!",
+            "Wild RATTATA's health is\nsapped by LEECH SEED!",
+            "TORCHIC's ORAN BERRY\nrestored health!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed` on a miss (`data/battle_scripts_1.s:1163`), and
+/// `Cmd_setseeded` picks `B_MSG_LEECH_SEED_MISS` for that miss and for an
+/// already-seeded target alike (`src/battle_script_commands.c:6720`-`:6724`),
+/// so either failure names the target (`gLeechSeedStringIds`,
+/// `src/battle_message.c:963`) rather than the attacker's generic miss.
+#[test]
+fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::LeechSeedEvaded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::LeechSeedEvaded {
+                    by_player: false,
+                    move_id: MoveId::LEECH_SEED,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA evaded\nthe attack!",
+            "TORCHIC evaded\nthe attack!",
         ]
     );
 }
@@ -533,6 +647,33 @@ fn a_cured_status_that_names_no_status_is_refused() {
         narrator.requests(&AssetNames, &event),
         Err(NarrationError::MissingContext("cured status"))
     );
+}
+
+/// Shed Skin names the cured status through `STATUS1_POISON` for either
+/// poison (`pokeemerald/src/battle_util.c:2620-2638`), so a bad poison cure
+/// narrates exactly as an ordinary one, whatever its stored counter.
+#[test]
+fn a_shed_skin_bad_poison_cure_narrates_as_poison() {
+    for by_player in [true, false] {
+        let expected = narrator(BattleKind::Wild).requests(
+            &AssetNames,
+            &BattleEvent::ShedSkinCured {
+                by_player,
+                status: Status1::Poisoned,
+            },
+        );
+        assert!(expected.is_ok(), "{expected:?}");
+        for counter in [0, 5, 15] {
+            let toxic = narrator(BattleKind::Wild).requests(
+                &AssetNames,
+                &BattleEvent::ShedSkinCured {
+                    by_player,
+                    status: Status1::BadPoisoned { counter },
+                },
+            );
+            assert_eq!(toxic, expected, "counter {counter}, by_player {by_player}");
+        }
+    }
 }
 
 #[test]
