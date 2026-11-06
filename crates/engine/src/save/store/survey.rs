@@ -106,8 +106,8 @@ pub(super) struct SlotSurvey {
     tail_failed_count: usize,
     tail_failed_at_first_tail_position: bool,
     /// Tail positions holding no `SECTOR_SIGNATURE` (erased or never
-    /// written), and whether the last one is the first tail position. See
-    /// [`Self::tail_unusable`] for when these count as unusable.
+    /// written), and whether the first tail position is one of them. See
+    /// [`Self::tail_unusable_count`] for when these count as unusable.
     tail_unsigned_count: usize,
     tail_unsigned_at_first_tail_position: bool,
     /// The footer counter of each checksum-valid tail sector, in position
@@ -172,7 +172,7 @@ impl SlotSurvey {
             // (`pokeemerald/src/save.c:529-546`).
             if in_tail {
                 self.tail_unsigned_count += 1;
-                self.tail_unsigned_at_first_tail_position =
+                self.tail_unsigned_at_first_tail_position |=
                     i == usize::from(SECTOR_ID_PKMN_STORAGE_START);
             }
             return;
@@ -289,32 +289,38 @@ impl SlotSurvey {
             .fold(0u32, |ids, (_, &id)| ids | 1 << id)
     }
 
-    /// The number of unusable tail positions and whether the last one is the
-    /// first tail position.
+    /// The number of unusable tail positions.
     ///
     /// A signed tail sector failing its checksum is always unusable. An
     /// unsigned one (erased, as flash holds it when a write stops after the
-    /// erase) is unusable only when it is the slot's one unsigned tail
+    /// erase) is unusable here only when it is the slot's one unsigned tail
     /// position: a torn write blanks just the sector in flight, so a lone
     /// blank can be that sector (`pokeemerald/src/save.c:529-546`). Two or
-    /// more blanks are no torn write and stay uncounted, as they were before
-    /// the torn-after-erase rule, leaving the signed remainder to be judged
-    /// alone; a legacy head over a coherent older tail keeps reading intact.
-    fn tail_unusable(&self) -> (usize, bool) {
-        let lone_blank = self.tail_unsigned_count == 1;
-        let count = self.tail_failed_count + usize::from(lone_blank);
-        let at_first = if lone_blank {
-            self.tail_unsigned_at_first_tail_position
-        } else {
-            self.tail_failed_at_first_tail_position
-        };
-        (count, at_first)
+    /// more blanks are not counted, so the signed remainder is judged alone
+    /// and a legacy head over a coherent older tail keeps reading intact.
+    /// The one exception is the first tail position, see
+    /// [`Self::first_tail_position_is_unusable`].
+    fn tail_unusable_count(&self) -> usize {
+        self.tail_failed_count + usize::from(self.tail_unsigned_count == 1)
+    }
+
+    /// Whether the first tail position (5) is unusable, blank or failing.
+    ///
+    /// Upstream writes ids 0-13 in order at `(id + rotation) % 14`
+    /// (`pokeemerald/src/save.c:138-173,176-184`), so a rotation-zero write
+    /// that has laid the five head sectors reaches position 5 next. A blank
+    /// there is that write's sixth sector, torn after its erase, whatever
+    /// else the older tail holds; blanks elsewhere lie in the older tail's
+    /// own rotation, which the head's write never reached.
+    fn first_tail_position_is_unusable(&self) -> bool {
+        self.tail_unsigned_at_first_tail_position
+            || (self.tail_failed_count == 1 && self.tail_failed_at_first_tail_position)
     }
 
     /// The rotation and counter of the stale tail behind a legacy head, if one
     /// is identifiable; upstream has no such tail (`pokeemerald/src/save.c:514-585`).
     fn tail_generation(&self) -> Option<(usize, u32)> {
-        let (unusable_count, unusable_at_first_tail_position) = self.tail_unusable();
+        let unusable_count = self.tail_unusable_count();
         if unusable_count > 1 {
             return None;
         }
@@ -330,7 +336,7 @@ impl SlotSurvey {
         // the head's, over a predecessor it rotated away from. A rotated tail
         // behind that damage is refused by layout; a rotation-0 tail there
         // was never that write's predecessor and can only be a legacy head's.
-        if unusable_count == 1 && unusable_at_first_tail_position && rotation != 0 {
+        if self.first_tail_position_is_unusable() && rotation != 0 {
             return None;
         }
         let mut outliers = rotations
