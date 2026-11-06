@@ -312,6 +312,24 @@ impl PlayerState {
         self.position
     }
 
+    /// Returns the tile the player's object event occupied before its active
+    /// crossing began: `previousCoords`, which equals the current tile once
+    /// the crossing finishes and at rest (`ShiftStillObjectEventCoords`,
+    /// `event_object_movement.c:2162-2165`).
+    ///
+    /// Taken from the committed crossing direction, not
+    /// [`facing`](Self::facing), which may change mid-step.
+    #[must_use]
+    pub const fn previous_position(&self) -> TilePos {
+        match self.transit_direction {
+            Some(direction) => {
+                let (dx, dy) = direction.delta();
+                (self.position.0 - dx, self.position.1 - dy)
+            }
+            None => self.position,
+        }
+    }
+
     /// Returns the elevation used for collision checks.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
@@ -394,6 +412,14 @@ impl PlayerState {
     #[must_use]
     pub const fn field_input_suppressed(&self) -> bool {
         self.forced_input_tile_center
+    }
+
+    /// Ends the keypad's moving streak after a step upstream drives as held
+    /// movement, which leaves `runningState` at `NOT_MOVING`
+    /// (`field_player_avatar.c:353-379`), so a held direction that differs from
+    /// the facing turns first (`CheckMovementInputNotOnBike`, `:587-595`).
+    pub const fn end_movement_streak(&mut self) {
+        self.movement_streak_active = false;
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -1158,6 +1184,8 @@ mod tests {
     mod step_parity_tests;
 
     mod bump_tests;
+    /// The previous tile of an active crossing.
+    mod previous_position_tests;
     /// Held-B running: its gates, cadence, and preserved interactions.
     mod running_tests;
 

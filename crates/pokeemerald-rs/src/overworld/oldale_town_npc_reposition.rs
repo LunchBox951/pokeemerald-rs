@@ -67,7 +67,7 @@ const fn oldale_town_object_events(
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "OldaleTown_EventScript_Girl",
+            script: Some(assets::ScriptRef::new("OldaleTown_EventScript_Girl")),
             flag: "0",
         },
         ObjectEvent {
@@ -81,7 +81,9 @@ const fn oldale_town_object_events(
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "OldaleTown_EventScript_MartEmployee",
+            script: Some(assets::ScriptRef::new(
+                "OldaleTown_EventScript_MartEmployee",
+            )),
             flag: "0",
         },
         ObjectEvent {
@@ -95,7 +97,9 @@ const fn oldale_town_object_events(
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "OldaleTown_EventScript_FootprintsMan",
+            script: Some(assets::ScriptRef::new(
+                "OldaleTown_EventScript_FootprintsMan",
+            )),
             flag: "0",
         },
         ObjectEvent {
@@ -109,7 +113,7 @@ const fn oldale_town_object_events(
             movement_range_y: 1,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "OldaleTown_EventScript_Rival",
+            script: Some(assets::ScriptRef::new("OldaleTown_EventScript_Rival")),
             flag: "FLAG_HIDE_OLDALE_TOWN_RIVAL",
         },
     ]

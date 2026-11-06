@@ -55,11 +55,11 @@ fn max_iv_player_mon(species: SpeciesId, level: u8, moves: Vec<MoveId>) -> Battl
 fn start_first_battle_refuses_a_loaded_battle_item_before_any_draw() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let treecko = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
-    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&treecko, ItemId::SITRUS_BERRY);
 
     assert_eq!(
         start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());
 
@@ -319,11 +319,11 @@ fn advancing_an_absent_first_battle_does_nothing() {
 #[test]
 fn start_first_battle_refuses_an_inadmissible_lead_before_any_draw() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
-    let slakoth = max_iv_player_mon(SpeciesId::SLAKOTH, 5, vec![MoveId::SCRATCH]);
+    let mightyena = max_iv_player_mon(SpeciesId::MIGHTYENA, 5, vec![MoveId::SCRATCH]);
     assert_eq!(
-        start_first_battle(slakoth, 0, &mut rng).err(),
+        start_first_battle(mightyena, 0, &mut rng).err(),
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());

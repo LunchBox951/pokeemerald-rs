@@ -544,6 +544,28 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_holds_the_tall_grass_sheet_and_its_palette() {
+    const TALL_GRASS_WIDTH: u32 = 80;
+    const TALL_GRASS_HEIGHT: u32 = 16;
+
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let sheet = pack
+        .field_effect_image("tall_grass")
+        .expect("tall_grass sheet");
+    assert_eq!(
+        (sheet.width, sheet.height),
+        (TALL_GRASS_WIDTH, TALL_GRASS_HEIGHT)
+    );
+    let palette = pack
+        .field_effect_palette("general_1")
+        .expect("general_1 palette");
+    assert_eq!(palette.color_count, EXPECTED_PALETTE_COLOR_COUNT);
+    // `graphics/field_effects/palettes/general_1.pal`: colour 1 is (180, 255, 131).
+    assert_eq!(palette.colors().nth(1), Some(0x43F6));
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
     const FIRST_COLORS: [u16; 2] = [0x7fff, 0x0010];
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
@@ -557,4 +579,27 @@ fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
     assert_eq!(leading, FIRST_COLORS);
     assert_eq!((ball.open_sheet.width, ball.open_sheet.height), (16, 16));
     assert_eq!(ball.open_sheet.pixels.len(), 16 * 16);
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_down_arrow_frames_bob_the_arrow_up_one_row_at_a_time() {
+    // `down_arrow.png` paints one arrow starting at sheet row 5, in palette
+    // indices 0, 2 and 4; the blit windows start at rows 0, 1, 2, 1.
+    const FIRST_ARROW_ROW: usize = 5;
+    const FRAME_START_ROWS: [usize; 4] = [0, 1, 2, 1];
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let arrow = pack.text_printer_down_arrow().expect("the down arrow");
+
+    for (index, start) in FRAME_START_ROWS.into_iter().enumerate() {
+        let frame = arrow.frame(u8::try_from(index).unwrap());
+        assert_eq!((frame.width, frame.height, frame.bit_depth), (8, 16, 4));
+        let first_painted_row = frame
+            .pixels
+            .chunks_exact(8)
+            .position(|row| row.iter().any(|&pixel| pixel != 0));
+        assert_eq!(first_painted_row, Some(FIRST_ARROW_ROW - start), "{index}");
+        assert!(frame.pixels.iter().all(|pixel| [0, 2, 4].contains(pixel)));
+    }
 }
