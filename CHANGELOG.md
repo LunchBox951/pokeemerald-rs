@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.109.0] - 2026-11-06
+
+- Fixed-facing townsfolk now run on the overworld frame: they hold their authored facing, keep any turn a script gave them until they leave the screen, and face their authored way again when they come back into view or after a warp.
+
 ## [0.0.108.0] - 2026-11-06
 
 - The Oldale Pokémon Center escalators now carry you between floors, and you step off facing the counter as in the original game. The escalator ride animation is still being prepared.
@@ -498,7 +502,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.108.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b25f65f8c8160f6d72ba14737ae973673792994d...dev
+[0.0.109.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5a1d6f424ac58f94d78c02d69fd57ee566dfcb01...dev
+[0.0.108.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b25f65f8c8160f6d72ba14737ae973673792994d...5a1d6f424ac58f94d78c02d69fd57ee566dfcb01
 [0.0.107.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d7b94057f9b6ae26200a5e7b8fc25ac525ce7e62...b25f65f8c8160f6d72ba14737ae973673792994d
 [0.0.106.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/97a5bcc1faeff8a6ef1ea539d52fc05806587766...d7b94057f9b6ae26200a5e7b8fc25ac525ce7e62
 [0.0.105.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8f6bf3245569fa4d8b950ea850552bbc9999eabd...97a5bcc1faeff8a6ef1ea539d52fc05806587766

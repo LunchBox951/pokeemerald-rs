@@ -8,6 +8,8 @@ pub mod map_runtime;
 pub mod metatile_behavior;
 pub mod metatile_interaction;
 pub mod object_event;
+#[cfg(test)]
+pub(crate) mod object_event_harness;
 pub mod player;
 pub mod trainer_sight;
 pub mod warp;

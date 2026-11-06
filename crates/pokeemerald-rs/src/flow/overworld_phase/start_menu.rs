@@ -82,6 +82,7 @@ impl OverworldPhase {
             // already back; the message box then takes it again.
             StartMenuOutcome::TakeItem => self.show_take_item_outcome(),
         }
+        self.advance_object_events();
         true
     }
 
