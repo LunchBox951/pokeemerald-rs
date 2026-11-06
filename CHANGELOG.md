@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.112.0] - 2026-11-06
 
-- Battle messages are now shown one at a time in the battle text box at the chosen text speed, with pauses and button prompts as in the original game, as preparation for on-screen battles; the running game does not yet wait on them.
+- General improvements in preparation for on-screen battle text: the battle text box can print each message at the chosen text speed, with the original game's pauses and button prompts. Battles do not show or wait on these messages yet.
 
 ## [0.0.111.0] - 2026-11-06
 
