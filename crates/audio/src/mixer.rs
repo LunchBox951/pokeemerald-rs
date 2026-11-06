@@ -15,6 +15,20 @@
 //! Upstream sums packed 8-bit lanes; each voice term lands only in a lane's top
 //! byte, so a lane wraps modulo 256 and never carries into its neighbour
 //! (`m4a_1.s:308..339`, `395..416`). CGB output is still clipped, not wrapped.
+//!
+//! The clip acts on the unipolar PSG sum, as on hardware: mGBA builds each
+//! channel unipolar (`mgba/src/gb/audio.c:543-574,641,916-918`), adds it to the
+//! signed FIFO total and saturates that sum (`mgba/src/gba/audio.c:343-389`).
+//! The port renders each channel about its midpoint, so CGB voices also report
+//! that removed midpoint per sample; [`Mixer::mix_frame`] restores it for the
+//! saturation and removes it again afterwards, which keeps unclipped output
+//! free of a DC step. mGBA keeps the offset (it has no DC removal, and its
+//! window after `_applyBias` is `[-128, 127.75]`); the port removes it only as
+//! far as the s8 floor allows, so a sample never falls below `-128`, the level
+//! the transport can carry. That floor binds only when PCM below about `-98`
+//! meets a PSG whose unipolar low state sits at the floor, the same place the
+//! centred clip bound before; the ceiling side needs no floor, since
+//! removing a midpoint only lowers a saturated sample.
 
 use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -66,6 +80,9 @@ pub struct Mixer {
     master_volume: u8,
     next_note_on_ordinal: u64,
     mix_buffer: Vec<StereoAcc>,
+    /// The midpoint each CGB voice removed from `mix_buffer`, per sample and
+    /// side, so the clip can act on the unipolar PSG sum.
+    psg_offsets: Vec<StereoAcc>,
     reverb: Reverb,
     sequencer: FrameSequencer,
     clocks: FrameClocks,
@@ -101,6 +118,7 @@ impl Mixer {
             master_volume,
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
+            psg_offsets: vec![(0, 0); SAMPLES_PER_FRAME],
             reverb: Reverb::new(0),
             sequencer: FrameSequencer::default(),
             clocks: FrameClocks::with_capacity(
@@ -433,6 +451,7 @@ impl Mixer {
                 && self.clocks.length.len() <= MAX_LENGTH_TICKS_PER_FRAME,
             "a frame's tick buffers must never have to grow",
         );
+        self.psg_offsets.fill((0, 0));
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
@@ -446,8 +465,9 @@ impl Mixer {
                 // hardware-muted voice's unconditional catch-up in `render`
                 // must not also advance it (`CgbVoice::render`'s doc).
                 if voice.is_active() {
-                    voice.render_clocked(
+                    voice.render_with_offsets(
                         &mut self.mix_buffer,
+                        Some(&mut self.psg_offsets),
                         &self.clocks.sweep,
                         &self.clocks.length,
                     );
@@ -467,6 +487,7 @@ impl Mixer {
                 if let Some(hardware) = idle {
                     hardware.render_idle_hardware(
                         &mut self.mix_buffer,
+                        Some(&mut self.psg_offsets),
                         &self.clocks.sweep,
                         &self.clocks.length,
                     );
@@ -474,8 +495,13 @@ impl Mixer {
             }
         }
 
-        for sample in &mut self.mix_buffer {
-            *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
+        // Saturate the unipolar sum (`mgba/src/gba/audio.c:343-351`), then
+        // remove the midpoints: native DC removal comes after the clip.
+        for (sample, offset) in self.mix_buffer.iter_mut().zip(&self.psg_offsets) {
+            *sample = (
+                remove_midpoint(clip_to_s8(sample.0 + offset.0), offset.0),
+                remove_midpoint(clip_to_s8(sample.1 + offset.1), offset.1),
+            );
         }
 
         for (frame, &(left, right)) in self.mix_buffer.iter().enumerate() {
@@ -489,6 +515,13 @@ fn clip_to_s8(sample: i32) -> i32 {
     sample.clamp(-128, 127)
 }
 
+/// Removes `offset` from a saturated sample without leaving the s8 range the
+/// output transport carries: the clip already bounds the top, so only the floor
+/// can bind (see the module docs).
+fn remove_midpoint(saturated: i32, offset: i32) -> i32 {
+    (saturated - offset).max(-128)
+}
+
 /// Reduce a DirectSound sum to the signed byte lane upstream stores it in:
 /// `mul`/`bic 0xFF0000`/`add ... ror 8` leaves only bits 24..=31 of each voice
 /// term, so the lane wraps modulo 256 with no carry into its neighbour.
@@ -499,8 +532,8 @@ fn wrap_to_s8(sample: i32) -> i32 {
 fn normalise_s8(sample: i32) -> f32 {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "clamped to [-128, 127] by clip_to_s8, every value is exactly \
-                  representable in f32"
+        reason = "bounded to [-128, 127] by clip_to_s8 and remove_midpoint, every \
+                  value is exactly representable in f32"
     )]
     let value = sample as f32;
     value / 128.0

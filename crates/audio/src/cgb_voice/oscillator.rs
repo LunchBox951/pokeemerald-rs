@@ -6,17 +6,66 @@ use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use std::sync::Arc;
 
+/// One sample's pre-routing PSG output as the port renders it: `signal` is
+/// centred on the channel's midpoint, and `offset` is that removed midpoint, so
+/// `signal + offset` is the unipolar value mGBA's channel produces
+/// (`mgba/src/gb/audio.c:543-574,641,916-918`). The saturation in
+/// `mgba/src/gba/audio.c:343-351` acts on the unipolar sum, so the mixer needs
+/// both (`Mixer::mix_frame`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Contribution {
+    pub(super) signal: i32,
+    pub(super) offset: i32,
+}
+
+impl Contribution {
+    /// A silent channel: neither signal nor midpoint.
+    pub(super) const SILENT: Self = Self {
+        signal: 0,
+        offset: 0,
+    };
+}
+
 /// Clocks `noise` once at `hardware_volume` and renders its held latch
 /// (`mgba/src/gb/audio.c:782`) centred on the volume it was last resolved against.
 /// Only a clock or envelope step moves the level, so a trigger, volume write,
-/// or replacement leaves it unchanged.
-fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
+/// or replacement leaves it unchanged. The unipolar output is `4 * level`
+/// (`mgba/src/gb/audio.c:641`), so the midpoint is the part of it the centred
+/// level `2 * level - centre` does not carry.
+fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> Contribution {
     noise.clock_sample(hardware_volume);
-    (noise.centred_level() * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+    let scale = |level: i32| (level * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS;
+    let signal = scale(noise.centred_level());
+    Contribution {
+        signal,
+        offset: scale(2 * i32::from(noise.level())) - signal,
+    }
 }
 
 /// [`LINEAR_ENVELOPE_SCALE`] as a signed gain.
 const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
+
+/// A square's output at its centred `level` (`+-1`). The unipolar duty is
+/// `0` or `volume` (`mgba/src/gb/audio.c:916-918`), so the midpoint is the
+/// contribution of a `+1` level: the same `frame_gain` and scale on half the
+/// swing, exact for odd volumes.
+fn square_contribution(frame_gain: i32, level: i8) -> Contribution {
+    let scale = |level: i32| (frame_gain * level * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS;
+    Contribution {
+        signal: scale(i32::from(level)),
+        offset: scale(1),
+    }
+}
+
+/// A wave latch's output: `level` was centred on `midpoint` nibble units when
+/// it latched (`mgba/src/gb/audio.c:567-574`).
+fn wave_contribution(frame_gain: i32, level: i32, midpoint: i32) -> Contribution {
+    let scale = |level: i32| (frame_gain * level * WAVE_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS;
+    Contribution {
+        signal: scale(level),
+        offset: scale(midpoint),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
@@ -38,14 +87,13 @@ impl Oscillator {
         frame_gain: i32,
         hardware_volume: u8,
         envelope_volume: u8,
-    ) -> i32 {
+    ) -> Contribution {
         match self {
-            Self::Square(square) => {
-                (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
-            }
+            Self::Square(square) => square_contribution(frame_gain, square.sample()),
             Self::Wave { channel: wave, .. } => {
                 let gain = cgb3_wave_gain_256(envelope_volume);
-                (frame_gain * wave.sample(gain) * WAVE_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+                let (level, midpoint) = wave.sample_with_midpoint(gain);
+                wave_contribution(frame_gain, level, midpoint)
             }
             Self::Noise(noise) => noise_contribution(noise, hardware_volume),
         }
@@ -53,11 +101,13 @@ impl Oscillator {
 
     /// A square's contribution at a `level` its register write latched,
     /// without stepping it; `None` for Wave and Noise.
-    pub(super) fn relatched_square_contribution(&self, level: i8, frame_gain: i32) -> Option<i32> {
+    pub(super) fn relatched_square_contribution(
+        &self,
+        level: i8,
+        frame_gain: i32,
+    ) -> Option<Contribution> {
         match self {
-            Self::Square(_) => {
-                Some((frame_gain * i32::from(level) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS)
-            }
+            Self::Square(_) => Some(square_contribution(frame_gain, level)),
             Self::Wave { .. } | Self::Noise(_) => None,
         }
     }
@@ -77,14 +127,16 @@ impl Oscillator {
     /// A stopped wave channel's held output at full envelope gain, with no
     /// clock (`mgba/src/gb/audio.c:246-253,768-774`); `None` for the other
     /// channels, whose idle outputs are accounted separately.
-    pub(super) fn held_wave_contribution(&self) -> Option<i32> {
+    pub(super) fn held_wave_contribution(&self) -> Option<Contribution> {
         match self {
-            Self::Wave { channel, .. } => Some(
-                (i32::try_from(FULL_GAIN_256).unwrap_or(i32::MAX)
-                    * channel.held_output()
-                    * WAVE_SAMPLE_SCALE)
-                    >> SAMPLE_GAIN_BITS,
-            ),
+            Self::Wave { channel, .. } => {
+                let (level, midpoint) = channel.held_output_with_midpoint();
+                Some(wave_contribution(
+                    i32::try_from(FULL_GAIN_256).unwrap_or(i32::MAX),
+                    level,
+                    midpoint,
+                ))
+            }
             Self::Square(_) | Self::Noise(_) => None,
         }
     }
@@ -293,7 +345,7 @@ mod changed_wave_asset_latch_tests {
         };
         previous.frame_contribution(256, 0, 15);
         assert_eq!(
-            previous.frame_contribution(256, 0, 15),
+            previous.frame_contribution(256, 0, 15).signal,
             7 * WAVE_SAMPLE_SCALE
         );
         let mut replacement = Oscillator::Wave {
@@ -326,16 +378,19 @@ mod changed_wave_asset_latch_tests {
         let mut previous = wave("a");
         previous.frame_contribution(256, 0, 15);
         assert_eq!(
-            previous.frame_contribution(256, 0, 15),
+            previous.frame_contribution(256, 0, 15).signal,
             7 * WAVE_SAMPLE_SCALE
         );
         let mut replacement = wave("a");
         replacement.carry_hardware_state_from(&previous);
         assert_eq!(
-            replacement.frame_contribution(256, 0, 2),
+            replacement.frame_contribution(256, 0, 2).signal,
             7 * WAVE_SAMPLE_SCALE,
             "held output survives the volume change"
         );
-        assert_eq!(replacement.frame_contribution(256, 0, 2), WAVE_SAMPLE_SCALE);
+        assert_eq!(
+            replacement.frame_contribution(256, 0, 2).signal,
+            WAVE_SAMPLE_SCALE
+        );
     }
 }

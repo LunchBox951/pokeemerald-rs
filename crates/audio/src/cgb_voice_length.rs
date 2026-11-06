@@ -550,7 +550,7 @@ fn a_pitch_changing_write_to_a_stopped_square_latches_its_pre_high_byte_sample()
                 let pre_store = oracle.held_level();
                 let expected = (voice.frame_gain * i32::from(pre_store) * BIPOLAR_SAMPLE_SCALE)
                     >> SAMPLE_GAIN_BITS;
-                if voice.last_contribution != expected {
+                if voice.last_contribution.signal != expected {
                     post_store_cases.push((channel, key_m, idle_frames, old, new));
                 }
             }
