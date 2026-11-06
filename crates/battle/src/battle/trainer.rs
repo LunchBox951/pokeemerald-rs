@@ -788,9 +788,9 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            screen(&[member(ItemId::NONE), member(ItemId::SITRUS_BERRY)]),
             Err(crate::error::BattleError::UnsupportedHeldItem(
-                ItemId::ORAN_BERRY
+                ItemId::SITRUS_BERRY
             ))
         );
     }

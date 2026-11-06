@@ -147,6 +147,23 @@ pub enum AssetError {
     ///
     /// Contains the font's asset-pack name.
     FontSourceMissing(&'static str),
+
+    /// The keypad-icon sheet is not the 128x32 four-bit raster
+    /// [`keypad_icons`](crate::keypad_icons) documents.
+    ///
+    /// Contains the actual width, height, and bit depth.
+    KeypadSheetWrongShape(u32, u32, u8),
+
+    /// The keypad-icon sheet's pixel count does not match its dimensions.
+    ///
+    /// Contains the expected count and the actual count.
+    KeypadSheetWrongPixelCount(usize, usize),
+
+    /// The keypad-icon sheet holds a palette index outside the window's
+    /// sixteen colours.
+    ///
+    /// Contains the row-major pixel index and the invalid palette index.
+    KeypadSheetInvalidPixel(usize, u8),
 }
 
 impl fmt::Display for AssetError {
@@ -212,6 +229,20 @@ impl fmt::Display for AssetError {
                 write!(f, "font `{name}` has more than one glyph source")
             }
             Self::FontSourceMissing(name) => write!(f, "font `{name}` has no glyph source"),
+            Self::KeypadSheetWrongShape(width, height, bit_depth) => write!(
+                f,
+                "keypad-icon sheet wrong shape: expected {}x{} at 4bpp, got {width}x{height} at {bit_depth}bpp",
+                crate::keypad_icons::SHEET_WIDTH,
+                crate::keypad_icons::SHEET_HEIGHT
+            ),
+            Self::KeypadSheetWrongPixelCount(expected, actual) => write!(
+                f,
+                "keypad-icon sheet wrong pixel count: expected {expected}, got {actual}"
+            ),
+            Self::KeypadSheetInvalidPixel(index, value) => write!(
+                f,
+                "keypad-icon sheet has invalid palette index {value} at pixel {index}: expected 0..=15"
+            ),
         }
     }
 }
