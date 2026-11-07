@@ -74,7 +74,8 @@ pub(super) fn text_fixture() -> Fixture {
 
 pub(super) fn layer(speed: TextSpeed) -> BattleMessageLayer<TestSheet> {
     let blank = BattleTextbox::from_parts(
-        Tileset::from_tiles(rendering::BitDepth::Bpp4, Vec::new()),
+        Tileset::from_tiles(rendering::BitDepth::Bpp4, Vec::new())
+            .expect("an empty 4bpp tileset holds no index above 15"),
         Palette::new([rendering::Bgr555::default(); Palette::LEN]),
         Tilemap::new(0, 0, Vec::new()).unwrap(),
     );
