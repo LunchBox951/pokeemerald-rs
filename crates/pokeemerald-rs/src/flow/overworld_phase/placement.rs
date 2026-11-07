@@ -35,7 +35,8 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 /// The pair is trusted only when the decoded `active` is set (a record this
 /// port's writer marked, or a pristine upstream one whose coordinates agree
 /// with `pos`; `engine::save::block` documents the rule and the unmarked
-/// pre-#801 re-save it cannot tell apart, which is adopted) and the saved
+/// record an earlier port writer re-saved at an unchanged position, which it
+/// cannot tell apart and so adopts) and the saved
 /// current elevation is one upstream could hold on the landing cell: the
 /// cell's own, or any on a multi-level cell
 /// ([`ELEVATION_MULTI_LEVEL`]; `ObjectEventUpdateElevation`,

@@ -309,7 +309,7 @@ fn pristine_upstream_image_keeps_its_pair_on_a_multi_level_cell() {
 }
 
 /// A marker-less image whose `currentCoords` disagree with `pos` -- the shape
-/// the pre-#801 writer leaves, since it moves `pos` and preserves the slot --
+/// an earlier port writer leaves, since it moves `pos` and preserves the slot --
 /// is still not restored, so the stale `(0, 3)` pair's wrong previous
 /// elevation 3 does not survive on a transition cell where the walk from
 /// elevation 4 left 0. (Unmarked records whose coords do match `pos` are

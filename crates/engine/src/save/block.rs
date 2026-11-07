@@ -25,13 +25,13 @@
 //!   zero, and a pair `ObjectEventUpdateElevation` could have produced (neither
 //!   nibble is the multi-level value, which it never assigns).
 //!
-//! A record whose coordinates disagree with `pos` -- the shape the pre-#801
-//! port writer left when it moved `pos` and preserved the slot -- is rejected
-//! either way.
+//! A record whose coordinates disagree with `pos` -- the shape an earlier port
+//! writer left when it moved `pos` but preserved the stored player object --
+//! is rejected either way.
 //!
-//! Unmarked records are **not** reliably identifiable. A pre-#801 port re-save
-//! of an upstream-origin image that leaves `pos` unchanged keeps matching
-//! coordinates, `isPlayer`, zero padding and a legal pair, so it is
+//! Unmarked records are **not** reliably identifiable. A record that an earlier
+//! port writer re-saved at an unchanged `pos` without setting the marker keeps
+//! matching coordinates, `isPlayer`, zero padding and a legal pair, so it is
 //! indistinguishable from the upstream record and is now adopted; its pair is
 //! then whatever the upstream image held, and the continue's
 //! cell-compatibility check in the game crate is the only remaining filter.
@@ -146,7 +146,7 @@ const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
 const MAP_OFFSET: i16 = 7;
 // `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
-// the model never reads and the pre-#801 writer never touched, reused to hold
+// the model never reads and an earlier port writer never touched, reused to hold
 // the save counter of the write that stored the pair. Every writer advances
 // the counter, so a save by a build that does not stamp it leaves a stale one.
 const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
@@ -867,8 +867,8 @@ fn trusted_player_object(bytes: &[u8], pos: Coords16) -> bool {
 /// function returns early on [`ELEVATION_MULTI_LEVEL`], so neither field is
 /// ever assigned the multi-level value.
 ///
-/// This cannot tell a pristine record from a pre-#801 re-save that left `pos`
-/// unchanged; see the module documentation.
+/// This cannot tell a pristine record from one an earlier port writer
+/// re-saved at an unchanged `pos`; see the module documentation.
 fn pristine_upstream_player_object(bytes: &[u8]) -> bool {
     let elevations = SavedObjectEvent::default()
         .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET]);
@@ -1511,7 +1511,7 @@ mod tests {
                 .active
         };
 
-        // Coordinates left behind by a writer that moved `pos` (pre-#801).
+        // Coordinates left behind by a writer that moved `pos` but kept the slot.
         let mut stale = pristine_upstream_image(pos, 0x30);
         stale[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
             .copy_from_slice(&object_event_coords(Coords16 { x: 3, y: 4 }).to_bytes());
@@ -1578,7 +1578,7 @@ mod tests {
             "a fresh save is trusted"
         );
 
-        // The pre-#801 writer: new position and directions over the loaded
+        // An earlier port writer: new position and directions over the loaded
         // bytes, every other byte -- marker, elevations, coords -- preserved.
         bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
             .copy_from_slice(&Coords16 { x: 5, y: 4 }.to_bytes());
