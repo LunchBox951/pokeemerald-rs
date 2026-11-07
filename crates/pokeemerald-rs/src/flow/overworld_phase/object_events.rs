@@ -22,13 +22,17 @@ impl OverworldPhase {
             || self.sight_approach.is_some()
             || self.start_menu.is_some()
             || self.in_battle();
-        self.object_events.run_frame(
-            &FrameContext {
-                player_position: self.player.position(),
-                event_data: &self.save1.event_data,
-                frozen,
-            },
-            &mut self.rng,
-        );
+        let context = FrameContext {
+            player_position: self.player.position(),
+            event_data: &self.save1.event_data,
+            frozen,
+            player_dashing: self.player.dashing(),
+        };
+        #[cfg(test)]
+        if let Some(scratch) = &mut self.object_event_rng {
+            self.object_events.run_frame(&context, scratch);
+            return;
+        }
+        self.object_events.run_frame(&context, &mut self.rng);
     }
 }

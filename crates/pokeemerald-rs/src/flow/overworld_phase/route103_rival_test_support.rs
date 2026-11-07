@@ -49,6 +49,7 @@ pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_103_phase`] with the player already facing [`RIVAL_TILE`] from
@@ -71,6 +72,7 @@ pub(super) fn route_103_phase_facing_the_rival_repo() -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, built

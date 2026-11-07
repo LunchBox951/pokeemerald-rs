@@ -31383,6 +31383,24 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "MovementType_FaceDownAndRight": {
+          "reason": "MOVEMENT_TYPE_FACE_DOWN_AND_RIGHT: the same LiveObjectEvent::random_facing_step table as MovementType_LookAround (Step0 to Step4, :3434-3481) with sMovementDelaysShort (:711, 32/48/64/80), gDownAndRightDirections[Random() & 1] (south, east; movement_type_func_tables.h:127), and RUNFOLLOW_SOUTH_EAST (GetLimitedVectorDirection_EastSouth, :2762-2779) for a running trainer nearby. See MovementType_LookAround for the frame, draw-order and restart facts and for what is not modelled.",
+          "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementType_LookAround": {
+          "reason": "MOVEMENT_TYPE_LOOK_AROUND: LiveObjectEvent::random_facing_step (object_event_random_facing.rs) runs Step0 to Step4 (:2844-2892). Step2's face action completes on its first execution because a single movement action is never held (ObjectEventSetSingleMovement, :5042-5046; FaceDirection, :5048-5055), so the first callback frame draws sMovementDelaysMedium[Random() % 4] (:709) and settles previousCoords; Step3 predecrements the delay (WaitForMovementDelay, :8537-8544) and also ends early for a running trainer nearby; Step4 draws gStandardDirections[Random() & 3] (south, north, west, east) unless TryGetTrainerEncounterDirection (RUNFOLLOW_ANY, GetVectorDirection) gives one, then requeues step 1 in the same frame, so a turn frame draws the facing then the next delay, always in collection order from the field Random() stream. A movement type set on a live object to a different type restarts at Step0 (SetTrainerMovementType, :4636-4643); setting the type it already has restarts nothing here, as ObjectEventState::set_movement_type carries no hook. Not modelled: the action table dispatch, singleMovementActive, facingDirectionLocked and the previous-movement-direction fields SetObjectEventDirection writes, sprite animation (SetStepAnim, animPaused), and sprite-slot iteration order (AnimateSprites visits slots; the port visits templates in order).",
+          "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "ObjectEventIsTrainerAndCloseToPlayer": {
+          "reason": "LiveObjectEvent::trainer_is_close_to_running_player (:2632-2660): needs PLAYER_AVATAR_FLAG_DASH (FrameContext::player_dashing, PlayerState::dashing: the held-B run's crossing plus its paused pose until the next poll, field_player_avatar.c:384-391,658-663), a Normal or Buried trainer, and the player's tile inside the inclusive square of the template's sight range around the object's live tile, with no alignment, sight, elevation or defeated check. Reached only from the two random-facing movement types; the other callers (the remaining rotation and walk types) are not modelled.",
+          "rust_target": "crates/engine/src/overworld/object_event_random_facing.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "ObjectEventUpdateElevation": {
           "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority. Modelled in two halves (issue #379): PlayerState::adopt_elevation is the per-step half above, and engine::overworld::MapRuntime::arrival_elevation (crates/engine/src/overworld/map_runtime.rs) is the spawn/arrival half, the single grid read shared by warp_destination_position (a resolved warp event), OverworldPhase::warp_to_position (an explicit-coordinate warp), and saved_tile_placement (a continued save). arrival_elevation takes one coordinate pair rather than two because a freshly spawned object event's previousCoords are seeded equal to its currentCoords (InitObjectEventStateFromTemplate, :1309-1312), so the prevElevation half of the :7764-7765 guard collapses into the curElevation half there; it returns ELEVATION_TRANSITION for a multi-level landing cell rather than modelling upstream's no-op early return, since the player it places is fresh and upstream's own spawn-time initialization already left that field at ELEVATION_TRANSITION.",
           "rust_target": "crates/engine/src/overworld/player.rs",
@@ -31419,6 +31437,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "TryGetTrainerEncounterDirection": {
+          "reason": "LiveObjectEvent::trainer_encounter_direction (:2822-2841): the facing toward a running player nearby from the player's tile minus the object's live tile. Only gGetVectorDirectionFuncs entries RUNFOLLOW_ANY (GetVectorDirection, :2663-2679) and RUNFOLLOW_SOUTH_EAST (GetLimitedVectorDirection_EastSouth, :2762-2779) are ported, for MovementType_LookAround and MovementType_FaceDownAndRight; the other limited vector functions belong to the rotation and other face types, which stay inert.",
+          "rust_target": "crates/engine/src/overworld/object_event_random_facing.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "TrySpawnObjectEventTemplate": {
           "reason": "The hide-flag gate (!FlagGet(template->flagId)) is reproduced two ways. object_event_is_visible, and the visible_object_events/visible_object_event_at searches built on it, treat a hidden object event as absent at query time (rendering, the facing-tile interaction lookup, and movement collision alike), applying the filter inside each scan so a tile carrying several stacked templates with independent hide flags resolves to the first visible one. ObjectEventCollection::run_frame (object_event_scheduler.rs) also consults it at admission, so a hidden template is never scheduled, while a flag set on an already active entry does not retire it, as upstream consults the flag only at spawn. Every template still has a live ObjectEventCollection slot seeded unconditionally from InitObjectEventStateFromTemplate's non-sprite half (see that function's own entry), so queries read unadmitted entries. Not modelled: the sprite/palette/OAM setup TrySetupObjectEventSprite and this function perform, GetAvailableObjectEventId's slot reuse, link-player object events, and the Trainer Hill/Battle Pyramid dynamic object-event-count special cases.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
@@ -31432,7 +31456,7 @@
           "status": "stubbed"
         },
         "UpdateObjectEventCurrentMovement": {
-          "reason": "ObjectEventCollection::run_frame runs each active entry's movement-type callback in a while-true loop once per frame unless the frame is frozen (:4934-4937), through LiveObjectEvent::movement_type_step, whose match arm per MovementType is the extension point. Not modelled: held movement (ObjectEventExecHeldMovementAction), DoGroundEffects_*, animation enable/pause, visibility and subpriority updates, and every movement type but the four fixed-facing ones, which stay inert.",
+          "reason": "ObjectEventCollection::run_frame runs each active entry's movement-type callback in a while-true loop once per frame unless the frame is frozen (:4934-4937), through LiveObjectEvent::movement_type_step, whose match arm per MovementType is the extension point and which hands the callback the field Random() stream in collection order. The four fixed-facing types and MOVEMENT_TYPE_LOOK_AROUND and MOVEMENT_TYPE_FACE_DOWN_AND_RIGHT run; every other type stays inert. Not modelled: held movement (ObjectEventExecHeldMovementAction), DoGroundEffects_*, animation enable/pause, visibility and subpriority updates.",
           "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
           "spec": "S-5",
           "status": "stubbed"

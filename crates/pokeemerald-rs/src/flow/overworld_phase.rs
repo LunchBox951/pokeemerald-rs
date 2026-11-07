@@ -336,6 +336,13 @@ pub(crate) struct OverworldPhase {
     /// drive a cone that claims its trigger frame through [`Self::step`].
     #[cfg(test)]
     pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
+    /// Test-only: a private stream the object-event scheduler draws from instead of
+    /// [`Self::rng`], so a test that pins the field stream's exact state around some other
+    /// system (a wild roll, a sight trainer, a first battle) is not moved by the random-facing
+    /// NPCs in view ([`Self::with_private_object_event_rng`]); `None` is production's single
+    /// shared stream.
+    #[cfg(test)]
+    pub(in crate::flow) object_event_rng: Option<engine::rng::Rng>,
     /// The terminal result of the most recently completed Route 101
     /// scripted first battle. Cleared when a new attempt starts and set
     /// only when its driver reports a real [`battle::BattleOutcome`], so an
@@ -634,6 +641,8 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
+            #[cfg(test)]
+            object_event_rng: None,
             first_battle_outcome: None,
             rival_battle_outcome: None,
             sight_trainer_battle_outcome: None,
@@ -689,14 +698,12 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        Self::new(
-            scene.in_room_for_test(map_id),
+        Self::for_test_with_source(
+            scene,
             map_id,
             player,
             dialog,
             crate::pack_source::PackSource::Runtime,
-            new_game::NewGameOptions::DEFAULT,
-            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -722,6 +729,16 @@ impl OverworldPhase {
             new_game::NewGameOptions::DEFAULT,
             new_game::NewGameIdentity::DEFAULT,
         )
+    }
+
+    /// Test-only: gives the object-event scheduler a private stream, for a test that pins the
+    /// field stream's exact state around some other system (a wild roll, a sight trainer, a
+    /// first battle) and so must not be moved by the random-facing NPCs in view. The test
+    /// then no longer observes the scheduler's own draws.
+    #[cfg(test)]
+    pub(super) fn with_private_object_event_rng(mut self) -> Self {
+        self.object_event_rng = Some(engine::rng::Rng::new(0));
+        self
     }
 
     /// Build a new overworld run. New-game initialization consumes exactly
@@ -780,6 +797,8 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
+            #[cfg(test)]
+            object_event_rng: None,
             first_battle_outcome: None,
             rival_battle_outcome: None,
             sight_trainer_battle_outcome: None,
@@ -1028,6 +1047,9 @@ mod oldale_reposition_tests;
 mod opponent_ot_id_tests;
 #[cfg(test)]
 mod pre_movement_arrow_elevation_tests;
+/// Random-facing object events driven by the production frame.
+#[cfg(test)]
+mod random_facing_tests;
 #[cfg(test)]
 mod route103_rival_driver_tests;
 #[cfg(test)]
