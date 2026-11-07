@@ -31041,7 +31041,10 @@
     "src/data/text/nature_names.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "Extracted: gNatureNamePointers[NUM_NATURES] (25 pointers, nature order) and the _() names they point at, mapped through charmap.txt with EOS appended, into summary-identity/table (assets::pack::SummaryIdentityTable) by the xtask extractor and by rom-import domains/summary_identity.rs.",
+      "rust_target": "crates/xtask/src/extract/summary_identity.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/ribbon_descriptions.h": {
       "category": "code.header",
@@ -33786,6 +33789,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "SpeciesToNationalPokedexNum": {
+          "reason": "Rewritten as SummaryIdentityTable::species_to_national: SPECIES_NONE converts to NATIONAL_DEX_NONE and species 1..=411 read their table row. A species past the table reads as None where upstream indexes out of bounds.",
+          "rust_target": "crates/assets/src/pack/summary_identity.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        },
         "gNatureStatTable": {
           "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
           "rust_target": "crates/battle/src/nature.rs",
@@ -33796,6 +33805,12 @@
           "reason": "Stat-stage numerator/denominator table ported as Rust data behind the StatStage newtype, with APPLY_STAT_MOD's multiply-then-divide order preserved exactly (issue #125).",
           "rust_target": "crates/battle/src/stat_stage.rs",
           "spec": "S-6",
+          "status": "ported"
+        },
+        "sSpeciesToNationalPokedexNum": {
+          "reason": "Extracted: the NUM_SPECIES - 1 (411) rows SPECIES_TO_NATIONAL designates by SPECIES_* - 1, keyed by species number so the 25 old-Unown species (252..=276) keep their National Dex numbers above Deoxys, into summary-identity/table by the xtask extractor and by rom-import domains/summary_identity.rs. The sibling Hoenn tables are not read.",
+          "rust_target": "crates/xtask/src/extract/summary_identity.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
@@ -33982,6 +33997,32 @@
       "status": "pending"
     },
     "src/region_map.c": {
+      "artifacts": {
+        "GetMapName": {
+          "reason": "Modelled: the name lookup by MAPSEC_* below MAPSEC_NONE (SummaryIdentityTable::region_section_name). Not modelled: the space padding to padLength, the space fill from MAPSEC_NONE up, and the save-dependent GetSecretBaseMapName.",
+          "rust_target": "crates/assets/src/pack/summary_identity.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "GetMapNameGeneric": {
+          "reason": "Modelled: MAPSEC_DYNAMIC reads gText_Ferry, MAPSEC_SECRET_BASE reads gText_SecretBase and every other section below MAPSEC_NONE its own name (SummaryIdentityTable::map_name_generic). Not modelled: the space fill from MAPSEC_NONE up, which reads as no name.",
+          "rust_target": "crates/assets/src/pack/summary_identity.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "GetMapNameHandleAquaHideout": {
+          "reason": "Modelled: MAPSEC_AQUA_HIDEOUT_OLD reads gText_Hideout and every other section as GetMapNameGeneric does (SummaryIdentityTable::met_location_name). Not modelled: the space fill from MAPSEC_NONE up, which reads as no name.",
+          "rust_target": "crates/assets/src/pack/summary_identity.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "gRegionMapEntries": {
+          "reason": "Names only: the name of each of the 213 sections of src/data/region_map/region_map_sections.json (numbered in list order as MAPSEC_* is, a missing name reading as the template's empty string), into summary-identity/table by the xtask extractor and by rom-import domains/summary_identity.rs. The x, y, width and height fields are not carried.",
+          "rust_target": "crates/xtask/src/extract/summary_identity.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -34689,9 +34730,27 @@
     },
     "src/strings.c": {
       "artifacts": {
+        "gText_Ferry": {
+          "reason": "Extracted: gText_Ferry, the name GetMapNameGeneric gives MAPSEC_DYNAMIC, into summary-identity/table by the xtask extractor and by rom-import domains/summary_identity.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_identity.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_Hideout": {
+          "reason": "Extracted: gText_Hideout, the name GetMapNameHandleAquaHideout gives MAPSEC_AQUA_HIDEOUT_OLD, into summary-identity/table by the xtask extractor and by rom-import domains/summary_identity.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_identity.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gText_PkmnFainted_FldPsn": {
           "reason": "src/strings.c:1189 defines gText_PkmnFainted_FldPsn as {STR_VAR_1} fainted…\\p\\n, shown by Task_TryFieldPoisonWhiteOut (src/field_poison.c:76). Its charmap token stream through EOS is extracted into field-message/table by crates/xtask/src/extract/field_message.rs (src/strings.c through charmap.txt) and by crates/rom-import/src/domains/field_messages.rs (profiled EOS-terminated root), validated by assets::pack::FieldMessageTable, with the {STR_VAR_1} placeholder, \\p, newline, single-glyph ellipsis, and EOS retained. Only this one symbol is modelled; message sequencing, nickname substitution, and the poison white-out task are not.",
           "rust_target": "crates/rom-import/src/domains/field_messages.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_SecretBase": {
+          "reason": "Extracted: gText_SecretBase, the name GetMapNameGeneric gives MAPSEC_SECRET_BASE, into summary-identity/table by the xtask extractor and by rom-import domains/summary_identity.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_identity.rs",
           "spec": "S-4",
           "status": "ported"
         }

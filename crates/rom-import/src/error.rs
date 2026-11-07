@@ -410,6 +410,14 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::pack::SummaryMoveError,
     },
+    /// The summary-identity schema refused what the ROM holds: a stream with no
+    /// well-formed terminator, or a record the tables cannot be filled from.
+    SummaryIdentity {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::SummaryIdentityError,
+    },
     /// The field-message schema refused what the ROM holds: a stream with no
     /// well-formed terminator, or roots the inventory cannot be filled from.
     FieldMessage {
@@ -614,6 +622,7 @@ impl fmt::Display for ImportError {
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
             Self::FieldMessage { id, source } => write!(f, "`{id}`: {source}"),
             Self::SummaryMove { id, source } => write!(f, "`{id}`: {source}"),
+            Self::SummaryIdentity { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleAnimation { id, source } => write!(f, "`{id}`: {}", OneLineText(source)),
             Self::AnimationOpcode { at, opcode } => write!(
                 f,
@@ -680,6 +689,7 @@ impl std::error::Error for ImportError {
             Self::BattleMessage { source, .. } => Some(source),
             Self::FieldMessage { source, .. } => Some(source),
             Self::SummaryMove { source, .. } => Some(source),
+            Self::SummaryIdentity { source, .. } => Some(source),
             Self::BattleAnimation { source, .. } => Some(source),
             _ => None,
         }
@@ -904,6 +914,10 @@ mod tests {
             ImportError::SummaryMove {
                 id: "summary-move/table",
                 source: assets::pack::SummaryMoveError::Truncated,
+            },
+            ImportError::SummaryIdentity {
+                id: "summary-identity/table",
+                source: assets::pack::SummaryIdentityError::Truncated,
             },
             ImportError::BattleAnimation {
                 id: "battle-anim/catalog",
