@@ -418,3 +418,12 @@ fn battle_message_table_is_extracted_from_the_real_checkout() {
     assert_eq!(&used[used.len() - 3..], [0xFD, 0x01, 0xFF]);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn extractor_fixture_ignores_everything_planted_at_its_former_and_candidate_names() {
+    crate::extract::fixture_guard::assert_fixture_ignores_planted_names(
+        "pokeemerald-rs-bmsg",
+        None,
+        extractor_pushes_exactly_one_entry_and_nothing_on_failure,
+    );
+}
