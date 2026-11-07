@@ -326,7 +326,8 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         assets::MapId("MAP_ROUTE102"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
@@ -426,7 +427,8 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         PlayerState::new(REAL_GRASS[0], elevation, Direction::East),
         None,
         crate::pack_source::PackSource::Repo,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
 

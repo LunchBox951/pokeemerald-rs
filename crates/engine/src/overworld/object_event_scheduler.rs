@@ -7,7 +7,8 @@
 //!
 //! Movement types plug in at [`LiveObjectEvent::movement_type_step`], one match arm per upstream
 //! `gMovementTypeFuncs_*` table; [`Lifecycle::Active`]'s `type_func_id` is that table's
-//! `sTypeFuncId` index. Only the four fixed-facing types are modelled; every other type is inert.
+//! `sTypeFuncId` index. Only the four fixed-facing types and the two random-facing ones
+//! (`LookAround`, `FaceDownAndRight`, in [`random_facing`]) are modelled; every other type is inert.
 
 use assets::MovementType;
 
@@ -18,14 +19,23 @@ use crate::rng::RandomSource;
 
 use super::{LiveObjectEvent, ObjectEventCollection};
 
+#[path = "object_event_random_facing.rs"]
+mod random_facing;
+
 /// Where an entry stands in upstream's object-event slot lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Lifecycle {
     /// Seeded, but the spawn window has not admitted it yet; upstream has no object for it.
     Unadmitted,
-    /// Spawned: `initial` is `initialCoords`, the template tile at admission, and `type_func_id`
-    /// is the sprite's `sTypeFuncId`.
-    Active { initial: TilePos, type_func_id: u8 },
+    /// Spawned: `initial` is `initialCoords`, the template tile at admission, `type_func_id` is
+    /// the sprite's `sTypeFuncId`, `delay` is its `data[3]` movement-delay counter, and
+    /// `scheduled` is the movement type those two belong to.
+    Active {
+        initial: TilePos,
+        type_func_id: u8,
+        delay: i16,
+        scheduled: MovementType,
+    },
     /// Removed for lying outside the view; the next admission reinitialises its state.
     Despawned,
 }
@@ -46,6 +56,10 @@ pub struct FrameContext<'a> {
     /// Whether object events are frozen (`FreezeObjectEvents`): active entries then skip their
     /// movement-type callback (`UpdateObjectEventCurrentMovement`, `:4934-4937`).
     pub frozen: bool,
+    /// Whether the player avatar carries `PLAYER_AVATAR_FLAG_DASH`, the one gate on a trainer
+    /// waking early to the player running nearby (`ObjectEventIsTrainerAndCloseToPlayer`,
+    /// `:2643`).
+    pub player_dashing: bool,
 }
 
 impl ObjectEventCollection {
@@ -59,15 +73,15 @@ impl ObjectEventCollection {
     /// any callback runs, as map load's `TrySpawnObjectEvents` does ahead of the first frame
     /// (`overworld.c:2163`). An entry the camera pass admits first runs on the following frame.
     ///
-    /// `rng` is the field's `Random()` stream, for the movement types that draw from it; the
-    /// fixed-facing types never touch it.
+    /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
+    /// collection order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
         if self.reconciled_at.is_none() {
             self.reconcile_with_view(context);
         }
         if !context.frozen {
             for entry in &mut self.entries {
-                entry.run_movement_type(rng);
+                entry.run_movement_type(context, rng);
             }
         }
         if self.reconciled_at != Some(context.player_position) {
@@ -103,6 +117,8 @@ impl LiveObjectEvent {
         self.lifecycle = Lifecycle::Active {
             initial: spawn_tile,
             type_func_id: 0,
+            delay: 0,
+            scheduled: self.state.movement_type(),
         };
     }
 
@@ -118,20 +134,51 @@ impl LiveObjectEvent {
     }
 
     /// `while (callback(objectEvent, sprite));` (`:4937`): runs steps until one reports done.
-    fn run_movement_type(&mut self, rng: &mut impl RandomSource) {
+    fn run_movement_type(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
         if self.lifecycle.is_active() {
-            while self.movement_type_step(rng) {}
+            self.restart_if_movement_type_changed();
+            while self.movement_type_step(context, rng) {}
+        }
+    }
+
+    /// A movement type set on a live object starts its table over at step 0
+    /// (`SetTrainerMovementType` writes `sTypeFuncId = 0`, `:4638-4642`), dropping any delay
+    /// the previous type was counting down.
+    fn restart_if_movement_type_changed(&mut self) {
+        let current = self.state.movement_type();
+        if let Lifecycle::Active {
+            type_func_id,
+            delay,
+            scheduled,
+            ..
+        } = &mut self.lifecycle
+        {
+            if *scheduled != current {
+                *scheduled = current;
+                *type_func_id = 0;
+                *delay = 0;
+            }
         }
     }
 
     /// One call of the entry's `gMovementTypeFuncs_*[sTypeFuncId]`; `true` runs the next step
     /// this frame.
-    fn movement_type_step(&mut self, _rng: &mut impl RandomSource) -> bool {
+    fn movement_type_step(
+        &mut self,
+        context: &FrameContext<'_>,
+        rng: &mut impl RandomSource,
+    ) -> bool {
         match self.state.movement_type() {
             MovementType::FaceUp
             | MovementType::FaceDown
             | MovementType::FaceLeft
             | MovementType::FaceRight => self.face_direction_step(),
+            MovementType::LookAround => {
+                self.random_facing_step(&random_facing::LOOK_AROUND, context, rng)
+            }
+            MovementType::FaceDownAndRight => {
+                self.random_facing_step(&random_facing::FACE_DOWN_AND_RIGHT, context, rng)
+            }
             _ => false,
         }
     }
@@ -165,6 +212,23 @@ impl LiveObjectEvent {
         if let Lifecycle::Active { type_func_id, .. } = &mut self.lifecycle {
             *type_func_id = next;
         }
+    }
+
+    /// `SetMovementDelay` (`:8532-8535`).
+    fn set_movement_delay(&mut self, next: i16) {
+        if let Lifecycle::Active { delay, .. } = &mut self.lifecycle {
+            *delay = next;
+        }
+    }
+
+    /// `WaitForMovementDelay`: predecrements, and is `true` once the counter reaches zero
+    /// (`:8537-8544`).
+    fn movement_delay_elapsed(&mut self) -> bool {
+        let Lifecycle::Active { delay, .. } = &mut self.lifecycle else {
+            return false;
+        };
+        *delay = delay.wrapping_sub(1);
+        *delay == 0
     }
 }
 

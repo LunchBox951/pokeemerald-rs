@@ -434,7 +434,8 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
          terrain -- including the final tile's own collision/impassability arms"
     );
 
-    let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
+    let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source)
+        .with_private_object_event_rng();
     phase.set_fresh_lead_for_test(overwhelming_lead());
     // Rhett's party constructs; the Headbutt party refuses, so its id stands
     // in at Rhett's real cone.

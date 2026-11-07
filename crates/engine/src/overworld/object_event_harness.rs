@@ -87,6 +87,7 @@ pub(crate) struct Rig {
     pub(crate) event_data: EventData,
     pub(crate) player: TilePos,
     pub(crate) frozen: bool,
+    pub(crate) dashing: bool,
     pub(crate) rng: ScriptedRng,
 }
 
@@ -98,6 +99,7 @@ impl Rig {
             event_data: EventData::new(),
             player,
             frozen: false,
+            dashing: false,
             rng: ScriptedRng::exhausted(),
         }
     }
@@ -110,6 +112,7 @@ impl Rig {
                     player_position: self.player,
                     event_data: &self.event_data,
                     frozen: self.frozen,
+                    player_dashing: self.dashing,
                 },
                 &mut self.rng,
             );
