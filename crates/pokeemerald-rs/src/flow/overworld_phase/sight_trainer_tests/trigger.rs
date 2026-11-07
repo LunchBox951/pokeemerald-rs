@@ -69,8 +69,8 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; the Headbutt party does not, so its id
-    // stands in for the refusal at Rhett's cone.
+    // Rhett's party constructs, so a refusal at his cone needs a borrowed
+    // party: the Headbutt party does not construct, and its id stands in.
     refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     refused.step(pressed(Buttons::START));
     assert!(
@@ -141,9 +141,12 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
 /// A player one tile beyond a trainer's own sight range must not trigger.
 ///
 /// Uses the constructible [`STAND_IN_TRAINER`] (`sight_trainer_tests` docs,
-/// "The stand-in party") rather than Andrew's own real party, so a
-/// false-positive cone hit would be observable as a started approach instead
-/// of masked by every real trainer's own construction refusal.
+/// "The stand-in party") rather than the scanned trainer's own real party.
+/// Andrew's party does construct, but the stand-in replaces *whichever*
+/// single-battle trainer the scan selects, so a false-positive hit from a
+/// refused trainer (Miguel) is observable as a started approach instead of
+/// masked by that trainer's own construction refusal. Amy and Liv's double
+/// battle is set aside before selection, so the stand-in never reaches them.
 #[test]
 fn a_player_beyond_range_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
@@ -309,7 +312,7 @@ fn miguels_party_refuses_to_construct() {
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
-        "Miguel's party must refuse to construct (unmodelled ability, move and item)"
+        "Miguel's party must refuse to construct (Cute Charm, an unmodelled ability)"
     );
     assert!(
         phase.lead_for_test().is_some(),

@@ -20,19 +20,28 @@
 //!
 //! # The stand-in party (`seed_battle`)
 //!
-//! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
-//! nothing, forever") record an emergent gap: most real Route 103 sight
-//! trainers' default, level-up-derived movesets still include a move this
-//! battle engine does not yet implement or score, so
-//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
-//! them (pinned generically by
-//! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`).
-//! Andrew's, Rhett's, Marcos's and Pete's real parties do construct, and
-//! `real_parties` drives each from its own cone to its conclusion. The
-//! `trigger` tests that need a refusal use the id of a party that stops at
-//! Taillow's Headbutt in place of Rhett's at Rhett's cone through
-//! `synthetic_sight_trainer`, so the geometry stays Rhett's while the refused
-//! party is real.
+//! Which real Route 103 parties construct, and which are refused and why, is
+//! owned and pinned by `sight_trainer_trigger`
+//! (`begin_sight_trainer_approach_if_seen`'s docs, `FIGHTING_TRAINERS`, and
+//! `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`);
+//! this module does not repeat that list. `real_parties` drives Andrew,
+//! Rhett, Marcos and Pete from their own cones to their conclusions with no
+//! borrowed party.
+//!
+//! The stand-in below is a choice for determinism and isolation, not a
+//! workaround for an unavailable production path. A borrowed party keeps
+//! these tests off any one trainer's moveset and AI scoring, so a
+//! `battle`-crate change to a real party cannot move a timing, flag or
+//! RNG-draw pin that is about this module's own glue. Through
+//! `synthetic_sight_trainer` it also makes a false-positive cone observable
+//! as a started approach whichever single-battle trainer the scan wrongly
+//! selects, including a trainer whose real party is refused. Double battles
+//! are not covered that way: the scan sets them aside before selection, so
+//! the stand-in is never reached for them. The `trigger` tests that need a
+//! refusal at Rhett's geometry borrow, through the same field, the id of a
+//! party that stops at Zigzagoon's Headbutt (`TRAINER_REFUSED_FOR_MOVE`),
+//! because Rhett's own party constructs; the real refusals have their own
+//! cone tests.
 //!
 //! The win/loss/defeated-flag *driver* half
 //! ([`OverworldPhase::advance_sight_trainer_battle_frame`][advance]) is a
@@ -58,7 +67,8 @@
 //!
 //! - `support`: the shared fixtures (Route 103 phase, stand-in battle and
 //!   approach seeds).
-//! - `real_parties`: the four fighting trainers, cone to conclusion.
+//! - `real_parties`: four of the six constructible trainers, cone to
+//!   conclusion.
 //! - `live_selection`: selection from the live object-event collection.
 //! - `live_writeback`: the approach's write-back to the live collection,
 //!   seen after the battle (tile, facing, collision, sight, rendered OAM).

@@ -123,14 +123,12 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
     // Standing in the same cone again must not restart the fight -- the
     // trainer is still standing (no hide flag, `TRAINER_FLAGS_START`'s
     // own docs), but
-    // `already_defeated` refuses before the geometry even matters (and, as
-    // of this issue, before Rhett's own real construction gap would matter
-    // either).
+    // `already_defeated` refuses before the geometry even matters.
     //
-    // Arm the constructible stand-in (`sight_trainer_tests` docs, "The
-    // stand-in party") so a scan that wrongly selected Rhett *would* start an
-    // approach instead of being masked by his real party's construction
-    // refusal; see the undefeated control below.
+    // Arm the stand-in (`sight_trainer_tests` docs, "The stand-in party") so
+    // a scan that wrongly selected Rhett *would* start an approach against a
+    // party whose construction does not depend on his moveset; see the
+    // undefeated control below.
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
@@ -181,11 +179,10 @@ fn winning_sets_the_defeated_flag_and_saturates_money_at_the_upstream_cap() {
 /// `event_data` is carried wholesale into a freshly reconstructed phase
 /// (`OverworldPhase::from_saved`'s own docs), so the win recorded above
 /// stays won. Checked directly against the resumed phase's own `event_data`
-/// rather than by stepping it back into Rhett's cone: Rhett's own real
-/// construction currently fails regardless of the flag (`sight_trainer_tests`
-/// docs, "The stand-in party"), so a `step`-based assertion here could not
-/// actually distinguish "the flag survived" from "construction always refuses
-/// anyway" -- the flag read is the one assertion that can.
+/// rather than by stepping it back into Rhett's cone: a `step`-based
+/// assertion would depend on the party behind the cone (`sight_trainer_tests`
+/// docs, "The stand-in party") rather than on the flag alone -- the flag read
+/// is the one assertion that isolates what survived the round trip.
 #[test]
 fn the_defeated_flag_survives_a_save_continue_round_trip() {
     let (rx, ry) = RHETT_TILE;
