@@ -86,16 +86,40 @@ fn split_parent(path: &Path) -> std::io::Result<(&Path, &std::ffi::OsStr)> {
     Ok((parent, name))
 }
 
+/// `O_SEARCH` on Apple targets, which have no `O_PATH`: search access to a
+/// directory without the read access `O_RDONLY` demands. Apple spells it
+/// `O_EXEC | O_DIRECTORY` (`libc`'s `O_EXEC`, `0x4000_0000`); `rustix` 1.1 has
+/// no flag for it, so the value travels as externally defined `OFlags` bits.
+#[cfg(target_vendor = "apple")]
+const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
+
 /// Pins the directory at `path` open, following a symlink in its own name
 /// as the caller's output directory may legitimately be one.
+///
+/// The handle asks for search access only: the path-based flow this replaced
+/// needed no more than write and search on the output directory, so a
+/// directory that cannot be listed (mode `0300`) must still publish.
+/// `O_PATH` on Linux and `O_SEARCH` on Apple give that; elsewhere `O_RDONLY`
+/// is the closest the platform offers.
 #[cfg(unix)]
 fn open_directory(path: &Path) -> std::io::Result<std::fs::File> {
-    let fd = rustix::fs::open(
-        path,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )?;
-    Ok(std::fs::File::from(fd))
+    let open = |access: rustix::fs::OFlags| {
+        rustix::fs::open(
+            path,
+            access | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+    };
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let fd = open(rustix::fs::OFlags::PATH);
+    #[cfg(target_vendor = "apple")]
+    let fd = match open(rustix::fs::OFlags::RDONLY) {
+        Err(rustix::io::Errno::ACCESS) => open(APPLE_SEARCH),
+        fd => fd,
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    let fd = open(rustix::fs::OFlags::RDONLY);
+    Ok(std::fs::File::from(fd?))
 }
 
 /// As [`create_new_exclusive`], naming `name` relative to the held `dir`, so
@@ -684,6 +708,39 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Whether this process is root, which bypasses directory modes. Reads
+    /// the owner of `/proc/self`, as `scenario::session`'s tests do, because
+    /// no `geteuid` is among the approved `rustix` features.
+    #[cfg(unix)]
+    fn running_as_root() -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata("/proc/self").is_ok_and(|meta| meta.uid() == 0)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_and_search_only_output_directory_still_publishes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if running_as_root() {
+            eprintln!("skipped: root ignores directory modes, so 0300 stays readable");
+            return;
+        }
+        let dir = scratch_dir("write-search-only");
+        let output_path = dir.join("pokeemerald.pack");
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let result = write_pack_atomically_with_names(
+            &output_path,
+            b"a fresh pack",
+            std::iter::once(staging_path),
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let written = std::fs::read(&output_path);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(written.unwrap(), b"a fresh pack");
     }
 
     #[cfg(unix)]
