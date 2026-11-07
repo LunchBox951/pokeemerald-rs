@@ -209,6 +209,7 @@ fn party_events() -> Vec<BattleEvent> {
         BattleEvent::ImmobilizedByLove { by_player, move_id },
         BattleEvent::Infatuated { by_player, move_id },
         BattleEvent::ObliviousPreventsAttraction { by_player, move_id },
+        BattleEvent::InfatuatedByCuteCharm { by_player, move_id },
         BattleEvent::UsedMove { by_player, move_id },
         BattleEvent::TypeEffectiveness {
             by_player,
@@ -223,7 +224,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 81;
+const VARIANTS: usize = 82;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -311,6 +312,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::ImmobilizedByLove { .. } => 78,
         BattleEvent::Infatuated { .. } => 79,
         BattleEvent::ObliviousPreventsAttraction { .. } => 80,
+        BattleEvent::InfatuatedByCuteCharm { .. } => 81,
     }
 }
 
