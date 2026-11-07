@@ -278,7 +278,7 @@ impl Battle {
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
-    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
+    /// Speed Boost, Color Change, Trace, Flame Body,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
