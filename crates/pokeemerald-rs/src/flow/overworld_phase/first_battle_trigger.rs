@@ -6,7 +6,9 @@
 
 use engine::event_data::EventData;
 use engine::overworld::MapRuntime;
+use platform::ButtonState;
 
+use crate::flow::battle_finalize::finalize_battle_turn;
 use crate::flow::first_battle;
 use crate::flow::lead_screen::ensure_lead_can_battle;
 
@@ -125,6 +127,14 @@ impl OverworldPhase {
         // The start consumes its copy; the lent original returns on rejection.
         match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
+                match self.open_wild_battle_text(&battle) {
+                    Ok(sequence) => self.battle_sequence = sequence,
+                    Err(error) => {
+                        eprintln!("first battle: can't play its text ({error})");
+                        self.restore_lead_battler(lead);
+                        return;
+                    }
+                }
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
@@ -140,11 +150,21 @@ impl OverworldPhase {
     pub(super) fn advance_first_battle_frame(
         &mut self,
         battle: battle::Battle,
+        buttons: ButtonState,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
         let mut returned_lead = None;
-        let outcome =
-            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng);
+        let outcome = if self.battle_sequence.is_some() {
+            let battle = slot.as_mut()?;
+            match self.tick_battle_text(battle, buttons) {
+                None => return slot.map(ActiveBattle::First),
+                Some(turn_failed) => {
+                    finalize_battle_turn(&mut slot, turn_failed, &mut returned_lead)
+                }
+            }
+        } else {
+            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng)
+        };
         if let Some(lead) = returned_lead {
             self.restore_lead_battler(lead);
         }

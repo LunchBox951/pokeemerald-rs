@@ -330,7 +330,7 @@ impl OverworldPhase {
 
         // An active battle owns the frame ahead of the dialog check, as the
         // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
-        if self.advance_active_battle_frame() {
+        if self.advance_active_battle_frame(buttons) {
             return;
         }
 
