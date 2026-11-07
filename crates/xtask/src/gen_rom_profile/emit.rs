@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 mod poke_ball;
+mod summary_identity;
 mod summary_moves;
 
 use rom_import::Encoding;
@@ -78,7 +79,7 @@ use crate::roots::{{
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
     PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot, TilesetRoot,
+    StarterChooserRoots, SummaryIdentityRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot, TilesetRoot,
     TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
@@ -139,6 +140,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
     summary_moves::summary_move_roots(&mut out, &plan.summary_moves);
+    summary_identity::summary_identity_roots(&mut out, &plan.summary_identity);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -910,8 +912,8 @@ mod bag_field_tests {
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, SummaryMovePlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
-        TrainerFrontPlan,
+        StarterChooserPlan, SummaryIdentityPlan, SummaryMovePlan, TextWindowPlan, TitleScreenPlan,
+        TrainerBattlerPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1299,6 +1301,14 @@ mod bag_field_tests {
                 contest_moves: base,
                 contest_effects: base,
                 effect_descriptions: base,
+            },
+            summary_identity: SummaryIdentityPlan {
+                natures: base,
+                region_map_entries: base,
+                ferry: base,
+                secret_base: base,
+                hideout: base,
+                species_to_national: base,
             },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],

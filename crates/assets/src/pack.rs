@@ -66,6 +66,12 @@ pub use summary_move::{
     CONTEST_CATEGORY_COUNT, CONTEST_EFFECT_COUNT, CONTEST_MOVE_COUNT,
     DESCRIPTION_COUNT as MOVE_DESCRIPTION_COUNT,
 };
+mod summary_identity;
+pub use summary_identity::{
+    NatureId, SpecialLocationNames, SummaryIdentityError, SummaryIdentitySection,
+    SummaryIdentityTable, MAPSEC_AQUA_HIDEOUT_OLD, MAPSEC_DYNAMIC, MAPSEC_SECRET_BASE,
+    NATURE_COUNT, REGION_MAP_SECTION_COUNT, SPECIES_TO_NATIONAL_COUNT,
+};
 pub use text_printer::TextPrinterDownArrow;
 
 pub use trainer_battler::TrainerBattlerHandle;

@@ -53,6 +53,20 @@ pub fn parse(sources: &PokedexSources<'_>) -> Result<PokedexData> {
     Ok(PokedexData::new(entries, orders)?)
 }
 
+/// The National Dex constants of `include/constants/pokedex.h`, by name.
+///
+/// # Errors
+///
+/// A [`PokedexSourceError`] when the enum or its count aliases differ from the
+/// pinned shape.
+pub fn national_dex_numbers(text: &str) -> Result<HashMap<String, NationalDexNo>> {
+    parse_constants(text)?
+        .values
+        .into_iter()
+        .map(|(name, value)| Ok((name, NationalDexNo::new(value)?)))
+        .collect()
+}
+
 fn resolve_entries(
     rows: Vec<EntryRow>,
     constants: &Constants,
