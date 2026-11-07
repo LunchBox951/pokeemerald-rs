@@ -146,7 +146,9 @@ impl SnapshotsRestore {
 
     /// Records the generation directory named by `record-snapshot`'s
     /// success line (`... to <dir>/title.rgb (+ ...`), when it sits directly
-    /// under this guard's directory.
+    /// under this guard's directory. The line carries a native
+    /// `Path::display()` path, so `/` and `\` both separate components
+    /// (Windows prints `\`); the comparison normalises both to `/`.
     fn own_generation_from_stdout(&mut self, stdout: &str) {
         let Some((_, rest)) = stdout.split_once(" snapshot (") else {
             return;
@@ -154,17 +156,25 @@ impl SnapshotsRestore {
         let Some((_, rest)) = rest.split_once(" to ") else {
             return;
         };
-        let Some((rgb_dir, _)) = rest.split_once("/title.rgb") else {
+        let Some((rgb_path, _)) = rest.split_once(" (+ ") else {
             return;
         };
-        let generation = Path::new(rgb_dir);
-        if generation.parent() != Some(self.dir.as_path()) {
+        let rgb_path = rgb_path.replace('\\', "/");
+        let Some((rgb_dir, rgb_name)) = rgb_path.rsplit_once('/') else {
+            return;
+        };
+        if rgb_name != "title.rgb" {
             return;
         }
-        if let Some(name) = generation.file_name().and_then(|name| name.to_str()) {
-            if name.starts_with("title.generation-") {
-                self.own_generations.push(name.to_owned());
-            }
+        let Some((parent, name)) = rgb_dir.rsplit_once('/') else {
+            return;
+        };
+        let own_dir = self.dir.to_string_lossy().replace('\\', "/");
+        if parent != own_dir {
+            return;
+        }
+        if name.starts_with("title.generation-") {
+            self.own_generations.push(name.to_owned());
         }
     }
 }
@@ -302,6 +312,29 @@ fn snapshots_restore_keeps_a_concurrent_publishers_generation() {
         std::fs::read(dir.join("title.generation")).expect("pointer"),
         b"title.generation-4294967295-0\n",
         "a pointer written by another publisher must be left alone"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshots_restore_parses_a_windows_backslash_success_line() {
+    let dir = scratch_snapshots("windows-separators");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let own = dir.join("title.generation-78-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-78-0\n").expect("pointer");
+    // `Path::display()` on Windows: every separator is a backslash.
+    let native = own.display().to_string().replace('/', "\\");
+    restore.own_generation_from_stdout(&format!(
+        "recorded `title` snapshot (1 byte(s)) to {native}\\title.rgb (+ {native}\\title.meta); rgb hash 0\n",
+    ));
+    drop(restore);
+    assert!(!own.exists(), "the child's own generation is removed");
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-1-0\n"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
