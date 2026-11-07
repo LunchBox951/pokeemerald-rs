@@ -324,6 +324,40 @@ fn an_entry_stays_active_while_either_its_current_or_its_initial_tile_is_in_view
 }
 
 #[test]
+fn an_object_walked_out_of_view_survives_on_its_initial_tile_then_is_removed_and_respawns_at_its_template(
+) {
+    let mut rig = rig_with(MovementType::FaceUp);
+    rig.tick(1);
+    for _ in 0..20 {
+        rig.collection
+            .get_mut(1)
+            .unwrap()
+            .state_mut()
+            .walk(Direction::East);
+    }
+
+    // The current tile (40, 20) is outside the window, the initial tile (20, 20) inside; the
+    // player steps so the camera pass runs.
+    rig.player = (20, 21);
+    rig.tick(1);
+    assert!(rig.collection.get(1).unwrap().is_active());
+
+    // Both tiles outside.
+    rig.player = (100, 100);
+    rig.tick(1);
+    assert!(!rig.collection.get(1).unwrap().is_active());
+
+    // The window returns over the template tile; the walk is forgotten.
+    rig.player = (20, 20);
+    rig.tick(1);
+    let entry = rig.collection.get(1).unwrap();
+    assert!(entry.is_active());
+    assert_eq!(entry.state().position(), (20, 20));
+    assert_eq!(entry.state().previous_position(), (20, 20));
+    assert_eq!(entry.state().facing(), Direction::North);
+}
+
+#[test]
 fn movement_types_without_a_callback_yet_stay_inert() {
     let mut rig = rig_with(MovementType::WanderAround);
     rig.collection
