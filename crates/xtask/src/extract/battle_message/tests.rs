@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 
 use super::*;
 use crate::extract::owned_fixture::OwnedDir;
+use crate::extract::text_source::Tok;
 use assets::pack::{AssetPack, SpecialBattleMessage};
 
 const CHARMAP: &str = "\

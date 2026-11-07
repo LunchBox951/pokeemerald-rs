@@ -442,6 +442,19 @@ pub struct FieldMessagePlan {
     pub messages: Vec<FieldMessageRootPlan>,
 }
 
+/// The summary screen's move and contest roots, owned.
+#[derive(Debug, Clone)]
+pub struct SummaryMovePlan {
+    /// `gMoveDescriptionPointers`.
+    pub descriptions: u32,
+    /// `gContestMoves`.
+    pub contest_moves: u32,
+    /// `gContestEffects`.
+    pub contest_effects: u32,
+    /// `gContestEffectDescriptionPointers`.
+    pub effect_descriptions: u32,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -665,6 +678,8 @@ pub struct ProfilePlan {
     pub battle_messages: BattleMessagePlan,
     /// The field-message token table.
     pub field_messages: FieldMessagePlan,
+    /// The summary screen's move descriptions and contest records.
+    pub summary_moves: SummaryMovePlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.

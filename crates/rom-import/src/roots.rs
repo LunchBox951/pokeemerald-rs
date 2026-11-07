@@ -30,8 +30,10 @@
 use crate::reader::GbaPtr;
 
 mod poke_ball;
+mod summary_move;
 
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+pub use summary_move::SummaryMoveRoots;
 
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -712,6 +714,8 @@ pub struct Roots {
     pub battle_messages: BattleMessageRoots,
     /// The field-message token table.
     pub field_messages: &'static [FieldMessageRoot],
+    /// The summary screen's move descriptions and contest records.
+    pub summary_moves: SummaryMoveRoots,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -778,6 +782,7 @@ impl Roots {
         },
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
+        summary_moves: SummaryMoveRoots::NONE,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,

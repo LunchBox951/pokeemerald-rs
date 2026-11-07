@@ -83,6 +83,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "evolution-scene/",
     "poke-ball/",
     "naming-screen/",
+    "summary-move/",
 ];
 
 /// The text printer's page-prompt arrow, by id: `interface/` is a complete
@@ -273,6 +274,11 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
     0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
 ];
 
+/// The summary screen's move and contest table, by literal id. `summary-move/`
+/// is a complete prefix, but an id spelled here independently of both backends
+/// fails when both drop or rename the entry together.
+const SUMMARY_MOVE_IDS: [&str; 1] = ["summary-move/table"];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -388,6 +394,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
+        .chain(SUMMARY_MOVE_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -410,6 +417,158 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+#[test]
+fn the_summary_move_table_is_claimed_and_pinned_by_a_literal_id() {
+    assert!(is_claimed_complete("summary-move/table"));
+    assert_eq!(SUMMARY_MOVE_IDS, ["summary-move/table"]);
+    // An entry both backends drop is reported once per backend.
+    let none = BTreeMap::new();
+    let ids: Vec<String> = SUMMARY_MOVE_IDS.into_iter().map(str::to_owned).collect();
+    assert_eq!(missing_from_either(&ids, &none, &none).len(), 2);
+}
+
+/// Spell the characters upstream's summary text uses through `charmap.txt`,
+/// independently of either backend, ending in `EOS`.
+fn charmap_text(text: &str) -> Vec<u8> {
+    let mut bytes: Vec<u8> = text
+        .chars()
+        .map(|c| match c {
+            ' ' => 0x00,
+            '.' => 0xAD,
+            '-' => 0xAE,
+            ',' => 0xB8,
+            '\n' => 0xFE,
+            'A'..='Z' => 0xBB + (c as u8 - b'A'),
+            'a'..='z' => 0xD5 + (c as u8 - b'a'),
+            other => panic!("unmapped {other:?}"),
+        })
+        .collect();
+    bytes.push(0xFF);
+    bytes
+}
+
+/// The sampled records of the summary table, from upstream's own text, which
+/// either backend's table must hold.
+fn pin_summary_move_table(table: &assets::pack::SummaryMoveTable<'_>) {
+    use assets::pack::{ContestCategory, ContestEffectId, ContestEffectType};
+    use assets::MoveId;
+
+    assert_eq!(table.descriptions().count(), 354);
+    assert_eq!(table.contest_moves().count(), 355);
+    assert_eq!(table.contest_effects().count(), 48);
+    // `src/data/text/move_descriptions.h`: slot 0 is MOVE_POUND, 353 MOVE_PSYCHO_BOOST.
+    assert_eq!(table.move_description(MoveId(0)), None);
+    assert_eq!(
+        table.move_description(MoveId(1)),
+        Some(charmap_text("Pounds the foe with\nforelegs or tail.").as_slice())
+    );
+    assert_eq!(
+        table.move_description(MoveId(354)),
+        Some(charmap_text("Allows a full-power attack,\nbut sharply lowers SP. ATK.").as_slice())
+    );
+    assert_eq!(table.move_description(MoveId(355)), None);
+    // `src/data/contest_moves.h`: gContestMoves rows, MOVE_NONE included.
+    for (move_id, category, effect) in [
+        (0, ContestCategory::Cool, 0),
+        (1, ContestCategory::Tough, 0),
+        (3, ContestCategory::Tough, 17),
+        (354, ContestCategory::Smart, 1),
+    ] {
+        let row = table.contest_move(MoveId(move_id)).unwrap();
+        assert_eq!(
+            (row.category, row.effect.index()),
+            (category, effect),
+            "move {move_id}"
+        );
+    }
+    // `gContestEffects` and `gContestEffectDescriptionPointers`.
+    for (id, kind, appeal, jam, text) in [
+        (
+            0,
+            ContestEffectType::Appeal,
+            40,
+            0,
+            Some("A highly appealing move."),
+        ),
+        (
+            1,
+            ContestEffectType::Appeal,
+            60,
+            0,
+            Some("After this move, the user is\nmore easily startled."),
+        ),
+        (17, ContestEffectType::StartleMons, 20, 10, None),
+        (
+            47,
+            ContestEffectType::Worsen,
+            30,
+            0,
+            Some("Temporarily stops the\ncrowd from growing excited."),
+        ),
+    ] {
+        let effect = table.contest_effect(ContestEffectId::new(id).unwrap());
+        assert_eq!(
+            (effect.effect_type, effect.appeal, effect.jam),
+            (kind, appeal, jam),
+            "effect {id}"
+        );
+        // Effect 17's text spells characters this helper does not map.
+        if let Some(text) = text {
+            assert_eq!(effect.description, charmap_text(text), "effect {id}");
+        }
+    }
+}
+
+/// The summary move and contest records, read through the typed reader from
+/// both packs: the lengths and sampled records are pinned from upstream's own
+/// text, and the two tables must be equal.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_summary_move_table_is_equal_through_both_backends() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing {} failed: {err}", rom_path.display()));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-summary-move-equivalence-{}.pack",
+        std::process::id()
+    ));
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&imported_path)
+            .unwrap_or_else(|err| panic!("creating {} failed: {err}", imported_path.display()));
+        file.write_all(&rom_bytes)
+            .expect("writing the imported pack");
+    }
+    let imported = AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+
+    let ours = imported.summary_moves().expect("the imported table");
+    let theirs = checkout.summary_moves().expect("the checkout table");
+    assert_eq!(ours, theirs);
+    assert_eq!(ours.encode(), theirs.encode());
+
+    for table in [&ours, &theirs] {
+        pin_summary_move_table(table);
+    }
+    eprintln!("summary-move table equal through both backends");
 }
 
 #[test]
