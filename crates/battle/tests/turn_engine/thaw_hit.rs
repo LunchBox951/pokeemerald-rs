@@ -5,7 +5,7 @@
 //! (`battle_script_commands.c:4257-4272`). Every script is exact:
 //! `SequenceRng::assert_exhausted` fails on a missing or an extra draw.
 
-use crate::common::{max_iv_mon, SequenceRng};
+use crate::common::{max_iv_mon, script, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
@@ -297,18 +297,16 @@ fn a_fire_hit_that_faints_its_frozen_target_reports_no_thaw() {
     let strong = max_iv_mon(&dex, RATTATA, 50, vec![SACRED_FIRE]);
     let mut weak = max_iv_mon(&dex, ZIGZAGOON, 3, vec![TACKLE]);
     weak.set_status1(Status1::Frozen);
-    let mut rng = SequenceRng::new(
-        [&PREFIX[..], &fire_hit(0)[..]]
-            .concat()
-            .into_iter()
-            .chain([0; 8]),
-    );
+    // The enemy faints before acting, so no freeze draw follows the hit.
+    let mut rng = SequenceRng::new(script(&[&PREFIX, &fire_hit(0)]));
     let mut battle = Battle::new(dex, strong, weak, false, &mut rng).unwrap();
 
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
 
+    assert_eq!(rng.draws(), 3 + 4);
+    rng.assert_exhausted();
     assert!(battle.enemy().is_fainted());
     assert!(!events.iter().any(|event| matches!(
         event,
