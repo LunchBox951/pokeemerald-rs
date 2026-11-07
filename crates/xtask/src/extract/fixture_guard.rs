@@ -29,14 +29,28 @@ const PLANT_WAIT: Duration = Duration::from_secs(10);
 struct Planted(Vec<PathBuf>);
 
 impl Drop for Planted {
+    /// A removal that fails for any reason but the entry already being gone
+    /// leaves it behind, so it panics once every entry has been tried, unless
+    /// the thread is already unwinding: a passing test must not leave planted
+    /// entries on disk unreported (the convention of `OwnedDir`).
     fn drop(&mut self) {
+        let mut failures = Vec::new();
         for entry in &self.0 {
-            if entry.is_symlink() {
-                let _ = std::fs::remove_file(entry);
+            let removed = if entry.is_symlink() {
+                std::fs::remove_file(entry)
             } else {
-                let _ = std::fs::remove_dir_all(entry);
+                std::fs::remove_dir_all(entry)
+            };
+            if let Err(error) = removed {
+                if error.kind() != io::ErrorKind::NotFound {
+                    failures.push(format!("{}: {error}", entry.display()));
+                }
             }
         }
+        assert!(
+            failures.is_empty() || std::thread::panicking(),
+            "removing planted entries failed: {failures:?}"
+        );
     }
 }
 
@@ -243,6 +257,82 @@ mod tests {
             &|| {
                 let _ = wait_report.send(());
             },
+        );
+    }
+
+    /// Removal of a planted entry that fails for a reason other than the
+    /// entry being gone is reported, not discarded.
+    #[cfg(unix)]
+    #[test]
+    fn planted_drop_reports_a_failed_removal() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-undeletable-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        populate(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let planted = Planted(vec![dir.clone()]);
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let left_behind = dir.exists();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        if !left_behind {
+            eprintln!("skipped: the process ignores directory modes (root), so 0555 is removable");
+            return;
+        }
+        assert!(
+            reported.is_err(),
+            "Planted::drop left {} behind without reporting it",
+            dir.display()
+        );
+    }
+
+    const SYMLINK_PREFIX: &str = "pokeemerald-rs-fixture-guard-symlink-only";
+
+    /// Unlinks a planted symlink and touches no directory.
+    #[cfg(unix)]
+    fn fixture_unlinking_only_a_symlink() {
+        let path = std::env::temp_dir().join(format!("{SYMLINK_PREFIX}-{}-0", std::process::id()));
+        if path.is_symlink() {
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    /// Only the symlink pass can see this fixture: the directory pass finds
+    /// every populated directory intact.
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "removed or replaced symlinks")]
+    fn guard_catches_a_symlink_only_disturbance_with_directories_intact() {
+        assert_fixture_ignores_planted_names(
+            SYMLINK_PREFIX,
+            None,
+            fixture_unlinking_only_a_symlink,
+        );
+    }
+
+    const WRITE_THROUGH_PREFIX: &str = "pokeemerald-rs-fixture-guard-write-through";
+
+    /// Writes through a planted symlink and touches no directory.
+    #[cfg(unix)]
+    fn fixture_writing_through_only_a_symlink() {
+        let path =
+            std::env::temp_dir().join(format!("{WRITE_THROUGH_PREFIX}-{}-0", std::process::id()));
+        if path.is_symlink() {
+            std::fs::write(path.join("scratch"), "x").unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "wrote through a planted symlink")]
+    fn guard_catches_a_write_through_a_symlink_with_directories_intact() {
+        assert_fixture_ignores_planted_names(
+            WRITE_THROUGH_PREFIX,
+            None,
+            fixture_writing_through_only_a_symlink,
         );
     }
 }
