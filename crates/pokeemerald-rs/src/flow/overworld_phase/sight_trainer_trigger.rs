@@ -468,8 +468,10 @@ impl OverworldPhase {
             return SightTrainerOutcome::Refused;
         };
         let trainer_id = entry.id;
-        // `Self::synthetic_sight_trainer`: a constructible party in place of
-        // one no listed sight trainer has yet.
+        // `Self::synthetic_sight_trainer`: replaces whichever single-battle
+        // trainer the scan selected, for determinism and isolation in tests
+        // (six of the eight sight-trainer ids construct; see the
+        // `sight_trainer_tests` docs, "The stand-in party").
         #[cfg(test)]
         let trainer_id = self.synthetic_sight_trainer.unwrap_or(trainer_id);
 
