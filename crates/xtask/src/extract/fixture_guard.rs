@@ -58,8 +58,14 @@ fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
 /// Plants an entry with `plant` at every name. A name held by a concurrent
 /// run of the same fixture is waited for, so the guard owns every name
 /// before the fixture runs; one still held after `PLANT_WAIT`, or any other
-/// failure, panics.
-fn plant_all(prefix: &str, names: &[PathBuf], plant: impl Fn(&Path) -> io::Result<()>) -> Planted {
+/// failure, panics. `on_wait` runs each time a name is found held, before the
+/// guard waits for it.
+fn plant_all(
+    prefix: &str,
+    names: &[PathBuf],
+    plant: impl Fn(&Path) -> io::Result<()>,
+    on_wait: &dyn Fn(),
+) -> Planted {
     let mut planted = Planted(Vec::new());
     let deadline = Instant::now() + PLANT_WAIT;
     for path in names {
@@ -67,6 +73,7 @@ fn plant_all(prefix: &str, names: &[PathBuf], plant: impl Fn(&Path) -> io::Resul
             match plant(path) {
                 Ok(()) => break,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline => {
+                    on_wait();
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 Err(e) => panic!("{prefix}: cannot plant {}: {e}", path.display()),
@@ -111,12 +118,29 @@ pub(crate) fn assert_fixture_ignores_planted_names(
     line_limit: Option<usize>,
     fixture: fn(),
 ) {
+    assert_fixture_ignores_planted_names_observing(prefix, line_limit, fixture, &|| {});
+}
+
+/// [`assert_fixture_ignores_planted_names`], calling `on_wait` whenever
+/// planting finds a name held, so a test can release the holder on an
+/// observed planting attempt instead of a timer.
+fn assert_fixture_ignores_planted_names_observing(
+    prefix: &str,
+    line_limit: Option<usize>,
+    fixture: fn(),
+    on_wait: &dyn Fn(),
+) {
     let names = names(prefix, line_limit);
 
-    let dirs = plant_all(prefix, &names, |path| {
-        std::fs::create_dir(path)?;
-        populate(path)
-    });
+    let dirs = plant_all(
+        prefix,
+        &names,
+        |path| {
+            std::fs::create_dir(path)?;
+            populate(path)
+        },
+        on_wait,
+    );
     fixture();
     let disturbed: Vec<_> = dirs.0.iter().filter(|p| !untouched(p)).cloned().collect();
     drop(dirs);
@@ -129,9 +153,12 @@ pub(crate) fn assert_fixture_ignores_planted_names(
     {
         let victim = OwnedDir::create("pokeemerald-rs-fixture-guard-victim").unwrap();
         populate(victim.path()).unwrap();
-        let links = plant_all(prefix, &names, |path| {
-            std::os::unix::fs::symlink(victim.path(), path)
-        });
+        let links = plant_all(
+            prefix,
+            &names,
+            |path| std::os::unix::fs::symlink(victim.path(), path),
+            on_wait,
+        );
         fixture();
         let removed: Vec<_> = links
             .0
@@ -159,11 +186,16 @@ mod tests {
 
     const PREFIX: &str = "pokeemerald-rs-fixture-guard-sibling";
 
-    /// Joins the thread on drop, so a panic unwinding past it still waits.
-    struct Join(Option<std::thread::JoinHandle<()>>);
-    impl Drop for Join {
+    /// Releases the sibling, then joins it, on drop, so a panic unwinding
+    /// past it, or a guard that never waits, cannot leave it blocked.
+    struct Sibling {
+        release: std::sync::mpsc::Sender<()>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for Sibling {
         fn drop(&mut self) {
-            self.0.take().unwrap().join().unwrap();
+            let _ = self.release.send(());
+            self.thread.take().unwrap().join().unwrap();
         }
     }
 
@@ -180,18 +212,37 @@ mod tests {
     /// A concurrent run of the same fixture holds candidate 0 while the guard
     /// plants. The guard must wait for it and still plant candidate 0, so the
     /// reverted fixture's reuse of that name is caught.
+    ///
+    /// The sibling releases the name only when the guard reports that planting
+    /// found it held, so the guard has always met the occupied name before the
+    /// name frees, whatever the schedule. A guard that skipped occupied names
+    /// never reports, and the fixture then runs against a name the guard does
+    /// not own.
     #[test]
     #[should_panic(expected = "disturbed populated directories")]
     fn guard_catches_a_fixture_that_reuses_candidate_zero_while_a_sibling_held_it_at_planting() {
         let (claimed, claimed_rx) = std::sync::mpsc::channel();
-        let sibling = std::thread::spawn(move || {
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
             let held = OwnedDir::create(PREFIX).unwrap();
             claimed.send(()).unwrap();
-            std::thread::sleep(Duration::from_millis(150));
+            // Returns on the guard's report, or when `Sibling` drops.
+            release_rx.recv().unwrap();
             drop(held);
         });
         claimed_rx.recv().unwrap();
-        let _join = Join(Some(sibling));
-        assert_fixture_ignores_planted_names(PREFIX, None, fixture_reusing_candidate_zero);
+        let wait_report = release.clone();
+        let _sibling = Sibling {
+            release,
+            thread: Some(thread),
+        };
+        assert_fixture_ignores_planted_names_observing(
+            PREFIX,
+            None,
+            fixture_reusing_candidate_zero,
+            &|| {
+                let _ = wait_report.send(());
+            },
+        );
     }
 }
