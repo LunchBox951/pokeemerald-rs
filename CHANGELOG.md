@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.114.0] - 2026-11-07
+
+- The asset pack now carries the summary screen's move descriptions, each move's contest effect and category, and the contest effect table with its descriptions, extracted from both the source checkout and the supported ROM. Nothing on screen changes yet; this is the data the summary screen's move pages will read.
+
 ## [0.0.113.0] - 2026-11-06
 
 - Attract can now be used in battle: it infatuates an opposite-gender target that is not already in love and lacks Oblivious, and an infatuated Pokémon has a 50% chance each turn of being immobilized by love, which also ends a Rollout series, as in the original game. Switching out or fainting clears it. Miguel on Route 103 is still refused until Cute Charm is modelled.
@@ -518,7 +522,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...dev
+[0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...dev
+[0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...e9411c4552d44eaa0ba4de2e094a9a698a4f1a70
 [0.0.112.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/94c3b60a64c924ff98afbd4a1e74482c989d1526...8cc509c0cc722ad0084591f37301d43c7d047498
 [0.0.111.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f3a34deb7b9cde4f76a9f4f2f7d6246e70efaacf...94c3b60a64c924ff98afbd4a1e74482c989d1526
 [0.0.110.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/135a76b5a52a6ec5c09e647165efef13231591f5...f3a34deb7b9cde4f76a9f4f2f7d6246e70efaacf
