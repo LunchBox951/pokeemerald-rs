@@ -39,7 +39,7 @@
 //! are not covered that way: the scan sets them aside before selection, so
 //! the stand-in is never reached for them. The `trigger` tests that need a
 //! refusal at Rhett's geometry borrow, through the same field, the id of a
-//! party that stops at Taillow's Headbutt (`TRAINER_REFUSED_FOR_MOVE`),
+//! party that stops at Zigzagoon's Headbutt (`TRAINER_REFUSED_FOR_MOVE`),
 //! because Rhett's own party constructs; the real refusals have their own
 //! cone tests.
 //!

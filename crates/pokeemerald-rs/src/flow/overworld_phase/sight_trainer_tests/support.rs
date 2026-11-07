@@ -26,9 +26,9 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// The trainer whose party Taillow knows Headbutt (`EFFECT_FLINCH_HIT`), which
-/// the battle crate does not execute: its construction is refused for a move
-/// (`npc_trainer_battle`'s `an_oran_berry_party_is_refused_for_its_move_before_any_ot_id_draw`).
+/// The trainer whose party's Zigzagoon knows Headbutt (`EFFECT_FLINCH_HIT`),
+/// which the battle crate does not execute: its construction is refused for a
+/// move (`npc_trainer_battle`'s `an_oran_berry_party_is_refused_for_its_move_before_any_ot_id_draw`).
 /// It is not a Route 103 sight trainer, so tests borrow its id, through
 /// `synthetic_sight_trainer`, as a refused party at a cone whose own real
 /// party constructs.
