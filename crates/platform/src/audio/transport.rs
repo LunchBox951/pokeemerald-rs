@@ -37,7 +37,9 @@
 //!   started, or `start` held while none was attached, even when a `stop`
 //!   followed before the driver stepped), the queued samples
 //!   are discarded, so playback resumes at the producer's current position
-//!   instead of replaying history. When playback has been stopped since,
+//!   instead of replaying history. The discarded samples are counted
+//!   ([`Producer::discarded`]): they were never played, and the ring reads
+//!   empty either way. When playback has been stopped since,
 //!   only what was queued before that `stop` is history: what the producer
 //!   queues after it is a stopped queue. A stream that starts as it
 //!   attaches also drops, at its first callback, what the producer queued

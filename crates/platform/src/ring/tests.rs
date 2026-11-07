@@ -83,12 +83,41 @@ fn discard_all_drops_samples_without_counting_underruns() {
     assert_eq!(consumer.available(), 0);
     assert_eq!(producer.underruns(), 0);
     assert_eq!(producer.available_space(), 4);
+    assert_eq!(producer.discarded(), 3, "the loss is counted, not silent");
 
     // Samples pushed afterwards, across the wrap, play in order.
     assert_eq!(producer.push(&[7.0, 8.0, 9.0]), 3);
     let mut out = [0.0; 3];
     consumer.fill(&mut out);
     assert_eq!(out, [7.0, 8.0, 9.0]);
+}
+
+#[test]
+fn every_discard_path_counts_the_samples_it_drops() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.discarded(), 0);
+
+    // Played samples are not discarded.
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(producer.discarded(), 0);
+
+    // A discard of an empty queue drops nothing.
+    consumer.hold_pushes().discard_all();
+    assert_eq!(producer.discarded(), 0);
+
+    assert_eq!(producer.push(&[0.25; 3]), 3);
+    let mark = producer.pushed();
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    consumer.hold_pushes().discard_pushed_before(mark);
+    assert_eq!(producer.discarded(), 3, "only what predates the mark");
+
+    consumer.discard_queued_at_first_read();
+    consumer.fill(&mut out);
+    assert_eq!(producer.discarded(), 5, "the first-read discard counts too");
+    assert_eq!(out, [0.0, 0.0]);
+    assert_eq!(consumer.underruns(), 2, "a discard is not an underrun");
 }
 
 #[test]
