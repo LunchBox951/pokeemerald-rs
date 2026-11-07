@@ -7,7 +7,10 @@
 //! infatuated actor as the attacker and, for `STRINGID_PKMNINLOVE`, the
 //! battler it is in love with as the scripting battler
 //! (`AtkCanceler_UnableToUseMove`, `src/battle_util.c:2203`;
-//! `data/battle_scripts_1.s:3840`-`:3849`).
+//! `data/battle_scripts_1.s:3840`-`:3849`). Cute Charm's contact infatuation
+//! prints `STRINGID_PKMNSXINFATUATEDY` naming the holder as the defender and
+//! the infatuated attacker (`BattleScript_CuteCharmActivates`,
+//! `data/battle_scripts_1.s:4193`-`:4197`).
 
 use assets::AbilityId;
 use battle::BattleEvent;
@@ -30,6 +33,11 @@ pub(super) fn requests(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<N
             id::PKMNPREVENTSROMANCEWITH,
             base.user_vs_target(Side::user(by_player))
                 .with_ability(Side::user(by_player).other(), AbilityId::OBLIVIOUS),
+        ),
+        BattleEvent::InfatuatedByCuteCharm { by_player, .. } => table(
+            id::PKMNSXINFATUATEDY,
+            base.user_vs_target(Side::user(by_player))
+                .with_ability(Side::user(by_player).other(), AbilityId::CUTE_CHARM),
         ),
         BattleEvent::InLove { by_player } => {
             let infatuated = Side::user(by_player);
