@@ -209,6 +209,17 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
 /// combined tileset; it is drawn from instead of the walking sheet at tile 0
 /// while [`run::draws_running_sheet`].
 pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSprite {
+    player_entry_displaced(player, run_base_tile, (0, 0))
+}
+
+/// [`player_entry`] drawn `(dx, dy)` pixels from its fixed screen position: the
+/// sprite's `x2`/`y2` offsets, which move the OBJ but not the object event
+/// the camera follows (`pokeemerald/src/event_object_movement.c:2253-2271`).
+pub(super) fn player_entry_displaced(
+    player: &PlayerState,
+    run_base_tile: u16,
+    (dx, dy): (i8, i8),
+) -> SheetSprite {
     let (frame, h_flip) = frame_for(player);
     let sheet_base = if run::draws_running_sheet(player) {
         run_base_tile
@@ -218,8 +229,8 @@ pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSpr
     let sheet_tile = sheet_base + frame * FRAME_TILES;
     SheetSprite::new(
         OamEntry::new(
-            PLAYER_OBJ_X,
-            PLAYER_OBJ_Y,
+            PLAYER_OBJ_X.wrapping_add_signed(i16::from(dx)),
+            PLAYER_OBJ_Y.wrapping_add_signed(dy),
             sheet_tile,
             PLAYER_PALETTE_BANK,
             BitDepth::Bpp4,
