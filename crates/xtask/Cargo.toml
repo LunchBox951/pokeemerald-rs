@@ -40,11 +40,13 @@ pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
 assets = { path = "../assets" }
 
 # Snapshot payload writes use held directories; promotion atomically refuses replacement.
+# The extract pack publish also stages and renames relative to its held staging
+# directory, so this is unconditional on Unix (`minimal-deps: approved` on #2807).
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = [
     "std",
     "fs",
-], optional = true }
+] }
 
 # `record-snapshot` and the extract pack publish compare a fresh open of a path
 # with the handle they hold on Windows through `win-fs`'s identity query.
@@ -61,7 +63,7 @@ win-fs = { path = "../win-fs" }
 # record_snapshot` is `#[cfg]`d on *this* feature rather than on
 # `record-snapshot`, so CI's `cargo test -p xtask --features smoke` leg
 # compiles and runs its synthetic-pack tests (see `main.rs`'s crate docs).
-scenes = ["dep:pokeemerald-rs", "dep:rustix"]
+scenes = ["dep:pokeemerald-rs"]
 smoke = ["scenes"]
 record-snapshot = ["scenes"]
 scenario = ["scenes"]
