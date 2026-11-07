@@ -569,6 +569,23 @@ pub enum BattleEvent {
         /// The contact move that triggered Effect Spore.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::CUTE_CHARM`] infatuated the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_CUTE_CHARM`,
+    /// `battle_util.c:2851`-`:2870`; `BattleScript_CuteCharmActivates`,
+    /// `data/battle_scripts_1.s:4193`-`:4197`).
+    ///
+    /// The roll is one `Random() % 3` draw spent only when both battlers
+    /// survived the hit; only a zero roll on an opposite-gender pair, an
+    /// attacker without Oblivious and one not already infatuated emits this
+    /// event. The attacker then carries the holder's slot as its
+    /// infatuation, exactly as after Attract.
+    InfatuatedByCuteCharm {
+        /// Whether the player used the contact move and so was infatuated.
+        by_player: bool,
+        /// The contact move that triggered Cute Charm.
+        move_id: MoveId,
+    },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
     /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
     /// `battle_script_commands.c:4280`; `ABILITY_POISON_POINT`,
