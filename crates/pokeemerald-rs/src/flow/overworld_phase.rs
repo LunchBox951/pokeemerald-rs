@@ -45,6 +45,7 @@ pub(super) use self::wild_battle::WildBattle;
 mod animated_door;
 mod connections;
 mod escalator_arrival;
+mod escalator_transition;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -192,9 +193,9 @@ pub(crate) struct OverworldPhase {
     /// Feeds only the wild-encounter gate -- never the positional
     /// coord/warp consumers `pending_landing` feeds.
     pending_turn: Option<TilePos>,
-    /// An escalator warp just landed and its arrival's east step is still
-    /// due ([`escalator_arrival`]); consumed by the next field frame.
-    escalator_arrival_walk: Option<engine::overworld::Direction>,
+    /// The escalator ride that owns the field while it plays: the lock, the
+    /// ride, the fades and the arrival ([`escalator_transition`]).
+    escalator: Option<escalator_transition::EscalatorTransition>,
     /// The tile the arrival's east step is walking onto, until its landing is
     /// consumed: that landing is held movement, not a took-step
     /// ([`escalator_arrival`]).
@@ -609,7 +610,7 @@ impl OverworldPhase {
             save2: block2,
             pending_landing: None,
             pending_turn: None,
-            escalator_arrival_walk: None,
+            escalator: None,
             escalator_walk_off_landing: None,
             dialog: None,
             tick: 0,
@@ -759,7 +760,7 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             pending_turn: None,
-            escalator_arrival_walk: None,
+            escalator: None,
             escalator_walk_off_landing: None,
             dialog,
             tick: 0,
@@ -988,6 +989,8 @@ mod decoration_tests;
 mod dialog_pacing_tests;
 #[cfg(test)]
 mod door_sequencing_tests;
+#[cfg(test)]
+mod escalator_ride_tests;
 /// Continue's active-battler selection ([`party::select_active_battler`])
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]

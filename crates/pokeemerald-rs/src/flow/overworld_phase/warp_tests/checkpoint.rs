@@ -140,14 +140,13 @@ fn the_checkpoint_set_declares_twenty_seven_internal_edges_in_four_shapes() {
 /// (`field_control_avatar.c:702-714`). Their arrival then faces the player
 /// east and walks one tile east off the escalator
 /// (`FieldCallback_EscalatorWarpIn`, `field_effect.c:1690-1702,1800-1818`),
-/// asserted after the landing agreement; the ride animation
-/// (`DoEscalatorWarp`) is not modelled.
+/// asserted by the escalator tests below through the ride that precedes it
+/// (`DoEscalatorWarp`); this test lands on the warp event directly.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
     let mut driven = 0;
     for edge in edges() {
-        let mut escalator_edge = false;
         let (x, y, elevation) = (
             i32::from(edge.warp.x),
             i32::from(edge.warp.y),
@@ -170,7 +169,6 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
                     trigger_arrow_warp(&runtime, x, y, elevation, Direction::South)
                 }
                 MB_UP_ESCALATOR | MB_DOWN_ESCALATOR => {
-                    escalator_edge = true;
                     trigger_escalator_warp(&runtime, x, y, elevation)
                 }
                 other => panic!("{label}: behavior {other:#04x}"),
@@ -235,9 +233,6 @@ fn every_checkpoint_entrance_and_return_warp_lands_in_agreement() {
             expected_arrival_facing(arrival_behavior),
             "{label}: warp-in facing"
         );
-        if escalator_edge {
-            assert_escalator_arrival_walks_off(&mut phase, arrival, edge.source, &label);
-        }
         driven += 1;
     }
     assert_eq!(driven, 27);
@@ -289,32 +284,6 @@ fn holding_north_at_each_oldale_door_enters_its_building() {
     }
 }
 
-/// An escalator-triggered arrival faces the player east and walks them one
-/// tile east of the destination warp tile (`FieldCallback_EscalatorWarpIn`).
-fn assert_escalator_arrival_walks_off(
-    phase: &mut OverworldPhase,
-    arrival: WarpEvent,
-    departed_from: MapId,
-    label: &str,
-) {
-    phase.begin_escalator_arrival(true, departed_from);
-    assert_eq!(
-        phase.player.facing(),
-        Direction::East,
-        "{label}: faces east"
-    );
-    assert_eq!(
-        walk_off_the_escalator(phase),
-        (i32::from(arrival.x) + 1, i32::from(arrival.y)),
-        "{label}: one tile east of the destination escalator"
-    );
-    assert_eq!(
-        phase.player.facing(),
-        Direction::East,
-        "{label}: walked east"
-    );
-}
-
 /// Idle frames until an escalator arrival's east step has landed, then the
 /// player's tile.
 fn walk_off_the_escalator(phase: &mut OverworldPhase) -> (i32, i32) {
@@ -322,6 +291,41 @@ fn walk_off_the_escalator(phase: &mut OverworldPhase) -> (i32, i32) {
         phase.step(platform::ButtonState::new());
     }
     phase.player.position()
+}
+
+/// Holds LEFT until the step onto the escalator at `edge`'s source fires its
+/// ride, then rides it out with LEFT still held: the field controls are
+/// locked for the whole ride, so the held button reaches nothing until the
+/// walk-off has begun. Returns with the arrival's east step started.
+fn ride_the_escalator(phase: &mut OverworldPhase, edge: &Edge) {
+    use platform::Buttons;
+    for _ in 0..40 {
+        if phase.escalator.is_some() {
+            break;
+        }
+        phase.step(super::super::test_support::held(Buttons::LEFT));
+    }
+    assert!(
+        phase.escalator.is_some(),
+        "{:?}: the step onto the escalator starts its ride",
+        edge.source
+    );
+    assert_eq!(
+        phase.map_id, edge.source,
+        "{:?}: the warp waits for the ride",
+        edge.source
+    );
+    for _ in 0..100 {
+        if phase.escalator.is_none() {
+            break;
+        }
+        phase.step(super::super::test_support::held(Buttons::LEFT));
+    }
+    assert!(
+        phase.escalator.is_none(),
+        "{:?}: the ride ends",
+        edge.source
+    );
 }
 
 /// Walking west onto each Oldale Pokemon Center escalator through
@@ -339,7 +343,6 @@ fn walk_off_the_escalator(phase: &mut OverworldPhase) -> (i32, i32) {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_onto_each_pokemon_center_escalator_warps_and_walks_off_east() {
-    use platform::Buttons;
     let mut escalators = 0;
     for edge in edges() {
         let (x, y) = (i32::from(edge.warp.x), i32::from(edge.warp.y));
@@ -358,25 +361,22 @@ fn walking_onto_each_pokemon_center_escalator_warps_and_walks_off_east() {
         escalators += 1;
         phase.player = PlayerState::new(start, standing, Direction::West);
 
-        for _ in 0..40 {
-            if phase.map_id != edge.source {
-                break;
-            }
-            phase.step(super::super::test_support::held(Buttons::LEFT));
-        }
+        ride_the_escalator(&mut phase, &edge);
 
         let arrival = assets::MapEventsTable::new()
             .resolve(edge.destination)
             .unwrap()
             .warp_events[usize::from(edge.destination_warp)];
         assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
+        // The ride's last frame turned the player east and started the walk
+        // off the arrival escalator.
         assert_eq!(
             phase.player.position(),
-            (i32::from(arrival.x), i32::from(arrival.y)),
+            (i32::from(arrival.x) + 1, i32::from(arrival.y)),
             "{:?}",
             edge.source
         );
-        // The arrival callback has already turned the player east.
+        assert!(phase.player.in_transit(), "{:?}", edge.source);
         assert_eq!(phase.player.facing(), Direction::East, "{:?}", edge.source);
 
         assert_eq!(
@@ -431,20 +431,18 @@ fn escalator_arrival_walk_off_is_not_a_took_step() {
         phase.player = PlayerState::new(start, standing, Direction::West);
         let _ = phase.save1.event_data.var_set(VAR_POISON_STEP_COUNTER, 0);
 
-        for _ in 0..40 {
-            if phase.map_id != edge.source {
-                break;
-            }
-            phase.step(super::super::test_support::held(Buttons::LEFT));
-        }
+        ride_the_escalator(&mut phase, &edge);
         assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
         // The step onto the escalator is a warp step, which skips the count.
         assert_eq!(counter(&phase), 0, "{:?}: warp step", edge.source);
 
-        let arrival = phase.player.position();
+        let arrival = assets::MapEventsTable::new()
+            .resolve(edge.destination)
+            .unwrap()
+            .warp_events[usize::from(edge.destination_warp)];
         assert_eq!(
             walk_off_the_escalator(&mut phase),
-            (arrival.0 + 1, arrival.1),
+            (i32::from(arrival.x) + 1, i32::from(arrival.y)),
             "{:?}: walked one tile east",
             edge.source
         );
@@ -496,15 +494,13 @@ fn escalator_arrival_walk_off_ends_not_moving_so_held_input_turns_first() {
         }
         escalators += 1;
         phase.player = PlayerState::new(start, standing, Direction::West);
-        for _ in 0..40 {
-            if phase.map_id != edge.source {
-                break;
-            }
-            phase.step(super::super::test_support::held(Buttons::LEFT));
-        }
+        ride_the_escalator(&mut phase, &edge);
         assert_eq!(phase.map_id, edge.destination, "{:?}", edge.source);
-        let arrival = phase.player.position();
-        let walked_off = (arrival.0 + 1, arrival.1);
+        let arrival = assets::MapEventsTable::new()
+            .resolve(edge.destination)
+            .unwrap()
+            .warp_events[usize::from(edge.destination_warp)];
+        let walked_off = (i32::from(arrival.x) + 1, i32::from(arrival.y));
 
         // LEFT stays held; wait for the east step to land.
         for _ in 0..40 {

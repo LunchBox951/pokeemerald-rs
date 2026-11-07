@@ -16,11 +16,14 @@ impl OverworldPhase {
     /// start menu, or a battle owns the field: upstream's `lock`/`lockall`,
     /// `FreezeForApproachingTrainers` and `ShowStartMenu` freeze them
     /// (`src/scrcmd.c:2193-2208`, `src/start_menu.c:581`) and unfreeze when the
-    /// owner closes (`src/start_menu.c:1421`).
+    /// owner closes (`src/start_menu.c:1421`). An escalator ride freezes them
+    /// from its first frame until the destination's objects first run
+    /// (`field_effect.c:1580-1586`).
     pub(super) fn advance_object_events(&mut self) {
         let frozen = self.dialog.is_some()
             || self.sight_approach.is_some()
             || self.start_menu.is_some()
+            || self.escalator_freezes_objects()
             || self.in_battle();
         self.object_events.run_frame(
             &FrameContext {

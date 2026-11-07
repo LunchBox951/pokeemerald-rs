@@ -164,7 +164,7 @@ impl SceneSprites {
         event_data: &EventData,
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
-        self.live_entries(&self.seed_objects, player, event_data, grass)
+        self.live_entries(&self.seed_objects, player, event_data, grass, (0, 0))
     }
 
     /// Lists the player first, then NPCs in `objects` order, then the tall-grass
@@ -173,7 +173,8 @@ impl SceneSprites {
     /// `objects` supplies tile, facing, and elevation, the last settled by the
     /// layout cell it stands on; the scene's templates keep the graphics
     /// bindings. Each effect carries its own subpriority, set against the
-    /// object sprites it overlaps.
+    /// object sprites it overlaps. `player_offset` displaces the player's
+    /// OBJ alone, as the sprite's `x2`/`y2` do.
     #[must_use]
     pub(super) fn live_entries(
         &self,
@@ -181,6 +182,7 @@ impl SceneSprites {
         player: &PlayerState,
         event_data: &EventData,
         grass: &TallGrassEffects,
+        player_offset: (i8, i8),
     ) -> Vec<SheetSprite> {
         let elevations: Vec<u8> = objects
             .iter()
@@ -190,8 +192,9 @@ impl SceneSprites {
                     .settled(state.position(), state.elevation())
             })
             .collect();
-        let mut sprites = vec![npc::DepthSprite::single(
+        let mut sprites = vec![npc::DepthSprite::single_displaced(
             avatar::player_entry(player, self.run_base_tile),
+            avatar::player_entry_displaced(player, self.run_base_tile, player_offset),
             player.previous_elevation(),
         )];
         sprites.extend(npc::elevated_oam_entries(

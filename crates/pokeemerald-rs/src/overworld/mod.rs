@@ -79,6 +79,7 @@ pub use engine::overworld::WALK_FRAMES_PER_TILE;
 mod avatar;
 pub(crate) mod dialog;
 mod grass;
+mod metatile_patch;
 mod npc;
 pub(crate) mod npc_scripts;
 mod obj_vram;
@@ -627,9 +628,27 @@ impl OverworldScene {
         objects: &engine::overworld::object_event::ObjectEventCollection,
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
+        self.compose_live_displaced(player, event_data, tick, objects, palette, (0, 0))
+    }
+
+    /// [`Self::compose_live`] with the player's OBJ drawn `player_offset`
+    /// pixels from its fixed screen position, the sprite's `x2`/`y2`. Only
+    /// the OBJ moves: the viewport, collision, and every other sprite stay
+    /// with the player's tile, so a ride across a stationary camera is a
+    /// displacement alone.
+    #[must_use]
+    pub fn compose_live_displaced(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+        tick: u32,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        palette: PaletteStage<'_>,
+        player_offset: (i8, i8),
+    ) -> Framebuffer {
         let player_first_oam_entries =
             self.sprites
-                .live_entries(objects, player, event_data, &self.grass);
+                .live_entries(objects, player, event_data, &self.grass, player_offset);
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
     }
 

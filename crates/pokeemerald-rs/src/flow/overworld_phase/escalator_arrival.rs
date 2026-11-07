@@ -1,16 +1,23 @@
-//! The walk off the escalator an escalator warp lands the player on.
+//! The escalator warp's phase glue and the walk off the escalator it lands
+//! the player on.
 //!
-//! An escalator warp's arrival runs `FieldCallback_EscalatorWarpIn`
+//! [`super::escalator_transition`] owns the ride, the fades and the control
+//! lock as a frame-by-frame sequence; this module runs it against an
+//! [`OverworldPhase`] ([`OverworldPhase::begin_escalator_transition`],
+//! [`OverworldPhase::advance_escalator_frame`]) and holds the arrival's last
+//! step.
+//!
+//! The arrival runs `FieldCallback_EscalatorWarpIn`
 //! (`pokeemerald/src/field_effect.c:1690-1702`): `EscalatorWarpIn_Init` holds a
 //! face-east movement (`:1717`), and `EscalatorWarpIn_End` unlocks the field
 //! controls and holds a single normal east step (`:1809-1818`). The player
 //! therefore ends one tile east of the destination warp tile, facing east.
-//!
-//! The fade and the ride (`DoEscalatorWarp`, `StartEscalatorWarp`) are not
-//! modelled, only that facing and step. The step reaches
-//! [`PlayerState::step`] as an east poll in place of the next frame's buttons,
-//! so collision and the walk animation take the normal path; the landing's
-//! field events do not, as below.
+//! The task runs from `RunTasks` and the held step starts in the same frame's
+//! `AnimateSprites` (`overworld.c:1465-1474`), so [`OverworldPhase::start_escalator_walk_off`]
+//! begins it inside the transition's last frame rather than waiting for the
+//! next frame's input. It still goes through [`PlayerState::step`], so
+//! collision and the walk animation take the normal path; the landing's field
+//! events do not, as below.
 //!
 //! The step is *held* movement, not a keypad step: it bypasses `PlayerStep`'s
 //! keypad movement (`field_player_avatar.c:353-379`), so `runningState` stays
@@ -24,21 +31,136 @@
 //! steps (`CheckMovementInputNotOnBike`, `:587-595`). See
 //! [`OverworldPhase::escalator_walk_off_landing`].
 
-use assets::MapId;
-use engine::overworld::metatile_behavior::is_escalator;
-use engine::overworld::{Direction, MapRuntime, StepOutcome, TilePos};
+use engine::overworld::metatile_behavior::{is_escalator, MB_UP_ESCALATOR};
+use engine::overworld::{Direction, MapRuntime, PlayerState, StepOutcome, TilePos};
 use platform::{ButtonState, Buttons};
 
+use super::connections::MapConnections;
+use super::escalator_transition::{Destination, EscalatorTransition, Progress, RideDriver};
+use super::input::advance_or_skip_for_preempt;
 use super::OverworldPhase;
 
-/// Whether the completed step `landed` onto an escalator tile.
-pub(super) fn landed_on_escalator(runtime: &MapRuntime<'_>, landed: Option<TilePos>) -> bool {
-    landed
-        .and_then(|(x, y)| runtime.metatile_behavior(x, y))
-        .is_some_and(is_escalator)
+/// Whether the completed step `landed` onto an up escalator (`Some(true)`), a
+/// down escalator (`Some(false)`), or neither (`None`): `DoEscalatorWarp`
+/// reads the direction from the tile's behavior (`field_effect.c:1568-1575`).
+pub(super) fn escalator_going_up(
+    runtime: &MapRuntime<'_>,
+    landed: Option<TilePos>,
+) -> Option<bool> {
+    let behavior = landed.and_then(|(x, y)| runtime.metatile_behavior(x, y))?;
+    is_escalator(behavior).then_some(behavior == MB_UP_ESCALATOR)
+}
+
+/// [`RideDriver`] over a phase.
+struct PhaseRide<'a>(&'a mut OverworldPhase);
+
+impl RideDriver for PhaseRide<'_> {
+    fn player_in_transit(&self) -> bool {
+        self.0.player.in_transit()
+    }
+
+    fn player_tile(&self) -> (i32, i32) {
+        self.0.player.position()
+    }
+
+    fn hold_current_facing(&mut self) {
+        let facing = self.0.player.facing();
+        self.0.player.face(facing);
+    }
+
+    fn face_east(&mut self) {
+        self.0.player.face(Direction::East);
+    }
+
+    fn warp_into_map(&mut self, destination: Destination) -> bool {
+        self.0.warp_to(destination.map, destination.warp_id)
+    }
+
+    fn behavior_under_player(&self) -> Option<u8> {
+        let (x, y) = self.0.player.position();
+        self.0.scene.runtime().metatile_behavior(x, y)
+    }
+
+    fn grid_cell(&self, x: i32, y: i32) -> Option<u16> {
+        self.0.scene.grid_cell_raw(x, y)
+    }
+
+    fn set_grid_cell(&mut self, x: i32, y: i32, raw: u16) {
+        self.0.scene.set_grid_cell_raw(x, y, raw);
+    }
+
+    fn restart_tileset_animation(&mut self) {
+        self.0.tick = 0;
+    }
+
+    fn start_walk_off(&mut self) {
+        self.0.start_escalator_walk_off();
+    }
 }
 
 impl OverworldPhase {
+    /// `DoEscalatorWarp`: locks the field controls and starts the ride toward
+    /// `destination`, running the sequence's first frame in the frame that
+    /// fired the warp (`field_screen_effect.c:528-532`).
+    pub(super) fn begin_escalator_transition(&mut self, destination: Destination, going_up: bool) {
+        self.escalator = Some(EscalatorTransition::begin(destination, going_up));
+        self.advance_escalator_frame();
+    }
+
+    /// Runs one frame of the escalator transition, if one owns the field. A
+    /// destination that cannot be entered ends it with the player where they
+    /// stood.
+    pub(super) fn advance_escalator_frame(&mut self) {
+        let Some(mut transition) = self.escalator.take() else {
+            return;
+        };
+        match transition.run_frame(&mut PhaseRide(self)) {
+            Progress::Running => self.escalator = Some(transition),
+            Progress::Done => {}
+            Progress::Aborted => {
+                eprintln!("warp: the escalator's destination could not be entered -- staying put");
+            }
+        }
+    }
+
+    /// Whether an escalator transition holds the object events still.
+    pub(super) fn escalator_freezes_objects(&self) -> bool {
+        self.escalator
+            .as_ref()
+            .is_some_and(EscalatorTransition::freezes_objects)
+    }
+
+    /// `EscalatorWarpIn_End`'s held east step, started in the frame that
+    /// unlocks the controls: the walk goes through the player's normal step,
+    /// and its landing is latched as held movement
+    /// ([`Self::latch_escalator_walk_off_landing`]).
+    fn start_escalator_walk_off(&mut self) {
+        let mut walk_east = ButtonState::new();
+        walk_east.update(Buttons::RIGHT);
+        walk_east.update(Buttons::RIGHT);
+        let runtime = self.scene.runtime().with_object_events(&self.object_events);
+        let maps = MapConnections {
+            pack: &self.connection_pack,
+            source: self.pack_source.clone(),
+        };
+        let pre_step_player: PlayerState = self.player;
+        let outcome = advance_or_skip_for_preempt(
+            &mut self.player,
+            &mut self.pending_landing,
+            walk_east,
+            &runtime,
+            &maps,
+            &self.save1.event_data,
+            false,
+        );
+        self.latch_escalator_walk_off_landing(&outcome);
+        if let StepOutcome::Advanced { to, .. } = outcome {
+            self.scene
+                .player_step_began(to, self.player.previous_elevation());
+        }
+        self.finish_crossing(outcome, pre_step_player);
+    }
+
     /// The completed step the frame's `tookStep` consumers may see: the tile
     /// the last step landed on, once the player is at rest.
     ///
@@ -63,46 +185,11 @@ impl OverworldPhase {
         None
     }
 
-    /// Starts the arrival of the frame's warp when `escalator_warp` says an
-    /// escalator fired it and it left `departed_from`: the player faces east,
-    /// and the next frame's input is the one east step. A warp that failed
-    /// and left the phase on `departed_from` starts nothing.
-    pub(super) fn begin_escalator_arrival(&mut self, escalator_warp: bool, departed_from: MapId) {
-        if !escalator_warp || self.map_id == departed_from {
-            return;
-        }
-        self.player.face(Direction::East);
-        self.escalator_arrival_walk = Some(Direction::East);
-    }
-
-    /// Latches the arrival step's landing tile when `walk_off_step` says the
-    /// frame's input was that step and its `outcome` began it; a blocked or
-    /// preempted step has no landing.
-    pub(super) fn latch_escalator_walk_off_landing(
-        &mut self,
-        walk_off_step: bool,
-        outcome: &StepOutcome,
-    ) {
-        if let (true, StepOutcome::Advanced { to, .. }) = (walk_off_step, outcome) {
+    /// Latches the walk-off step's landing tile when its `outcome` began it; a
+    /// blocked step has no landing.
+    fn latch_escalator_walk_off_landing(&mut self, outcome: &StepOutcome) {
+        if let StepOutcome::Advanced { to, .. } = outcome {
             self.escalator_walk_off_landing = Some(*to);
         }
-    }
-
-    /// The buttons the frame's input pipeline reads: `buttons`, unless an
-    /// escalator arrival's step is due, which holds its direction instead.
-    /// The flag is whether this frame's input is that step; its landing is
-    /// then held movement, which [`Self::take_stepped_onto`] withholds from
-    /// the `tookStep` consumers.
-    pub(super) fn escalator_arrival_buttons(
-        &mut self,
-        buttons: ButtonState,
-    ) -> (ButtonState, bool) {
-        let Some(Direction::East) = self.escalator_arrival_walk.take() else {
-            return (buttons, false);
-        };
-        let mut walk_east = ButtonState::new();
-        walk_east.update(Buttons::RIGHT);
-        walk_east.update(Buttons::RIGHT);
-        (walk_east, true)
     }
 }
