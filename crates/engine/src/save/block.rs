@@ -3,11 +3,46 @@
 //! Decoding ignores unmodeled bytes. [`SaveBlock1::patch_bytes`] and
 //! [`SaveBlock2::patch_bytes`] preserve them, while `to_bytes` serializes the
 //! modeled fields over a zero-filled payload.
+//!
+//! # The saved player object's elevation pair
+//!
+//! Upstream copies every `ObjectEvent` in and out of `SaveBlock1::objectEvents`
+//! whole (`SaveObjectEvents`/`LoadObjectEvents`, `src/load_save.c:180-194`), so
+//! the player's `(currentElevation, previousElevation)` pair -- including the
+//! `previousElevation` that `ObjectEventUpdateElevation` leaves untouched on a
+//! transition cell (`src/event_object_movement.c:7759-7771`) -- survives a save
+//! and continue. [`SaveBlock1::from_bytes`] decodes that pair as trusted
+//! ([`SavedObjectEvent::active`]) in two cases:
+//!
+//! * A record this port's writer stored: `active` and a marker bit in the
+//!   `padding:4` bits upstream never writes
+//!   (`include/global.fieldmap.h:224`) both set, `currentCoords` equal to
+//!   `pos` plus `MAP_OFFSET`, and (checked by [`SaveStore::load`]) the
+//!   initialCoords stamp equal to the slot's save counter. This is the strong
+//!   signal; any one failing withdraws trust.
+//! * A pristine upstream record with no marker: `active` and `isPlayer` set,
+//!   `currentCoords` equal to `pos` plus `MAP_OFFSET`, the `padding:4` bits
+//!   zero, and a pair `ObjectEventUpdateElevation` could have produced (neither
+//!   nibble is the multi-level value, which it never assigns).
+//!
+//! A record whose coordinates disagree with `pos` -- the shape an earlier port
+//! writer left when it moved `pos` but preserved the stored player object --
+//! is rejected either way.
+//!
+//! Unmarked records are **not** reliably identifiable. A record that an earlier
+//! port writer re-saved at an unchanged `pos` without setting the marker keeps
+//! matching coordinates, `isPlayer`, zero padding and a legal pair, so it is
+//! indistinguishable from the upstream record and is now adopted; its pair is
+//! then whatever the upstream image held, and the continue's
+//! cell-compatibility check in the game crate is the only remaining filter.
+//!
+//! [`SaveStore::load`]: super::store::SaveStore::load
 
 use super::bag::{Bag, BAG_LEN};
 use super::game_stats::GameStats;
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
+use crate::overworld::ELEVATION_MULTI_LEVEL;
 use assets::items::ItemId;
 
 const PLAYER_NAME_OFFSET: usize = 0x00;
@@ -79,18 +114,28 @@ const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_ELEVATIONS_OFFSET;
 // `ObjectEvent`'s `active:1`, the low bit of its first byte
-// (include/global.fieldmap.h:213).
+// (include/global.fieldmap.h:196).
 const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
 const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 // The top bit of `ObjectEvent`'s third bitfield byte, inside the
-// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:227-228).
-// Only this port's writer sets it, so an upstream-origin image -- whose
-// `active` bit is set but whose elevation byte predates this position -- is
-// told apart from a save whose elevation pair was written with its position.
+// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:224).
+// Only this port's writer sets it. Set, it is the strong signal that the
+// elevation pair was written with its position; clear, a record is adopted
+// only by the pristine-upstream rule ([`pristine_upstream_player_object`]).
 const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
 const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
+// The whole `u32 padding:4` field: the high nibble of the third bitfield byte
+// (include/global.fieldmap.h:224). Upstream never writes it, so a real
+// upstream record reads zero here.
+const OBJECT_EVENT_PADDING_MASK: u8 = 0xF0;
+// `ObjectEvent`'s `isPlayer:1`, the low bit of its second bitfield byte
+// (include/global.fieldmap.h:212), set on the player's object by
+// `InitPlayerAvatar` (field_player_avatar.c:1401).
+const PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x02;
+const OBJECT_EVENT_IS_PLAYER_BIT: u8 = 0x01;
 // `ObjectEvent::currentCoords` (include/global.fieldmap.h:235), map-local plus
 // `MAP_OFFSET` (include/fieldmap.h:18), as upstream keeps it against
 // `SaveBlock1::pos`. Written from `pos` with the elevation pair, so a writer
@@ -101,7 +146,7 @@ const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
 const MAP_OFFSET: i16 = 7;
 // `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
-// the model never reads and the pre-#801 writer never touched, reused to hold
+// the model never reads and an earlier port writer never touched, reused to hold
 // the save counter of the write that stored the pair. Every writer advances
 // the counter, so a save by a build that does not stamp it leaves a stale one.
 const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
@@ -546,15 +591,20 @@ impl SaveBlock2 {
 /// The player object's raw saved direction and elevation nibbles.
 ///
 /// Raw values include the no-direction value from a zero-filled entry, which
-/// has no equivalent walking direction. `active` marks an entry this
-/// port wrote, since a zero elevation pair is valid and cannot mark it.
+/// has no equivalent walking direction. `active` marks an entry whose
+/// elevation pair is trusted, since a zero elevation pair is valid and cannot
+/// mark it (see the module documentation for the rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
-    /// `active` and this port's marker bit both set: the slot holds a live
-    /// object whose elevation pair this port wrote with its position.
-    /// Zero-filled entries, and images (including upstream-origin ones) not
-    /// written by this port's elevation writer, decode it clear, which is what
-    /// tells a real `(0, 0)` elevation pair from a stale or unwritten byte.
+    /// The slot holds a live player object whose elevation pair is trusted:
+    /// either this port's writer stored it (`active` and the marker bit set,
+    /// `currentCoords` agreeing with `pos`) or it is a pristine upstream record
+    /// (`active` and `isPlayer` set, coordinates agreeing with `pos`, padding
+    /// zero, a legal pair). Zero-filled entries, and images whose coordinates
+    /// disagree with `pos` or whose pair upstream could not hold, decode it
+    /// clear, which is what tells a real `(0, 0)` elevation pair from a stale
+    /// or unwritten byte. An unmarked record is not reliably identifiable; see
+    /// the module documentation for the residual.
     pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,
@@ -669,10 +719,16 @@ impl SaveBlock1 {
         }
     }
 
-    /// Withdraws trust in the saved elevation pair unless the stamp in `bytes`
-    /// equals `counter`, the counter of the slot they were read from.
+    /// Withdraws trust in a marked saved elevation pair unless the stamp in
+    /// `bytes` equals `counter`, the counter of the slot they were read from.
+    ///
+    /// Only the port's own writer stamps, and it also sets the marker, so an
+    /// unmarked record (a pristine upstream one adopted by
+    /// [`Self::from_bytes`]) carries no stamp to check: its `initialCoords`
+    /// hold upstream's own spawn coordinates.
     pub(crate) fn require_generation(&mut self, bytes: &[u8], counter: u32) {
-        if read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
+        let marked = bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0;
+        if marked && read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
             self.player_object_event.active = false;
         }
     }
@@ -785,15 +841,41 @@ impl SaveBlock1 {
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
-            .with_active(
-                bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
-                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
-                    && Coords16::from_bytes(
-                        &bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN],
-                    ) == object_event_coords(pos),
-            ),
+            .with_active(trusted_player_object(bytes, pos)),
         })
     }
+}
+
+/// Whether the player object in `bytes` holds an elevation pair to trust for
+/// a save at `pos`: `active` set, `currentCoords` equal to `pos` plus
+/// `MAP_OFFSET`, and either the port's marker bit (the strong signal) or the
+/// shape of a pristine upstream record ([`pristine_upstream_player_object`]).
+fn trusted_player_object(bytes: &[u8], pos: Coords16) -> bool {
+    bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
+        && Coords16::from_bytes(&bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN])
+            == object_event_coords(pos)
+        && (bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
+            || pristine_upstream_player_object(bytes))
+}
+
+/// Whether the unmarked player object in `bytes` could be one upstream's
+/// `SaveObjectEvents` copied out (`src/load_save.c:180-186`): `isPlayer` set,
+/// the unused `padding:4` bits zero, and an elevation pair
+/// `ObjectEventUpdateElevation` could have left
+/// (`src/event_object_movement.c:7759-7771`). The player spawns with
+/// elevation 0 (`InitPlayerAvatar`, `src/field_player_avatar.c:1391`) and that
+/// function returns early on [`ELEVATION_MULTI_LEVEL`], so neither field is
+/// ever assigned the multi-level value.
+///
+/// This cannot tell a pristine record from one an earlier port writer
+/// re-saved at an unchanged `pos`; see the module documentation.
+fn pristine_upstream_player_object(bytes: &[u8]) -> bool {
+    let elevations = SavedObjectEvent::default()
+        .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET]);
+    bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] & OBJECT_EVENT_IS_PLAYER_BIT != 0
+        && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_PADDING_MASK == 0
+        && elevations.current_elevation != ELEVATION_MULTI_LEVEL
+        && elevations.previous_elevation != ELEVATION_MULTI_LEVEL
 }
 
 fn require_len(bytes: &[u8], expected: usize) -> Result<(), SaveError> {
@@ -1369,14 +1451,111 @@ mod tests {
             0xEE & !OBJECT_EVENT_MARKER_BIT
         );
 
-        // An upstream-origin image: `active` set, no marker, stale elevation.
+        // A zero-filled image with only `active` and a stale elevation byte:
+        // not a player object (`isPlayer` clear, coordinates unset).
         let mut upstream = [0u8; SaveBlock1::PAYLOAD_LEN];
         upstream[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
         upstream[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = 0x30;
         let decoded = SaveBlock1::from_bytes(&upstream, key).unwrap();
         assert!(
             !decoded.player_object_event.active,
-            "no marker, not trusted"
+            "no marker and not a pristine upstream record, not trusted"
+        );
+    }
+
+    /// A player object as upstream's `SaveObjectEvents` copies it out
+    /// (`src/load_save.c:180-186`) for a save at `pos`: `active` and
+    /// `isPlayer` set, `currentCoords` equal to `pos` plus `MAP_OFFSET`,
+    /// `padding:4` zero, elevation byte `elevations`.
+    fn pristine_upstream_image(pos: Coords16, elevations: u8) -> [u8; SaveBlock1::PAYLOAD_LEN] {
+        let mut bytes = SaveBlock1 {
+            pos,
+            ..SaveBlock1::default()
+        }
+        .to_bytes(0xA1B2_C3D4);
+        bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
+        bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] = OBJECT_EVENT_IS_PLAYER_BIT;
+        bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] = 0;
+        bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = elevations;
+        bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+            .copy_from_slice(&object_event_coords(pos).to_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_pristine_upstream_player_object_is_adopted_with_its_elevation_pair() {
+        let key = 0xA1B2_C3D4;
+        let pos = Coords16 { x: 4, y: 4 };
+        // Walked from an elevation-4 floor onto a transition cell: (0, 4).
+        let image = pristine_upstream_image(pos, 0x40);
+        let event = SaveBlock1::from_bytes(&image, key)
+            .unwrap()
+            .player_object_event;
+        assert!(event.active, "an unmarked pristine upstream record");
+        assert_eq!((event.current_elevation, event.previous_elevation), (0, 4));
+        // The marker is the port's own signal, absent here.
+        assert_eq!(
+            image[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT,
+            0
+        );
+    }
+
+    #[test]
+    fn an_unmarked_player_object_that_upstream_could_not_have_written_is_not_adopted() {
+        let key = 0xA1B2_C3D4;
+        let pos = Coords16 { x: 4, y: 4 };
+        let adopted = |image: &[u8; SaveBlock1::PAYLOAD_LEN]| {
+            SaveBlock1::from_bytes(image, key)
+                .unwrap()
+                .player_object_event
+                .active
+        };
+
+        // Coordinates left behind by a writer that moved `pos` but kept the slot.
+        let mut stale = pristine_upstream_image(pos, 0x30);
+        stale[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+            .copy_from_slice(&object_event_coords(Coords16 { x: 3, y: 4 }).to_bytes());
+        assert!(!adopted(&stale), "coords disagree with pos");
+
+        let mut not_player = pristine_upstream_image(pos, 0x30);
+        not_player[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] = 0;
+        assert!(!adopted(&not_player), "isPlayer clear");
+
+        let mut inactive = pristine_upstream_image(pos, 0x30);
+        inactive[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = 0;
+        assert!(!adopted(&inactive), "active clear");
+
+        for padding in [0x10, 0x20, 0x40] {
+            let mut dirty = pristine_upstream_image(pos, 0x30);
+            dirty[PLAYER_OBJECT_EVENT_MARKER_OFFSET] = padding;
+            assert!(!adopted(&dirty), "padding bits {padding:#x} set");
+        }
+
+        // `ObjectEventUpdateElevation` never assigns the multi-level value.
+        for elevations in [0x0F, 0xF0, 0xFF] {
+            let illegal = pristine_upstream_image(pos, elevations);
+            assert!(!adopted(&illegal), "elevation byte {elevations:#x}");
+        }
+        assert!(adopted(&pristine_upstream_image(pos, 0x00)));
+        assert!(adopted(&pristine_upstream_image(pos, 0xEE)));
+    }
+
+    #[test]
+    fn a_marked_record_keeps_trust_despite_a_clear_is_player_bit() {
+        // The port's writer does not set `isPlayer`; the marker stands alone.
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1 {
+            pos: Coords16 { x: 4, y: 4 },
+            ..SaveBlock1::default()
+        };
+        block.player_object_event.active = true;
+        let bytes = block.to_bytes(key);
+        assert_eq!(bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET], 0);
+        assert!(
+            SaveBlock1::from_bytes(&bytes, key)
+                .unwrap()
+                .player_object_event
+                .active
         );
     }
 
@@ -1399,7 +1578,7 @@ mod tests {
             "a fresh save is trusted"
         );
 
-        // The pre-#801 writer: new position and directions over the loaded
+        // An earlier port writer: new position and directions over the loaded
         // bytes, every other byte -- marker, elevations, coords -- preserved.
         bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
             .copy_from_slice(&Coords16 { x: 5, y: 4 }.to_bytes());
