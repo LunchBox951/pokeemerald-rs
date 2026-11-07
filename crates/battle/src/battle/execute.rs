@@ -3,6 +3,7 @@
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
 use crate::ability::{burn_halves_damage, huge_power_attack};
+use crate::attract::is_attract_effect;
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -36,6 +37,7 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod attract;
 mod burn;
 mod effect_spore;
 mod pipelines;
@@ -92,6 +94,7 @@ pub(super) enum MovePipeline {
     Confuse,
     LeechSeed,
     Rollout,
+    Attract,
     OrdinaryHit,
 }
 
@@ -139,6 +142,8 @@ impl MovePipeline {
             (Self::LeechSeed, crate::leech_seed::ensure_resolvable)
         } else if is_rollout_effect(effect) {
             (Self::Rollout, crate::rollout::ensure_resolvable)
+        } else if is_attract_effect(effect) {
+            (Self::Attract, crate::attract::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -459,6 +464,9 @@ impl Battle {
             }
             MovePipeline::Rollout => {
                 self.execute_rollout_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Attract => {
+                self.execute_attract_move(attacker_is_player, move_id, rng, events)
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -847,6 +855,7 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
+        self.clear_infatuation_from(BattlerSide::from_is_player(fainted_is_player));
         // `FaintClearSetData` resets the battler's history, Perish Song
         // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
@@ -1237,6 +1246,7 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (&[84], MovePipeline::LeechSeed),
         (&[117], MovePipeline::Rollout),
+        (&[120], MovePipeline::Attract),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
@@ -1273,7 +1283,8 @@ mod pipeline_agreement_tests {
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
                     || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
                     || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::attract::ensure_resolvable(dex, move_id).is_ok();
                 if accepted {
                     Ok(())
                 } else {
