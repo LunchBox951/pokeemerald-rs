@@ -28776,10 +28776,10 @@
           "status": "stubbed"
         },
         "CopyPlayerMonData.status1": {
-          "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. Modelled: party::from_save_pokemon decodes the save record status word into battle::Status1 -- healthy, ordinary poison (0x08), burn (0x10), freeze (0x20), paralysis (0x40), sleep with 1-7 turns left, and bad poison (0x80 | counter << 8, counter 0-15, into Status1::BadPoisoned with its toxic counter) -- and any other word fails closed with PartyError::UnsupportedStatus, leaving the record bytes untouched, so it is never read as healthy and erased on the next save. Deferred: combined status words, which battle does not model and which therefore cannot be loaded into a battler; a toxic counter without the bad-poison bit, or counter bits above 11, fails closed the same way.",
+          "reason": "battle_controller_player.c:1636-1640 (CopyPlayerMonData, REQUEST_STATUS_BATTLE) and constants/battle.h:114-125 (STATUS1_* masks). party::from_save_pokemon decodes the save record status word into battle::Status1 exactly: healthy (0), sleep with 1-7 turns left (STATUS1_SLEEP, 0x07), ordinary poison (0x08), burn (0x10), freeze (0x20), paralysis (0x40), and bad poison (STATUS1_TOXIC_POISON 0x80 | STATUS1_TOXIC_TURN(counter), counter 0-15 in bits 8-11, into Status1::BadPoisoned with its toxic counter). Upstream copies the whole word unchecked, but every primary-status setter refuses a battler that already holds one (SetMoveEffect, battle_script_commands.c:2457) and every poison cure clears the toxic counter, so a combined primary-status word, a toxic counter without STATUS1_TOXIC_POISON, and a bit above the counter's four are words the game itself never writes; the port refuses them with PartyError::UnsupportedStatus carrying the original word and leaves the record bytes untouched, so they are never read as healthy and erased on the next save. The table-driven regression party::tests::codec::the_primary_status_word_converts_exactly_or_fails_closed_in_both_directions covers every supported word and the representative combined, counter-only and out-of-domain words against from_save_pokemon, LoadedLead::load_slot and LoadedLead::load.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-4",
-          "status": "stubbed"
+          "status": "rewritten"
         },
         "PlayerHandlePrintString": {
           "reason": "src/battle_controller_player.c:2543-2554. Resolved narration requests enter the battle message queue and print through the shared text printer. Controller buffer transfer, BG0 offset reset, battle TV recording, and arena skill-point accounting are not modelled.",
@@ -28788,10 +28788,10 @@
           "status": "stubbed"
         },
         "SetPlayerMonData.status1": {
-          "reason": "battle_controller_player.c:1983-1987 and constants/battle.h:114-125. Modelled: both party::to_save_pokemon and party::merge_into_save_pokemon write the battler Status1 into the record status word (0 for healthy or a cleared status, 0x08 poison, 0x10 burn, 0x20 freeze, 0x40 paralysis, 1-7 sleep turns, 0x80 | counter << 8 for bad poison with its stored toxic counter), so an inflicted or cured condition reaches the save; a sleep count above 7 would corrupt the neighbouring bits and panics instead. Deferred: combined words, which battle cannot hold and so never writes.",
+          "reason": "battle_controller_player.c:1983-1987 (SetPlayerMonData, REQUEST_STATUS_BATTLE) and constants/battle.h:114-125 (STATUS1_* masks). Both party::to_save_pokemon and party::merge_into_save_pokemon write the battler Status1 into the record status word exactly: 0 for healthy or a cleared status, 1-7 for sleep turns left, 0x08 poison, 0x10 burn, 0x20 freeze, 0x40 paralysis, and 0x80 | counter << 8 for bad poison with its stored toxic counter 0-15, so an inflicted or cured condition reaches the save and every supported word loaded by CopyPlayerMonData re-saves to the identical word. A sleep count above 7 or a toxic counter above 15 would corrupt the neighbouring status bits and panics instead of truncating. battle::Status1 holds one primary status at a time, matching upstream's setters that refuse a battler already holding one (SetMoveEffect, battle_script_commands.c:2457), so the encoder never writes a combined word; a word the load refuses never reaches a battler, so no re-save can rewrite it and the record keeps its bytes. The table-driven regression party::tests::codec::the_primary_status_word_converts_exactly_or_fails_closed_in_both_directions checks the re-save of every supported word through LoadedLead::merge_and_save and a fresh to_save_pokemon.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-4",
-          "status": "stubbed"
+          "status": "rewritten"
         }
       },
       "category": "code.source",
