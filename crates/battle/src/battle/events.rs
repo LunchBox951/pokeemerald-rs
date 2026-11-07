@@ -143,6 +143,47 @@ pub enum BattleEvent {
         /// The move that was never attempted.
         move_id: MoveId,
     },
+    /// An infatuated battler's action reached `CANCELER_IN_LOVE`
+    /// (`BattleScript_MoveUsedIsInLove`, `data/battle_scripts_1.s:3840`-
+    /// `:3844`), which announces the infatuation on either coin outcome. The
+    /// battler is in love with the opposing battler, the only one that can
+    /// have attracted it in singles. It is followed by
+    /// [`BattleEvent::ImmobilizedByLove`] or the move's own events, and
+    /// precedes the thaw and PP handling.
+    InLove {
+        /// Whether the player's battler is infatuated and acting.
+        by_player: bool,
+    },
+    /// The infatuation coin cancelled the chosen move before any PP was
+    /// spent (`BattleScript_MoveUsedIsInLoveCantAttack`,
+    /// `data/battle_scripts_1.s:3846`-`:3849`). It follows
+    /// [`BattleEvent::InLove`].
+    ImmobilizedByLove {
+        /// Whether the player's battler was cancelled.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// Attract infatuated its target (`STRINGID_PKMNFELLINLOVE`,
+    /// `BattleScript_EffectAttract`, `data/battle_scripts_1.s:1653`). A miss
+    /// reports [`BattleEvent::Missed`], a gender or reapplication failure
+    /// [`BattleEvent::ButItFailed`], and an Oblivious target
+    /// [`BattleEvent::ObliviousPreventsAttraction`], instead.
+    Infatuated {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that infatuated the target.
+        move_id: MoveId,
+    },
+    /// Attract's target prevented the attraction with Oblivious
+    /// (`BattleScript_ObliviousPreventsAttraction`,
+    /// `data/battle_scripts_1.s:4140`-`:4144`).
+    ObliviousPreventsAttraction {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that was prevented.
+        move_id: MoveId,
+    },
     /// A move connected, but the target's typing made it ineffective. An
     /// absorbing ability already at full HP reports
     /// [`BattleEvent::AbsorbMadeMoveUseless`] instead.
@@ -634,7 +675,9 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
-    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`): the
+    /// `ENDTURN_POISON` tick and the `ENDTURN_BAD_POISON` tick, which share
+    /// `BattleScript_PoisonTurnDmg`.
     HurtByPoison {
         /// Whether the player's battler was hurt.
         by_player: bool,

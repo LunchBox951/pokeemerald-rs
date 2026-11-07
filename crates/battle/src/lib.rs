@@ -165,7 +165,7 @@
 //! `Random() % 5` draw after the sleep canceller and before confusion and
 //! paralysis ([`status1::draw_freeze_canceller`]); a frozen Magma Armor
 //! participant is refused at admission for the same unmodelled move-end cure. A burned participant with Water Veil
-//! is refused at admission, as a poisoned Immunity holder is, because the
+//! is refused at admission, as a poisoned or badly poisoned Immunity holder is, because the
 //! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
@@ -234,11 +234,13 @@
 //! the effect of any held item but Oran Berry's end-turn heal (a mon carries
 //! one, and [`ensure_held_item_playable`] refuses every other item that has
 //! an effect), every primary status but [`status1::Status1::Paralysed`],
-//! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`],
+//! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
+//! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
-//! [`status1::Status1::Asleep`] (toxic — see [`status1`]'s module
-//! docs; no modelled move inflicts sleep or freeze yet, and burn comes only from a
-//! burn secondary, so those arrive only
+//! [`status1::Status1::Asleep`] (a loaded bad poison ticks through
+//! [`status1::bad_poison_residual_damage`] between poison and burn — see
+//! [`status1`]'s module docs; no modelled move inflicts toxic, sleep or freeze
+//! yet, and burn comes only from a burn secondary, so those arrive only
 //! through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s tracked set
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
@@ -269,6 +271,7 @@
 
 pub mod ability;
 pub mod accuracy;
+pub mod attract;
 pub mod battle;
 pub mod confuse;
 pub mod critical;
@@ -302,6 +305,9 @@ pub mod wild;
 mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
+pub use attract::{
+    draws_love_immobility, is_attract_effect, resolve_attract_move, AttractOutcome, EFFECT_ATTRACT,
+};
 pub use battle::admission::ensure_participant_admissible;
 pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{

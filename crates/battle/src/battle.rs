@@ -24,13 +24,15 @@ use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEV
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
-    burn_residual_damage, draw_freeze_canceller, draws_full_paralysis, draws_shed_skin_cure,
-    poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
+    bad_poison_residual_damage, burn_residual_damage, draw_freeze_canceller, draws_full_paralysis,
+    draws_shed_skin_cure, poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod attract_tests;
 pub mod battler_state;
 mod events;
 mod execute;
@@ -274,7 +276,7 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
+    /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
     /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
     /// Drizzle, Drought or Sand Stream fails with
@@ -1095,6 +1097,7 @@ impl Battle {
                 continue;
             }
             self.apply_poison_residual(is_player, events);
+            self.apply_bad_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
@@ -1248,6 +1251,32 @@ impl Battle {
         });
     }
 
+    /// `ENDTURN_BAD_POISON`: a living badly poisoned battler raises its toxic
+    /// count (at most 15) and loses `max(1, max HP / 16)` times that count,
+    /// with no RNG draw and no status write-back
+    /// (`pokeemerald/src/battle_util.c:1536`-`:1549`). It reports through the
+    /// same script and message as ordinary poison.
+    fn apply_bad_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if target.is_fainted() {
+            return;
+        }
+        let max_hp = target.stats().max_hp;
+        let Some(counter) = target.advance_toxic_turns() else {
+            return;
+        };
+        let dealt = bad_poison_residual_damage(max_hp, counter).min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
     /// `ENDTURN_BURN`: a living burned battler loses an eighth of its max HP,
     /// at least one, with no RNG draw (`pokeemerald/src/battle_util.c:1550`-
     /// `:1560`).
@@ -1364,6 +1393,7 @@ impl Battle {
         // first, so the trainer's replacement scores against `MOVE_NONE`
         // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
         self.player.clear_battle_scratch();
+        self.clear_infatuation_from(BattlerSide::Player);
         self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1480,6 +1510,12 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
+        // The departing member's own copy went with its scratch; the player's
+        // battler is the only other holder, and `context` still borrows
+        // `self.kind`.
+        self.player
+            .volatiles_mut()
+            .clear_infatuation_from(BattlerSide::Enemy);
         self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1514,7 +1550,7 @@ impl Battle {
 
     /// Runs one battler's turn-order slot: the sleep decrement, the frozen
     /// draw, the Truant loafing gate, the confusion decrement, the
-    /// full-paralysis draw, the thaw-hit thaw, the Soundproof block, PP
+    /// full-paralysis draw, the infatuation coin, the thaw-hit thaw, the Soundproof block, PP
     /// handling, then
     /// execution.
     ///
@@ -1584,6 +1620,11 @@ impl Battle {
                 move_id,
             });
             self.record_cancelled_move(player_is_attacker, move_id)?;
+            return Ok(());
+        }
+        // `CANCELER_IN_LOVE` follows paralysis and precedes the thaw
+        // (`src/battle_util.c:2188`-`:2262`).
+        if self.cancels_for_love(player_is_attacker, move_id, rng, events)? {
             return Ok(());
         }
         if thaws_with_move {

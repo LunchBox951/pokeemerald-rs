@@ -26,6 +26,7 @@ use crate::damage::{
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{
@@ -198,6 +199,10 @@ enum ScoreableEffect {
     FocusEnergy,
     /// `AI_CBM_LeechSeed` (`data/battle_ai_scripts.s:410-416`).
     LeechSeed,
+    /// `AI_CBM_Attract` (`data/battle_ai_scripts.s:456-478`). Attract has no
+    /// `AI_CheckViability` branch and is absent from the first-turn setup
+    /// list, so only `CHECK_BAD_MOVE` scores it.
+    Attract,
     /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
     /// (`data/battle_ai_scripts.s:177,368-376`).
     HighRiskForDamage,
@@ -225,6 +230,8 @@ impl ScoreableEffect {
             Some(Self::FocusEnergy)
         } else if effect == MoveEffect::LEECH_SEED {
             Some(Self::LeechSeed)
+        } else if effect == MoveEffect::ATTRACT {
+            Some(Self::Attract)
         } else if effect == MoveEffect::SONICBOOM {
             Some(Self::HighRiskForDamage)
         } else if let Some(label) = ai_stat_label(effect) {
@@ -263,7 +270,7 @@ impl ScoreableEffect {
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
-            Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
+            Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
         };
         if flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect)
         {
@@ -875,6 +882,7 @@ fn score_bad_move(
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
         ScoreableEffect::LeechSeed => leech_seed_penalty(target),
+        ScoreableEffect::Attract => attract_penalty(user, target)?,
         ScoreableEffect::HighRiskForDamage => {
             high_risk_for_damage_penalty(dex, move_id, user, target)?
         }
@@ -974,6 +982,23 @@ fn leech_seed_penalty(target: &BattlePokemon) -> Option<i8> {
         .then_some(STRONGLY_DISCOURAGE)
 }
 
+/// `AI_CBM_Attract`: an already-infatuated target ends at `-10`, then an
+/// Oblivious target, then any pair that is not exactly one male and one
+/// female (`data/battle_ai_scripts.s:456-478`). It draws nothing.
+fn attract_penalty(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    let opposite_genders = matches!(
+        (user.gender(), target.gender()),
+        (Gender::Male, Gender::Female) | (Gender::Female, Gender::Male)
+    );
+    let blocked = target.volatiles().infatuated()
+        || ai_get_ability(target)? == AbilityId::OBLIVIOUS
+        || !opposite_genders;
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
+}
+
 fn score_try_to_faint(
     dex: &Dex,
     scores: &mut MoveScores,
@@ -1025,7 +1050,8 @@ fn score_viability(
     match scoreable_effect(dex, move_id)? {
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
-        | ScoreableEffect::FocusEnergy => {}
+        | ScoreableEffect::FocusEnergy
+        | ScoreableEffect::Attract => {}
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
@@ -2212,6 +2238,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod attract_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]

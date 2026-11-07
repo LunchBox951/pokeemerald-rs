@@ -10,6 +10,10 @@ mod absorbing_abilities;
 mod accuracy_down_hit;
 #[path = "turn_engine/announcement.rs"]
 mod announcement;
+#[path = "turn_engine/attract/mod.rs"]
+mod attract;
+#[path = "turn_engine/bad_poison.rs"]
+mod bad_poison;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]
