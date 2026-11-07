@@ -25,7 +25,8 @@ use MovementType::{FaceDownAndRight as FDR, LookAround as LA};
 
 type Placements = &'static [(u8, MovementType)];
 
-/// The checkpoint inventory of issue #3060: each map's random-facing placements as
+/// The checkpoint maps' random-facing placements (`LOOK_AROUND` in both 2F bedrooms, Route 101 and
+/// Route 103; `FACE_DOWN_AND_RIGHT` on Route 103) as
 /// `(local_id, movement type)`, read off `data/maps/*/map.json`. The bedrooms' ids 2 to 13 are
 /// the decoration placeholders, hidden by `FLAG_DECORATION_*` until placed.
 const CHECKPOINT_INVENTORY: [(&str, Placements); 4] = [
