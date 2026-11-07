@@ -16,16 +16,9 @@ impl Battle {
     /// (`battle_script_commands.c:4280`-`:4284`, `battle_util.c:2851`-`:2870`;
     /// `BattleScript_CuteCharmActivates`, `data/battle_scripts_1.s:4193`-`:4197`).
     ///
-    /// Only a living attacker's damaging contact hit on a holder that survived
-    /// it spends the `Random() % 3` roll (`:2853`-`:2858`), unlike Static and
-    /// Poison Point, which still roll for a holder that fainted. The caller
-    /// reaches this seam only for a hit that damaged the target, which covers
-    /// the no-effect result, and a confusion self-hit never reaches it, so
-    /// neither can infatuate. The Oblivious, gender and existing-infatuation
-    /// guards follow the roll (`:2859`-`:2864`), so a zero roll spent on an
-    /// ineligible pair still consumed its draw. A pair that passes records
-    /// the holder's slot as the attacker's infatuation, the state Attract's
-    /// `Cmd_tryinfatuating` writes (`:2866`).
+    /// Unlike Static and Poison Point, a fainted holder skips the roll
+    /// (`:2853`-`:2858`); the eligibility guards follow it (`:2859`-`:2864`),
+    /// so an ineligible pair still consumes the draw.
     ///
     /// # Errors
     ///
