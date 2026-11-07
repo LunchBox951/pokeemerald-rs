@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.115.0] - 2026-11-07
+
+- Townsfolk standing in tall grass, such as the boy on Route 101, now show the grass around their feet as the player does.
+
 ## [0.0.114.0] - 2026-11-07
 
 - Cute Charm now works in battle: a Pokémon with it has a one-in-three chance of making an opposite-gender attacker fall in love when that attacker hits it with a contact move and both survive the hit, and the infatuated Pokémon can be immobilized by love just as after Attract. It does not take hold on Pokémon with Oblivious, of the same gender, without a gender, or already in love. Miguel on Route 103 is still refused until his other moves are modelled.
@@ -522,7 +526,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...dev
+[0.0.115.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2bbf966619c27568282a1b7f3ea6042e21cdb9d4...dev
+[0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...2bbf966619c27568282a1b7f3ea6042e21cdb9d4
 [0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...e9411c4552d44eaa0ba4de2e094a9a698a4f1a70
 [0.0.112.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/94c3b60a64c924ff98afbd4a1e74482c989d1526...8cc509c0cc722ad0084591f37301d43c7d047498
 [0.0.111.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f3a34deb7b9cde4f76a9f4f2f7d6246e70efaacf...94c3b60a64c924ff98afbd4a1e74482c989d1526
