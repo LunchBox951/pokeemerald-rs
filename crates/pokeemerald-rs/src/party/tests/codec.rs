@@ -684,16 +684,9 @@ enum StatusWord {
     Malformed(u32),
 }
 
-/// `CopyPlayerMonData` and `SetPlayerMonData` move the whole `MON_DATA_STATUS`
-/// word between the record and the battler's `status1`
-/// (`pokeemerald/src/battle_controller_player.c:1636-1640`, `:1983-1987`).
-/// `STATUS1_*` (`pokeemerald/include/constants/battle.h:114-125`) gives sleep
-/// the low three bits, poison `0x08`, burn `0x10`, freeze `0x20`, paralysis
-/// `0x40`, toxic poison `0x80` and its turn counter bits 8 to 11. The table
-/// is the whole contract: each supported primary status converts exactly in
-/// both directions, and a combined word, a counter without toxic poison and
-/// any out-of-domain bit fail closed -- the decode refuses them, no battler
-/// exists to re-save over them, and the record keeps the word byte for byte.
+/// `REQUEST_STATUS_BATTLE` copies and sets the whole status word
+/// (`pokeemerald/src/battle_controller_player.c:1636-1640`, `:1983-1987`):
+/// supported words round-trip exactly, and malformed words are refused.
 #[test]
 fn the_primary_status_word_converts_exactly_or_fails_closed_in_both_directions() {
     let dex = Dex::new();
