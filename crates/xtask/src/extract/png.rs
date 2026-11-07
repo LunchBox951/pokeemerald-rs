@@ -60,14 +60,6 @@ pub enum PngError {
     MissingOrBadPalette,
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
     TooManyPaletteEntries(usize),
-    /// The `PLTE` chunk has more entries than the `IHDR` bit depth can index
-    /// (at most `2^bit_depth`).
-    PaletteExceedsBitDepth {
-        /// The number of `PLTE` entries.
-        count: usize,
-        /// The `IHDR` bit depth.
-        bit_depth: u8,
-    },
     /// The image's colour type may not carry a `PLTE` chunk (PNG 1.2 §4.1.2:
     /// it must not appear for colour types 0 and 4).
     PaletteForbiddenForColorType(u8),
@@ -121,11 +113,6 @@ impl fmt::Display for PngError {
             Self::PaletteForbiddenForColorType(color_type) => write!(
                 f,
                 "PNG has a PLTE chunk, which colour type {color_type} images must not carry"
-            ),
-            Self::PaletteExceedsBitDepth { count, bit_depth } => write!(
-                f,
-                "PNG PLTE chunk declares {count} entries: a {bit_depth}-bit indexed image can index at most {}",
-                1usize << bit_depth
             ),
         }
     }
@@ -637,6 +624,12 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 
 /// Reads a PNG's embedded palette in index order.
 ///
+/// A `PLTE` longer than the `2^bit_depth` slots the image can address (PNG 1.2
+/// §4.1.2 forbids it) is truncated to those first slots rather than rejected,
+/// as libpng's `png_handle_PLTE` does when it clamps `num` to the bit depth's
+/// palette size. Upstream ships 24 such 4-bit PNGs (for example
+/// `graphics/birch_speech/shadow.png`, 32 entries).
+///
 /// # Errors
 ///
 /// Returns [`PngError`] when framing, a parsed chunk's CRC, the `IHDR`, or the
@@ -663,17 +656,11 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .ok_or(PngError::MissingOrBadPalette)?;
 
     let entries = header.parse_palette(plte.data)?;
-    // An indexed image of bit depth `d` can address `2^d` palette slots; PNG
-    // 1.2 §4.1.2 forbids a longer `PLTE`.
-    if entries.len() > 1usize << header.bit_depth {
-        return Err(PngError::PaletteExceedsBitDepth {
-            count: entries.len(),
-            bit_depth: header.bit_depth,
-        });
-    }
+    let addressable = 1usize << header.bit_depth;
 
     Ok(entries
         .into_iter()
+        .take(addressable)
         .map(|[r, g, b]| Rgb888 { r, g, b })
         .collect())
 }
@@ -1437,25 +1424,37 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn decode_palette_rejects_more_plte_entries_than_the_bit_depth_indexes() {
-        let at_cap =
-            indexed_png_from_raw_with_plte(1, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3, 4, 5, 6]);
-        assert_eq!(decode_palette(&at_cap).unwrap().len(), 2);
+    fn decode_palette_truncates_a_plte_longer_than_the_bit_depth_indexes() {
+        let plte_of =
+            |count: u8| -> Vec<u8> { (0..count).flat_map(|i| [i, i + 1, i + 2]).collect() };
+        let palette_of = |bit_depth: u8, count: u8| {
+            let raw = [super::FILTER_NONE, 0];
+            decode_palette(&indexed_png_from_raw_with_plte(
+                bit_depth,
+                1,
+                1,
+                &raw,
+                &plte_of(count),
+            ))
+            .unwrap()
+        };
+        let expected = |count: u8| -> Vec<Rgb888> {
+            (0..count)
+                .map(|i| Rgb888 {
+                    r: i,
+                    g: i + 1,
+                    b: i + 2,
+                })
+                .collect()
+        };
 
-        let over_cap = indexed_png_from_raw_with_plte(
-            1,
-            1,
-            1,
-            &[super::FILTER_NONE, 0],
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-        );
-        assert_eq!(
-            decode_palette(&over_cap).unwrap_err(),
-            PngError::PaletteExceedsBitDepth {
-                count: 3,
-                bit_depth: 1
-            }
-        );
+        assert_eq!(palette_of(4, 32), expected(16));
+        assert_eq!(palette_of(2, 5), expected(4));
+        assert_eq!(palette_of(1, 3), expected(2));
+        assert_eq!(palette_of(4, 16), expected(16));
+        assert_eq!(palette_of(4, 15), expected(15));
+        assert_eq!(palette_of(2, 4), expected(4));
+        assert_eq!(palette_of(8, 200), expected(200));
     }
 
     #[test]
