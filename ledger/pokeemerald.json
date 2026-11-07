@@ -32194,6 +32194,9 @@
           "spec": "S-4",
           "status": "stubbed"
         },
+        "gPartyMenuPokeballSmall_Gfx": {
+          "status": "pending"
+        },
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
@@ -32201,7 +32204,7 @@
           "status": "ported"
         },
         "party_menu_graphics": {
-          "reason": "src/graphics.c:1111-1115 gPartyMenuBg_Gfx/_Pal/_Tilemap and gPartyMenuPokeball_Gfx/_Pal: extracted by crates/xtask/src/extract/party_menu.rs honouring the LZ77-built sources and the background's 62-tile cut. gPartyMenuPokeballSmall_Gfx (line 1116, marked //unused but loaded by sSpriteSheet_MenuPokeballSmall, src/data/party_menu.h:981-984, for the chooseHalf Confirm/Cancel ball sprites, src/party_menu.c:1108-1110, 4180) is not yet modelled.",
+          "reason": "src/graphics.c:1111-1115 gPartyMenuBg_Gfx/_Pal/_Tilemap and gPartyMenuPokeball_Gfx/_Pal: extracted by crates/xtask/src/extract/party_menu.rs honouring the LZ77-built sources and the background's 62-tile cut. gPartyMenuPokeballSmall_Gfx (line 1116) is not part of this artifact; it has its own row.",
           "rust_target": "crates/xtask/src/extract/party_menu.rs",
           "spec": "S-4",
           "status": "ported"
