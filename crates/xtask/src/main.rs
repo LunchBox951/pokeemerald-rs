@@ -1424,6 +1424,80 @@ mod tests {
         assert!(matches!(invalid, XtaskError::InvalidScenario(name) if name == "bogus"));
     }
 
+    /// Printed by each `*_dispatch_fails_closed_without_a_pack` test just
+    /// after its guard passes, so the spawning tests below can tell a test
+    /// that ran its assertions from one that skipped.
+    #[cfg(feature = "scenes")]
+    const PROBE_ASSERTIONS_RAN: &str = "dispatch-pack-probe: assertions running";
+
+    /// Runs one fails-closed test in a child process with `$POKEEMERALD_PACK`
+    /// naming a file that exists (this binary), then one naming a file that
+    /// does not, and checks the guard probed the checkout pack: the child
+    /// passes either way, and its assertions run exactly when the checkout
+    /// pack is absent. A guard on `default_path()` fails this twice over --
+    /// it skips when the override exists though the checkout pack is
+    /// missing, and runs the dispatch (succeeding, so `unwrap_err()` panics)
+    /// when the override is missing though the checkout pack exists. The
+    /// override is child-only: setting it here would race every other test's
+    /// `getenv`.
+    #[cfg(feature = "scenes")]
+    fn fails_closed_guard_probes_the_checkout_pack(test: &str) {
+        // Same real-pack lock as the tests it spawns, held across the
+        // presence read and the children (separate processes, so no
+        // self-deadlock): `extract_dispatch_succeeds_with_local_checkout`
+        // could otherwise create the pack in between.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let checkout_present = assets::pack::AssetPack::repo_pack_path().exists();
+        let existing = std::env::current_exe().expect("test binary path");
+        for pack_override in [
+            existing.as_path(),
+            std::path::Path::new("/nonexistent.pack"),
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([test, "--exact", "--nocapture", "--test-threads=1"])
+                .env(pack_format::PACK_PATH_ENV, pack_override)
+                .output()
+                .expect("the test binary must be spawnable");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "{test} with $POKEEMERALD_PACK={} must pass; checkout pack present: \
+                 {checkout_present}\n--- stdout ---\n{stdout}--- stderr ---\n{stderr}",
+                pack_override.display(),
+            );
+            assert!(
+                stdout.contains("1 passed"),
+                "{test} did not run exactly once:\n{stdout}"
+            );
+            assert_eq!(
+                stdout.contains(PROBE_ASSERTIONS_RAN),
+                !checkout_present,
+                "{test} with $POKEEMERALD_PACK={}: its assertions must run exactly when \
+                 the checkout pack is absent (present: {checkout_present})\n{stdout}",
+                pack_override.display(),
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    fn scenario_fails_closed_guard_probes_the_checkout_pack() {
+        fails_closed_guard_probes_the_checkout_pack(
+            "tests::scenario_dispatch_fails_closed_without_a_pack",
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "scenes")]
+    fn record_snapshot_fails_closed_guard_probes_the_checkout_pack() {
+        fails_closed_guard_probes_the_checkout_pack(
+            "tests::record_snapshot_dispatch_fails_closed_without_a_pack",
+        );
+    }
+
     // The other half of `scenario`'s wiring proof, mirroring
     // `record_snapshot_dispatch_fails_closed_without_a_pack` below: with
     // the feature-enabled arm compiled in, dispatch must really reach
@@ -1432,9 +1506,13 @@ mod tests {
     // report success with zero validation `(gated-by-default)`
     // `(test-ratchet)`. Checked through the pack-missing failure path so a
     // pack-free `--features scenario` test run exercises it, and skips
-    // read-only on a box whose real pack would make the run succeed --
+    // read-only on a box whose checkout pack would make the run succeed --
     // that full path is `scenario_dispatch_succeeds_against_the_real_pack`
-    // below.
+    // below. The probe is `AssetPack::repo_pack_path()`, the one path the
+    // command reads (`PackSelection::checkout()`), never `default_path()`:
+    // that resolver honours `$POKEEMERALD_PACK`, which the command ignores
+    // (`tests/dispatch_pack_boundary.rs` runs both dispatches in a child
+    // process to prove it).
     #[test]
     #[cfg(feature = "scenario")]
     fn scenario_dispatch_fails_closed_without_a_pack() {
@@ -1446,9 +1524,10 @@ mod tests {
         let _pack = extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if assets::pack::AssetPack::default_path().exists() {
+        if assets::pack::AssetPack::repo_pack_path().exists() {
             return;
         }
+        println!("{PROBE_ASSERTIONS_RAN}");
         let err = run(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap_err();
         assert!(matches!(err, XtaskError::ScenarioFailed(_)));
         assert!(err.to_string().contains("pack"));
@@ -1478,8 +1557,10 @@ mod tests {
     // satisfy a gate with zero validation `(gated-by-default)`
     // `(test-ratchet)`. Checked through the pack-missing error path so
     // this runs (and fails a no-op mutation) in pack-free CI, and skips
-    // read-only on a dev box whose real pack would make `run` succeed --
-    // that full path is `record_snapshot`'s own ignored real-pack test.
+    // read-only on a dev box whose checkout pack would make `run` succeed
+    // -- that full path is `record_snapshot`'s own ignored real-pack test.
+    // The probe is `AssetPack::repo_pack_path()`, the path `record_snapshot::
+    // run` reads, not `default_path()`, which `$POKEEMERALD_PACK` can move.
     #[test]
     #[cfg(feature = "scenes")]
     fn record_snapshot_dispatch_fails_closed_without_a_pack() {
@@ -1490,9 +1571,10 @@ mod tests {
         let _pack = extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if assets::pack::AssetPack::default_path().exists() {
+        if assets::pack::AssetPack::repo_pack_path().exists() {
             return;
         }
+        println!("{PROBE_ASSERTIONS_RAN}");
         let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
         assert!(matches!(err, XtaskError::RecordSnapshotFailed(_)));
         assert!(err.to_string().contains("pack"));
