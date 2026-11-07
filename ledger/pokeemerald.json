@@ -17117,6 +17117,77 @@
       "status": "pending"
     },
     "graphics/party_menu": {
+      "artifacts": {
+        "bg.bin": {
+          "reason": "src/graphics.c:1113 builds bg.bin as an LZ77 tilemap (gPartyMenuBg_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as party-menu/raw/bg.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg.png": {
+          "reason": "src/graphics.c:1111-1112 builds bg.png as 8-bit-indexed 4bpp LZ77 graphics with -num_tiles 62 (gPartyMenuBg_Gfx) and its embedded 176-colour palette as LZ77 gbapal (gPartyMenuBg_Pal); the extractor narrows the indices to their low nibble, publishes the first 62 tiles as the 8x496 party-menu/image/bg strip and all 176 PLTE colours as party-menu/palette/bg, refusing a dropped tile that holds colour. AssetPack::party_menu_background reads both with the shared bank-image validator.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cancel_button.bin": {
+          "reason": "src/data/party_menu.h:109-110 includes cancel_button.bin raw (INCBIN_U32, uncompressed) as a 7x2 grid of 16-bit screen entries; the extractor publishes its 28 bytes unchanged as party-menu/raw/cancel_button.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "confirm_button.bin": {
+          "reason": "src/data/party_menu.h:109-110 includes confirm_button.bin raw (INCBIN_U32, uncompressed) as a 7x2 grid of 16-bit screen entries; the extractor publishes its 28 bytes unchanged as party-menu/raw/confirm_button.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hold_icons.png": {
+          "reason": "src/data/party_menu.h:801-802 includes hold_icons.png as raw .4bpp (sHeldItemGfx, 2 tiles) and its embedded 16-colour palette as raw .gbapal (sHeldItemPalette); the extractor publishes the 8x16 raster as party-menu/image/hold_icons and the PLTE as party-menu/palette/hold_icons.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pokeball.png": {
+          "reason": "src/graphics.c:1114-1115 builds pokeball.png as 4bpp LZ77 graphics (gPartyMenuPokeball_Gfx, all 32 tiles) with its embedded 16-colour palette (gPartyMenuPokeball_Pal); the extractor publishes the 32x64 raster as party-menu/image/pokeball and the PLTE as party-menu/palette/pokeball.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pokeball_small.png": {
+          "status": "pending"
+        },
+        "slot_main.bin": {
+          "reason": "src/data/party_menu.h:565-569 includes slot_main.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_main and AssetPack::party_menu_slot_tilemap checks its grid length.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "slot_main_no_hp.bin": {
+          "reason": "src/data/party_menu.h:565-569 includes slot_main_no_hp.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_main_no_hp and AssetPack::party_menu_slot_tilemap checks its grid length.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "slot_wide.bin": {
+          "reason": "src/data/party_menu.h:565-569 includes slot_wide.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_wide and AssetPack::party_menu_slot_tilemap checks its grid length.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "slot_wide_empty.bin": {
+          "reason": "src/data/party_menu.h:565-569 includes slot_wide_empty.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_wide_empty and AssetPack::party_menu_slot_tilemap checks its grid length.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "slot_wide_no_hp.bin": {
+          "reason": "src/data/party_menu.h:565-569 includes slot_wide_no_hp.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_wide_no_hp and AssetPack::party_menu_slot_tilemap checks its grid length.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -30409,6 +30480,12 @@
     },
     "src/data/party_menu.h": {
       "artifacts": {
+        "party_menu_graphics": {
+          "reason": "src/data/party_menu.h:109-110, 565-569, 801-802 sConfirmButton_Tilemap/sCancelButton_Tilemap, sSlotTilemap_Main/_MainNoHP/_Wide/_WideNoHP/_WideEmpty and sHeldItemGfx/sHeldItemPalette: extracted by crates/xtask/src/extract/party_menu.rs as raw tilemaps and the held-item sheet; no party-menu screen logic is modelled here.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sTMHMMoves": {
           "reason": "sTMHMMoves (FOREACH_TMHM(TMHM_MOVE)) slot->MoveId mapping transcribed into SLOT_MOVES",
           "rust_target": "crates/assets/src/tmhm_learnsets.rs",
@@ -32120,6 +32197,12 @@
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "party_menu_graphics": {
+          "reason": "src/graphics.c:1111-1115 gPartyMenuBg_Gfx/_Pal/_Tilemap and gPartyMenuPokeball_Gfx/_Pal: extracted by crates/xtask/src/extract/party_menu.rs honouring the LZ77-built sources and the background's 62-tile cut. gPartyMenuPokeballSmall_Gfx (line 1116, marked //unused but loaded by sSpriteSheet_MenuPokeballSmall, src/data/party_menu.h:981-984, for the chooseHalf Confirm/Cancel ball sprites, src/party_menu.c:1108-1110, 4180) is not yet modelled.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
           "spec": "S-4",
           "status": "ported"
         },
