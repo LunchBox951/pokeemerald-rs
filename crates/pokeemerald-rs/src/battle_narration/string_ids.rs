@@ -82,6 +82,7 @@ pub(super) const PKMNSXMADEYINEFFECTIVE: u16 = 311;
 pub(super) const PKMNSXCUREDYPROBLEM: u16 = 312;
 pub(super) const ITSUCKEDLIQUIDOOZE: u16 = 313;
 pub(super) const PLAYERDEFEATEDTRAINER1: u16 = 321;
+pub(super) const PKMNSXINFATUATEDY: u16 = 310;
 pub(super) const PKMNSXMADEYUSELESS: u16 = 327;
 pub(super) const EMPTYSTRING4: u16 = 329;
 pub(super) const ABOOSTED: u16 = 330;

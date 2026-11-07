@@ -234,6 +234,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (223, "Got away safely!\\p"),
     (224, "Wild {B_BUFF1} fled!"),
     (226, "Can't escape!\\p"),
+    (310, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\ninfatuated {B_ATK_NAME_WITH_PREFIX}!"),
     (327, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade {B_CURRENT_MOVE} useless!"),
     (329, ""),
     (330, " a boosted"),
