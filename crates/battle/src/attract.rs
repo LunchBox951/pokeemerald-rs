@@ -9,7 +9,8 @@
 //! therefore spent in every outcome, and nothing else is drawn.
 //!
 //! An infatuated battler draws one coin at its action's `CANCELER_IN_LOVE`
-//! ([`draws_love_immobility`]). Cute Charm's contact trigger, the Oblivious
+//! ([`draws_love_immobility`]). Cute Charm's contact trigger lives in
+//! `Battle::apply_cute_charm_contact` and writes the same state. The Oblivious
 //! cure of an existing infatuation and the cure-attract held items are not
 //! modelled.
 
