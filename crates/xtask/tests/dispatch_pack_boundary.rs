@@ -179,32 +179,147 @@ impl SnapshotsRestore {
     }
 }
 
-impl Drop for SnapshotsRestore {
-    fn drop(&mut self) {
+impl SnapshotsRestore {
+    /// Puts the pointer back and removes this guard's own generations,
+    /// returning every failure instead of swallowing it.
+    ///
+    /// The pointer is never checked and then rewritten in place: that leaves
+    /// a gap in which a concurrent publisher's rename is overwritten. The
+    /// guard instead takes whatever is at the pointer by renaming it aside,
+    /// one atomic step that fixes which file is being judged, and then only
+    /// ever puts a file back with `hard_link`, which refuses to replace. A
+    /// pointer a publisher lands after the grab is therefore left as that
+    /// publisher wrote it, and a foreign pointer the guard moved aside is put
+    /// back only if nothing newer took its place.
+    ///
+    /// Generations are removed only after the pointer step succeeded, so a
+    /// failure never leaves the pointer naming a deleted generation.
+    /// `after_grab` runs between the grab and the put-back so a test can land
+    /// a publisher's rename in that gap.
+    fn finish_with(&mut self, after_grab: impl FnOnce()) -> Vec<String> {
         if self.own_generations.is_empty() {
-            return;
+            return Vec::new();
         }
-        // Restore the pointer only while it still names a generation this
-        // guard's child created; another publisher's pointer stays.
-        let pointer_is_ours = std::fs::read_to_string(&self.pointer)
-            .is_ok_and(|text| self.own_generations.iter().any(|own| own == text.trim()));
-        if pointer_is_ours {
-            match &self.pointer_before {
-                Some(bytes) => {
-                    let _ = std::fs::write(&self.pointer, bytes);
+        let mut errors = Vec::new();
+        match self.restore_pointer(after_grab) {
+            Ok(()) => {
+                for name in std::mem::take(&mut self.own_generations) {
+                    if let Err(error) = std::fs::remove_dir_all(self.dir.join(&name)) {
+                        errors.push(format!("cannot remove generation {name}: {error}"));
+                    }
                 }
-                None => {
-                    let _ = std::fs::remove_file(&self.pointer);
+                if !self.dir_existed {
+                    // Fails, harmlessly, when anything else is in it.
+                    let _ = std::fs::remove_dir(&self.dir);
+                }
+            }
+            Err(error) => {
+                // The generations stay: the pointer may still name one.
+                self.own_generations.clear();
+                errors.push(error);
+            }
+        }
+        errors
+    }
+
+    fn restore_pointer(&self, after_grab: impl FnOnce()) -> Result<(), String> {
+        let pid = std::process::id();
+        let aside = self.dir.join(format!("title.generation.guard-aside-{pid}"));
+        match std::fs::rename(&self.pointer, &aside) {
+            Ok(()) => {}
+            // No pointer: nothing names a generation, nothing to restore.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "cannot take the snapshot pointer {} aside; generations {:?} kept: {error}",
+                    self.pointer.display(),
+                    self.own_generations
+                ));
+            }
+        }
+        after_grab();
+        let outcome = self.settle_grabbed_pointer(&aside, pid);
+        match std::fs::remove_file(&aside) {
+            Ok(()) => outcome,
+            Err(error) => {
+                let note = format!("cannot remove {}: {error}", aside.display());
+                match outcome {
+                    Ok(()) => Err(note),
+                    Err(first) => Err(format!("{first}; {note}")),
                 }
             }
         }
-        for name in &self.own_generations {
-            let _ = std::fs::remove_dir_all(self.dir.join(name));
+    }
+
+    /// Decides what the grabbed pointer at `aside` means and acts on it.
+    fn settle_grabbed_pointer(&self, aside: &Path, pid: u32) -> Result<(), String> {
+        let put_back = |reason: String| -> Result<(), String> {
+            match std::fs::hard_link(aside, &self.pointer) {
+                Ok(()) => Err(format!(
+                    "{reason}; the pointer was put back and the generations kept"
+                )),
+                // A publisher already landed a newer pointer; it stands.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
+                    "{reason}; a newer pointer is in place and the generations are kept"
+                )),
+                Err(error) => Err(format!(
+                    "{reason}; the pointer could not be put back from {}: {error}",
+                    aside.display()
+                )),
+            }
+        };
+        let text = match std::fs::read(aside) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(error) => {
+                return put_back(format!(
+                    "cannot read the snapshot pointer {}: {error}",
+                    self.pointer.display()
+                ));
+            }
+        };
+        if !self.own_generations.iter().any(|own| own == text.trim()) {
+            // Another publisher's pointer: give it back untouched.
+            return match std::fs::hard_link(aside, &self.pointer) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(format!(
+                    "cannot put back another publisher's pointer from {}: {error}",
+                    aside.display()
+                )),
+            };
         }
-        if !self.dir_existed {
-            // Fails, harmlessly, when anything else is in it.
-            let _ = std::fs::remove_dir(&self.dir);
+        let Some(bytes) = &self.pointer_before else {
+            // The pointer was absent before: it already is again.
+            return Ok(());
+        };
+        let staged = self.dir.join(format!("title.generation.guard-stage-{pid}"));
+        let restored = (|| {
+            std::fs::write(&staged, bytes)?;
+            std::fs::hard_link(&staged, &self.pointer)
+        })();
+        let _ = std::fs::remove_file(&staged);
+        match restored {
+            Ok(()) => Ok(()),
+            // A publisher landed a pointer after the grab; it stands.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => put_back(format!(
+                "cannot restore the snapshot pointer {}: {error}",
+                self.pointer.display()
+            )),
         }
+    }
+}
+
+impl Drop for SnapshotsRestore {
+    /// A failure leaves the checkout changed, so it panics unless the thread
+    /// is already unwinding (the `OwnedDir` convention).
+    fn drop(&mut self) {
+        let errors = self.finish_with(|| {});
+        assert!(
+            errors.is_empty() || std::thread::panicking(),
+            "SnapshotsRestore left the checkout changed: {}",
+            errors.join("; ")
+        );
     }
 }
 
@@ -312,6 +427,96 @@ fn snapshots_restore_keeps_a_concurrent_publishers_generation() {
         std::fs::read(dir.join("title.generation")).expect("pointer"),
         b"title.generation-4294967295-0\n",
         "a pointer written by another publisher must be left alone"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn success_line(generation: &Path) -> String {
+    format!(
+        "recorded `title` snapshot (1 byte(s)) to {0}/title.rgb (+ {0}/title.meta); rgb hash 0\n",
+        generation.display()
+    )
+}
+
+/// A publisher that stages a pointer and renames it into place after the
+/// guard has already judged the pointer it grabbed must keep that pointer.
+#[test]
+fn snapshots_restore_leaves_a_pointer_published_after_its_check() {
+    let dir = scratch_snapshots("publish-after-check");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-77-0\n").expect("pointer");
+    restore.own_generation_from_stdout(&success_line(&own));
+    let errors = restore.finish_with(|| {
+        // The other publisher's stage-then-rename lands in the gap.
+        let other = dir.join("title.generation-4294967295-0");
+        std::fs::create_dir(&other).expect("other generation");
+        let staged = dir.join("title.generation.stage-other");
+        std::fs::write(&staged, b"title.generation-4294967295-0\n").expect("stage");
+        std::fs::rename(&staged, dir.join("title.generation")).expect("publish");
+    });
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-4294967295-0\n",
+        "the pointer a publisher renamed into place must not be overwritten"
+    );
+    assert!(dir.join("title.generation-4294967295-0").exists());
+    assert!(!own.exists(), "the guard's own generation is still removed");
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .expect("read dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(
+        leftovers.len(),
+        3,
+        "no guard scratch files remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A restore that cannot be done must be reported and must not delete the
+/// generation the pointer still names.
+#[test]
+#[cfg(unix)]
+fn snapshots_restore_keeps_the_generation_when_the_pointer_restore_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch_snapshots("restore-fails");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-77-0\n").expect("pointer");
+    restore.own_generation_from_stdout(&success_line(&own));
+
+    // A read-only directory refuses the rename that takes the pointer aside.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    if std::fs::write(dir.join("probe"), b"").is_ok() {
+        eprintln!("skipped: root ignores directory modes, so 0555 stays writable");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let _ = std::fs::remove_dir_all(&dir);
+        restore.own_generations.clear();
+        return;
+    }
+    let errors = restore.finish_with(|| {});
+    assert!(!errors.is_empty(), "the failed restore must be reported");
+    // Re-arm, then check the drop surfaces the failure as a panic.
+    restore.own_generation_from_stdout(&success_line(&own));
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(restore)));
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    assert!(dropped.is_err(), "a failed restore must panic from drop");
+    assert!(
+        own.exists(),
+        "the generation the pointer names must survive"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-77-0\n"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
