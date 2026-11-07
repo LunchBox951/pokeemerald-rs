@@ -269,7 +269,7 @@ fn plant_symlink_at_free_fixture_path(hint: &str, target: &std::path::Path) -> s
 }
 
 #[cfg(unix)]
-fn assert_write_pack_does_not_follow_a_preplanted_symlink(hint: &str) {
+fn assert_write_pack_does_not_follow_a_preplanted_symlink(hint: &str) -> std::path::PathBuf {
     const SENTINEL: &[u8] = b"precious";
     // Exclusively created, so the sentinel itself never follows a planted link.
     let target = write_pack(&format!("{hint}-target"), SENTINEL);
@@ -295,6 +295,7 @@ fn assert_write_pack_does_not_follow_a_preplanted_symlink(hint: &str) {
         "fixture reused the symlink path"
     );
     assert!(written == bytes, "fixture bytes differ");
+    link
 }
 
 #[cfg(unix)]
@@ -307,15 +308,18 @@ fn write_pack_does_not_follow_a_preplanted_symlink() {
 #[test]
 fn symlink_regression_leaves_an_unowned_attempt_zero_entry_alone() {
     let hint = "symlink-regression-occupied";
-    let foreign = super::shared::pack_fixture_path(hint, 0);
-    // Exclusive, so this test owns the occupant it later checks.
-    let occupant = write_pack(hint, b"not-ours");
-    assert_eq!(occupant, foreign, "attempt zero must be the occupied path");
+    // Exclusive, so this test owns the occupant it later checks. A stale entry
+    // already at attempt zero only moves the occupant to a later attempt.
+    let occupied = write_pack(hint, b"not-ours");
 
-    assert_write_pack_does_not_follow_a_preplanted_symlink(hint);
+    let link = assert_write_pack_does_not_follow_a_preplanted_symlink(hint);
 
-    let survived = std::fs::read(&foreign).ok();
-    let _ = std::fs::remove_file(&foreign);
+    let survived = std::fs::read(&occupied).ok();
+    let _ = std::fs::remove_file(&occupied);
+    assert_ne!(
+        link, occupied,
+        "the link was planted over the occupied path"
+    );
     assert_eq!(
         survived.as_deref(),
         Some(&b"not-ours"[..]),
