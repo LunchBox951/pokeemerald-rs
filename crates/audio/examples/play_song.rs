@@ -150,17 +150,16 @@ fn main() -> ExitCode {
     // resampler's own settle margin (`playback_settle_margin_frames`), or a
     // resampled device's buffered interpolation tail could still be sounding
     // real audio after the wait already ended -- see `measured_drain_target`.
-    let submitted_target = output.playback_progress().map(|progress| {
-        measured_drain_target(
-            progress.submitted_frames,
-            output.playback_settle_margin_frames(),
-        )
-    });
+    let settle_margin_frames = output.playback_settle_margin_frames();
+    let submitted_target = output
+        .playback_progress()
+        .map(|progress| measured_drain_target(progress.submitted_frames, settle_margin_frames));
     let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
     let tail_result = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
         output.device_sample_rate(),
+        settle_margin_frames,
         &policy,
         || output.playback_progress(),
         || errors.since(&output),
@@ -449,17 +448,65 @@ fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32)
     }
 }
 
-/// Sleeps `tail`, then fails if `stream_errors` is nonzero: a device error
-/// during the tail means the last buffer never played.
+/// Holds the stream for the derived `tail` when no usable timestamp existed at
+/// ring drain, polling `progress` and `stream_errors` every `policy.interval`
+/// so the fallback is no blinder than [`wait_for_measured_tail`].
+///
+/// - Stream errors: any error is [`DrainError::StreamStoppedDuringTail`]: a
+///   device error during the tail means the last buffer never played.
+/// - A timestamp that becomes usable mid-tail hands the wait to
+///   [`wait_for_measured_tail`] under `policy` and `tail`, as if it had been
+///   usable at the drain. The song's own submitted count was unreadable at the
+///   drain, so its target is the timestamp's `submitted_frames` widened by
+///   `settle_margin_frames` (see [`measured_drain_target`]); that count also
+///   holds the silence the callbacks submitted since, which the device sounds
+///   about a callback queue after the timestamp appeared, so the measured
+///   wait gets its own full budget from then rather than what the tail has
+///   left. The whole wait is therefore bounded by the time spent before the
+///   timestamp appeared (under `tail`) plus the measured wait's own bound.
+/// - Otherwise the wait ends `Ok` once `tail` has elapsed.
+///
+/// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
+/// [`push_frame`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
 fn wait_for_device_tail(
     tail: Duration,
+    device_sample_rate: u32,
+    settle_margin_frames: u64,
+    policy: &RetryPolicy,
+    mut progress: impl FnMut() -> Option<PlaybackProgress>,
     mut stream_errors: impl FnMut() -> u64,
+    mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
-    sleep(tail);
-    match stream_errors() {
-        0 => Ok(()),
-        errors => Err(DrainError::StreamStoppedDuringTail { errors }),
+    let started = now();
+    let deadline = started + tail;
+    loop {
+        let snapshot = progress();
+        let errors = stream_errors();
+        if errors > 0 {
+            return Err(DrainError::StreamStoppedDuringTail { errors });
+        }
+        if let Some(snapshot) = snapshot {
+            return wait_for_measured_tail(
+                measured_drain_target(snapshot.submitted_frames, settle_margin_frames),
+                tail,
+                device_sample_rate,
+                policy,
+                progress,
+                stream_errors,
+                now,
+                sleep,
+            );
+        }
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        sleep(remaining.min(policy.interval));
     }
 }
 
@@ -938,8 +985,11 @@ impl MeasuredTail {
 /// `main`'s "hold the stream open until the last samples sound" step.
 /// With a `submitted_target`, it runs [`wait_for_measured_tail`], whose
 /// contract covers stale timestamps, live callbacks, and the deadline. Without
-/// one it sleeps `derived_tail` via [`wait_for_device_tail`], ignoring
-/// `policy`; stream errors fail both. Hooks are injected as in [`push_frame`].
+/// one it holds `derived_tail` via [`wait_for_device_tail`], which polls at
+/// `policy.interval`, switches to the measured wait if a timestamp becomes
+/// usable, and otherwise bounds the wait at `derived_tail` rather than
+/// `policy.max_wait`; stream errors fail both. Hooks are injected as in
+/// [`push_frame`].
 #[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
@@ -948,6 +998,7 @@ fn wait_for_device_tail_or_measured(
     submitted_target: Option<u64>,
     derived_tail: Duration,
     device_sample_rate: u32,
+    settle_margin_frames: u64,
     policy: &RetryPolicy,
     progress: impl FnMut() -> Option<PlaybackProgress>,
     stream_errors: impl FnMut() -> u64,
@@ -966,7 +1017,16 @@ fn wait_for_device_tail_or_measured(
             sleep,
         )
     } else {
-        wait_for_device_tail(derived_tail, stream_errors, sleep)
+        wait_for_device_tail(
+            derived_tail,
+            device_sample_rate,
+            settle_margin_frames,
+            policy,
+            progress,
+            stream_errors,
+            now,
+            sleep,
+        )
     }
 }
 
