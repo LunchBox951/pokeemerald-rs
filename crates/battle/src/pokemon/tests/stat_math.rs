@@ -203,3 +203,38 @@ fn compute_stats_with_evs_forces_shedinja_to_one_hp_even_fully_ev_trained() {
     );
     assert_eq!(stats.max_hp, 1);
 }
+
+#[test]
+fn compute_stats_with_evs_routes_each_ev_byte_to_its_own_stat() {
+    let dex = Dex::new();
+    let bulbasaur = dex.species(BULBASAUR).unwrap();
+    let evs = Evs {
+        hp: 4,
+        attack: 8,
+        defense: 12,
+        speed: 16,
+        sp_attack: 20,
+        sp_defense: 24,
+    };
+    let untrained = compute_stats_with_evs(
+        BULBASAUR,
+        bulbasaur,
+        MAX_LEVEL,
+        Nature::Hardy,
+        MAX_IVS,
+        Evs::default(),
+    );
+    let trained =
+        compute_stats_with_evs(BULBASAUR, bulbasaur, MAX_LEVEL, Nature::Hardy, MAX_IVS, evs);
+    assert_eq!(
+        (
+            trained.max_hp - untrained.max_hp,
+            trained.attack - untrained.attack,
+            trained.defense - untrained.defense,
+            trained.speed - untrained.speed,
+            trained.sp_attack - untrained.sp_attack,
+            trained.sp_defense - untrained.sp_defense,
+        ),
+        (1, 2, 3, 4, 5, 6)
+    );
+}
