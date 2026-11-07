@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use super::*;
+use crate::extract::owned_fixture::OwnedDir;
 use assets::pack::{AssetPack, SpecialBattleMessage};
 
 const CHARMAP: &str = "\
@@ -180,7 +181,8 @@ fn rebuilding_is_deterministic_regardless_of_row_order() {
 
 #[test]
 fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
-    let dir = std::env::temp_dir().join(format!("pokeemerald-rs-bmsg-{}", std::process::id()));
+    let owned = OwnedDir::create("pokeemerald-rs-bmsg").unwrap();
+    let dir = owned.path();
     let f = fixture();
     for (path, text) in [
         (CHARMAP_PATH, CHARMAP),
@@ -193,17 +195,16 @@ fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
         std::fs::write(target, text).unwrap();
     }
     let mut writer = PackWriter::new();
-    extract_battle_message(&dir, &mut writer).unwrap();
+    extract_battle_message(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), 1);
 
     std::fs::write(dir.join(MESSAGE_PATH), "").unwrap();
     let mut writer = PackWriter::new();
     assert!(matches!(
-        extract_battle_message(&dir, &mut writer),
+        extract_battle_message(dir, &mut writer),
         Err(ExtractError::BattleMessageSource { .. })
     ));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
