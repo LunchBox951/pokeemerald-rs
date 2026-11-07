@@ -11869,6 +11869,14 @@
       "status": "pending"
     },
     "data/text/contest_strings.inc": {
+      "artifacts": {
+        "contest_effect_descriptions": {
+          "reason": "Extracted: the 48 gText_* labels gContestEffectDescriptionPointers names, .string pieces concatenated up to their explicit $ terminator, into summary-move/table (assets::pack::SummaryMoveTable). The file's other labels are not read.",
+          "rust_target": "crates/xtask/src/extract/summary_move.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "data.text",
       "kind": "file",
       "spec_owner": "S-5",
@@ -29748,6 +29756,20 @@
       "status": "ported"
     },
     "src/data/contest_moves.h": {
+      "artifacts": {
+        "gContestEffects": {
+          "reason": "Extracted: all 48 gContestEffects rows (effectType, raw appeal, raw jam) into summary-move/table (assets::pack::SummaryMoveTable) by the xtask extractor and by rom-import domains/summary_moves.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_move.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gContestMoves_summary_fields": {
+          "reason": "Extracted: the effect and contestCategory of every gContestMoves[MOVES_COUNT] row, MOVE_NONE included, into summary-move/table (assets::pack::SummaryMoveTable). The comboStarterId and comboMoves fields are contest mechanics and are not carried.",
+          "rust_target": "crates/xtask/src/extract/summary_move.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29758,6 +29780,14 @@
       "status": "pending"
     },
     "src/data/contest_text_tables.h": {
+      "artifacts": {
+        "gContestEffectDescriptionPointers": {
+          "reason": "Extracted: the 48 gContestEffectDescriptionPointers entries, indexed by contest effect, paired with their gContestEffects row in summary-move/table (assets::pack::SummaryMoveTable).",
+          "rust_target": "crates/xtask/src/extract/summary_move.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -30988,6 +31018,14 @@
       "status": "pending"
     },
     "src/data/text/move_descriptions.h": {
+      "artifacts": {
+        "gMoveDescriptionPointers": {
+          "reason": "Extracted: gMoveDescriptionPointers[MOVES_COUNT - 1] (354 pointers, MOVE_NONE has no slot, indexed by move minus one) and the _() strings they name, mapped through charmap.txt with EOS appended, into summary-move/table (assets::pack::SummaryMoveTable) by the xtask extractor and by rom-import domains/summary_moves.rs. sNullDescription is unreferenced and not packed.",
+          "rust_target": "crates/xtask/src/extract/summary_move.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"

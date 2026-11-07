@@ -40,6 +40,7 @@ pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
+pub(crate) mod summary_moves;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
@@ -73,6 +74,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     song::write,
     battle_messages::write,
     field_messages::write,
+    summary_moves::write,
     battle_anim::write,
     bag::write,
     starter_choose::write,

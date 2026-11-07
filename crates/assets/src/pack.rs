@@ -22,6 +22,7 @@ mod paletted_image;
 mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
+mod summary_move;
 mod text_printer;
 mod text_tokens;
 mod trainer_battler;
@@ -59,6 +60,12 @@ pub use paletted_image::PalettedImage;
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
+pub use summary_move::{
+    ContestCategory, ContestEffect, ContestEffectId, ContestEffectRecord, ContestEffectType,
+    ContestMove, ContestMoveRecord, SummaryMoveError, SummaryMoveSection, SummaryMoveTable,
+    CONTEST_CATEGORY_COUNT, CONTEST_EFFECT_COUNT, CONTEST_MOVE_COUNT,
+    DESCRIPTION_COUNT as MOVE_DESCRIPTION_COUNT,
+};
 pub use text_printer::TextPrinterDownArrow;
 
 pub use trainer_battler::TrainerBattlerHandle;

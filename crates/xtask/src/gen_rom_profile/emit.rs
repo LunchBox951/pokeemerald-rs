@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 mod poke_ball;
+mod summary_moves;
 
 use rom_import::Encoding;
 
@@ -77,8 +78,8 @@ use crate::roots::{{
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
     PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    StarterChooserRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot, TilesetRoot,
+    TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -137,6 +138,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
+    summary_moves::summary_move_roots(&mut out, &plan.summary_moves);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -908,7 +910,8 @@ mod bag_field_tests {
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
+        StarterChooserPlan, SummaryMovePlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
+        TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1291,6 +1294,12 @@ mod bag_field_tests {
                 specials: vec![],
             },
             field_messages: FieldMessagePlan { messages: vec![] },
+            summary_moves: SummaryMovePlan {
+                descriptions: base,
+                contest_moves: base,
+                contest_effects: base,
+                effect_descriptions: base,
+            },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],

@@ -50,7 +50,10 @@
 //!   `mus_title`'s transitive voicegroup tree and every sample that tree
 //!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
-//!   templates `BufferStringBattle` selects); and
+//!   templates `BufferStringBattle` selects);
+//! - the summary screen's move and contest records (`gMoveDescriptionPointers`,
+//!   each `gContestMoves` row's effect and category, `gContestEffects`, and
+//!   `gContestEffectDescriptionPointers`); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
 //! - the battle-animation catalog (`data/battle_anim_scripts.s`);
@@ -89,6 +92,7 @@
 //! - `battle-message/table`
 //! - `poke-ball/{image,palette}/<name>`
 //! - `field-message/table`
+//! - `summary-move/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `battle-anim/catalog`
 //! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
@@ -131,6 +135,7 @@ mod publish;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;
+mod summary_move;
 mod text_source;
 mod text_window;
 mod tilesets;
@@ -225,6 +230,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
+    summary_move::extract_summary_move(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
