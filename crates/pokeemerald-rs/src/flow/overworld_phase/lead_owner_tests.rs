@@ -76,6 +76,39 @@ fn flushing_a_lead_over_an_empty_party_files_it_in_slot_zero() {
 }
 
 #[test]
+fn a_loaded_frozen_lead_round_trips_through_the_flush_and_a_thaw_writes_zero() {
+    let mut frozen = starter();
+    frozen.set_status1(battle::Status1::Frozen);
+    let mut phase = continued(&[frozen], 1);
+    assert_eq!(phase.save1.player_party[0].status, 0x20, "fixture sanity");
+    phase.assert_lead_at_slot_for_test(0);
+    assert_eq!(
+        phase.lead_battler().unwrap().status1(),
+        battle::Status1::Frozen
+    );
+    let before = phase.save1.player_party[0];
+
+    phase.flush_lead_to_save();
+    assert_eq!(
+        phase.save1.player_party[0], before,
+        "an untouched frozen lead re-saves byte for byte"
+    );
+
+    phase
+        .lead_mut_for_test()
+        .unwrap()
+        .set_status1(battle::Status1::Healthy);
+    phase.flush_lead_to_save();
+    assert_eq!(phase.save1.player_party[0].status, 0);
+    phase.clear_lead_for_test();
+    phase.load_lead_from_save();
+    assert_eq!(
+        phase.lead_battler().unwrap().status1(),
+        battle::Status1::Healthy
+    );
+}
+
+#[test]
 fn flushing_without_a_lead_changes_nothing() {
     let mut phase = continued(&[starter()], 1);
     phase.clear_lead_for_test();
@@ -254,10 +287,12 @@ fn an_unsaved_fresh_lead_is_lent_and_restored_without_a_backing_record() {
 fn healing_files_a_damaged_ev_trained_lead_at_full() {
     const EV_HP_BONUS: u16 = 7;
     let mut phase = new_game_phase();
-    let lead = starter();
-    let mut stored = record_of(&lead);
+    let mut stored = record_of(&starter());
     stored.max_hp += EV_HP_BONUS;
-    stored.hp = 1;
+    stored.hp = 2;
+    // The battler adopts the saved cache, so its own maximum is the trained one.
+    let lead = crate::party::from_save_pokemon(&Dex::new(), &stored).unwrap();
+    assert_eq!(lead.stats().max_hp, u32::from(stored.max_hp));
     phase.save1.player_party_count = 1;
     phase.set_backed_lead_for_test(0, stored, lead);
     phase.lead_mut_for_test().unwrap().apply_damage(1);

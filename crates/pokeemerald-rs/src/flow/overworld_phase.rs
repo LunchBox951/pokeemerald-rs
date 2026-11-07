@@ -44,6 +44,7 @@ pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod connections;
+mod escalator_arrival;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -51,12 +52,14 @@ mod frame;
 mod input;
 mod interaction;
 mod lead_owner;
+mod object_events;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
 mod step;
+mod take_item_message;
 mod white_out;
 mod wild_battle;
 
@@ -189,6 +192,13 @@ pub(crate) struct OverworldPhase {
     /// Feeds only the wild-encounter gate -- never the positional
     /// coord/warp consumers `pending_landing` feeds.
     pending_turn: Option<TilePos>,
+    /// An escalator warp just landed and its arrival's east step is still
+    /// due ([`escalator_arrival`]); consumed by the next field frame.
+    escalator_arrival_walk: Option<engine::overworld::Direction>,
+    /// The tile the arrival's east step is walking onto, until its landing is
+    /// consumed: that landing is held movement, not a took-step
+    /// ([`escalator_arrival`]).
+    escalator_walk_off_landing: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -246,9 +256,8 @@ pub(crate) struct OverworldPhase {
     pub(super) wild_lead_refusal: Option<battle::BattleError>,
     /// The player's lead party mon: its battle-ready form, the saved slot it
     /// was decoded from (`SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`,
-    /// `pokeemerald/src/battle_controllers.c:604`), the backing record, and the
-    /// current-HP points the zero-EV load clamp hid from it
-    /// (`party::hp_hidden_by_load`) -- what a fired encounter is fought with.
+    /// `pokeemerald/src/battle_controllers.c:604`), and the backing
+    /// record -- what a fired encounter is fought with.
     /// Write-back ([`Self::copy_party_and_objects_to_save`]) and
     /// [`Self::white_out`]'s heal both target the lead's own slot, not always
     /// slot 0.
@@ -600,6 +609,8 @@ impl OverworldPhase {
             save2: block2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -748,6 +759,8 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -987,6 +1000,9 @@ mod field_poison_tests;
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
+/// Fixed-facing object events driven by the production frame.
+#[cfg(test)]
+mod fixed_facing_tests;
 #[cfg(test)]
 mod forced_landing_field_input_gate_tests;
 #[cfg(test)]

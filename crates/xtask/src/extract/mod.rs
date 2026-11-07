@@ -24,7 +24,7 @@
 //! - the tall-grass field-effect sheet and its `general_1` palette;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
-//!   main-menu background palette; and
+//!   main-menu background palette, and the text printer's down-arrow sheet; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes and both Birch tilemaps;
 //! - Birch's speech scene (shadow sheet, background tilemap and palettes, his
@@ -70,9 +70,9 @@
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
 //! - `field-effect/{image,palette}/<name>`
 //! - `layout/<name>/{map,border}`
-//! - `font/<name>/glyphs`
+//! - `font/<name>/glyphs` and `font/keypad_icons`
 //! - `text-window/{image,palette}/<stem>`
-//! - `interface/palette/main_menu_bg`
+//! - `interface/image/down_arrow` and `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `evolution-scene/{image,palette,raw}/<name>`
@@ -121,6 +121,8 @@ mod layouts_json;
 pub(crate) mod midi;
 mod naming_screen;
 mod opening_scene;
+#[cfg(test)]
+mod owned_fixture;
 pub mod png;
 pub(crate) mod poke_ball;
 mod pokedex;
@@ -207,6 +209,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
+    interface::extract_interface_images(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     opening_scene::extract_opening_scene(&upstream, &mut writer)?;
@@ -325,32 +328,9 @@ fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
     writer.push(pack_format::raw_entry(id, payload));
 }
 
-fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                walk(&path, out)?;
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                out.push(path);
-            }
-        }
-        Ok(())
-    }
-    let mut out = Vec::new();
-    walk(dir, &mut out).map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
-    out.sort();
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError};
+    use super::{extract_to, jasc_pal, upstream_present, ExtractError};
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -445,11 +425,5 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
-    }
-
-    #[test]
-    fn collect_pngs_sorted_rejects_missing_dir() {
-        let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
-        assert!(matches!(err, super::ExtractError::ReadFailed(..)));
     }
 }

@@ -69,6 +69,10 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs", "
 # asset pack. Dev-only, so production builds keep the pack-mediated pairing
 # guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+# `battle`'s test-only seam (BattlePokemon::reconcile_saved_experience) for
+# unit tests that level a lead without a battle fixture. Dev-only, so the
+# production build carries no level-raise outside an award.
+battle = { path = "../battle", features = ["test-support"] }
 # `pack-format` is a plain dependency now (see above), so it needs no
 # dev-dependency entry: `title`'s tile round-trip test, which proves
 # `title::pack_tile_bytes` is the exact inverse of

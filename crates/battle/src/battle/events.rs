@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
 
 use crate::error::BattleError;
@@ -46,10 +47,22 @@ pub enum BattleEvent {
     /// decrement, cancelling its chosen move before any PP was spent
     /// (`CANCELER_ASLEEP`, `src/battle_util.c:2015`-`:2057`).
     ///
-    /// This precedes the confusion and paralysis cancellers, which do not
-    /// run for the action.
+    /// This precedes the Truant, confusion and paralysis cancellers, which do
+    /// not run for the action.
     FastAsleep {
         /// Whether the player's battler is asleep.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A Truant holder loafed on its off turn, cancelling its chosen move
+    /// before any PP was spent (`CANCELER_TRUANT`,
+    /// `src/battle_util.c:2086`-`:2097`).
+    ///
+    /// Sleep is checked first; the confusion and paralysis cancellers and
+    /// every later draw do not run for the action.
+    LoafingAround {
+        /// Whether the player's battler loafed.
         by_player: bool,
         /// The move that was never attempted.
         move_id: MoveId,
@@ -60,6 +73,35 @@ pub enum BattleEvent {
     WokeUp {
         /// Whether the player's battler woke.
         by_player: bool,
+    },
+    /// A frozen battler's canceller draw kept it frozen and its chosen move
+    /// is not a thaw-hit move, so the move was cancelled before any PP was
+    /// spent (`BattleScript_MoveUsedIsFrozen`,
+    /// `src/battle_util.c:2059`-`:2083`).
+    ///
+    /// This follows the sleep canceller and precedes the confusion and
+    /// paralysis cancellers, which do not run for the action.
+    FrozenSolid {
+        /// Whether the player's battler is frozen.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A frozen battler thawed on its canceller draw
+    /// (`BattleScript_MoveUsedUnfroze`, `src/battle_util.c:2073`-`:2079`),
+    /// and its chosen move proceeds through the remaining cancellers.
+    Thawed {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+    },
+    /// A frozen battler's thaw-hit move thawed it after the confusion and
+    /// paralysis cancellers let the move proceed, without a second draw
+    /// (`CANCELER_THAW`, `src/battle_util.c:2250`-`:2262`).
+    ThawedByMove {
+        /// Whether the player's battler thawed.
+        by_player: bool,
+        /// The thaw-hit move that thawed it.
+        move_id: MoveId,
     },
     /// A confused battler's duration reached zero this action, ending
     /// confusion before the paralysis draw and PP handling run
@@ -99,6 +141,47 @@ pub enum BattleEvent {
         /// Whether the player's battler was cancelled.
         by_player: bool,
         /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// An infatuated battler's action reached `CANCELER_IN_LOVE`
+    /// (`BattleScript_MoveUsedIsInLove`, `data/battle_scripts_1.s:3840`-
+    /// `:3844`), which announces the infatuation on either coin outcome. The
+    /// battler is in love with the opposing battler, the only one that can
+    /// have attracted it in singles. It is followed by
+    /// [`BattleEvent::ImmobilizedByLove`] or the move's own events, and
+    /// precedes the thaw and PP handling.
+    InLove {
+        /// Whether the player's battler is infatuated and acting.
+        by_player: bool,
+    },
+    /// The infatuation coin cancelled the chosen move before any PP was
+    /// spent (`BattleScript_MoveUsedIsInLoveCantAttack`,
+    /// `data/battle_scripts_1.s:3846`-`:3849`). It follows
+    /// [`BattleEvent::InLove`].
+    ImmobilizedByLove {
+        /// Whether the player's battler was cancelled.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// Attract infatuated its target (`STRINGID_PKMNFELLINLOVE`,
+    /// `BattleScript_EffectAttract`, `data/battle_scripts_1.s:1653`). A miss
+    /// reports [`BattleEvent::Missed`], a gender or reapplication failure
+    /// [`BattleEvent::ButItFailed`], and an Oblivious target
+    /// [`BattleEvent::ObliviousPreventsAttraction`], instead.
+    Infatuated {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that infatuated the target.
+        move_id: MoveId,
+    },
+    /// Attract's target prevented the attraction with Oblivious
+    /// (`BattleScript_ObliviousPreventsAttraction`,
+    /// `data/battle_scripts_1.s:4140`-`:4144`).
+    ObliviousPreventsAttraction {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that was prevented.
         move_id: MoveId,
     },
     /// A move connected, but the target's typing made it ineffective. An
@@ -360,6 +443,27 @@ pub enum BattleEvent {
         /// The move that inflicted poison.
         move_id: MoveId,
     },
+    /// A burn secondary inflicted [`crate::status1::Status1::Burned`]
+    /// (`BattleScript_MoveEffectBurn`, `data/battle_scripts_1.s:3893`-`:3897`;
+    /// `STRINGID_PKMNWASBURNED` through `gGotBurnedStringIds`).
+    Burned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted the burn.
+        move_id: MoveId,
+    },
+    /// A Fire move thawed a frozen target that survived its damage
+    /// (`MOVEEND_DEFROST`, `battle_script_commands.c:4257`-`:4272`;
+    /// `BattleScript_DefrostedViaFireMove`, `data/battle_scripts_1.s:3767`-`:3771`,
+    /// `STRINGID_PKMNWASDEFROSTED`). It consumes no RNG and precedes the
+    /// target's Synchronize and contact abilities.
+    TargetDefrosted {
+        /// Whether the player used the Fire move; the thawed battler is its
+        /// target.
+        by_player: bool,
+        /// The Fire move that thawed the target.
+        move_id: MoveId,
+    },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
     /// back onto the original attacker after the target's own faint settlement
     /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
@@ -571,7 +675,9 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
-    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`): the
+    /// `ENDTURN_POISON` tick and the `ENDTURN_BAD_POISON` tick, which share
+    /// `BattleScript_PoisonTurnDmg`.
     HurtByPoison {
         /// Whether the player's battler was hurt.
         by_player: bool,
@@ -587,6 +693,67 @@ pub enum BattleEvent {
         by_player: bool,
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
+    },
+    /// Leech Seed took hold of its target (`STRINGID_PKMNSEEDED`,
+    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss
+    /// or an already-seeded target reports [`BattleEvent::LeechSeedEvaded`],
+    /// and a Grass-type target [`BattleEvent::NoEffect`], instead
+    /// (`gLeechSeedStringIds`, `src/battle_message.c:960`-`:967`).
+    Seeded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that planted the seed.
+        move_id: MoveId,
+    },
+    /// Leech Seed missed its accuracy check or found its target already
+    /// seeded (`B_MSG_LEECH_SEED_MISS`, `Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6720`-`:6724`). Unlike
+    /// [`BattleEvent::Missed`], this names the target:
+    /// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+    /// `BattleScript_DoLeechSeed` on a miss too (`data/battle_scripts_1.s:1163`),
+    /// so both failures print `gLeechSeedStringIds`' `STRINGID_PKMNEVADEDATTACK`
+    /// (`src/battle_message.c:963`). Marks `MOVE_RESULT_MISSED` like a miss.
+    LeechSeedEvaded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that failed.
+        move_id: MoveId,
+    },
+    /// `STRINGID_PKMNSAPPEDBYLEECHSEED` (`data/battle_scripts_1.s:3265`-
+    /// `:3284`): the seeded battler's `ENDTURN_LEECH_SEED` loss, which
+    /// precedes its [`BattleEvent::HurtByPoison`] slot
+    /// (`pokeemerald/src/battle_util.c:1509`-`:1523`). Always followed by the
+    /// seeder's [`BattleEvent::LeechSeedHealed`].
+    SappedByLeechSeed {
+        /// Whether the player's battler was drained.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the drain.
+        damage: u32,
+    },
+    /// The seeder's share of a [`BattleEvent::SappedByLeechSeed`]: it regains
+    /// exactly the HP the seeded battler lost (`copyword gBattleMoveDamage,
+    /// gHpDealt`, `data/battle_scripts_1.s:3270`), capped at its maximum HP.
+    LeechSeedHealed {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// HP actually gained, zero for a full-HP seeder.
+        healed: u32,
+    },
+    /// `STRINGID_PKMNSITEMRESTOREDHEALTH`,
+    /// `BattleScript_ItemHealHP_RemoveItem` (`data/battle_scripts_1.s:4356`-
+    /// `:4364`): a living holder at or below half HP regained its item's HP
+    /// in the end-turn item pass and consumed the item
+    /// (`ItemBattleEffects`' `ITEMEFFECT_NORMAL`,
+    /// `pokeemerald/src/battle_util.c:3331`-`:3346`). That pass precedes the
+    /// battler's [`BattleEvent::SappedByLeechSeed`] slot
+    /// (`:1442`-`:1461`).
+    ItemRestoredHealth {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// The item consumed.
+        item: ItemId,
+        /// HP actually gained, capped at the holder's maximum HP.
+        healed: u32,
     },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
