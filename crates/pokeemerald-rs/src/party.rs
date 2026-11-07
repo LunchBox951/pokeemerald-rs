@@ -614,11 +614,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     }
     let move_ids = slot_moves[..known_moves].to_vec();
 
-    // Adopted before any PP is wound back: it is what each slot's *capacity*
-    // is, so the spend below counts down from the PP-Up-adjusted maximum
-    // rather than from base PP. Every byte is legal (two-bit fields cannot
-    // overflow), so there is nothing to screen -- `battle::PpBonuses`' own
-    // docs.
+    // `with_pp_bonuses` sets each slot's maximum from these PP Up counts; the
+    // stored PP byte is then adopted unchanged by `with_saved_pp` below. Every
+    // byte is legal (two-bit fields cannot overflow), so there is nothing to
+    // screen -- `battle::PpBonuses`' own docs.
     let pp_bonuses = battle::PpBonuses::from_bits(substructures.growth[GROWTH_PP_BONUSES]);
 
     // `PokemonSubstruct2`'s first six bytes -- this record's own EVs, adopted
