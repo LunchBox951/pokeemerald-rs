@@ -596,15 +596,9 @@ impl SaveBlock2 {
 /// mark it (see the module documentation for the rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
-    /// The slot holds a live player object whose elevation pair is trusted:
-    /// either this port's writer stored it (`active` and the marker bit set,
-    /// `currentCoords` agreeing with `pos`) or it is a pristine upstream record
-    /// (`active` and `isPlayer` set, coordinates agreeing with `pos`, padding
-    /// zero, a legal pair). Zero-filled entries, and images whose coordinates
-    /// disagree with `pos` or whose pair upstream could not hold, decode it
-    /// clear, which is what tells a real `(0, 0)` elevation pair from a stale
-    /// or unwritten byte. An unmarked record is not reliably identifiable; see
-    /// the module documentation for the residual.
+    /// The slot holds a live player object whose elevation pair is trusted
+    /// under the module documentation's rule. Clear, it tells a zero-filled or
+    /// untrusted entry from a real `(0, 0)` pair.
     pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,

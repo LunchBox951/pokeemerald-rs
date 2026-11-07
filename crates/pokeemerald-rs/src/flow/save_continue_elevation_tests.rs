@@ -329,3 +329,41 @@ fn unmarked_image_whose_coords_disagree_with_pos_is_not_restored() {
         )
     );
 }
+
+/// A checksum-valid upstream-layout flash image loaded through `SaveStore`,
+/// then continued onto the transition cell, keeps the `(0, 4)` pair.
+#[test]
+fn checksum_valid_upstream_image_continues_with_its_pair() {
+    use engine::save::{SaveStatus, SaveStore, Sector, SECTOR_DATA_SIZE, SECTOR_SIZE};
+    let (bytes, block2) = pristine_upstream_bytes(0x40);
+    let mut block1 = new_game_phase().save1.clone();
+    block1.pos.x = 4;
+    block1.pos.y = 4;
+    let mut store = SaveStore::new();
+    store.save(&block1, &block2);
+    let mut image = store.flash_image().to_vec();
+    let mut patched = 0;
+    for physical in 0..32 {
+        let off = physical * SECTOR_SIZE;
+        let raw: [u8; SECTOR_SIZE] = image[off..off + SECTOR_SIZE].try_into().unwrap();
+        let sector = Sector::from_bytes(raw);
+        if sector.id() == 1 && sector.signature() == engine::save::SECTOR_SIGNATURE {
+            let rewritten = Sector::write(1, &bytes[..SECTOR_DATA_SIZE], sector.counter());
+            image[off..off + SECTOR_SIZE].copy_from_slice(rewritten.as_bytes());
+            patched += 1;
+        }
+    }
+    assert_eq!(patched, 1);
+    let mut reopened = SaveStore::from_flash_image(&image).unwrap();
+    let outcome = reopened.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert!(outcome.block1.player_object_event.active);
+    assert_eq!(
+        continue_onto_cell(
+            outcome.block1,
+            outcome.block2,
+            engine::overworld::ELEVATION_TRANSITION
+        ),
+        (engine::overworld::ELEVATION_TRANSITION, 4)
+    );
+}
