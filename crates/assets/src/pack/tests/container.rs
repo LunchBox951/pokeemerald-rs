@@ -252,16 +252,28 @@ fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
     );
 }
 
+/// Plants a symlink to `target` at the first free fixture path for `hint`.
+/// Creation is exclusive, so a taken name moves on to the next attempt instead
+/// of being unlinked; the returned path is therefore owned by the caller.
 #[cfg(unix)]
-#[test]
-fn write_pack_does_not_follow_a_preplanted_symlink() {
+fn plant_symlink_at_free_fixture_path(hint: &str, target: &std::path::Path) -> std::path::PathBuf {
+    for attempt in 0.. {
+        let link = super::shared::pack_fixture_path(hint, attempt);
+        match std::os::unix::fs::symlink(target, &link) {
+            Ok(()) => return link,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => panic!("plant symlink {}: {err}", link.display()),
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(unix)]
+fn assert_write_pack_does_not_follow_a_preplanted_symlink(hint: &str) {
     const SENTINEL: &[u8] = b"precious";
-    let hint = "symlink-regression";
-    let link = super::shared::pack_fixture_path(hint, 0);
-    let _ = std::fs::remove_file(&link);
     // Exclusively created, so the sentinel itself never follows a planted link.
-    let target = write_pack("symlink-regression-target", SENTINEL);
-    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let target = write_pack(&format!("{hint}-target"), SENTINEL);
+    let link = plant_symlink_at_free_fixture_path(hint, &target);
 
     let bytes = synthetic_pack();
     let path = write_pack(hint, &bytes);
@@ -283,6 +295,32 @@ fn write_pack_does_not_follow_a_preplanted_symlink() {
         "fixture reused the symlink path"
     );
     assert!(written == bytes, "fixture bytes differ");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_pack_does_not_follow_a_preplanted_symlink() {
+    assert_write_pack_does_not_follow_a_preplanted_symlink("symlink-regression");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_regression_leaves_an_unowned_attempt_zero_entry_alone() {
+    let hint = "symlink-regression-occupied";
+    let foreign = super::shared::pack_fixture_path(hint, 0);
+    // Exclusive, so this test owns the occupant it later checks.
+    let occupant = write_pack(hint, b"not-ours");
+    assert_eq!(occupant, foreign, "attempt zero must be the occupied path");
+
+    assert_write_pack_does_not_follow_a_preplanted_symlink(hint);
+
+    let survived = std::fs::read(&foreign).ok();
+    let _ = std::fs::remove_file(&foreign);
+    assert_eq!(
+        survived.as_deref(),
+        Some(&b"not-ours"[..]),
+        "the regression deleted an entry it did not create"
+    );
 }
 
 #[test]
