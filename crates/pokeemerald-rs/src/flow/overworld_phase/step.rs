@@ -342,7 +342,8 @@ impl OverworldPhase {
         self.scene.seed_tall_grass_placement(&self.player);
         self.step_field_frame(buttons);
         self.advance_object_events();
-        self.scene.advance_tall_grass(&self.player);
+        self.scene
+            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no
