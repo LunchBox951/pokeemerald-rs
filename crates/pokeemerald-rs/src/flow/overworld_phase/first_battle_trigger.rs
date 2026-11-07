@@ -96,9 +96,9 @@ impl OverworldPhase {
         self.first_battle_trigger_at(runtime, x, y, retained_elevation)
     }
 
-    /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`);
-    /// only a lead the turn engine refuses (an inadmissible battler, or a saved held item
-    /// whose effect it does not model) leaves it armed, with nothing drawn.
+    /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`),
+    /// and so does this, lead or no lead. A start the turn engine or the battle
+    /// text rejects re-arms it, so a later step can retry with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
         if let Some(Err(error)) = self.lead_battler().map(ensure_lead_can_battle) {
             eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
@@ -109,6 +109,7 @@ impl OverworldPhase {
             "first battle: Route 101 rescue trigger reached -- starting the scripted Zigzagoon \
              battle (issue #231)"
         );
+        let armed_state = self.save1.event_data.var_get(VAR_ROUTE101_STATE).ok();
         if let Err(error) = self
             .save1
             .event_data
@@ -132,6 +133,7 @@ impl OverworldPhase {
                     Err(error) => {
                         eprintln!("first battle: can't play its text ({error})");
                         self.restore_lead_battler(lead);
+                        self.rearm_first_battle_trigger(armed_state);
                         return;
                     }
                 }
@@ -143,7 +145,23 @@ impl OverworldPhase {
             Err(error) => {
                 eprintln!("first battle: can't start ({error:?})");
                 self.restore_lead_battler(lead);
+                self.rearm_first_battle_trigger(armed_state);
             }
+        }
+    }
+
+    /// Puts `VAR_ROUTE101_STATE` back to the value a rejected start found, so the
+    /// coord event fires again on the next completed step.
+    fn rearm_first_battle_trigger(&mut self, armed_state: Option<u16>) {
+        let Some(armed_state) = armed_state else {
+            return;
+        };
+        if let Err(error) = self
+            .save1
+            .event_data
+            .var_set(VAR_ROUTE101_STATE, armed_state)
+        {
+            eprintln!("first battle: couldn't re-arm VAR_ROUTE101_STATE ({error})");
         }
     }
 

@@ -20,6 +20,8 @@ use platform::{ButtonState, Buttons};
 const NEEDS_PACK: &str = "needs a local pack: run `cargo xtask extract` first";
 /// The first Route 101 rescue coord event (`Route101/map.json`, elevation 3).
 const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
+/// `VAR_ROUTE101_STATE` (`include/constants/vars.h`): 1 arms the rescue, 2 marks it consumed.
+const VAR_ROUTE101_STATE: u16 = 0x4060;
 const TREECKO: SpeciesId = SpeciesId(277);
 const FAST_TEXT_SPEED: u8 = 2;
 const IDLE_FRAMES: usize = 300;
@@ -269,4 +271,37 @@ fn a_move_learning_decision_is_made_only_after_the_text_that_asks_it() {
     assert!(lead.level() >= 16);
     let moves_after: Vec<MoveId> = lead.moves().iter().map(|known| known.move_id).collect();
     assert_eq!(moves_after, moves_before, "declining keeps the moveset");
+}
+
+/// A battle-text setup failure must not consume the rescue: the trigger stays
+/// armed so a later step can retry once the pack is repaired.
+#[test]
+fn a_rejected_battle_text_setup_leaves_the_rescue_armed() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch-verify-pack").into_boxed_path());
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx - 1, ty), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Test(missing),
+    );
+    phase.battle_text = BattleText::Played;
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(1));
+
+    walk_one_tile_east(&mut phase);
+
+    assert!(
+        !phase.is_first_battle_active(),
+        "setup failed, so no battle"
+    );
+    assert!(phase.lead.is_some(), "the lead was restored");
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue must stay armed after a setup rejection"
+    );
 }
