@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.114.0] - 2026-11-07
+## [0.0.115.0] - 2026-11-07
 
 - Townsfolk standing in tall grass, such as the boy on Route 101, now show the grass around their feet as the player does.
+
+## [0.0.114.0] - 2026-11-07
+
+- Cute Charm now works in battle: a Pokémon with it has a one-in-three chance of making an opposite-gender attacker fall in love when that attacker hits it with a contact move and both survive the hit, and the infatuated Pokémon can be immobilized by love just as after Attract. It does not take hold on Pokémon with Oblivious, of the same gender, without a gender, or already in love. Miguel on Route 103 is still refused until his other moves are modelled.
 
 ## [0.0.113.0] - 2026-11-06
 

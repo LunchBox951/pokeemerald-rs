@@ -439,9 +439,10 @@ impl OverworldPhase {
     ///   its `BattlePokemon`, and the battle crate refuses only an item whose
     ///   effect it does not model ([`battle::ensure_held_item_playable`]).
     ///   Miguel's Skitty holds an Oran Berry, which the battle crate admits,
-    ///   and is refused for its selected Cute Charm.
-    /// - **Miguel and Amy & Liv** stop on an ability or (for Amy & Liv) a
-    ///   double battle this port does not field.
+    ///   and its selected Cute Charm is modelled; a move screen refuses it.
+    /// - **Miguel and Amy & Liv** stop on a move the engine does not execute
+    ///   (Miguel's Sing) or (for Amy & Liv) a double battle this port does not
+    ///   field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
         let scan = find_sight_trainer(

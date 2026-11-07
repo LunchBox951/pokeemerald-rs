@@ -209,7 +209,7 @@ impl NpcDialog {
             self.ops.clear();
         }
         match event {
-            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
+            TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
                 for op in &mut self.ops {
                     op.shift_y(-dy);
@@ -238,12 +238,12 @@ impl NpcDialog {
         // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
         // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
         if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
+            self.push_clipped(WindowOp::ClearSpan(span));
         }
         // A keypad icon also ends its frame as `TickEvent::Idle`
         // (`Printer::keypad_icon`), so it never competes with a glyph either.
         if let Some(icon) = self.printer.keypad_icon() {
-            self.ops.push(WindowOp::KeypadIcon(icon));
+            self.push_clipped(WindowOp::KeypadIcon(icon));
         }
 
         if self.state == DialogState::Closed {
@@ -251,6 +251,12 @@ impl NpcDialog {
         } else {
             DialogOutcome::Continue
         }
+    }
+
+    /// Retains `op` with the rows below the window removed, once, at reveal
+    /// time; see [`WindowOp::clipped_below`].
+    fn push_clipped(&mut self, op: WindowOp) {
+        textbox::push_clipped(&mut self.ops, op, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1);
     }
 
     /// Draws the message box and visible glyphs over `base`.
@@ -1113,5 +1119,97 @@ mod tests {
             "a field dialog given the FAST saved option must print in fewer frames than one \
              given SLOW, but they took {fast} and {slow} frames"
         );
+    }
+
+    /// `{SHIFT_DOWN n}A\l` then a long pause, as an open dialog: the scroll's
+    /// 16 pixels finish within the pause.
+    fn shifted_glyph_then_scroll(shift_down: u8) -> NpcDialog {
+        opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: 0x0E,
+                args: vec![shift_down],
+            },
+            Token::Char('A'),
+            Token::PromptScroll,
+            Token::ExtCtrl {
+                sub: 0x08,
+                args: vec![u8::MAX],
+            },
+            Token::End,
+        ])
+    }
+
+    /// Runs `dialog` to the prompt, answers it, and lets the scroll run out.
+    fn scroll_past_the_prompt(dialog: &mut NpcDialog) {
+        const FRAMES_AFTER_THE_ANSWER: usize = 8;
+        dialog.tick(NO_INPUT);
+        dialog.tick(NO_INPUT);
+        dialog.tick(A_PRESS);
+        for _ in 0..FRAMES_AFTER_THE_ANSWER {
+            dialog.tick(NO_INPUT);
+        }
+    }
+
+    /// The glyph-wide strip of the standard box's content, one colour per
+    /// window row.
+    fn glyph_column_rows(dialog: &NpcDialog) -> Vec<Vec<Option<Rgb888>>> {
+        let composed = dialog.compose_over(Framebuffer::new());
+        (0..textbox::STANDARD_BOX_CONTENT_SIZE_PX.1)
+            .map(|row| {
+                (0..i32::try_from(assets::fonts::GLYPH_SIZE).unwrap())
+                    .map(|column| {
+                        let (x, y) = box_pixel((column, row));
+                        composed.pixel(x, y)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_glyph_clipped_below_the_window_stays_hidden_after_a_scroll() {
+        let background = glyph_column_rows(&opaque_synthetic_dialog(vec![Token::End]));
+        // A lands at window y = 32, wholly below the 32-pixel window.
+        let mut dialog = shifted_glyph_then_scroll(31);
+        dialog.tick(NO_INPUT);
+        assert_eq!(glyph_column_rows(&dialog), background, "before scroll");
+
+        scroll_past_the_prompt(&mut dialog);
+
+        assert_eq!(glyph_column_rows(&dialog), background, "after scroll");
+    }
+
+    #[test]
+    fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scroll() {
+        const LAST_WINDOW_ROW: usize = 31;
+        const SCROLL_PX: usize = 16;
+        let background = glyph_column_rows(&opaque_synthetic_dialog(vec![Token::End]));
+        // A lands at window y = 31: only its top row is inside the window.
+        let mut dialog = shifted_glyph_then_scroll(30);
+        dialog.tick(NO_INPUT);
+        let before = glyph_column_rows(&dialog);
+        for (row, pixels) in before.iter().enumerate() {
+            let expected = if row == LAST_WINDOW_ROW {
+                assert_ne!(pixels, &background[row], "the revealed row is drawn");
+                pixels
+            } else {
+                &background[row]
+            };
+            assert_eq!(pixels, expected, "before scroll row {row}");
+        }
+
+        scroll_past_the_prompt(&mut dialog);
+
+        // The scroll moved the revealed row up; rows clipped at reveal never
+        // come back.
+        let after = glyph_column_rows(&dialog);
+        for (row, pixels) in after.iter().enumerate() {
+            let expected = if row == LAST_WINDOW_ROW - SCROLL_PX {
+                &before[LAST_WINDOW_ROW]
+            } else {
+                &background[row]
+            };
+            assert_eq!(pixels, expected, "after scroll row {row}");
+        }
     }
 }
