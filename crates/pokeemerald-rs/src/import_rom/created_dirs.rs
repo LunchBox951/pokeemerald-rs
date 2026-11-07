@@ -345,6 +345,10 @@ fn create_missing_level(
                 entry_synced,
                 own: Some(std::rc::Rc::clone(&descend)),
             });
+            // The umask may have taken the owner's access to the level just
+            // made; the next level is created in it, so it is restored first.
+            // The level stays recorded if this fails.
+            dest::restore_directory_owner_access(&descend)?;
             // This level just made the pinned window one longer than
             // `pin_limit`; shed the outermost to bring it back -- one call
             // always suffices, since nothing but this push could have grown

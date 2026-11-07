@@ -11,6 +11,7 @@
 use assets::{AbilityId, Effectiveness};
 use battle::{BattleEvent, ChangedStat, Status1};
 
+use super::attract;
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
 use super::lifecycle;
 use super::names::NarrationNames;
@@ -18,7 +19,7 @@ use super::narrator::Narrator;
 use super::string_ids as id;
 use super::{NarrationError, NarrationRequest, TemplateId};
 
-fn table(template: u16, context: NarrationContext) -> NarrationRequest {
+pub(super) fn table(template: u16, context: NarrationContext) -> NarrationRequest {
     NarrationRequest {
         template: TemplateId::Table(template),
         context,
@@ -60,7 +61,9 @@ fn stat_change_buffer(rose: bool, magnitude: u8) -> BattleBuffer {
 
 fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     match status {
-        Status1::Poisoned => Ok(BattleBuffer::Status(StatusName::Poison)),
+        Status1::Poisoned | Status1::BadPoisoned { .. } => {
+            Ok(BattleBuffer::Status(StatusName::Poison))
+        }
         Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
@@ -79,6 +82,9 @@ pub(super) fn requests(
         return Ok(requests);
     }
     if let Some(requests) = setseeded_results(narrator, event) {
+        return Ok(requests);
+    }
+    if let Some(requests) = attract::requests(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = sleep_results(narrator, event) {
