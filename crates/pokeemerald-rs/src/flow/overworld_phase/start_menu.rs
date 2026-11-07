@@ -370,19 +370,24 @@ impl SaveTarget for PhaseSaveTarget<'_> {
             Ok(StoreOutcome::Written) => true,
             Ok(StoreOutcome::RefusedExistingSave) => {
                 eprintln!(
-                    "save: a saved game this session never loaded appeared on disk -- \n                     refusing to overwrite it without asking; the game was not saved"
+                    "save: a saved game this session never loaded appeared on disk -- \
+                     refusing to overwrite it without asking; the game was not saved"
                 );
                 false
             }
             Ok(StoreOutcome::RefusedStaleSession) => {
                 eprintln!(
-                    "save: the save on disk changed since this session loaded it \n                     (another instance saved?) -- refusing to overwrite newer \n                     progress with stale state; the game was not saved"
+                    "save: the save on disk changed since this session loaded it \
+                     (another instance saved?) -- refusing to overwrite newer \
+                     progress with stale state; the game was not saved"
                 );
                 false
             }
             Ok(StoreOutcome::RefusedConflictingSave) => {
                 eprintln!(
-                    "save: the save on disk is not this session's lineage (an equal or \n                     older counter with unexpected contents) -- refusing to overwrite it; \n                     the game was not saved"
+                    "save: the save on disk is not this session's lineage (an equal or \
+                     older counter with unexpected contents) -- refusing to overwrite it; \
+                     the game was not saved"
                 );
                 false
             }
