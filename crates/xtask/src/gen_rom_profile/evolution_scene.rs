@@ -12,14 +12,11 @@
 //! symbol. Both images are 4-bit in the ROM and in the pack, so the located
 //! depth needs no split.
 
-use rom_import::Encoding;
-
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::exactly_one;
+use super::lz77_blobs::locate_lz77_blobs;
 use super::palettes::locate_unique;
 use super::plan::{BlobPlan, EvolutionScenePlan, ReportLine, SymbolExpectation};
-use super::tilesets::len32;
 use super::Context;
 
 const IMAGE_PREFIX: &str = "evolution-scene/image/";
@@ -45,6 +42,14 @@ fn local_symbol(id: &str) -> Option<&'static str> {
         "evolution-scene/raw/bg_inner" => Some("sBgAnim_Inner_Tilemap"),
         "evolution-scene/raw/bg_outer" => Some("sBgAnim_Outer_Tilemap"),
         _ => None,
+    }
+}
+
+/// The symbol a linker map should show at `id`: its `static` name, if it has one.
+fn symbol_expectation(id: &str) -> SymbolExpectation {
+    match local_symbol(id) {
+        Some(name) => SymbolExpectation::Local(name.to_owned()),
+        None => SymbolExpectation::Unnamed,
     }
 }
 
@@ -79,15 +84,7 @@ fn locate_palettes(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<super::plan::PalettePlan>, GenRomProfileError> {
-    let mut plans = locate_unique(
-        ctx,
-        &ids_under(PALETTE_PREFIX),
-        &|id| match local_symbol(id) {
-            Some(name) => SymbolExpectation::Local(name.to_owned()),
-            None => SymbolExpectation::Unnamed,
-        },
-        report,
-    )?;
+    let mut plans = locate_unique(ctx, &ids_under(PALETTE_PREFIX), &symbol_expectation, report)?;
     plans.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(plans)
 }
@@ -97,30 +94,7 @@ fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let ids = ids_under(TILEMAP_PREFIX);
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        let mut line = ReportLine::unique(id, addr, len);
-        if let Some(name) = local_symbol(id) {
-            line = line.local_symbol(name);
-        }
-        report.push(line);
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(ctx, &ids_under(TILEMAP_PREFIX), &symbol_expectation, report)
 }
 
 #[cfg(test)]
