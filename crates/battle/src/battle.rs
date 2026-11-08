@@ -1771,8 +1771,11 @@ impl Battle {
 
     /// Runs the attacker's `CANCELER_ASLEEP` step: sleep is decremented ahead
     /// of every other modelled canceller (`src/battle_util.c:2015`-`:2057`).
-    /// A duration that survives cancels the move and returns `true`; expiry
-    /// wakes the attacker and lets the move proceed.
+    /// A duration that survives cancels the move and returns `true`, except
+    /// for Snore and Sleep Talk, which the cancel exempts
+    /// (`src/battle_util.c:2038`): they keep the decrement but proceed to the
+    /// later cancellers and the no-PP abort. Expiry wakes the attacker and
+    /// lets the move proceed.
     fn tick_attacker_sleep(
         &mut self,
         player_is_attacker: bool,
@@ -1788,6 +1791,9 @@ impl Battle {
             SleepTick::NotAsleep => Ok(false),
             SleepTick::StillAsleep(status) => {
                 attacker.set_status1(status);
+                if move_id == MoveId::SNORE || move_id == MoveId::SLEEP_TALK {
+                    return Ok(false);
+                }
                 events.push(BattleEvent::FastAsleep {
                     by_player: player_is_attacker,
                     move_id,

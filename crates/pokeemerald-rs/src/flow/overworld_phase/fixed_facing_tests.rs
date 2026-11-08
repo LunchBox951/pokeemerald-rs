@@ -12,8 +12,8 @@ use super::OverworldPhase;
 use crate::overworld::oldale_town_npc_reposition as oldale;
 
 /// A grid roomy enough for every checkpoint placement plus the player's offset from it.
-const GRID: u16 = 100;
-const FLOOR_ELEVATION: u8 = 3;
+pub(super) const GRID: u16 = 100;
+pub(super) const FLOOR_ELEVATION: u8 = 3;
 
 const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
 
@@ -76,7 +76,7 @@ const fn authored_facing(movement_type: MovementType) -> Direction {
 /// A phase over an open synthetic room whose live collection is seeded from `events`, as
 /// `connections::seed_object_events` seeds it from the scene's own events, without the sprite
 /// sheets binding the scene to those events would need.
-fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase {
+pub(super) fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase {
     let mut phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(GRID, GRID),
         map,
@@ -93,7 +93,7 @@ fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase 
     phase
 }
 
-fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
+pub(super) fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
     for _ in 0..frames {
         phase.step(ButtonState::new());
     }
@@ -101,7 +101,7 @@ fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
 
 /// Stands the player where `local_id` is in the spawn window but on neither its row nor its
 /// column, so no sight cone or interaction can reach.
-fn stand_near(phase: &mut OverworldPhase, local_id: u8) {
+pub(super) fn stand_near(phase: &mut OverworldPhase, local_id: u8) {
     let template = phase.object_events.get(local_id).unwrap().template();
     phase.player = PlayerState::new(
         (i32::from(template.x) + 3, i32::from(template.y) + 2),
@@ -116,6 +116,11 @@ fn assert_holds_authored_facing(
     movement_type: MovementType,
     what: &str,
 ) {
+    // Only this placement runs, on the phase's own stream: the map's other placements include
+    // random-facing ones, which legitimately draw from it.
+    let whole_map = phase.object_events.clone();
+    let template = whole_map.get(local_id).unwrap().template();
+    phase.object_events = ObjectEventCollection::from_templates(std::slice::from_ref(template));
     stand_near(phase, local_id);
     let rng_before = phase.rng.state();
     idle_frames(phase, 4);
@@ -145,6 +150,7 @@ fn assert_holds_authored_facing(
         phase.dialog.is_none() && phase.sight_approach.is_none() && !phase.in_battle(),
         "{what}: the loop under test was not preempted"
     );
+    phase.object_events = whole_map;
 }
 
 #[test]
@@ -365,7 +371,7 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
 
     let mut phase = build();
     turn_everyone_south_and_run(&mut phase);
-    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
+    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
     assert_reseeded(&mut phase, "the connection crossing");
 
     let _ = std::fs::remove_file(&path);

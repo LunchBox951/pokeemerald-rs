@@ -175,7 +175,9 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
+    /// Remaining PP. A battler built in-process holds at most
+    /// [`BattlePokemon::max_pp`]; one adopted from a save may hold more
+    /// ([`BattlePokemon::with_saved_pp`]).
     pub pp: u8,
 }
 
@@ -589,6 +591,23 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
+        Ok(self)
+    }
+
+    /// Adopts a saved record's remaining PP for one move slot exactly as
+    /// stored, even above [`BattlePokemon::max_pp`]; upstream provenance is
+    /// in the `party` module docs ("Move PP"). Spending
+    /// ([`BattlePokemon::deduct_pp`]) counts down from the stored value and
+    /// [`BattlePokemon::heal`] restores the maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty.
+    pub fn with_saved_pp(mut self, index: usize, pp: u8) -> Result<Self, BattleError> {
+        self.moves
+            .get_mut(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?
+            .pp = pp;
         Ok(self)
     }
 
