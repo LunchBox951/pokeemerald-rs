@@ -304,15 +304,40 @@ fn write_pack_does_not_follow_a_preplanted_symlink() {
     assert_write_pack_does_not_follow_a_preplanted_symlink("symlink-regression");
 }
 
+/// Claims the plain (attempt zero) fixture path of the first hint that has it
+/// free, returning that hint and the path. Creation is exclusive, so a stale
+/// entry at attempt zero (a reused PID's leftover) selects the next hint
+/// instead of letting the occupant drift to a later attempt.
+#[cfg(unix)]
+fn claim_attempt_zero(hint_prefix: &str, bytes: &[u8]) -> (String, std::path::PathBuf) {
+    use std::io::Write;
+    for n in 0.. {
+        let hint = format!("{hint_prefix}-{n}");
+        let path = super::shared::pack_fixture_path(&hint, 0);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(bytes).unwrap();
+                return (hint, path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => panic!("claim attempt zero {}: {err}", path.display()),
+        }
+    }
+    unreachable!()
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_regression_leaves_an_unowned_attempt_zero_entry_alone() {
-    let hint = "symlink-regression-occupied";
-    // Exclusive, so this test owns the occupant it later checks. A stale entry
-    // already at attempt zero only moves the occupant to a later attempt.
-    let occupied = write_pack(hint, b"not-ours");
+    // The occupant must sit at attempt zero, where setup plants its link first;
+    // a later attempt would hide an unconditional attempt-zero unlink.
+    let (hint, occupied) = claim_attempt_zero("symlink-regression-occupied", b"not-ours");
 
-    let link = assert_write_pack_does_not_follow_a_preplanted_symlink(hint);
+    let link = assert_write_pack_does_not_follow_a_preplanted_symlink(&hint);
 
     let survived = std::fs::read(&occupied).ok();
     let _ = std::fs::remove_file(&occupied);
