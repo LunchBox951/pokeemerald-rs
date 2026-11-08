@@ -467,7 +467,15 @@ impl OverworldPhase {
     /// If `to_map`'s header can't be resolved or its room can't be loaded,
     /// logs, touches nothing, and returns `false` so the caller can restore
     /// the pre-step stance. Returns `true` on a completed rebind.
-    pub(super) fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) -> bool {
+    ///
+    /// `shift` is the departed-to-entered tile translation the player's own
+    /// step went through; the player's live tall-grass effects follow it.
+    pub(super) fn cross_connection(
+        &mut self,
+        to_map: assets::MapId,
+        to_position: TilePos,
+        shift: (i32, i32),
+    ) -> bool {
         let Ok(header) = MapHeaderTable::new().header(to_map) else {
             eprintln!(
                 "connection: unknown destination map {to_map:?} -- staying on the departed \
@@ -475,7 +483,8 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(to_map)
+        let Some((transitioned_event_data, mut scene, object_events)) =
+            self.stage_transition(to_map)
         else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
@@ -485,6 +494,9 @@ impl OverworldPhase {
         };
 
         assert_scene_owns_map(&scene, to_map);
+        // The player's still-live rustle follows the camera into the entered
+        // map's coordinates (`field_effect_helpers.c:325-330`).
+        scene.carry_tall_grass_from(&self.scene, shift);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;
