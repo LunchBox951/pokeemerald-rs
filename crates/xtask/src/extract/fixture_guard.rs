@@ -25,25 +25,94 @@ const OCCUPIED_CANDIDATES: usize = 2;
 /// milliseconds, so a name still occupied after this is a leftover.
 const PLANT_WAIT: Duration = Duration::from_secs(10);
 
-/// Entries the guard created, removed on drop whatever the fixture did.
-struct Planted(Vec<PathBuf>);
+/// Unix: device and inode of the entry itself (a symlink is not followed).
+#[cfg(unix)]
+type Token = (u64, u64);
+
+/// Windows: the volume and file ID read off a handle opened without
+/// following a reparse point.
+#[cfg(windows)]
+type Token = win_fs::WindowsFileIdentity;
+
+/// Any other target has no identity this guard can read, so it removes
+/// nothing there and reports every planted entry.
+#[cfg(not(any(unix, windows)))]
+type Token = ();
+
+/// The per-object identity of the entry at `path`: `Ok(None)` when nothing is
+/// there, `Err` when the read itself failed.
+fn identity_of(path: &Path) -> io::Result<Option<Token>> {
+    #[cfg(unix)]
+    let read = {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::symlink_metadata(path).map(|m| (m.dev(), m.ino()))
+    };
+    #[cfg(windows)]
+    let read = win_fs::open_for_verified_delete(path)
+        .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle));
+    #[cfg(not(any(unix, windows)))]
+    let read: io::Result<Token> = Err(io::ErrorKind::Unsupported.into());
+    match read {
+        Ok(token) => Ok(Some(token)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// An entry the guard created and what it was at planting.
+struct PlantedEntry {
+    path: PathBuf,
+    /// `None` when the identity could not be read at planting: the entry can
+    /// then not be told from a replacement and is never removed.
+    identity: Option<Token>,
+}
+
+/// Entries the guard created, removed on drop whatever the fixture did, as
+/// long as the path still names the entry the guard created.
+struct Planted(Vec<PlantedEntry>);
+
+impl Planted {
+    /// Records the entry now at `path`, right after the guard planted it.
+    fn entry(path: &Path) -> PlantedEntry {
+        PlantedEntry {
+            path: path.to_path_buf(),
+            identity: identity_of(path).ok().flatten(),
+        }
+    }
+}
 
 impl Drop for Planted {
+    /// Removes an entry only while its path still names the one the guard
+    /// planted (the rule of `OwnedDir`): a path that now holds anything else,
+    /// such as the planted directory renamed aside and an unrelated one put
+    /// in its place, is left alone and reported. A path that is gone is
+    /// skipped silently.
+    ///
     /// A removal that fails for any reason but the entry already being gone
     /// leaves it behind, so it panics once every entry has been tried, unless
     /// the thread is already unwinding: a passing test must not leave planted
     /// entries on disk unreported (the convention of `OwnedDir`).
     fn drop(&mut self) {
         let mut failures = Vec::new();
-        for entry in &self.0 {
-            let removed = if entry.is_symlink() {
-                std::fs::remove_file(entry)
-            } else {
-                std::fs::remove_dir_all(entry)
-            };
-            if let Err(error) = removed {
-                if error.kind() != io::ErrorKind::NotFound {
-                    failures.push(format!("{}: {error}", entry.display()));
+        for PlantedEntry { path, identity } in &self.0 {
+            match identity_of(path) {
+                Ok(None) => {}
+                Err(error) => failures.push(format!("{}: {error}", path.display())),
+                Ok(Some(current)) if Some(&current) != identity.as_ref() => failures.push(format!(
+                    "{}: not the entry the guard planted, left alone",
+                    path.display()
+                )),
+                Ok(Some(_)) => {
+                    let removed = if path.is_symlink() {
+                        std::fs::remove_file(path)
+                    } else {
+                        std::fs::remove_dir_all(path)
+                    };
+                    if let Err(error) = removed {
+                        if error.kind() != io::ErrorKind::NotFound {
+                            failures.push(format!("{}: {error}", path.display()));
+                        }
+                    }
                 }
             }
         }
@@ -93,7 +162,7 @@ fn plant_all(
                 Err(e) => panic!("{prefix}: cannot plant {}: {e}", path.display()),
             }
         }
-        planted.0.push(path.clone());
+        planted.0.push(Planted::entry(path));
     }
     planted
 }
@@ -156,12 +225,17 @@ fn assert_fixture_ignores_planted_names_observing(
         on_wait,
     );
     fixture();
-    let disturbed: Vec<_> = dirs.0.iter().filter(|p| !untouched(p)).cloned().collect();
-    drop(dirs);
+    let disturbed: Vec<_> = dirs
+        .0
+        .iter()
+        .filter(|e| !untouched(&e.path))
+        .map(|e| e.path.clone())
+        .collect();
     assert!(
         disturbed.is_empty(),
         "{prefix}: fixture disturbed populated directories it never created: {disturbed:?}"
     );
+    drop(dirs);
 
     #[cfg(unix)]
     {
@@ -177,11 +251,10 @@ fn assert_fixture_ignores_planted_names_observing(
         let removed: Vec<_> = links
             .0
             .iter()
-            .filter(|p| std::fs::read_link(p).ok().as_deref() != Some(victim.path()))
-            .cloned()
+            .filter(|e| std::fs::read_link(&e.path).ok().as_deref() != Some(victim.path()))
+            .map(|e| e.path.clone())
             .collect();
         let victim_untouched = untouched(victim.path());
-        drop(links);
         assert!(
             removed.is_empty(),
             "{prefix}: fixture removed or replaced symlinks it never created: {removed:?}"
@@ -190,6 +263,7 @@ fn assert_fixture_ignores_planted_names_observing(
             victim_untouched,
             "{prefix}: fixture wrote through a planted symlink"
         );
+        drop(links);
     }
 }
 
@@ -273,7 +347,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         populate(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let planted = Planted(vec![dir.clone()]);
+        let planted = Planted(vec![Planted::entry(&dir)]);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
         let left_behind = dir.exists();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
@@ -289,6 +363,40 @@ mod tests {
         );
     }
 
+    /// A planted directory renamed aside and replaced at its path by an
+    /// unrelated populated directory is not the entry the guard created: the
+    /// replacement survives the drop, which reports it instead.
+    #[cfg(unix)]
+    #[test]
+    fn planted_drop_leaves_an_unrelated_replacement() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-replaced-{}",
+            std::process::id()
+        ));
+        let aside = path.with_extension("aside");
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let planted = Planted(vec![Planted::entry(&path)]);
+        std::fs::rename(&path, &aside).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let survived = untouched(&path);
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&aside);
+        assert!(
+            survived,
+            "Planted::drop deleted an unrelated directory at {}",
+            path.display()
+        );
+        assert!(
+            reported.is_err(),
+            "Planted::drop skipped {} without reporting it",
+            path.display()
+        );
+    }
+
+    #[cfg(unix)]
     const SYMLINK_PREFIX: &str = "pokeemerald-rs-fixture-guard-symlink-only";
 
     /// Unlinks a planted symlink and touches no directory.
@@ -313,6 +421,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     const WRITE_THROUGH_PREFIX: &str = "pokeemerald-rs-fixture-guard-write-through";
 
     /// Writes through a planted symlink and touches no directory.
