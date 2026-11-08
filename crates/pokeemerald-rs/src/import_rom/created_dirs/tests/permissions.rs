@@ -20,10 +20,7 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use super::*;
 
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-))]
+#[cfg(target_os = "linux")]
 mod failed_restore;
 
 /// `a/b`, created, with `b` (the last level, as when its owner-access
