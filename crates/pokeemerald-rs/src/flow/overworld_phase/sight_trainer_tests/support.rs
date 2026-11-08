@@ -70,6 +70,7 @@ pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_103_phase`] that retains the checkout pack, for the real-pack
@@ -82,6 +83,7 @@ pub(super) fn repo_route_103_phase(player: PlayerState) -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, mirroring
