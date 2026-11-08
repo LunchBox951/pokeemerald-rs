@@ -58,11 +58,23 @@ pub struct MoveLearnResolution {
     pub next: Option<PendingMoveLearn>,
 }
 
+/// What one experience award did to the mon's moveset.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExperienceAward {
+    /// Move awaiting a decision because every slot was full, or `None` when
+    /// the award was applied in full.
+    pub pending: Option<PendingMoveLearn>,
+    /// Moves written into a free slot without asking, in the order the walk
+    /// reached them, including any learned before `pending` paused it.
+    pub learned: Vec<MoveId>,
+}
+
 impl BattlePokemon {
     pub(super) fn advance_experience(
         &mut self,
         dex: &Dex,
         mut unapplied_experience: u32,
+        learned: &mut Vec<MoveId>,
     ) -> Option<PendingMoveLearn> {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
@@ -86,7 +98,7 @@ impl BattlePokemon {
             self.experience = next_level_experience;
             self.raise_level_to_experience();
             if let Some(pending) =
-                self.process_level_learnset(dex, self.level, 0, unapplied_experience)
+                self.process_level_learnset(dex, self.level, 0, unapplied_experience, learned)
             {
                 return Some(pending);
             }
@@ -99,6 +111,7 @@ impl BattlePokemon {
         level: u8,
         start_at_entry: usize,
         unapplied_experience: u32,
+        learned: &mut Vec<MoveId>,
     ) -> Option<PendingMoveLearn> {
         let learnset = LevelUpLearnsets::new().get(self.species)?;
         for (learnset_index, entry) in learnset.iter().enumerate().skip(start_at_entry) {
@@ -127,6 +140,7 @@ impl BattlePokemon {
                 move_id,
                 pp: move_data.pp,
             });
+            learned.push(move_id);
         }
         None
     }
@@ -175,14 +189,24 @@ impl BattlePokemon {
                 })
             }
         };
+        // A prompt only opens on a full moveset and neither answer frees a
+        // slot, so a resumed walk can only open further prompts.
+        let mut learned_unprompted = Vec::new();
         let next = self
             .process_level_learnset(
                 dex,
                 pending.offered_at_level,
                 pending.resume_at_entry,
                 pending.unapplied_experience,
+                &mut learned_unprompted,
             )
-            .or_else(|| self.advance_experience(dex, pending.unapplied_experience));
+            .or_else(|| {
+                self.advance_experience(dex, pending.unapplied_experience, &mut learned_unprompted)
+            });
+        debug_assert!(
+            learned_unprompted.is_empty(),
+            "a full moveset cannot take a move without asking"
+        );
         self.pending_move_learn = next;
         Ok(MoveLearnResolution { learned, next })
     }
@@ -480,7 +504,28 @@ mod tests {
     }
 
     #[test]
-    fn a_free_slot_learns_without_asking() {
+    fn a_free_slot_learns_without_asking_and_reports_the_move() {
+        let dex = Dex::new();
+        let mut mon = BattlePokemon::new(
+            &dex,
+            TORCHIC,
+            BEFORE_PECK_LEVEL,
+            Ivs::default(),
+            TEST_PERSONALITY,
+            vec![SCRATCH],
+        )
+        .unwrap();
+        let award = experience_needed_for_level(&dex, &mon, PECK_LEVEL);
+
+        let reported = mon.apply_experience_reporting(&dex, award).unwrap();
+
+        assert!(reported.pending.is_none());
+        assert_eq!(reported.learned, vec![PECK]);
+        assert_eq!(known_moves(&mon), vec![SCRATCH, PECK]);
+    }
+
+    #[test]
+    fn the_unreported_award_still_learns_into_a_free_slot_silently() {
         let dex = Dex::new();
         let mut mon = BattlePokemon::new(
             &dex,
@@ -495,6 +540,69 @@ mod tests {
 
         assert!(mon.apply_experience(&dex, award).unwrap().is_none());
         assert_eq!(known_moves(&mon), vec![SCRATCH, PECK]);
+    }
+
+    #[test]
+    fn free_slot_learns_across_levels_are_reported_in_learning_order() {
+        let dex = Dex::new();
+        let mut mon = BattlePokemon::new(
+            &dex,
+            TORCHIC,
+            BEFORE_PECK_LEVEL,
+            Ivs::default(),
+            TEST_PERSONALITY,
+            vec![SCRATCH],
+        )
+        .unwrap();
+        let award = experience_needed_for_level(&dex, &mon, SAND_ATTACK_LEVEL);
+
+        let reported = mon.apply_experience_reporting(&dex, award).unwrap();
+
+        assert!(reported.pending.is_none());
+        assert_eq!(reported.learned, vec![PECK, SAND_ATTACK]);
+        assert_eq!(known_moves(&mon), vec![SCRATCH, PECK, SAND_ATTACK]);
+    }
+
+    #[test]
+    fn free_slots_fill_before_a_prompt_and_the_report_keeps_both() {
+        let dex = Dex::new();
+        let mut mon = BattlePokemon::new(
+            &dex,
+            WYNAUT,
+            BEFORE_WYNAUT_MULTI_MOVE_LEVEL,
+            Ivs::default(),
+            TEST_PERSONALITY,
+            vec![SCRATCH],
+        )
+        .unwrap();
+        let award = experience_needed_for_level(&dex, &mon, WYNAUT_MULTI_MOVE_LEVEL);
+
+        let reported = mon.apply_experience_reporting(&dex, award).unwrap();
+
+        assert_eq!(
+            reported.learned,
+            WYNAUT_MULTI_LEVEL_MOVES[..3].to_vec(),
+            "three free slots take the first three same-level entries"
+        );
+        assert_eq!(
+            reported.pending.map(|pending| pending.move_id()),
+            Some(WYNAUT_MULTI_LEVEL_MOVES[3]),
+            "the fourth entry finds the moveset full"
+        );
+        assert_eq!(mon.pending_move_learn(), reported.pending);
+    }
+
+    #[test]
+    fn a_refused_reporting_award_with_an_open_prompt_reports_the_prompt() {
+        let dex = Dex::new();
+        let mut mon = torchic_with_full_moveset(&dex, BEFORE_PECK_LEVEL);
+        let award = experience_needed_for_level(&dex, &mon, PECK_LEVEL);
+        let _ = mon.apply_experience_reporting(&dex, award).unwrap();
+
+        assert_eq!(
+            mon.apply_experience_reporting(&dex, ADDITIONAL_EXPERIENCE),
+            Err(BattleError::MoveLearnPending(PECK))
+        );
     }
 
     #[test]

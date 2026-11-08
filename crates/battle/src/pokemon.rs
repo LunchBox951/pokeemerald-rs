@@ -32,7 +32,9 @@ pub mod pp_bonuses;
 mod tests;
 
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
-pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use learn::{
+    ExperienceAward, LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn,
+};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// Maximum number of moves a Pokémon can know.
@@ -955,11 +957,33 @@ impl BattlePokemon {
         dex: &Dex,
         amount: u32,
     ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        Ok(self.apply_experience_reporting(dex, amount)?.pending)
+    }
+
+    /// Applies an award exactly like [`BattlePokemon::apply_experience`] and
+    /// also reports the moves a free slot took without asking, in learning
+    /// order, so the caller can announce each one before any prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
+    /// decision is already pending.
+    #[must_use = "the report carries the open move prompt and the moves \
+                  learned without asking"]
+    pub fn apply_experience_reporting(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<ExperienceAward, BattleError> {
         if let Some(pending) = self.pending_move_learn {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
+        let mut learned = Vec::new();
+        self.pending_move_learn = self.advance_experience(dex, amount, &mut learned);
+        Ok(ExperienceAward {
+            pending: self.pending_move_learn,
+            learned,
+        })
     }
 
     /// Adopts a loaded experience total verbatim, without moving the level or
