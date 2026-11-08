@@ -92,6 +92,25 @@ impl<'a> RawSearch<'a> {
     /// [`Self::find_all`] with each needle capped at `limit` hits instead of
     /// [`MATCH_LIMIT`]; the lowest `limit` offsets are kept.
     pub fn find_all_up_to(&self, needles: &[Vec<u8>], limit: usize) -> Vec<Vec<u32>> {
+        self.find_all_up_to_where(needles, limit, |_| true)
+    }
+
+    /// [`Self::find_all_up_to`] counting only the offsets `accept` allows.
+    ///
+    /// A locator that discards raw hits afterwards (a string must begin
+    /// after an `EOS`, say) must filter here instead: the cap keeps the
+    /// lowest `limit` offsets, so rejected hits recorded first would crowd
+    /// accepted ones out of the list and hide a duplicate or the only
+    /// genuine match. `accept` sees a match start at most once per needle,
+    /// in ascending order within that needle; in a batch the same start can
+    /// reach it for several needles, and starts are not ascending across
+    /// needles.
+    pub fn find_all_up_to_where(
+        &self,
+        needles: &[Vec<u8>],
+        limit: usize,
+        accept: impl Fn(u32) -> bool,
+    ) -> Vec<Vec<u32>> {
         let mut anchors = Vec::with_capacity(needles.len());
         // Bitmap over the anchor's first two bytes: a one-index filter that
         // spares most ROM offsets the hash lookup below.
@@ -137,9 +156,10 @@ impl<'a> RawSearch<'a> {
                     continue;
                 }
                 if self.rom.get(start..start + needle.len()) == Some(needle.as_slice()) {
-                    let truncated =
-                        u32::try_from(start).expect("a ROM offset fits in u32 at 16 MiB");
-                    hits[index].push(truncated);
+                    let found = u32::try_from(start).expect("a ROM offset fits in u32 at 16 MiB");
+                    if accept(found) {
+                        hits[index].push(found);
+                    }
                 }
             }
         }
@@ -384,6 +404,28 @@ mod tests {
         assert_eq!(raised[0].len(), copies);
         assert!(raised[0].windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+    }
+
+    #[test]
+    fn a_rejected_hit_does_not_count_against_the_cap() {
+        let needle = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut rom = vec![0u8; 4096];
+        // MATCH_LIMIT rejected copies at low offsets, then two accepted ones.
+        for slot in 0..MATCH_LIMIT {
+            let at = 64 + slot * 64;
+            rom[at..at + ANCHOR].copy_from_slice(&needle);
+        }
+        let accepted = [2048usize, 3072];
+        for &at in &accepted {
+            rom[at..at + ANCHOR].copy_from_slice(&needle);
+        }
+        let search = RawSearch::new(&rom);
+        let hits = search.find_all_up_to_where(&[needle.to_vec()], MATCH_LIMIT, |at| at >= 2048);
+        assert_eq!(hits[0], vec![2048, 3072]);
+        // The unfiltered search is full before it reaches either.
+        assert!(search.find_all(&[needle.to_vec()])[0]
+            .iter()
+            .all(|&at| at < 2048));
     }
 
     #[test]

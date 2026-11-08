@@ -513,6 +513,10 @@ impl CgbVoice {
     /// one replaces on the shared slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
         self.oscillator.carry_hardware_state_from(&other.oscillator);
+        // Channel 3 alone commits its pan only at a surviving boundary (`begin_frame`).
+        if matches!(self.channel, CgbChannelNumber::Wave) {
+            self.routing.carry_committed_route_from(other.routing);
+        }
         self.carry_length_from(other);
         // Hold the predecessor's clocks for the note-on writes (`commit_initial_writes`).
         if let (Oscillator::Noise(noise), Oscillator::Noise(previous)) =
@@ -702,8 +706,11 @@ impl CgbVoice {
         // its note-on writes.
         let commits_hardware = self.envelope.is_active() || initial_trigger;
         // NR51 moves only under `CGB_CHANNEL_MO_VOL` (`m4a.c:1081-1082,1205-1208`).
+        // A wave's retiring first pass reports a boundary yet jumps past the store
+        // (`m4a.c:1053-1056`), leaving the carried predecessor route.
         let is_wave = matches!(self.channel, CgbChannelNumber::Wave);
         if commits_hardware
+            && (!is_wave || self.envelope.is_active())
             && (retriggered_by_transition
                 || retriggered_by_note_off
                 || (is_wave && envelope_boundary))

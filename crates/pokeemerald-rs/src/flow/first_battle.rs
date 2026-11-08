@@ -77,6 +77,12 @@ pub fn start_first_battle(
 
 /// Advances the first battle by one headless turn.
 ///
+/// The running game does not call this: its first battle plays through
+/// `flow::battle_sequence`, which prints each turn's text
+/// and starts the next turn only once that text is done. This driver resolves
+/// a turn per call with no text, so the battle mechanics can be tested without
+/// an asset pack.
+///
 /// Returns `None` when the slot is empty, the battle remains active, or the
 /// turn fails. A terminal or failed turn empties the slot and writes back the
 /// player lead with battle-only stat stages cleared. A failed turn has no
