@@ -58,31 +58,22 @@ impl WindowsFileIdentity {
     ///
     /// Never in practice: `FILE_ID_INFO` is far smaller than `u32::MAX`.
     pub fn of(handle: &std::fs::File) -> std::io::Result<Self> {
-        use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
-        };
+        Self::resolve(query_file_id_info(handle), || query_by_handle(handle))
+    }
 
-        let mut wide = FILE_ID_INFO::default();
-        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
-            .expect("FILE_ID_INFO is far smaller than u32::MAX");
-        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                handle.as_raw_handle(),
-                FileIdInfo,
-                std::ptr::from_mut(&mut wide).cast(),
-                size,
-            )
+    /// `of`'s choice between its two queries: `fallback` runs only when
+    /// `wide` failed with a class-rejecting code, and its index is
+    /// zero-extended. Every other failure surfaces unchanged.
+    fn resolve(
+        wide: std::io::Result<Self>,
+        fallback: impl FnOnce() -> std::io::Result<
+            windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
+        >,
+    ) -> std::io::Result<Self> {
+        let refused = match wide {
+            Ok(identity) => return Ok(identity),
+            Err(refused) => refused,
         };
-        if ok != 0 {
-            return Ok(Self {
-                volume_serial_number: wide.VolumeSerialNumber,
-                file_id: wide.FileId.Identifier,
-            });
-        }
-        let refused = std::io::Error::last_os_error();
         let unsupported = refused
             .raw_os_error()
             .and_then(|code| u32::try_from(code).ok())
@@ -91,12 +82,7 @@ impl WindowsFileIdentity {
             return Err(refused);
         }
 
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
-        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
-        if ok == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        let info = fallback()?;
         let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
         let mut file_id = [0u8; 16];
         file_id[..8].copy_from_slice(&index.to_le_bytes());
@@ -105,6 +91,53 @@ impl WindowsFileIdentity {
             file_id,
         })
     }
+}
+
+/// The `GetFileInformationByHandleEx(FileIdInfo)` query: the 128-bit form.
+fn query_file_id_info(handle: &std::fs::File) -> std::io::Result<WindowsFileIdentity> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+
+    let mut wide = FILE_ID_INFO::default();
+    let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+        .expect("FILE_ID_INFO is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileIdInfo,
+            std::ptr::from_mut(&mut wide).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(WindowsFileIdentity {
+        volume_serial_number: wide.VolumeSerialNumber,
+        file_id: wide.FileId.Identifier,
+    })
+}
+
+/// The `GetFileInformationByHandle` query: the 64-bit index form, for a file
+/// system that rejects `FileIdInfo`.
+fn query_by_handle(
+    handle: &std::fs::File,
+) -> std::io::Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
+    let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info)
 }
 
 /// Whether `code` means a failed `FileIdInfo` query rejected that class.
@@ -125,17 +158,93 @@ fn rejects_the_class(code: u32) -> bool {
 
 #[cfg(test)]
 mod windows_file_identity_tests {
-    use super::rejects_the_class;
+    use super::{rejects_the_class, WindowsFileIdentity};
     use windows_sys::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_HANDLE, ERROR_INVALID_LEVEL,
         ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
     };
+    use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
 
     /// A share whose server refuses `FileIdInfo` with `ERROR_INVALID_LEVEL`
     /// falls back to the 64-bit index instead of failing every caller there.
     #[test]
     fn an_smb_share_that_refuses_the_class_falls_back() {
         assert!(rejects_the_class(ERROR_INVALID_LEVEL));
+    }
+
+    fn os_error(code: u32) -> std::io::Error {
+        std::io::Error::from_raw_os_error(i32::try_from(code).expect("an error code fits i32"))
+    }
+
+    #[test]
+    fn invalid_level_builds_the_zero_extended_identity_from_the_fallback() {
+        let info = BY_HANDLE_FILE_INFORMATION {
+            dwVolumeSerialNumber: 0xA1B2_C3D4,
+            nFileIndexHigh: 0x1122_3344,
+            nFileIndexLow: 0x5566_7788,
+            ..Default::default()
+        };
+
+        let got = WindowsFileIdentity::resolve(Err(os_error(ERROR_INVALID_LEVEL)), || Ok(info))
+            .expect("the fallback answers");
+
+        assert_eq!(got.volume_serial_number, 0xA1B2_C3D4);
+        assert_eq!(
+            got.file_id,
+            [0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn each_rejecting_code_reaches_the_fallback() {
+        for code in [
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_FUNCTION,
+            ERROR_INVALID_LEVEL,
+        ] {
+            let mut called = false;
+            let got = WindowsFileIdentity::resolve(Err(os_error(code)), || {
+                called = true;
+                Ok(BY_HANDLE_FILE_INFORMATION::default())
+            });
+            assert!(got.is_ok(), "code {code} should fall back");
+            assert!(called, "code {code} should run the fallback query");
+        }
+    }
+
+    #[test]
+    fn a_failing_fallback_propagates_its_own_error() {
+        let err = WindowsFileIdentity::resolve(Err(os_error(ERROR_INVALID_LEVEL)), || {
+            Err(os_error(ERROR_ACCESS_DENIED))
+        })
+        .expect_err("the fallback failed");
+
+        assert_eq!(err.raw_os_error(), i32::try_from(ERROR_ACCESS_DENIED).ok());
+    }
+
+    #[test]
+    fn a_non_fallback_error_is_returned_without_the_fallback() {
+        let mut called = false;
+        let err = WindowsFileIdentity::resolve(Err(os_error(ERROR_ACCESS_DENIED)), || {
+            called = true;
+            Ok(BY_HANDLE_FILE_INFORMATION::default())
+        })
+        .expect_err("the query failed");
+
+        assert_eq!(err.raw_os_error(), i32::try_from(ERROR_ACCESS_DENIED).ok());
+        assert!(!called, "a real failure must not run the fallback");
+    }
+
+    #[test]
+    fn a_successful_wide_query_skips_the_fallback() {
+        let wide = WindowsFileIdentity {
+            volume_serial_number: u64::MAX,
+            file_id: [7; 16],
+        };
+        let got = WindowsFileIdentity::resolve(Ok(wide), || panic!("fallback must not run"))
+            .expect("the wide query answered");
+        assert_eq!(got, wide);
     }
 
     #[test]
