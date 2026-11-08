@@ -490,16 +490,10 @@ impl OverworldPhase {
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
         // fightable map (`wild_table_fightable`), and only with a lead the
-        // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
-        // used to sit here too, for the one loss path issue #261's
-        // white-out could not yet cover (a lost Route 101 first battle --
-        // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
-        // #251's `first_battle_conclusion` now heals that lead the
-        // instant the battle ends, on every outcome, and a pre-#251 save
-        // that *serialized* the residual state is healed at load
-        // (`from_saved`'s migration, PR #291 review), so no path can
-        // leave a fainted lead standing here any more and the filter
-        // was removed
+        // turn engine admits (`wild_lead_admissible`). That shared lead
+        // screen also refuses a fainted lead, so a lead the healing paths
+        // cannot reach (an imported save, or an undecodable reserve that
+        // keeps the party's HP total nonzero) rolls nothing
         // (`crate::flow::wild_encounter`'s module docs, "Lead-health
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
@@ -743,7 +737,12 @@ impl OverworldPhase {
         else {
             return;
         };
-        if self.cross_connection(to_map, to_position) {
+        // The departed-to-entered translation: the step has already left the
+        // player in the entered map's coordinates, so its previous tile there
+        // against its pre-step tile is the camera offset.
+        let (from, previous) = (pre_step_player.position(), self.player.previous_position());
+        let shift = (previous.0 - from.0, previous.1 - from.1);
+        if self.cross_connection(to_map, to_position, shift) {
             // The crossing step's own begin-step pass, on the entered map.
             self.scene
                 .player_step_began(to_position, self.player.previous_elevation());

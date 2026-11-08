@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.117.0] - 2026-11-08
+## [0.0.118.0] - 2026-11-08
 
 - The Oldale Pokémon Center escalators now lock your controls and play the ride with its fade-out and fade-in, then walk you off east on the other floor with the original game's timing. The escalator sound and the floor's music are not played yet.
+
+## [0.0.117.0] - 2026-11-08
+
+- People and objects that look around now turn on the spot to a random direction after a random pause, as in the original game, without ever walking: this covers the items and dolls in both upstairs bedrooms, and the people and items on Route 101 and Route 103, where the woman faces only down or right. A trainer of that kind who sees you run close by turns toward you early.
 
 ## [0.0.116.0] - 2026-11-07
 
@@ -534,8 +538,9 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.117.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/083a608e8c82607486449f1d78714f5e978a887d...dev
-[0.0.116.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/0d50ced5328e0baead9be1f45e4884cff1a95a9f...083a608e8c82607486449f1d78714f5e978a887d
+[0.0.118.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/560f5c7137223b8e22ee1181afafcb47cd4b6312...dev
+[0.0.117.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/3196e94c2fec319d17c718653ac20fbe9fe8f289...560f5c7137223b8e22ee1181afafcb47cd4b6312
+[0.0.116.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/0d50ced5328e0baead9be1f45e4884cff1a95a9f...3196e94c2fec319d17c718653ac20fbe9fe8f289
 [0.0.115.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2bbf966619c27568282a1b7f3ea6042e21cdb9d4...0d50ced5328e0baead9be1f45e4884cff1a95a9f
 [0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...2bbf966619c27568282a1b7f3ea6042e21cdb9d4
 [0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...e9411c4552d44eaa0ba4de2e094a9a698a4f1a70
