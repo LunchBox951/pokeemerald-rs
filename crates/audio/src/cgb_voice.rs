@@ -46,18 +46,45 @@ const HALF_GAIN_256: u32 = FULL_GAIN_256 / 2;
 const QUARTER_GAIN_256: u32 = FULL_GAIN_256 / 4;
 const SILENT_GAIN_256: u32 = 0;
 
-// `gCgb3Vol`: M4A envelope levels onto the five NR32 gains (`m4a_tables.c:168`).
+const NR32_THREE_QUARTER_BIT: u8 = 0x80;
+const NR32_VOLUME_SHIFT: u32 = 5;
+const NR32_VOLUME_MASK: u8 = 0b11;
+
+// The NR32 byte `CgbSound` writes for each wave envelope level (`m4a.c:1211`).
+// Levels 0-15 are `gCgb3Vol` (`m4a_tables.c:168-174`). Upstream indexes it
+// unchecked and centred goals reach 31 (`CgbModVol`), so levels 16-31 read the
+// bytes after it in `m4a_tables.o` `.rodata`: `gClockTable` (`m4a_tables.c:177`),
+// whose first sixteen bytes are `0x00..=0x0F`. The built ROM confirms the layout:
+// `00 00 60 60 60 60 40 40 40 40 80 80 80 80 20 20 | 00 01 02 .. 0F 10 11`.
 #[rustfmt::skip]
-const LEVEL_256: [u32; 16] = [
-    SILENT_GAIN_256, SILENT_GAIN_256,
-    QUARTER_GAIN_256, QUARTER_GAIN_256, QUARTER_GAIN_256, QUARTER_GAIN_256,
-    HALF_GAIN_256, HALF_GAIN_256, HALF_GAIN_256, HALF_GAIN_256,
-    THREE_QUARTER_GAIN_256, THREE_QUARTER_GAIN_256, THREE_QUARTER_GAIN_256, THREE_QUARTER_GAIN_256,
-    FULL_GAIN_256, FULL_GAIN_256,
+const NR32_BY_LEVEL: [u8; 32] = [
+    0x00, 0x00,
+    0x60, 0x60, 0x60, 0x60,
+    0x40, 0x40, 0x40, 0x40,
+    0x80, 0x80, 0x80, 0x80,
+    0x20, 0x20,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 ];
 
+/// Wave gain an NR32 byte selects: bit 7 forces three-quarter volume, else
+/// bits 5-6 pick mute, full, half, or quarter.
+fn nr32_wave_gain_256(nr32: u8) -> u32 {
+    if nr32 & NR32_THREE_QUARTER_BIT != 0 {
+        return THREE_QUARTER_GAIN_256;
+    }
+    match (nr32 >> NR32_VOLUME_SHIFT) & NR32_VOLUME_MASK {
+        0 => SILENT_GAIN_256,
+        1 => FULL_GAIN_256,
+        2 => HALF_GAIN_256,
+        _ => QUARTER_GAIN_256,
+    }
+}
+
+// Envelope levels top out at 31 (`cgb_envelope_goal`), the last table entry.
 fn cgb3_wave_gain_256(envelope_volume: u8) -> u32 {
-    LEVEL_256[usize::from(envelope_volume).min(LEVEL_256.len() - 1)]
+    let index = usize::from(envelope_volume).min(NR32_BY_LEVEL.len() - 1);
+    nr32_wave_gain_256(NR32_BY_LEVEL[index])
 }
 
 /// A fixed CGB hardware channel owned by at most one live voice.

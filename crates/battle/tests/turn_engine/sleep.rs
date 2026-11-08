@@ -297,3 +297,150 @@ fn a_zero_turn_sleep_field_is_a_healthy_battler_and_never_wakes() {
         "a battler with no sleep left has nothing to wake from: {events:?}"
     );
 }
+
+const DEPLETED_SLOT: u16 = 0;
+const CONFUSION_CONTINUES_DRAW: u16 = 1;
+const CONFUSION_SELF_HIT_DRAW: u16 = 0;
+const SELF_HIT_DAMAGE_ROLL_DRAW: u16 = 0;
+const SLEEP_EXEMPT_ENEMY_LEVEL: u8 = 4;
+const SLEEP_EXEMPT_TURNS: u8 = 5;
+const SLEEP_EXEMPT_CONFUSION: u8 = 3;
+
+/// A slower, sleeping, confused wild enemy whose first slot is `exempt_move`
+/// with no PP left, beside a PP-positive Tackle.
+fn sleeping_confused_enemy_with_depleted(dex: &Dex, exempt_move: MoveId) -> BattlePokemon {
+    let mut enemy = max_iv_mon_with_personality(
+        dex,
+        SpeciesId::ZIGZAGOON.0,
+        SLEEP_EXEMPT_ENEMY_LEVEL,
+        vec![exempt_move, TACKLE],
+        0,
+    );
+    while enemy.moves()[0].pp > 0 {
+        enemy.deduct_pp(0).unwrap();
+    }
+    enemy.set_status1(Status1::Asleep {
+        turns: SLEEP_EXEMPT_TURNS,
+    });
+    enemy.volatiles_mut().set_confusion(SLEEP_EXEMPT_CONFUSION);
+    enemy
+}
+
+fn player_splash(dex: &Dex) -> BattlePokemon {
+    max_iv_mon_with_personality(
+        dex,
+        SpeciesId::ZIGZAGOON.0,
+        SLEEPER_LEVEL,
+        vec![MoveId::SPLASH],
+        0,
+    )
+}
+
+fn depleted_slot_proceeds_past_the_sleep_canceller_to_the_no_pp_abort(exempt_move: MoveId) {
+    let dex = Dex::new();
+    let player = player_splash(&dex);
+    let enemy = sleeping_confused_enemy_with_depleted(&dex, exempt_move);
+
+    // Battle start, turn number, the wild slot draw, then the confusion coin.
+    let mut rng = SequenceRng::new([
+        BATTLE_START_DRAWS[0],
+        0,
+        DEPLETED_SLOT,
+        CONFUSION_CONTINUES_DRAW,
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::SPLASH,
+            },
+            BattleEvent::NothingHappened {
+                by_player: true,
+                move_id: MoveId::SPLASH,
+            },
+            BattleEvent::Confused { by_player: false },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: exempt_move,
+            },
+            BattleEvent::FailedNoPp {
+                by_player: false,
+                move_id: exempt_move,
+            },
+        ],
+        "the exempt move skips FastAsleep, ticks confusion and stops at the no-PP abort: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().status1(),
+        Status1::Asleep {
+            turns: SLEEP_EXEMPT_TURNS - 1
+        },
+        "the sleep decrement still runs"
+    );
+    assert_eq!(
+        battle.enemy().volatiles().confusion_turns,
+        SLEEP_EXEMPT_CONFUSION - 1
+    );
+    assert_eq!(battle.enemy().moves()[0].pp, 0);
+    rng.assert_exhausted();
+}
+
+#[test]
+fn a_sleeping_enemy_selecting_depleted_snore_ticks_confusion_then_aborts_for_no_pp() {
+    depleted_slot_proceeds_past_the_sleep_canceller_to_the_no_pp_abort(MoveId::SNORE);
+}
+
+#[test]
+fn a_sleeping_enemy_selecting_depleted_sleep_talk_ticks_confusion_then_aborts_for_no_pp() {
+    depleted_slot_proceeds_past_the_sleep_canceller_to_the_no_pp_abort(MoveId::SLEEP_TALK);
+}
+
+#[test]
+fn a_sleeping_enemy_s_depleted_snore_can_hurt_itself_in_confusion_before_the_no_pp_abort() {
+    let dex = Dex::new();
+    let player = player_splash(&dex);
+    let enemy = sleeping_confused_enemy_with_depleted(&dex, MoveId::SNORE);
+    let starting_hp = enemy.current_hp();
+
+    let mut rng = SequenceRng::new([
+        BATTLE_START_DRAWS[0],
+        0,
+        DEPLETED_SLOT,
+        CONFUSION_SELF_HIT_DRAW,
+        SELF_HIT_DAMAGE_ROLL_DRAW,
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[2..],
+        [
+            BattleEvent::Confused { by_player: false },
+            BattleEvent::ConfusionSelfHit {
+                by_player: false,
+                damage: 4,
+            },
+        ],
+        "{events:?}"
+    );
+    assert_eq!(
+        battle.enemy().status1(),
+        Status1::Asleep {
+            turns: SLEEP_EXEMPT_TURNS - 1
+        }
+    );
+    assert_eq!(
+        battle.enemy().volatiles().confusion_turns,
+        SLEEP_EXEMPT_CONFUSION - 1
+    );
+    assert_eq!(battle.enemy().current_hp(), starting_hp - 4);
+    rng.assert_exhausted();
+}
