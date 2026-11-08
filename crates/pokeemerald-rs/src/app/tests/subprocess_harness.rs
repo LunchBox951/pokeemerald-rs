@@ -81,6 +81,7 @@ impl ScratchPack {
 /// `(dev, ino)` pair on Unix. Windows std exposes no file id on stable, so it falls back to the
 /// 100 ns creation time and the length, which a freshly created replacement does not share.
 /// `None` where the platform offers neither.
+#[allow(clippy::unnecessary_wraps)] // `None` on platforms with no identity
 fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
     #[cfg(unix)]
     {
