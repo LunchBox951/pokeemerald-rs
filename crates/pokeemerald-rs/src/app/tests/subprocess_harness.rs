@@ -25,10 +25,11 @@ fn scratch_pack_candidate(label: &str, attempt: u32) -> std::path::PathBuf {
 }
 
 /// A scratch pack this harness created, owned through cleanup: it keeps the creating handle, so
-/// the entry it made stays identifiable by `(dev, ino)` for as long as the guard lives.
+/// the entry it made stays identifiable for as long as the guard lives.
 struct ScratchPack {
     path: std::path::PathBuf,
-    /// Held open so the created inode cannot be recycled for a replacement while we compare.
+    /// Held open so the created file's identity cannot be recycled for a replacement while we
+    /// compare.
     file: std::fs::File,
 }
 
@@ -41,7 +42,8 @@ enum ScratchRemoval {
     Gone,
     /// A different entry now sits at the pathname; it was left alone.
     Replaced,
-    /// This platform offers no identity to compare, so nothing was unlinked.
+    /// Ownership could not be established -- the platform offers no file identity, or reading or
+    /// acting on it failed -- so nothing was unlinked.
     Unverifiable,
 }
 
@@ -50,53 +52,57 @@ impl ScratchPack {
         &self.path
     }
 
-    /// Unlinks the pathname only if it still names the file this guard created. `symlink_metadata`
-    /// does not follow a link, so a symlink planted at the name never matches the created file.
-    /// (std has no unlink-by-handle, so a swap between the check and the unlink remains possible;
-    /// this closes the window the child run opens, not that one.)
+    /// Unlinks the pathname only if it still names the file this guard created, and fails closed
+    /// ([`ScratchRemoval::Unverifiable`]) wherever that cannot be established.
+    ///
+    /// Unix compares `(dev, ino)` of the path (`symlink_metadata`, so a planted symlink never
+    /// matches) against the creating handle. std has no unlink-by-handle, so a swap between that
+    /// check and the unlink remains possible; this closes the window the child run opens, not that
+    /// one. Windows reads the handle's [`win_fs::WindowsFileIdentity`] and deletes through a
+    /// handle opened on the path only if that handle has the same identity.
     fn remove_if_owned(&self) -> ScratchRemoval {
-        let current = match std::fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return ScratchRemoval::Gone;
-            }
-            Err(_) => return ScratchRemoval::Replaced,
-        };
-        let created = self.file.metadata().ok().and_then(|m| file_identity(&m));
-        let Some(created) = created else {
-            return ScratchRemoval::Unverifiable;
-        };
-        if file_identity(&current) != Some(created) {
-            return ScratchRemoval::Replaced;
-        }
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => ScratchRemoval::Removed,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
-            Err(_) => ScratchRemoval::Replaced,
-        }
-    }
-}
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
 
-/// What distinguishes the file `metadata` describes from a later file at the same pathname: the
-/// `(dev, ino)` pair on Unix. Windows std exposes no file id on stable, so it falls back to the
-/// 100 ns creation time and the length, which a freshly created replacement does not share.
-/// `None` where the platform offers neither.
-#[allow(clippy::unnecessary_wraps)] // `None` on platforms with no identity
-fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        Some((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        Some((metadata.creation_time(), metadata.file_size()))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        None
+            let current = match std::fs::symlink_metadata(&self.path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return ScratchRemoval::Gone;
+                }
+                Err(_) => return ScratchRemoval::Unverifiable,
+            };
+            let Ok(created) = self.file.metadata() else {
+                return ScratchRemoval::Unverifiable;
+            };
+            if (current.dev(), current.ino()) != (created.dev(), created.ino()) {
+                return ScratchRemoval::Replaced;
+            }
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => ScratchRemoval::Removed,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
+                Err(_) => ScratchRemoval::Unverifiable,
+            }
+        }
+        #[cfg(windows)]
+        {
+            let Ok(identity) = win_fs::WindowsFileIdentity::of(&self.file) else {
+                return ScratchRemoval::Unverifiable;
+            };
+            match win_fs::remove_through_verified_handle(&self.path, identity) {
+                Ok(win_fs::VerifiedRemoval::NotOurs) => ScratchRemoval::Replaced,
+                Ok(win_fs::VerifiedRemoval::Unlinked | win_fs::VerifiedRemoval::Pending) => {
+                    ScratchRemoval::Removed
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
+                Err(_) => ScratchRemoval::Unverifiable,
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = &self.file;
+            ScratchRemoval::Unverifiable
+        }
     }
 }
 
@@ -262,6 +268,53 @@ fn run_boundary_harness(after_create: impl FnOnce(&std::path::Path)) {
     );
 }
 
+/// The `attempt`th candidate name for the replacement's staging file beside `pack`.
+#[cfg(unix)]
+fn staged_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
+    if attempt == 0 {
+        pack.with_extension("staged")
+    } else {
+        pack.with_extension(format!("staged-{attempt}"))
+    }
+}
+
+/// Replaces the pack at `path` with a different file holding the same bytes (so a child still
+/// loads a valid entryless pack) and returns the name the original stays reachable under. The
+/// replacement is staged under an exclusively created name -- an occupied name, including a
+/// symlink, is skipped, never followed or truncated -- and swapped in with one rename, so the
+/// pathname never lacks a pack. Everything it returns or leaves behind is the test's own to remove.
+#[cfg(unix)]
+fn replace_pack_with_lookalike(path: &std::path::Path) -> std::path::PathBuf {
+    use std::io::Write as _;
+
+    let bytes = std::fs::read(path).expect("the freshly created pack is readable");
+    let (staged, mut handle) = (0..64)
+        .find_map(|attempt| {
+            let staged = staged_candidate(path, attempt);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged)
+            {
+                Ok(handle) => Some((staged, handle)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => panic!("the staging file must be creatable: {error}"),
+            }
+        })
+        .expect("a free staging name must exist");
+    handle
+        .write_all(&bytes)
+        .expect("the staging file must be writable");
+    drop(handle);
+    let aside = staged.with_extension("aside");
+    if let Err(error) = std::fs::hard_link(path, &aside) {
+        drop(std::fs::remove_file(&staged));
+        panic!("the original must be kept reachable beside the pack: {error}");
+    }
+    std::fs::rename(&staged, path).expect("the replacement must swap in");
+    aside
+}
+
 /// A file that replaces the scratch pack at its pathname during the harness run must not be
 /// unlinked by the harness's cleanup. The replacement is swapped in through the harness's
 /// `after_create` seam, so it is installed before the child runs and before cleanup, with no
@@ -272,15 +325,7 @@ fn scratch_pack_cleanup_spares_a_file_that_replaced_it_during_the_child_run() {
     let swapped = std::cell::RefCell::new(None);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_boundary_harness(|path| {
-            let bytes = std::fs::read(path).expect("the freshly created pack is readable");
-            let aside = path.with_extension("aside");
-            // Stage the replacement (same bytes, so the child still loads a valid entryless
-            // pack), keep the original reachable under another name, then swap with one rename
-            // so the pathname never lacks a pack.
-            let staged = path.with_extension("staged");
-            std::fs::write(&staged, &bytes).unwrap();
-            std::fs::hard_link(path, &aside).unwrap();
-            std::fs::rename(&staged, path).unwrap();
+            let aside = replace_pack_with_lookalike(path);
             *swapped.borrow_mut() = Some((path.to_path_buf(), aside));
         });
     }));
@@ -294,6 +339,55 @@ fn scratch_pack_cleanup_spares_a_file_that_replaced_it_during_the_child_run() {
     assert!(
         replacement_survived,
         "cleanup unlinked a replacement file it never created"
+    );
+}
+
+/// Staging the replacement must not write through a symlink planted at the first staging name:
+/// its target keeps its contents and the staging file lands at the next free name.
+#[cfg(unix)]
+#[test]
+fn scratch_pack_replacement_staging_does_not_write_through_a_planted_symlink() {
+    let victim = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-staged-victim-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    {
+        use std::io::Write as _;
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&victim)
+            .expect("the victim must be creatable")
+            .write_all(b"precious")
+            .expect("the victim must be writable");
+    }
+    let state = std::cell::RefCell::new(None);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_boundary_harness(|path| {
+            let planted = staged_candidate(path, 0);
+            std::os::unix::fs::symlink(&victim, &planted)
+                .expect("the first staging name must be free to plant the symlink");
+            *state.borrow_mut() = Some((path.to_path_buf(), planted.clone(), None));
+            let aside = replace_pack_with_lookalike(path);
+            *state.borrow_mut() = Some((path.to_path_buf(), planted, Some(aside)));
+        });
+    }));
+    let victim_contents = std::fs::read_to_string(&victim);
+    drop(std::fs::remove_file(&victim));
+    if let Some((path, planted, aside)) = state.into_inner() {
+        drop(std::fs::remove_file(&path));
+        drop(std::fs::remove_file(&planted));
+        if let Some(aside) = aside {
+            drop(std::fs::remove_file(&aside));
+        }
+    }
+    outcome.expect("the harness itself must pass");
+    assert_eq!(
+        victim_contents.as_deref().ok(),
+        Some("precious"),
+        "the symlink target must stay unchanged"
     );
 }
 
