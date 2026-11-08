@@ -74,10 +74,8 @@ fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
         match induced.unwrap() {
             Ok(held) => rustix::thread::set_capabilities(None, held).unwrap(),
             Err(refused) => {
-                // Stdout: the parent fails on any stderr.
-                println!("skipped: unshare(CLONE_FILES) refused here ({refused})");
                 rustix::process::umask(previous);
-                return;
+                panic!("failure boundary not exercised: unshare(CLONE_FILES) refused ({refused})");
             }
         }
         let Err((created, source)) = result else {
