@@ -93,8 +93,8 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 ///
 /// All three refusal shapes are covered: an unimplemented moveset (the Headbutt
 /// party at Rhett's cone, the trigger's own "Refusals cost nothing,
-/// forever"), an unported ability
-/// (Miguel's Cute Charm, same), and a double battle refused before construction is even
+/// forever"), another unimplemented moveset
+/// (Miguel's Sing, same), and a double battle refused before construction is even
 /// attempted (Amy, `trainer_data_wants_double_battle`).
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
@@ -106,7 +106,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
             "the Headbutt party at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
-        ("Miguel (unported ability)", (mx + 2, my)),
+        ("Miguel (unimplemented moveset)", (mx + 2, my)),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
@@ -294,7 +294,7 @@ fn taking_a_refused_item_lets_the_sight_trainer_approach_start() {
 // -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------
 
 /// Miguel's cone reaches, but his real party refuses to construct -- his
-/// Skitty's selected Cute Charm, ahead of its Attract --
+/// Skitty's Sing, since Cute Charm is no longer the stopping ability --
 /// so no battle starts, the lead is untouched, and the refusal draws nothing
 /// (the pre-flight runs before any RNG draw,
 /// `crate::flow::npc_trainer_battle`'s own docs).
@@ -309,7 +309,7 @@ fn miguels_party_refuses_to_construct() {
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
-        "Miguel's party must refuse to construct (unmodelled ability, move and item)"
+        "Miguel's party must refuse to construct (unmodelled move)"
     );
     assert!(
         phase.lead_for_test().is_some(),

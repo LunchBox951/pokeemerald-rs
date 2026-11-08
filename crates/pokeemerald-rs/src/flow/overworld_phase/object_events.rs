@@ -22,6 +22,13 @@ impl OverworldPhase {
             || self.sight_approach.is_some()
             || self.start_menu.is_some()
             || self.in_battle();
+        // Each object's spawn-time ground-effect pass opens its sprite
+        // callback (`UpdateObjectEventCurrentMovement`, `:4931`), ahead of the
+        // movement. Map load's admission happens before the first callback, so
+        // that frame's pass follows the scheduler's.
+        let first_frame = self.scene.take_object_admission_pending();
+        self.scene
+            .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
         let context = FrameContext {
             player_position: self.player.position(),
             event_data: &self.save1.event_data,
@@ -31,8 +38,16 @@ impl OverworldPhase {
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
             self.object_events.run_frame(&context, scratch);
-            return;
+        } else {
+            self.object_events.run_frame(&context, &mut self.rng);
         }
+        #[cfg(not(test))]
         self.object_events.run_frame(&context, &mut self.rng);
+        if first_frame {
+            self.scene
+                .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+        }
+        self.scene
+            .object_steps_began(&self.object_events, &self.save1.event_data);
     }
 }

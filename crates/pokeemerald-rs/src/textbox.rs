@@ -286,6 +286,59 @@ impl WindowOp {
             Self::KeypadIcon(icon) => icon.y = icon.y.saturating_add(dy),
         }
     }
+
+    /// This op without its rows at or below a window's bottom edge, or `None`
+    /// when nothing of it lies inside a window `content_height` pixels tall.
+    /// Rows above the top edge need no clip: a scroll only moves content up,
+    /// so they never return.
+    ///
+    /// Upstream draws into the window bitmap, which clips at its bottom edge
+    /// (`CopyGlyphToWindow`, `src/text.c`); `ScrollWindow` later moves only
+    /// pixels already in that bitmap, so a row clipped at reveal never comes
+    /// back into view. A window that retains ops and replays them after every
+    /// scroll shift reproduces that by clipping once, at reveal time, through
+    /// this method or [`push_clipped`].
+    pub(crate) fn clipped_below(self, content_height: i32) -> Option<Self> {
+        match self {
+            Self::Glyph(mut revealed) => {
+                let visible_rows = content_height.saturating_sub(revealed.y);
+                if visible_rows <= 0 {
+                    return None;
+                }
+                let visible_rows = usize::try_from(visible_rows).unwrap_or(usize::MAX);
+                if let Some(hidden) = revealed
+                    .glyph
+                    .pixels
+                    .get_mut(visible_rows.saturating_mul(GLYPH_SIZE)..)
+                {
+                    hidden.fill(0);
+                }
+                Some(Self::Glyph(revealed))
+            }
+            Self::ClearSpan(mut span) => {
+                span.height = span.height.min(content_height.saturating_sub(span.y));
+                (span.height > 0).then_some(Self::ClearSpan(span))
+            }
+            Self::KeypadIcon(mut icon) => {
+                let visible_rows = content_height.saturating_sub(icon.y);
+                if visible_rows <= 0 {
+                    return None;
+                }
+                icon.height = icon
+                    .height
+                    .min(u8::try_from(visible_rows).unwrap_or(u8::MAX));
+                Some(Self::KeypadIcon(icon))
+            }
+        }
+    }
+}
+
+/// Retains `op` in `ops` with the rows below a `content_height`-pixel window
+/// removed; an op wholly below it is dropped. See [`WindowOp::clipped_below`].
+pub(crate) fn push_clipped(ops: &mut Vec<WindowOp>, op: WindowOp, content_height: i32) {
+    if let Some(op) = op.clipped_below(content_height) {
+        ops.push(op);
+    }
 }
 
 /// Replays ordered glyph, keypad-icon, and clear-span ops onto `fb`, which
@@ -878,5 +931,72 @@ mod tests {
         coverage.mark(0, wrapping_y);
 
         assert!(!coverage.is_painted(0, 0));
+    }
+
+    const WINDOW_HEIGHT_PX: i32 = 32;
+
+    fn icon_at(y: i32) -> WindowOp {
+        WindowOp::KeypadIcon(KeypadIconPlacement {
+            x: 0,
+            y,
+            id: 0,
+            width: 8,
+            height: 12,
+        })
+    }
+
+    #[test]
+    fn a_keypad_icon_keeps_only_the_rows_inside_the_window() {
+        assert_eq!(
+            icon_at(20).clipped_below(WINDOW_HEIGHT_PX),
+            Some(icon_at(20))
+        );
+        let Some(WindowOp::KeypadIcon(partial)) = icon_at(28).clipped_below(WINDOW_HEIGHT_PX)
+        else {
+            panic!("an icon straddling the edge keeps its top rows");
+        };
+        assert_eq!(partial.height, 4);
+        assert_eq!(
+            icon_at(WINDOW_HEIGHT_PX).clipped_below(WINDOW_HEIGHT_PX),
+            None
+        );
+    }
+
+    #[test]
+    fn a_cleared_span_is_cut_at_the_window_bottom() {
+        let span = |y| {
+            WindowOp::ClearSpan(ClearedSpan {
+                x: 0,
+                y,
+                width: 8,
+                height: 16,
+            })
+        };
+        let Some(WindowOp::ClearSpan(partial)) = span(24).clipped_below(WINDOW_HEIGHT_PX) else {
+            panic!("a span straddling the edge keeps its top rows");
+        };
+        assert_eq!(partial.height, 8);
+        assert_eq!(span(WINDOW_HEIGHT_PX).clipped_below(WINDOW_HEIGHT_PX), None);
+    }
+
+    #[test]
+    fn a_glyph_loses_the_rows_below_the_window_and_is_dropped_when_wholly_outside() {
+        let painted_rows = |y| {
+            let op = WindowOp::Glyph(Box::new(opaque_glyph_at(0, y)));
+            let Some(WindowOp::Glyph(glyph)) = op.clipped_below(WINDOW_HEIGHT_PX) else {
+                return None;
+            };
+            Some(
+                glyph
+                    .glyph
+                    .pixels
+                    .chunks(GLYPH_SIZE)
+                    .filter(|row| row.iter().any(|&pixel| pixel != 0))
+                    .count(),
+            )
+        };
+        assert_eq!(painted_rows(0), Some(GLYPH_SIZE));
+        assert_eq!(painted_rows(WINDOW_HEIGHT_PX - 5), Some(5));
+        assert_eq!(painted_rows(WINDOW_HEIGHT_PX), None);
     }
 }

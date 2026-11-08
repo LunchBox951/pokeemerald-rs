@@ -14,6 +14,8 @@ use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 use rendering::OamEntry;
 
+mod npc;
+
 const LITTLEROOT: MapId = MapId("MAP_LITTLEROOT_TOWN");
 const GROUND: u8 = 3;
 const GENERAL_1_BANK: u8 = 6;

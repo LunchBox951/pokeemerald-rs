@@ -33,6 +33,7 @@
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
+use platform::ButtonState;
 use std::cell::OnceCell;
 
 use crate::game_save::SaveLineage;
@@ -52,6 +53,7 @@ mod frame;
 mod input;
 mod interaction;
 mod lead_owner;
+mod live_battle_text;
 mod object_events;
 mod placement;
 mod route103_rival_trigger;
@@ -288,6 +290,13 @@ pub(crate) struct OverworldPhase {
     /// [`Self::advance_active_battle_frame`] drives whichever variant's own
     /// driver one turn per frame.
     pub(super) active_battle: Option<ActiveBattle>,
+    /// The text sequencer of the battle in [`Self::active_battle`], when the
+    /// battle plays its text ([`live_battle_text`]). A battle without one
+    /// resolves a whole turn per frame.
+    battle_sequence: Option<crate::flow::battle_sequence::BattleSequence>,
+    /// Test-only: whether battles play their text; see [`live_battle_text::BattleText`].
+    #[cfg(test)]
+    pub(in crate::flow) battle_text: live_battle_text::BattleText,
     /// `gDifferentSaveFile` (`pokeemerald/src/new_game.c:55`): whether the
     /// next SAVE must still ask the different-save-file WARNING, instead
     /// of the ordinary already-saved question.
@@ -633,6 +642,9 @@ impl OverworldPhase {
             lead: None,
             undecodable_lead_retained: false,
             active_battle: None,
+            battle_sequence: None,
+            #[cfg(test)]
+            battle_text: live_battle_text::BattleText::Skipped,
             different_save_file: false,
             new_game_session: false,
             start_menu: None,
@@ -789,6 +801,9 @@ impl OverworldPhase {
             lead: None,
             undecodable_lead_retained: false,
             active_battle: None,
+            battle_sequence: None,
+            #[cfg(test)]
+            battle_text: live_battle_text::BattleText::Skipped,
             different_save_file: true,
             new_game_session: true,
             start_menu: None,
@@ -925,9 +940,10 @@ impl OverworldPhase {
     }
 
     /// Play one frame of whichever battle currently owns the overworld
-    /// frame, if any -- the one place any battle's turn is driven. Returns
-    /// whether a battle owned this frame.
-    pub(super) fn advance_active_battle_frame(&mut self) -> bool {
+    /// frame, if any -- the one place any battle's turn is driven. `buttons`
+    /// is this frame's input, which a battle that plays its text answers
+    /// prompts with. Returns whether a battle owned this frame.
+    pub(super) fn advance_active_battle_frame(&mut self, buttons: ButtonState) -> bool {
         let Some(active) = self.active_battle.take() else {
             return false;
         };
@@ -936,7 +952,7 @@ impl OverworldPhase {
         self.clear_poison_step_counter();
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
-            ActiveBattle::First(battle) => self.advance_first_battle_frame(battle),
+            ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
             ActiveBattle::Rival { battle, trainer_id } => {
                 self.advance_route103_rival_battle_frame(battle, trainer_id)
             }
@@ -1038,6 +1054,10 @@ mod landing_call_arrow_elevation_tests;
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
 mod lead_owner_tests;
+/// The first battle against the real battle text: a turn or the result cannot
+/// overtake the text before it.
+#[cfg(test)]
+mod live_first_battle_tests;
 #[cfg(test)]
 mod mom_faceplayer_tests;
 #[cfg(test)]
