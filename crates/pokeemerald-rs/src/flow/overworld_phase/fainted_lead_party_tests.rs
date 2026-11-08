@@ -602,3 +602,22 @@ fn white_out_reselection_over_a_lent_lead_installs_a_borrowable_healed_replaceme
     assert_eq!(flushed.hp, flushed.max_hp, "the healed lead is what saves");
     assert_ne!(flushed.hp, 0);
 }
+
+#[test]
+fn an_all_fainted_party_refuses_a_wild_battle_before_any_draw() {
+    let mut phase = continued_phase_with_trailing_member(&fainted_starter());
+    let before = phase.rng.state();
+
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+
+    assert!(!phase.is_wild_battle_active());
+    assert_eq!(
+        phase.rng.state(),
+        before,
+        "a refused fainted lead draws nothing"
+    );
+}
