@@ -10,19 +10,23 @@
 //!
 //! A umask can take the owner's own access to a level, and the pin of the
 //! level needs some of it: Apple's `O_EXEC` open the search bit, the
-//! read-mode open of other Unix systems the read bit. Every Unix target
-//! imports under every umask nonetheless. Linux, Android and FreeBSD pin
-//! with `O_PATH`, which no mode bit gates; FreeBSD restores through the held
-//! descriptor, Linux and Android through it or, without owner search,
-//! through `/proc/self/fd`. Where the held descriptor cannot do it -- a pin
-//! the mode refused, or Linux and Android with owner search gone and no
-//! procfs, since rustix 1.1 has no `fchmodat2(AT_EMPTY_PATH)` -- `owner_access`
-//! restores the level through its held parent: through a real descriptor
-//! when the mode still allows one to be opened, otherwise by a `chmod` of the
-//! name sandwiched between two no-follow identity checks. That last route
-//! cannot be atomic: a swap landing between the first check and the `chmod`
-//! gives the replacement the owner's bits before the second check refuses it.
-//! The run never descends into a level the checks did not vouch for.
+//! read-mode open of other Unix systems the read bit. Linux, Android and
+//! FreeBSD pin with `O_PATH`, which no mode bit gates; FreeBSD restores
+//! through the held descriptor, Linux and Android through it or, without
+//! owner search, through `/proc/self/fd`. Where the held descriptor cannot
+//! do it, `owner_access` restores the level through a real read descriptor
+//! opened from the held parent and `fstat`-checked against the level's
+//! identity, which needs the owner's read bit. Nothing is ever `chmod`ed by
+//! name: a name can be swapped for a symlink after the check, and no later
+//! check undoes the change.
+//!
+//! So a mode with no owner read left and no other inode-bound route is
+//! unsupported, and the create fails with a diagnostic naming the umask:
+//! mode `0000` (umask `0777`) on Apple, and on Linux and Android without
+//! procfs; and `0333`/`0300` (umasks `0444`, `0477`) on Unix systems that pin
+//! with a read-mode open. Every other umask imports on every Unix target;
+//! Linux and Android are covered for every umask when procfs is mounted, and
+//! FreeBSD for every umask.
 //!
 //! Durability lives in `sync`; the Unix take-back protocol, and the
 //! residuals it accepts, in `take_back`.
@@ -163,8 +167,8 @@ fn is_access_denied(error: &io::Error) -> bool {
 
 /// [`dest::restore_directory_owner_access`] on a pinned, recorded `level`,
 /// falling back to [`owner_access::restore_by_name`] through the level's held
-/// parent when the descriptor alone is refused. A replaced name is an error;
-/// the level stays recorded either way.
+/// parent when the descriptor alone is refused. A level neither can reach is
+/// an [`owner_access::unrestorable`] error; the level stays recorded.
 #[cfg(unix)]
 fn restore_recorded_level(level: &CreatedDirectory, pin: &std::os::fd::OwnedFd) -> io::Result<()> {
     let Err(source) = dest::restore_directory_owner_access(pin) else {
@@ -180,7 +184,7 @@ fn restore_recorded_level(level: &CreatedDirectory, pin: &std::os::fd::OwnedFd) 
     match owner_access::restore_by_name(parent, &level.name, &level.identity, Some(pin)) {
         Ok(()) => Ok(()),
         Err(owner_access::Refused::Replaced(replaced)) => Err(replaced),
-        Err(owner_access::Refused::Failed) => Err(source),
+        Err(owner_access::Refused::Failed) => Err(owner_access::unrestorable()),
     }
 }
 
@@ -303,7 +307,8 @@ fn reopen_created_level(
         };
         // The umask may have taken the bit the pin needs (owner search on
         // Apple, owner read on other Unix systems). The mode is restored
-        // through the parent, identity-checked, and the pin tried once more.
+        // through a real descriptor from the parent, identity-checked, and
+        // the pin tried once more; a mode with no owner read is refused.
         let attempt = match attempt {
             Err(source) if is_access_denied(&source) => {
                 match owner_access::restore_by_name(parent, name, identity, None) {
@@ -311,7 +316,7 @@ fn reopen_created_level(
                     Err(owner_access::Refused::Replaced(replaced)) => {
                         return ReopenedLevel::Unverified(replaced);
                     }
-                    Err(owner_access::Refused::Failed) => Err(source),
+                    Err(owner_access::Refused::Failed) => Err(owner_access::unrestorable()),
                 }
             }
             other => other,
