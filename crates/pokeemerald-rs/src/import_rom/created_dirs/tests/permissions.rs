@@ -5,8 +5,10 @@
 //! meets such a level only when that restore failed (a umask that took the
 //! owner's write and search with `/proc` unmounted). Creation then returns the
 //! levels made so far, the failing one last and recorded with both pins, and
-//! its ancestors untouched. These tests build that rollback input by taking
-//! the owner's write from the last level after it is created.
+//! its ancestors untouched. [`failed_restore`] makes that restore fail for
+//! real on Linux, so rollback gets exactly what creation returned; the
+//! tests here build the same rollback input by taking the owner's write
+//! from the last level after it is created.
 //!
 //! The route is chosen by the held level's mode, not by a failed rename, so
 //! it is taken under root too, where mode bits do not bind and a rename
@@ -17,6 +19,12 @@ use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt as _;
 
 use super::*;
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod failed_restore;
 
 /// `a/b`, created, with `b` (the last level, as when its owner-access
 /// restore failed) left at `mode`.
