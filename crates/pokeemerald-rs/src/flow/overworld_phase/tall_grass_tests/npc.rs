@@ -259,16 +259,17 @@ fn an_npc_whose_step_begins_onto_tall_grass_starts_a_rustling_effect_and_leaves_
 }
 
 #[test]
-fn setting_the_hide_flag_of_an_admitted_npc_retires_its_effect_and_it_gains_no_new_one() {
-    // `removeobject` sets the hide flag and removes the object
-    // (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`);
-    // the scheduler keeps the entry admitted, but it no longer has a sprite.
+fn setting_the_hide_flag_of_an_admitted_npc_keeps_its_effect_until_removeobject_retires_it() {
+    // The scheduler reads the hide flag only at admission, so a flag set on an admitted object
+    // leaves it, and its effect, in place; `removeobject` sets the flag and deactivates the object
+    // (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`).
     let mut phase = boy_phase(&ROUTE101_HIDDEN_BOY_EVENTS, MB_TALL_GRASS, (5, 13));
     phase
         .save1
         .event_data
         .flag_clear(0x3DF)
         .expect("FLAG_HIDE_ROUTE_101_BOY");
+    run_camera_update(&mut phase);
     idle(&mut phase, 2);
     assert_eq!(phase.scene.tall_grass_effect_count(), 1);
 
@@ -278,11 +279,19 @@ fn setting_the_hide_flag_of_an_admitted_npc_retires_its_effect_and_it_gains_no_n
         .flag_set(0x3DF)
         .expect("FLAG_HIDE_ROUTE_101_BOY");
     idle(&mut phase, 2);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "the flag alone does not retire an admitted object"
+    );
+
+    assert!(phase.object_events.remove_by_local_id(6));
+    idle(&mut phase, 2);
     assert!(!boy_drawn(&phase));
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 
-    // A return to the field re-arms every object's spawn pass; a hidden one
-    // still has none.
+    // A return to the field re-arms every object's spawn pass; a removed object whose flag is
+    // set has none.
     phase.scene.reset_field_effects();
     idle(&mut phase, 3);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);

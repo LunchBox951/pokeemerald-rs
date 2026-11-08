@@ -495,4 +495,25 @@ mod tests {
             "outside the spawn window"
         );
     }
+
+    #[test]
+    fn a_script_removal_retires_an_admitted_entry_whatever_its_flag() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![1]);
+
+        assert!(rig.collection.remove_by_local_id(1));
+        assert_eq!(ids_at(&rig, 2, 2), Vec::<u8>::new());
+        assert!(!rig.collection.remove_by_local_id(1), "already retired");
+        assert!(!rig.collection.remove_by_local_id(9), "no such local id");
+
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(
+            ids_at(&rig, 2, 2),
+            Vec::<u8>::new(),
+            "the set flag keeps it gone"
+        );
+    }
 }

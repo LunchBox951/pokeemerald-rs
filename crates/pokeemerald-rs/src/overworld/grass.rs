@@ -34,9 +34,7 @@ use assets::pack::{AssetPack, PaletteRef};
 use assets::{ImageRef, PackError};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
-use engine::overworld::object_event::{
-    object_event_is_visible, LiveObjectEvent, ObjectEventCollection,
-};
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
 use engine::overworld::{PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
@@ -429,13 +427,12 @@ impl TallGrassEffect {
     }
 }
 
-/// Whether the object has a sprite: the scheduler has admitted it and its hide
-/// flag is still clear. A script that sets the flag removes the object
-/// (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`),
-/// and the scheduler does not retire an admitted entry for it, so the flag is
-/// read here as drawing reads it.
-fn has_sprite(live: &LiveObjectEvent, event_data: &EventData) -> bool {
-    live.is_active() && object_event_is_visible(live.template(), event_data)
+/// Whether the object has a sprite: the scheduler has admitted it and not since retired it. The
+/// hide flag was applied at admission, and a flag set afterwards leaves the sprite until a script's
+/// `removeobject` retires the entry (`RemoveObjectEventByLocalIdAndMap`,
+/// `event_object_movement.c:1389-1397`).
+fn has_sprite(live: &LiveObjectEvent) -> bool {
+    live.is_active()
 }
 
 impl OverworldScene {
@@ -480,16 +477,16 @@ impl OverworldScene {
     /// pass, standing on tall grass. The object's elevation is first settled on
     /// its tile (`UpdateObjectEventElevationAndPriority`, `:8089`), and the
     /// pass runs whether or not object events are frozen. An object without a
-    /// sprite (hidden, outside the view, removed) is forgotten, so its next
+    /// sprite (not admitted, outside the view, removed) is forgotten, so its next
     /// admission runs the pass again (`triggerGroundEffectsOnMove`, `:1301`).
     pub(crate) fn seed_object_tall_grass(
         &mut self,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         for (slot, live) in objects.iter().enumerate() {
-            if !has_sprite(live, event_data) {
+            if !has_sprite(live) {
                 self.grass.forget_object(slot);
                 continue;
             }
@@ -516,11 +513,11 @@ impl OverworldScene {
     pub(crate) fn object_steps_began(
         &mut self,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         for (slot, live) in objects.iter().enumerate() {
-            if !has_sprite(live, event_data) {
+            if !has_sprite(live) {
                 self.grass.forget_object(slot);
                 continue;
             }
@@ -556,7 +553,7 @@ impl OverworldScene {
         &mut self,
         player: &PlayerState,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let mut grass = std::mem::take(&mut self.grass);
         {
@@ -567,7 +564,7 @@ impl OverworldScene {
                     Owner::Player => Some((player.position(), player.previous_position())),
                     Owner::Object(slot) => live
                         .get(slot)
-                        .filter(|live| has_sprite(live, event_data))
+                        .filter(|live| has_sprite(live))
                         .map(|live| (live.state().position(), live.state().previous_position())),
                 },
                 |(x, y)| runtime.metatile_behavior(x, y),

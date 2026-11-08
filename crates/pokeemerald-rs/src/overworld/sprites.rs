@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use assets::pack::AssetPack;
 use assets::LayoutGrid;
 use engine::event_data::EventData;
-use engine::overworld::object_event::ObjectEventCollection;
+use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, Palette, Tileset};
 
@@ -161,7 +161,8 @@ impl SceneSprites {
         self.cell_elevations.settled(tile, elevation)
     }
 
-    /// [`Self::live_entries`] over the template-seeded state.
+    /// [`Self::live_entries`] over the template-seeded state, admitted as map load would admit
+    /// it for `player` under `event_data`.
     #[must_use]
     pub(super) fn entries(
         &self,
@@ -169,7 +170,13 @@ impl SceneSprites {
         event_data: &EventData,
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
-        self.live_entries(&self.seed_objects, player, event_data, grass)
+        let mut objects = self.seed_objects.clone();
+        objects.admit_for_map_load(&FrameContext {
+            player_position: player.position(),
+            event_data,
+            frozen: true,
+        });
+        self.live_entries(&objects, player, event_data, grass)
     }
 
     /// Lists the player first, then NPCs in `objects` order, then the tall-grass

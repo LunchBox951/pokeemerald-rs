@@ -18,14 +18,13 @@ use super::map_runtime::MapRuntime;
 use super::metatile_behavior::MB_NORMAL;
 use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 use super::player::PlayerState;
-use crate::event_data::EventData;
 
 /// Whether `trainer` -- a [`TrainerType::Normal`] live object event on
 /// `runtime`'s map -- currently sees `player`: its live facing-direction
 /// cone, out to its template sight range, reaches `player`'s tile along a
 /// clear, elevation-compatible line. `objects` supplies the other live
 /// object events that can stand on the line (`trainer_see.c:301-312`). Hide flags are the
-/// scheduler's admission concern, so `_event_data` is not read.
+/// scheduler's admission concern, so none is read here.
 ///
 /// Returns `false` when `trainer` is not active (the scheduler has not admitted it, or has
 /// retired it), for any other [`TrainerType`], a sight range of `0`, or an
@@ -38,7 +37,6 @@ pub fn trainer_can_see_player(
     objects: &ObjectEventCollection,
     runtime: &MapRuntime<'_>,
     player: &PlayerState,
-    _event_data: &EventData,
 ) -> bool {
     let template = trainer.template();
     let state = trainer.state();
@@ -195,6 +193,7 @@ fn tile_blocks_intermediate_sight(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_data::EventData;
     use crate::overworld::collision::ELEVATION_TRANSITION;
     use crate::overworld::object_event_harness::{admit, admitted};
     use assets::{MapConnection, MapEvents, MapHeader, MapId, MovementType, ObjectEvent};
@@ -350,7 +349,7 @@ mod tests {
             event_data,
         );
         let live = *objects.get(trainer.local_id).unwrap();
-        trainer_can_see_player(&live, &objects, runtime, player, event_data)
+        trainer_can_see_player(&live, &objects, runtime, player)
     }
 
     #[test]
@@ -500,7 +499,7 @@ mod tests {
         let live = *objects.get(1).unwrap();
         let player = player_at(5, 8, 3);
         assert!(
-            !trainer_can_see_player(&live, &objects, &runtime, &player, &event_data),
+            !trainer_can_see_player(&live, &objects, &runtime, &player),
             "the admitted blocker still stands on the line"
         );
         objects
@@ -510,7 +509,7 @@ mod tests {
             .walk(Direction::East);
         let live = *objects.get(1).unwrap();
         assert!(
-            trainer_can_see_player(&live, &objects, &runtime, &player, &event_data),
+            trainer_can_see_player(&live, &objects, &runtime, &player),
             "the admitted trainer still sees once the line is clear"
         );
     }
@@ -528,8 +527,7 @@ mod tests {
             &live,
             &objects,
             &runtime,
-            &player_at(5, 8, 3),
-            &EventData::new()
+            &player_at(5, 8, 3)
         ));
     }
 
@@ -731,7 +729,7 @@ mod tests {
         let mut objects = admitted(templates, (5, 5));
         edit(objects.get_mut(local_id).unwrap().state_mut());
         let live = *objects.get(1).unwrap();
-        trainer_can_see_player(&live, &objects, &runtime, player, &EventData::new())
+        trainer_can_see_player(&live, &objects, &runtime, player)
     }
 
     #[test]

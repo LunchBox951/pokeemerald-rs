@@ -7,7 +7,7 @@ use assets::MapId;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
-use super::super::test_support::pressed;
+use super::super::test_support::{admitted_objects, pressed};
 use super::super::{OverworldPhase, SyntheticStartMenu};
 use super::support::*;
 use crate::flow::lead_screen::loaded_holding;
@@ -417,8 +417,10 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         .iter()
         .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event");
-    let objects = engine::overworld::object_event::ObjectEventCollection::from_templates(
+    let objects = admitted_objects(
         scene.map_events().object_events,
+        &player,
+        &engine::event_data::EventData::new(),
     );
     assert!(
         engine::overworld::trainer_can_see_player(
@@ -428,7 +430,6 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
             &objects,
             &scene.runtime(),
             &player,
-            &engine::event_data::EventData::new(),
         ),
         "Rhett's real cone must reach a player standing one tile south of him over real \
          terrain -- including the final tile's own collision/impassability arms"

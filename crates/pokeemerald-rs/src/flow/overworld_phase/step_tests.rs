@@ -189,6 +189,7 @@ fn unhide_vigoroth_1(phase: &mut OverworldPhase) {
         .event_data
         .flag_clear(flag)
         .expect("an ordinary flag id");
+    run_camera_update(phase);
 }
 
 /// An object event with a real, non-`"0x0"` script this port does not model

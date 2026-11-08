@@ -85,6 +85,23 @@ impl ObjectEventCollection {
         }
     }
 
+    /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
+    /// `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
+    /// `event_object_movement.c:1383-1397`): position queries stop returning it until a later
+    /// admission pass spawns it again. The script verb's `FlagSet` of the object's hide flag is
+    /// the caller's, so that later pass does not respawn it. Returns whether an active entry was
+    /// retired.
+    pub fn remove_by_local_id(&mut self, local_id: u8) -> bool {
+        let Some(entry) = self.get_mut(local_id) else {
+            return false;
+        };
+        let was_active = entry.lifecycle.is_active();
+        if was_active {
+            entry.lifecycle = Lifecycle::Despawned;
+        }
+        was_active
+    }
+
     /// Spawns every in-window, unhidden entry and removes every active entry outside the view
     /// (`TrySpawnObjectEvents` then `RemoveObjectEventsOutsideView`, `:1645-1675,1677-1710`).
     fn reconcile_with_view(&mut self, context: &FrameContext<'_>) {

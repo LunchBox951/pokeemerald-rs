@@ -1,4 +1,5 @@
 use super::*;
+use crate::flow::overworld_phase::test_support::admitted_objects;
 
 /// [`SIGHT_TRAINERS`] must cover exactly Route 103's own nine
 /// `TRAINER_TYPE_NORMAL` object events, by script name -- pinned against
@@ -117,8 +118,8 @@ fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
     let map_id = assets::MapId("MAP_ROUTE103");
     let scene = crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
     let runtime = scene.runtime();
-    let objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
     let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
+    let objects = admitted_objects(scene.map_events().object_events, &player, &EventData::new());
 
     let event_data = EventData::new();
     let scan = find_sight_trainer(&objects, &runtime, &player, &event_data);
@@ -154,8 +155,8 @@ fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
     let map_id = assets::MapId("MAP_ROUTE103");
     let scene = crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
     let runtime = scene.runtime();
-    let objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
     let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
+    let objects = admitted_objects(scene.map_events().object_events, &player, &EventData::new());
 
     let scan = find_sight_trainer(&objects, &runtime, &player, &EventData::new());
     assert_eq!(

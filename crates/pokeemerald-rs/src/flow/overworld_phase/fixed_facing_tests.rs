@@ -281,7 +281,7 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
 }
 
 #[test]
-fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_scheduled() {
+fn a_map_transition_reseeds_authored_facing_and_admits_only_the_objects_in_view() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -318,9 +318,16 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
         assert_eq!(phase.map_id, OLDALE_TOWN, "{what} completed");
         for template in phase.scene.map_events().object_events {
             let entry = phase.object_events.get(template.local_id).unwrap();
-            assert!(
-                !entry.is_active(),
-                "{what}: local {} is unscheduled",
+            // Map load's admission pass spawns the unhidden objects inside the spawn window of
+            // the arrival tile (`TrySpawnObjectEvents`, `overworld.c:2163`), and no others.
+            assert_eq!(
+                entry.is_active(),
+                engine::overworld::object_event_is_in_view(template, phase.player.position())
+                    && engine::overworld::object_event_is_visible(
+                        template,
+                        &phase.save1.event_data
+                    ),
+                "{what}: local {} is admitted exactly when it is in view and unhidden",
                 template.local_id
             );
             assert_eq!(
