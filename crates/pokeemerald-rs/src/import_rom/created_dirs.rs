@@ -8,6 +8,22 @@
 //! for, including one past [`pin_budget`] or whose pin was shed to free a
 //! descriptor, is left standing. Off Unix each level is addressed by path.
 //!
+//! A umask can take the owner's own access to a level, and the pin of the
+//! level needs some of it: Apple's `O_EXEC` open the search bit, the
+//! read-mode open of other Unix systems the read bit. Every Unix target
+//! imports under every umask nonetheless. Linux, Android and FreeBSD pin
+//! with `O_PATH`, which no mode bit gates; FreeBSD restores through the held
+//! descriptor, Linux and Android through it or, without owner search,
+//! through `/proc/self/fd`. Where the held descriptor cannot do it -- a pin
+//! the mode refused, or Linux and Android with owner search gone and no
+//! procfs, since rustix 1.1 has no `fchmodat2(AT_EMPTY_PATH)` -- `owner_access`
+//! restores the level through its held parent: through a real descriptor
+//! when the mode still allows one to be opened, otherwise by a `chmod` of the
+//! name sandwiched between two no-follow identity checks. That last route
+//! cannot be atomic: a swap landing between the first check and the `chmod`
+//! gives the replacement the owner's bits before the second check refuses it.
+//! The run never descends into a level the checks did not vouch for.
+//!
 //! Durability lives in `sync`; the Unix take-back protocol, and the
 //! residuals it accepts, in `take_back`.
 
@@ -138,6 +154,36 @@ fn is_out_of_descriptors_io(error: &io::Error) -> bool {
     rustix::io::Errno::from_io_error(error).is_some_and(is_out_of_descriptors)
 }
 
+/// Whether `error` is `EACCES`, the refusal a mode that took the owner's
+/// access gives a pin or a restore.
+#[cfg(unix)]
+fn is_access_denied(error: &io::Error) -> bool {
+    rustix::io::Errno::from_io_error(error) == Some(rustix::io::Errno::ACCESS)
+}
+
+/// [`dest::restore_directory_owner_access`] on a pinned, recorded `level`,
+/// falling back to [`owner_access::restore_by_name`] through the level's held
+/// parent when the descriptor alone is refused. A replaced name is an error;
+/// the level stays recorded either way.
+#[cfg(unix)]
+fn restore_recorded_level(level: &CreatedDirectory, pin: &std::os::fd::OwnedFd) -> io::Result<()> {
+    let Err(source) = dest::restore_directory_owner_access(pin) else {
+        return Ok(());
+    };
+    let Some(parent) = level
+        .parent
+        .as_deref()
+        .filter(|_| is_access_denied(&source))
+    else {
+        return Err(source);
+    };
+    match owner_access::restore_by_name(parent, &level.name, &level.identity, Some(pin)) {
+        Ok(()) => Ok(()),
+        Err(owner_access::Refused::Replaced(replaced)) => Err(replaced),
+        Err(owner_access::Refused::Failed) => Err(source),
+    }
+}
+
 /// Releases the outermost level at or after the `pin_from` cursor that
 /// still holds a pin, advancing the cursor past it; `false` when none is
 /// left. Adjacent levels share a descriptor, so a release may take a
@@ -255,6 +301,21 @@ fn reopen_created_level(
             Some(err) => Err(err),
             None => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
         };
+        // The umask may have taken the bit the pin needs (owner search on
+        // Apple, owner read on other Unix systems). The mode is restored
+        // through the parent, identity-checked, and the pin tried once more.
+        let attempt = match attempt {
+            Err(source) if is_access_denied(&source) => {
+                match owner_access::restore_by_name(parent, name, identity, None) {
+                    Ok(()) => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
+                    Err(owner_access::Refused::Replaced(replaced)) => {
+                        return ReopenedLevel::Unverified(replaced);
+                    }
+                    Err(owner_access::Refused::Failed) => Err(source),
+                }
+            }
+            other => other,
+        };
         match attempt {
             Err(source)
                 if is_out_of_descriptors_io(&source)
@@ -348,7 +409,9 @@ fn create_missing_level(
             // The umask may have taken the owner's access to the level just
             // made; the next level is created in it, so it is restored first.
             // The level stays recorded if this fails.
-            dest::restore_directory_owner_access(&descend)?;
+            if let Some(level) = created.last() {
+                restore_recorded_level(level, &descend)?;
+            }
             // This level just made the pinned window one longer than
             // `pin_limit`; shed the outermost to bring it back -- one call
             // always suffices, since nothing but this push could have grown
@@ -606,6 +669,8 @@ pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
     }
 }
 
+#[cfg(unix)]
+mod owner_access;
 mod sync;
 #[cfg(unix)]
 mod take_back;

@@ -357,11 +357,16 @@ pub(super) fn restore_owner_access(file: &File) -> io::Result<()> {
 /// its name, so a swap since the level was verified cannot redirect it; and
 /// only when an owner bit is missing.
 ///
-/// The level must already be held, so this reaches only a level the
-/// platform's [`open_created_directory_at`] can pin: on Apple platforms
-/// that needs the owner's search bit, and on other Unix systems the read bit
-/// too. A mask that takes the bit the pin needs fails the pin, and the level
-/// is left as it was made.
+/// The level must already be held, and the setter then needs more than the
+/// held descriptor on some targets: FreeBSD acts on the `O_PATH` descriptor
+/// itself and reaches every mode; Linux and Android reach a level without
+/// owner search only through its `/proc/self/fd` link, so without procfs
+/// `0177` and `0777` fail here with `EACCES`; every other Unix uses `fchmod`
+/// on the descriptor. Pinning the level can itself be refused by the mode
+/// (Apple's `O_EXEC` open needs owner search, the read-mode open of other
+/// Unix systems needs owner read). `created_dirs` answers both through
+/// `owner_access`, so creation covers every umask on every Unix target; this
+/// function is only the descriptor half of that.
 ///
 /// # Errors
 ///
@@ -380,17 +385,57 @@ pub(super) fn restore_directory_owner_access(level: &std::os::fd::OwnedFd) -> io
 /// `fchmodat(level, ".")` acts on the held inode, and needs only the search
 /// bit the umasks above leave. With that bit gone too, the descriptor's
 /// `/proc/self/fd` link names the same inode.
+///
+/// Without procfs a level without owner search (umasks `0177` and `0777`)
+/// is out of this setter's reach and it answers `EACCES`: rustix 1.1 does
+/// not expose `fchmodat2(AT_EMPTY_PATH)`, which would reach the inode
+/// directly. The caller then restores it through `owner_access`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;
 
     match rustix::fs::chmodat(level, ".", mode, rustix::fs::AtFlags::empty()) {
-        Err(rustix::io::Errno::ACCESS) => rustix::fs::chmod(
-            format!("/proc/self/fd/{}", level.as_raw_fd()).as_str(),
-            mode,
-        )
-        .map_err(|_| rustix::io::Errno::ACCESS.into()),
+        Err(rustix::io::Errno::ACCESS) => {
+            #[cfg(test)]
+            if procfs_unavailable::get() {
+                return Err(rustix::io::Errno::ACCESS.into());
+            }
+            rustix::fs::chmod(
+                format!("/proc/self/fd/{}", level.as_raw_fd()).as_str(),
+                mode,
+            )
+            .map_err(|_| rustix::io::Errno::ACCESS.into())
+        }
         result => Ok(result?),
+    }
+}
+
+/// Test seam: makes [`set_held_directory_mode`]'s `/proc/self/fd` route
+/// fail on this thread, as it does where procfs is not mounted.
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+pub(super) mod procfs_unavailable {
+    use std::cell::Cell;
+
+    thread_local! {
+        static UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn get() -> bool {
+        UNAVAILABLE.with(Cell::get)
+    }
+
+    /// Holds the route unavailable until dropped.
+    pub(in crate::import_rom) struct Guard(());
+
+    pub(in crate::import_rom) fn make_unavailable() -> Guard {
+        UNAVAILABLE.with(|flag| flag.set(true));
+        Guard(())
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            UNAVAILABLE.with(|flag| flag.set(false));
+        }
     }
 }
 
@@ -414,6 +459,68 @@ fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode)
 ))]
 fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
     Ok(rustix::fs::fchmod(level, mode)?)
+}
+
+/// Opens the level `name` in `parent` for reading, refusing a final
+/// symlink: a real descriptor [`restore_real_directory_owner_access`] can
+/// `fchmod`. Needs the owner's read bit, so it fails on the modes the
+/// held-descriptor routes cannot reach either; `owner_access` then falls
+/// back to a named `chmod`.
+#[cfg(unix)]
+pub(super) fn open_readable_created_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`restore_directory_owner_access`] for a descriptor that is a real open
+/// of the directory, where `fchmod(2)` is accepted on every target.
+///
+/// # Errors
+///
+/// Whatever `fstat(2)` or `fchmod(2)` reports.
+#[cfg(unix)]
+pub(super) fn restore_real_directory_owner_access(level: &std::os::fd::OwnedFd) -> io::Result<()> {
+    let mode = rustix::fs::Mode::from_raw_mode(rustix::fs::fstat(level)?.st_mode);
+    if !mode.contains(rustix::fs::Mode::RWXU) {
+        rustix::fs::fchmod(level, mode | rustix::fs::Mode::RWXU)?;
+    }
+    Ok(())
+}
+
+/// `chmod(2)`s `name` in `parent` to `mode` by name. Only
+/// `owner_access` calls this, right between its two identity checks: the
+/// name is not an identity on its own.
+///
+/// A final symlink is refused where the platform's `fchmodat(2)` can: rustix
+/// 1.1 answers `AT_SYMLINK_NOFOLLOW` with `EOPNOTSUPP` on Linux and Android
+/// (it will not emulate it through procfs), so there the flag is not sent.
+#[cfg(unix)]
+pub(super) fn chmod_named(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    match rustix::fs::chmodat(parent, name, mode, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Err(rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::INVAL) => {}
+        result => return Ok(result?),
+    }
+    Ok(rustix::fs::chmodat(
+        parent,
+        name,
+        mode,
+        rustix::fs::AtFlags::empty(),
+    )?)
 }
 
 /// Off Unix a file has no owner mode bits to restore.

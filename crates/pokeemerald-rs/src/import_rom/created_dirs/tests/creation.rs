@@ -288,32 +288,24 @@ fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
     );
 }
 
-// The simulated modes drop the owner's read bit, so they need the platforms
-// whose traversal opens pin a level on write and search alone; every other
-// Unix falls back to a read-requiring open.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
+#[cfg(unix)]
 #[test]
 fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it() {
     use std::os::unix::fs::PermissionsExt as _;
 
     // The hook runs on each level right after `mkdirat` and before the
     // reopen, so it stands in for the umask having taken those bits.
-    // Each level must be usable by the time the next is made inside it. All
-    // keep the owner search bit, as the Apple pin needs.
+    // Each level must be usable by the time the next is made inside it,
+    // whichever of the owner's bits the pin of the platform needs.
     let dir = TempDir::new("owner-access");
-    let levels: Vec<PathBuf> = ["a", "b", "c", "d"]
+    let left_by_umask = [0o333, 0o500, 0o555, 0o750, 0o600, 0o000, 0o300];
+    let levels: Vec<PathBuf> = ["a", "b", "c", "d", "e", "f", "g"]
         .iter()
         .scan(dir.path.clone(), |parent, name| {
             *parent = parent.join(name);
             Some(parent.clone())
         })
         .collect();
-    let left_by_umask = [0o333, 0o500, 0o555, 0o750];
     let mut next = 0;
     let mut hook = || -> Option<std::io::Error> {
         fs::set_permissions(
@@ -334,12 +326,278 @@ fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it()
     )
     .expect("every level is created, whatever the mode left");
 
-    assert_eq!(created.len(), 4);
+    assert_eq!(created.len(), left_by_umask.len());
+    assert!(
+        created.iter().all(|level| level.own.is_some()),
+        "every level is pinned"
+    );
     let modes: Vec<u32> = levels
         .iter()
         .map(|level| fs::metadata(level).unwrap().permissions().mode() & 0o7777)
         .collect();
-    assert_eq!(modes, [0o733, 0o700, 0o755, 0o750]);
+    assert_eq!(modes, [0o733, 0o700, 0o755, 0o750, 0o700, 0o700, 0o700]);
+}
+
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+#[test]
+fn a_level_without_owner_search_is_restored_without_procfs() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // `0600` and `0000` are what umasks `0177` and `0777` leave. With the
+    // `/proc/self/fd` route gone the held descriptor cannot restore them, so
+    // the parent-based route must; a privileged runner passes either way,
+    // an unprivileged one fails at the next level without it.
+    let _no_procfs = super::dest::procfs_unavailable::make_unavailable();
+    let dir = TempDir::new("owner-access-no-procfs");
+    let levels: Vec<PathBuf> = ["a", "b", "c"]
+        .iter()
+        .scan(dir.path.clone(), |parent, name| {
+            *parent = parent.join(name);
+            Some(parent.clone())
+        })
+        .collect();
+    let left_by_umask = [0o600, 0o000, 0o600];
+    let mut next = 0;
+    let mut hook = || -> Option<std::io::Error> {
+        fs::set_permissions(
+            &levels[next],
+            fs::Permissions::from_mode(left_by_umask[next]),
+        )
+        .unwrap();
+        next += 1;
+        None
+    };
+
+    super::create_directories_with_hooks(
+        levels.last().unwrap(),
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    )
+    .expect("every level is created without procfs");
+
+    for level in &levels {
+        let mode = fs::metadata(level).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{level:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pin_the_mode_refused_is_retried_once_the_level_is_restored_by_name() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Apple's `O_EXEC` and the read-mode open of other Unix systems answer
+    // `EACCES` for a level the umask closed. The hook closes the level and
+    // fails the first reopen the same way; the retry must find it restored.
+    let dir = TempDir::new("pin-refused");
+    let level = dir.join("closed");
+    let mut calls = 0;
+    let mut hook = || -> Option<std::io::Error> {
+        calls += 1;
+        (calls == 1).then(|| {
+            fs::set_permissions(&level, fs::Permissions::from_mode(0o000)).unwrap();
+            std::io::Error::from(rustix::io::Errno::ACCESS)
+        })
+    };
+
+    let created = super::create_directories_with_hooks(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    )
+    .expect("a refused pin is retried after the restore");
+
+    assert_eq!(calls, 1, "the retry is not a second reopen attempt");
+    assert!(created[0].own.is_some(), "the level ends up pinned");
+    assert_eq!(
+        fs::metadata(&level).unwrap().permissions().mode() & 0o7777,
+        0o700
+    );
+}
+
+/// A directory `name` in a fresh parent, with its parent descriptor and the
+/// identity `statat` gave it.
+#[cfg(unix)]
+fn closed_level(
+    tag: &str,
+    mode: u32,
+) -> (
+    TempDir,
+    std::os::fd::OwnedFd,
+    std::ffi::OsString,
+    rustix::fs::Stat,
+) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = TempDir::new(tag);
+    let name = std::ffi::OsString::from("level");
+    fs::create_dir(dir.join("level")).unwrap();
+    fs::set_permissions(dir.join("level"), fs::Permissions::from_mode(mode)).unwrap();
+    let parent = super::dest::open_traversal_directory(&dir.path).unwrap();
+    let identity =
+        rustix::fs::statat(&parent, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW).unwrap();
+    (dir, parent, name, identity)
+}
+
+#[cfg(unix)]
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::metadata(path).unwrap().permissions().mode() & 0o7777
+}
+
+#[cfg(unix)]
+fn refuse_readable_open(
+    _parent: &std::os::fd::OwnedFd,
+    _name: &std::ffi::OsStr,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    Err(std::io::Error::from(rustix::io::Errno::ACCESS))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_is_restored_by_name_when_no_readable_open_is_possible() {
+    // Mode `0000` is what umask `0777` leaves: nothing can open it, so the
+    // named `chmod` is the only route. Every other bit is kept.
+    let (dir, parent, name, identity) = closed_level("by-name", 0o000);
+    owner_access::restore_by_name_with(
+        &parent,
+        &name,
+        &identity,
+        None,
+        &mut refuse_readable_open,
+        &mut || {},
+    )
+    .expect("the level is restored");
+    assert_eq!(mode_of(&dir.join("level")), 0o700);
+
+    let (dir, parent, name, identity) = closed_level("by-name-kept", 0o050);
+    owner_access::restore_by_name_with(
+        &parent,
+        &name,
+        &identity,
+        None,
+        &mut refuse_readable_open,
+        &mut || {},
+    )
+    .expect("the level is restored");
+    assert_eq!(mode_of(&dir.join("level")), 0o750);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_with_owner_read_is_restored_through_a_real_descriptor() {
+    let (dir, parent, name, identity) = closed_level("by-fd", 0o600);
+    owner_access::restore_by_name(&parent, &name, &identity, None).expect("restored");
+    assert_eq!(mode_of(&dir.join("level")), 0o700);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replacement_present_before_the_restore_is_refused_and_left_alone() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Both routes: the real descriptor is `fstat`-checked, the named one
+    // checked before it touches anything.
+    for (tag, real) in [("replaced-named", false), ("replaced-real", true)] {
+        let (dir, parent, name, identity) = closed_level(tag, 0o000);
+        let level = dir.join("level");
+        fs::rename(&level, dir.join("original")).unwrap();
+        fs::create_dir(&level).unwrap();
+        fs::set_permissions(&level, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let outcome = owner_access::restore_by_name_with(
+            &parent,
+            &name,
+            &identity,
+            None,
+            &mut |parent, name| {
+                if real {
+                    super::dest::open_readable_created_at(parent, name)
+                } else {
+                    refuse_readable_open(parent, name)
+                }
+            },
+            &mut || {},
+        );
+
+        assert!(
+            matches!(outcome, Err(owner_access::Refused::Replaced(_))),
+            "{tag}: {outcome:?}"
+        );
+        assert_eq!(
+            mode_of(&level),
+            0o555,
+            "{tag}: the replacement is untouched"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_present_before_the_restore_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (dir, parent, name, identity) = closed_level("replaced-symlink", 0o000);
+    let victim = dir.join("victim");
+    fs::create_dir(&victim).unwrap();
+    fs::set_permissions(&victim, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::remove_dir(dir.join("level")).unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join("level")).unwrap();
+
+    let outcome = owner_access::restore_by_name_with(
+        &parent,
+        &name,
+        &identity,
+        None,
+        &mut refuse_readable_open,
+        &mut || {},
+    );
+
+    assert!(matches!(outcome, Err(owner_access::Refused::Replaced(_))));
+    assert_eq!(mode_of(&victim), 0o555, "the symlink's target is untouched");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swap_between_the_check_and_the_chmod_is_reported_not_descended_into() {
+    let (dir, parent, name, identity) = closed_level("swap-between", 0o000);
+    let level = dir.join("level");
+    let outcome = owner_access::restore_by_name_with(
+        &parent,
+        &name,
+        &identity,
+        None,
+        &mut refuse_readable_open,
+        &mut || {
+            fs::rename(&level, dir.join("original")).unwrap();
+            fs::create_dir(&level).unwrap();
+        },
+    );
+    assert!(
+        matches!(outcome, Err(owner_access::Refused::Replaced(_))),
+        "{outcome:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_that_cannot_be_examined_is_not_restored() {
+    let (dir, parent, name, identity) = closed_level("vanished", 0o000);
+    fs::remove_dir(dir.join("level")).unwrap();
+    let outcome = owner_access::restore_by_name_with(
+        &parent,
+        &name,
+        &identity,
+        None,
+        &mut refuse_readable_open,
+        &mut || {},
+    );
+    assert!(matches!(outcome, Err(owner_access::Refused::Replaced(_))));
 }
 
 #[cfg(unix)]

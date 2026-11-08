@@ -236,32 +236,18 @@ fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack()
 
 /// The umasks [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// imports under.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
-const OWNER_STRIPPING_UMASKS: &[&str] = &[
-    "0444",
-    "0277",
-    "0477",
-    "0022",
-    #[cfg(not(target_vendor = "apple"))]
-    "0177",
-    #[cfg(not(target_vendor = "apple"))]
-    "0777",
-];
+#[cfg(unix)]
+const OWNER_STRIPPING_UMASKS: &[&str] = &["0444", "0277", "0477", "0022", "0177", "0777"];
 
 /// Set in the child [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// re-runs itself as, holding the umask that child imports under.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
+#[cfg(unix)]
 const NESTED_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_UMASK_CHILD";
+
+/// Set in that child, on Linux and Android, to import with the
+/// `/proc/self/fd` route unavailable.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const NESTED_NO_PROCFS_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_NO_PROCFS_CHILD";
 
 /// An import to a destination whose every level is missing leaves each level
 /// it created with the owner's read, write and search, whatever the umask
@@ -273,17 +259,13 @@ const NESTED_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_UMASK_CHILD";
 /// The umask is process-wide, so each case runs alone in a child that reads
 /// its mask from the environment.
 ///
-/// Every mask here leaves the owner's search bit, which the traversal opens
-/// of Apple platforms need to pin a level; `0177` and `0777` take it too and
-/// are tried only where the pin is an `O_PATH` descriptor. Other Unix
-/// systems pin with a read-requiring open and are outside this test, as they
-/// are for the existing-destination test below.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
+/// Every mask is tried on every Unix target. `0177` and `0777` take the
+/// owner's search bit, which Apple's `O_EXEC` pin needs; `0444` and `0477`
+/// take the read bit the read-mode pin of other Unix systems needs. On Linux
+/// and Android each mask is tried a second time with the `/proc/self/fd`
+/// route unavailable. A privileged runner passes without any restore; the
+/// failure boundary is an unprivileged run.
+#[cfg(unix)]
 #[test]
 fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -291,8 +273,22 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
     let name = "import_rom::tests::publishing::\
                 an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask";
     let Some(mask) = std::env::var_os(NESTED_UMASK_CHILD) else {
-        for mask in OWNER_STRIPPING_UMASKS {
-            let output = std::process::Command::new("/bin/sh")
+        let procfs_variants: &[bool] = if cfg!(any(target_os = "linux", target_os = "android")) {
+            &[false, true]
+        } else {
+            &[false]
+        };
+        for (mask, no_procfs) in OWNER_STRIPPING_UMASKS.iter().flat_map(|mask| {
+            procfs_variants
+                .iter()
+                .map(move |no_procfs| (mask, *no_procfs))
+        }) {
+            let mut command = std::process::Command::new("/bin/sh");
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if no_procfs {
+                command.env(NESTED_NO_PROCFS_CHILD, "1");
+            }
+            let output = command
                 .args(["-c", "umask \"$1\" && shift && exec \"$0\" \"$@\""])
                 .arg(std::env::current_exe().unwrap())
                 .arg(mask)
@@ -303,7 +299,7 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
             let stdout = String::from_utf8_lossy(&output.stdout);
             assert!(
                 output.status.success() && stdout.contains("1 passed"),
-                "umask {mask} child failed:\n{stdout}\n{}",
+                "umask {mask} (procfs unavailable: {no_procfs}) child failed:\n{stdout}\n{}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
@@ -321,6 +317,9 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
     let outer = dir.join("one");
     let inner = outer.join("two");
     let pack_path = inner.join("pokeemerald.pack");
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let _no_procfs = std::env::var_os(NESTED_NO_PROCFS_CHILD)
+        .map(|_| super::super::dest::procfs_unavailable::make_unavailable());
     import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
     })
