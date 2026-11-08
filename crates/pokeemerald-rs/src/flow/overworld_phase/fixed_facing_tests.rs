@@ -371,7 +371,7 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
 
     let mut phase = build();
     turn_everyone_south_and_run(&mut phase);
-    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
+    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
     assert_reseeded(&mut phase, "the connection crossing");
 
     let _ = std::fs::remove_file(&path);
