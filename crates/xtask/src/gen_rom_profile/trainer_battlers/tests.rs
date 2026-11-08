@@ -413,7 +413,8 @@ fn a_surplus_trainer_entry_is_refused_by_id() {
     with_context("trainer-battlers-surplus", &rom, pack, |ctx| {
         let err = require_trainer_battlers(ctx.pack).unwrap_err();
         assert!(
-            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            matches!(&err, GenRomProfileError::StructMismatch { id, reason }
+                if id == surplus && reason == "is not in the checkout's trainer inventory"),
             "{err}"
         );
     });
