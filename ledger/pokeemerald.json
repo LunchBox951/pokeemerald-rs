@@ -31468,13 +31468,13 @@
         },
         "MovementType_FaceDownAndRight": {
           "reason": "MOVEMENT_TYPE_FACE_DOWN_AND_RIGHT: the same LiveObjectEvent::random_facing_step table as MovementType_LookAround (Step0 to Step4, :3434-3481) with sMovementDelaysShort (:711, 32/48/64/80), gDownAndRightDirections[Random() & 1] (south, east; movement_type_func_tables.h:127), and RUNFOLLOW_SOUTH_EAST (GetLimitedVectorDirection_EastSouth, :2762-2779) for a running trainer nearby. See MovementType_LookAround for the frame, draw-order and restart facts and for what is not modelled.",
-          "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
+          "rust_target": "crates/engine/src/overworld/object_event_random_facing.rs",
           "spec": "S-5",
           "status": "stubbed"
         },
         "MovementType_LookAround": {
           "reason": "MOVEMENT_TYPE_LOOK_AROUND: LiveObjectEvent::random_facing_step (object_event_random_facing.rs) runs Step0 to Step4 (:2844-2892). Step2's face action completes on its first execution because a single movement action is never held (ObjectEventSetSingleMovement, :5042-5046; FaceDirection, :5048-5055), so the first callback frame draws sMovementDelaysMedium[Random() % 4] (:709) and settles previousCoords; Step3 predecrements the delay (WaitForMovementDelay, :8537-8544) and also ends early for a running trainer nearby; Step4 draws gStandardDirections[Random() & 3] (south, north, west, east) unless TryGetTrainerEncounterDirection (RUNFOLLOW_ANY, GetVectorDirection) gives one, then requeues step 1 in the same frame, so a turn frame draws the facing then the next delay, always in collection order from the field Random() stream. A movement type set on a live object to a different type restarts at Step0 (SetTrainerMovementType, :4636-4643); setting the type it already has restarts nothing here, as ObjectEventState::set_movement_type carries no hook. Not modelled: the action table dispatch, singleMovementActive, facingDirectionLocked and the previous-movement-direction fields SetObjectEventDirection writes, sprite animation (SetStepAnim, animPaused), and sprite-slot iteration order (AnimateSprites visits slots; the port visits templates in order).",
-          "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
+          "rust_target": "crates/engine/src/overworld/object_event_random_facing.rs",
           "spec": "S-5",
           "status": "stubbed"
         },
