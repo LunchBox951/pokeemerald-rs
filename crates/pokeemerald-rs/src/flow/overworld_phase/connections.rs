@@ -226,6 +226,8 @@ impl OverworldPhase {
     /// `SetWarpDestinationToMapWarp` (`overworld.c:638-641`) passes to
     /// `SetWarpDestination`.
     ///
+    /// Returns whether the warp landed.
+    ///
     /// If the destination can't be resolved -- an unknown map, missing
     /// event data, a room that fails to load, or no warp event at
     /// `warp_id` -- logs and leaves the player exactly where they stood.
@@ -235,15 +237,15 @@ impl OverworldPhase {
     /// If the destination's generated `MAP_GROUP`/`MAP_NUM` index doesn't
     /// fit the `i8` upstream's `WarpData` stores it in; see
     /// [`warp_data_index`].
-    pub(super) fn warp_to(&mut self, map: assets::MapId, warp_id: u8) {
+    pub(super) fn warp_to(&mut self, map: assets::MapId, warp_id: u8) -> bool {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let destination = {
             let runtime = scene.runtime();
@@ -260,7 +262,7 @@ impl OverworldPhase {
         };
         let Some((x, y, elevation, facing)) = destination else {
             eprintln!("warp: destination map {map:?} has no warp event #{warp_id} -- staying put");
-            return;
+            return false;
         };
 
         self.player =
@@ -288,6 +290,7 @@ impl OverworldPhase {
             x: -1,
             y: -1,
         };
+        true
     }
 
     /// Executes an explicit-coordinate warp: lands on `(x, y)` of `map`

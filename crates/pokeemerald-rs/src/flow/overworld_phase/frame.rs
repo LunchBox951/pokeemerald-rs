@@ -42,9 +42,13 @@ impl OverworldPhase {
         self.pending_turn = None;
     }
 
-    /// Composes the finished frame with no palette stage.
+    /// Composes the finished frame: with no palette stage, unless an
+    /// escalator ride is playing, whose fade and sprite offset it takes.
     pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
-        self.compose_frame_staged(PaletteStage::default())
+        match &self.escalator {
+            Some(ride) => self.compose_frame_displaced(ride.palette_stage(), ride.player_offset()),
+            None => self.compose_frame_staged(PaletteStage::default()),
+        }
     }
 
     /// Composes the finished frame under `palette`: the scene for the current
@@ -58,12 +62,23 @@ impl OverworldPhase {
     /// Each overlay is still drawn on its own condition, in upstream's order:
     /// message box below, menu windows above.
     pub(in crate::flow) fn compose_frame_staged(&self, palette: PaletteStage<'_>) -> Box<Frame> {
-        let mut composed = self.scene.compose_live(
+        self.compose_frame_displaced(palette, (0, 0))
+    }
+
+    /// [`Self::compose_frame_staged`] with the player's sprite drawn
+    /// `player_offset` pixels from its tile, as a ride does.
+    fn compose_frame_displaced(
+        &self,
+        palette: PaletteStage<'_>,
+        player_offset: (i8, i8),
+    ) -> Box<Frame> {
+        let mut composed = self.scene.compose_live_displaced(
             &self.player,
             &self.save1.event_data,
             self.tick,
             &self.object_events,
             palette,
+            player_offset,
         );
         if let Some(dialog) = &self.dialog {
             stage_overlay(&mut composed, palette.bg, |fb| {

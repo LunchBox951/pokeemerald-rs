@@ -32,7 +32,8 @@ use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
-use super::escalator_arrival::landed_on_escalator;
+use super::escalator_arrival::escalator_going_up;
+use super::escalator_transition::Destination;
 use super::input::{advance_or_skip_for_preempt, held_direction, observe_tile, settle_outcome};
 pub(super) use super::interaction::InteractionOutcome;
 use super::sight_trainer_trigger::SightTrainerOutcome;
@@ -56,6 +57,15 @@ const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 /// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
 /// (`pokeemerald/src/menu.c:483-484`).
 const OPTIONS_TEXT_SPEED_MID: u8 = 1;
+
+/// The warp a frame fires, as [`OverworldPhase::resolve_step_events`] runs it.
+#[derive(Debug, Clone, Copy)]
+struct StepWarp {
+    trigger: Option<WarpTrigger>,
+    /// Set when the trigger is an escalator's, to whether it climbs:
+    /// `DoEscalatorWarp` rides before it warps.
+    escalator_ride_up: Option<bool>,
+}
 
 /// This frame's pre-movement field-input decisions.
 pub(super) struct PreMovementFieldInput {
@@ -340,7 +350,15 @@ impl OverworldPhase {
         // (`src/overworld.c:1465-1469`). Every branch below, a dialog or a
         // cutscene included, leaves the field's sprites animating.
         self.scene.seed_tall_grass_placement(&self.player);
-        self.step_field_frame(buttons);
+        // An escalator ride owns every frame from the warp to the walk-off:
+        // the field controls are locked, so no input is read at all
+        // (`LockPlayerFieldControls`, `field_screen_effect.c:528-532`).
+        if self.escalator.is_some() {
+            self.advance_escalator_frame();
+            self.sync_saved_position();
+        } else {
+            self.step_field_frame(buttons);
+        }
         self.advance_object_events();
         self.scene
             .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
@@ -407,7 +425,6 @@ impl OverworldPhase {
             return;
         }
 
-        let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
         let stepped_onto = self.take_stepped_onto();
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
@@ -450,7 +467,7 @@ impl OverworldPhase {
             trigger_door_warp(&runtime, x, y, elevation)
                 .or_else(|| trigger_escalator_warp(&runtime, x, y, elevation))
         });
-        let escalator_warp = door_warp.is_some() && landed_on_escalator(&runtime, landed);
+        let escalator_ride_up = door_warp.and_then(|_| escalator_going_up(&runtime, landed));
         // `TryStartStepCountScript` runs inside `TryStartStepBasedScript`
         // after the coord event and the door-shaped warp, ahead of the
         // wild-encounter roll (`field_control_avatar.c:155-163,543-553`), so
@@ -553,8 +570,6 @@ impl OverworldPhase {
                 || pre.start_menu.is_some(),
         );
 
-        self.latch_escalator_walk_off_landing(walk_off_step, &outcome);
-
         // `DoGroundEffects_OnBeginStep` runs from the step's first movement
         // update (`event_object_movement.c:5354-5357`), so the grass it
         // starts belongs to the tile the step enters, on the frame it begins.
@@ -578,16 +593,17 @@ impl OverworldPhase {
 
         // Warp, interaction, battle, then the START menu, in upstream's
         // `ProcessPlayerFieldInput` order.
-        let departed_from = self.map_id;
         self.resolve_step_events(
-            warp_trigger,
+            StepWarp {
+                trigger: warp_trigger,
+                escalator_ride_up,
+            },
             encounter,
             field_event_fired,
             first_battle_triggered,
             pre.interaction,
             pre.start_menu,
         );
-        self.begin_escalator_arrival(escalator_warp, departed_from);
 
         // Map-edge connection crossing (issue #177): deferred to here,
         // `runtime`'s last use above (method docs' own section on this).
@@ -711,7 +727,7 @@ impl OverworldPhase {
     /// Latches a started turn, then applies [`Self::step`]'s deferred map-edge
     /// crossing, restoring the pre-step stance when the entered map's rebind
     /// is refused.
-    fn finish_crossing(
+    pub(super) fn finish_crossing(
         &mut self,
         outcome: engine::overworld::StepOutcome,
         pre_step_player: PlayerState,
@@ -775,15 +791,27 @@ impl OverworldPhase {
     /// interaction claiming the frame takes the field lock on that frame.
     fn resolve_step_events(
         &mut self,
-        warp_trigger: Option<WarpTrigger>,
+        warp: StepWarp,
         encounter: Option<engine::overworld::WildEncounter>,
         field_event_fired: bool,
         first_battle_triggered: bool,
         interaction: Option<InteractionOutcome>,
         start_menu: Option<StartMenu>,
     ) {
+        let StepWarp {
+            trigger: warp_trigger,
+            escalator_ride_up,
+        } = warp;
         match warp_trigger {
-            Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
+            Some(WarpTrigger::Resolved { map, warp_id }) => match escalator_ride_up {
+                // `DoEscalatorWarp` rides first and warps once the fade is done.
+                Some(going_up) => {
+                    self.begin_escalator_transition(Destination { map, warp_id }, going_up);
+                }
+                None => {
+                    self.warp_to(map, warp_id);
+                }
+            },
             Some(WarpTrigger::Unsupported) => eprintln!(
                 "warp: destination at the player's tile can't be resolved by this port \
                  (dynamic map/warp id) -- staying put"
