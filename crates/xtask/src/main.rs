@@ -1430,22 +1430,14 @@ mod tests {
     #[cfg(feature = "scenes")]
     const PROBE_ASSERTIONS_RAN: &str = "dispatch-pack-probe: assertions running";
 
-    /// Runs one fails-closed test in a child process with `$POKEEMERALD_PACK`
-    /// naming a file that exists (this binary), then one naming a file that
-    /// does not, and checks the guard probed the checkout pack: the child
-    /// passes either way, and its assertions run exactly when the checkout
-    /// pack is absent. A guard on `default_path()` fails this twice over --
-    /// it skips when the override exists though the checkout pack is
-    /// missing, and runs the dispatch (succeeding, so `unwrap_err()` panics)
-    /// when the override is missing though the checkout pack exists. The
-    /// override is child-only: setting it here would race every other test's
-    /// `getenv`.
+    /// Runs one fails-closed test in a child process, once with an existing
+    /// `$POKEEMERALD_PACK` and once with a missing one; its assertions must run
+    /// exactly when the checkout pack is absent. The override is child-only:
+    /// setting it here would race every other test's `getenv`.
     #[cfg(feature = "scenes")]
     fn fails_closed_guard_probes_the_checkout_pack(test: &str) {
-        // Same real-pack lock as the tests it spawns, held across the
-        // presence read and the children (separate processes, so no
-        // self-deadlock): `extract_dispatch_succeeds_with_local_checkout`
-        // could otherwise create the pack in between.
+        // Held across the presence read and the children so `extract` cannot
+        // create the pack in between.
         let _pack = extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

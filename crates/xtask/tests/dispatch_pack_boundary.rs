@@ -146,11 +146,8 @@ impl SnapshotsRestore {
 
     /// The `<dir>/title.rgb` path of `<rgb> (+ <meta>); rgb hash ...`.
     ///
-    /// A checkout path may itself contain the ` (+ ` delimiter, so neither the
-    /// first nor the last occurrence is reliably the separator. The two
-    /// artifacts share one directory, so the separator is the occurrence
-    /// whose left side ends in `title.rgb`, whose right side ends in
-    /// `title.meta`, and whose directories (separators normalised) agree.
+    /// The checkout path may contain ` (+ ` too, so the separator is the
+    /// occurrence splitting `<dir>/title.rgb` from `<dir>/title.meta`.
     fn rgb_path_of(line: &str) -> Option<&str> {
         const DELIMITER: &str = " (+ ";
         let (body, _) = line.rsplit_once("); rgb hash ")?;
@@ -201,21 +198,12 @@ impl SnapshotsRestore {
 
 impl SnapshotsRestore {
     /// Puts the pointer back and removes this guard's own generations,
-    /// returning every failure instead of swallowing it.
+    /// returning every failure.
     ///
-    /// The pointer is never checked and then rewritten in place: that leaves
-    /// a gap in which a concurrent publisher's rename is overwritten. The
-    /// guard instead takes whatever is at the pointer by renaming it aside,
-    /// one atomic step that fixes which file is being judged, and then only
-    /// ever puts a file back with `hard_link`, which refuses to replace. A
-    /// pointer a publisher lands after the grab is therefore left as that
-    /// publisher wrote it, and a foreign pointer the guard moved aside is put
-    /// back only if nothing newer took its place.
-    ///
-    /// Generations are removed only after the pointer step succeeded, so a
-    /// failure never leaves the pointer naming a deleted generation.
-    /// `after_grab` runs between the grab and the put-back so a test can land
-    /// a publisher's rename in that gap.
+    /// The pointer is renamed aside (one atomic step) and only ever put back
+    /// with `hard_link`, which refuses to replace, so a pointer a concurrent
+    /// publisher lands in between is never overwritten. `after_grab` runs in
+    /// that gap so a test can land such a rename.
     fn finish_with(&mut self, after_grab: impl FnOnce()) -> Vec<String> {
         if self.own_generations.is_empty() {
             return Vec::new();
@@ -277,9 +265,6 @@ impl SnapshotsRestore {
     }
 
     /// Decides what the grabbed pointer at `aside` means and acts on it.
-    ///
-    /// An `Err` says whether the aside is still needed: it is the only copy
-    /// of the pointer whenever the put-back itself failed.
     fn settle_grabbed_pointer(&self, aside: &Path, pid: u32) -> Result<(), Settled> {
         let put_back = |reason: String| -> Result<(), Settled> {
             match std::fs::hard_link(aside, &self.pointer) {
@@ -342,10 +327,9 @@ impl SnapshotsRestore {
 
 /// Why [`SnapshotsRestore::settle_grabbed_pointer`] did not finish cleanly.
 enum Settled {
-    /// The grabbed file is back at the pointer, or a newer pointer replaced
-    /// it by design: the aside is redundant and may be removed.
+    /// The aside is redundant and may be removed.
     AsideDone(String),
-    /// The aside may be the only copy of the pointer: it must stay.
+    /// The aside may be the only copy of the pointer and must stay.
     AsideNeeded(String),
 }
 
@@ -608,8 +592,7 @@ fn snapshots_restore_removes_only_its_own_generation_and_restores_the_pointer() 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A checkout path may legally contain the ` (+ ` that separates the two
-/// artifact paths on the success line; the generation must still be found.
+/// A checkout path may itself contain the ` (+ ` success-line delimiter.
 #[test]
 fn snapshots_restore_parses_a_path_containing_the_artifact_delimiter() {
     let base = scratch_snapshots("delimiter-in-path");
@@ -636,14 +619,12 @@ fn snapshots_restore_parses_a_path_containing_the_artifact_delimiter() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// When the grabbed foreign pointer cannot be put back, the aside file is
-/// the only remaining copy: it must be kept and named in the report.
+/// A failed put-back leaves the aside as the only copy of the pointer.
 #[test]
 #[cfg(unix)]
 fn snapshots_restore_keeps_the_aside_when_the_put_back_fails() {
     let dir = scratch_snapshots("put-back-fails");
-    // The pointer is reached through a symlink so the test can break the
-    // put-back without relying on directory modes (root ignores those).
+    // A symlink breaks the put-back without directory modes (root ignores them).
     let real = dir.join("real");
     std::fs::create_dir(&real).expect("real dir");
     std::os::unix::fs::symlink(&real, dir.join("via")).expect("symlink");
@@ -657,7 +638,6 @@ fn snapshots_restore_keeps_the_aside_when_the_put_back_fails() {
     assert_eq!(restore.own_generations, ["title.generation-77-0"]);
 
     let errors = restore.finish_with(|| {
-        // Retarget the link after the grab: the put-back now fails ENOENT.
         std::fs::remove_file(dir.join("via")).expect("unlink");
         std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("via")).expect("relink");
     });
