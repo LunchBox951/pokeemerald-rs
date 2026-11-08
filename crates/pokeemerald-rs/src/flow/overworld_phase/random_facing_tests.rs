@@ -283,6 +283,42 @@ mod rendered {
     }
 
     #[test]
+    fn a_scheduler_turn_repaints_the_live_objects_new_facing_frame() {
+        let route_101 = MapEventsTable::new().resolve(ROUTE_101).unwrap();
+        let youngster = std::slice::from_ref(route_101.object_events.first().unwrap());
+        let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+            object_events: youngster,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+            ..*route_101
+        }));
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::test_support::synthetic_scene_with_events_and_distinct_side_frame(
+                100, 100, events, &SPRITES,
+            ),
+            ROUTE_101,
+            PlayerState::new(
+                (YOUNGSTER.0, YOUNGSTER.1 + 1),
+                FLOOR_ELEVATION,
+                Direction::North,
+            ),
+            None,
+        );
+        phase.rng = Rng::new(0);
+        idle_frames(&mut phase, 1);
+        let south_frame = phase.compose_frame();
+        assert_eq!(facing(&phase, 1), Direction::South);
+        idle_frames(&mut phase, 32);
+        assert_eq!(facing(&phase, 1), Direction::West);
+        assert!(
+            phase.compose_frame() != south_frame,
+            "the production frame paints the live object's new facing"
+        );
+        assert_never_displaced(&phase, 1, "Route 101 youngster");
+    }
+
+    #[test]
     fn a_displaced_object_is_not_found_and_does_paint_elsewhere() {
         let mut phase = route_101_beside_the_youngster(0);
         idle_frames(&mut phase, 1);

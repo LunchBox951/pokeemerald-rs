@@ -512,3 +512,62 @@ mod trainer_proximity {
         }
     }
 }
+
+#[test]
+fn a_later_admitted_earlier_template_runs_after_the_older_sprite_slot() {
+    // A (id 1) sits outside the spawn window; B (id 2) is admitted at map load and so takes the
+    // lower sprite slot. Upstream `AnimateSprites` (sprite.c:308-317) runs callbacks by slot, and
+    // `CreateSprite` (sprite.c:502-508) gives A the next free slot when it enters view later.
+    let mut rig = Rig::new(
+        vec![
+            template(1, 20, 30, MovementType::LookAround, NEVER_HIDDEN),
+            template(2, 20, 20, MovementType::LookAround, NEVER_HIDDEN),
+        ],
+        (20, 20),
+    );
+    // Frame 1: B draws 0 -> delay 32. Frames 2..=32 count down.
+    rig.rng = ScriptedRng::new([0, 1, 2, 3]);
+    rig.tick(31);
+    // Frame 32 moves the camera so A is admitted at its end; frame 33 is A's first callback and
+    // B's turn frame.
+    rig.player = (20, 21);
+    rig.tick(1);
+    assert_eq!(rig.collection.get(1).unwrap().type_func_id(), 0);
+    rig.tick(1);
+
+    // Slot order: B facing `1 & 3` North, B delay `2 % 4` 96, then A delay `3 % 4` 128.
+    assert_eq!(facing(&rig.collection, 2), Direction::North);
+    assert_eq!(delay(&rig.collection, 2), 96);
+    assert_eq!(delay(&rig.collection, 1), 128);
+}
+
+#[test]
+fn a_sprite_slot_freed_by_a_despawn_goes_to_the_next_admission_ahead_of_older_slots() {
+    // Map load gives the leaver (id 1) slot 0 and the stayer (id 2) slot 1; the late entry (id 3)
+    // lies just below the window. `RemoveObjectEventInternal` frees slot 0 when the leaver drops
+    // out of view, and `CreateSprite`'s lowest-free scan hands it to the late entry next.
+    let mut rig = Rig::new(
+        vec![
+            template(1, 20, 13, MovementType::FaceUp, NEVER_HIDDEN),
+            template(2, 20, 20, MovementType::LookAround, NEVER_HIDDEN),
+            template(3, 20, 31, MovementType::LookAround, NEVER_HIDDEN),
+        ],
+        (20, 20),
+    );
+    // Frame 1: the stayer draws 0 -> delay 32, so frame 33 is its turn.
+    rig.rng = ScriptedRng::new([0, 1, 2, 3]);
+    rig.tick(30);
+    // Frame 31's camera update removes the leaver; frame 32's admits the late entry.
+    rig.player = (20, 21);
+    rig.tick(1);
+    assert!(!rig.collection.get(1).unwrap().is_active());
+    rig.player = (20, 22);
+    rig.tick(1);
+    assert!(rig.collection.get(3).unwrap().is_active());
+    rig.tick(1);
+
+    // Slot order: late delay `1 % 4` 64, then stayer facing `2 & 3` West and delay `3 % 4` 128.
+    assert_eq!(delay(&rig.collection, 3), 64);
+    assert_eq!(facing(&rig.collection, 2), Direction::West);
+    assert_eq!(delay(&rig.collection, 2), 128);
+}
