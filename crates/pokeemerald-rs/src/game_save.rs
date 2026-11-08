@@ -3,6 +3,18 @@
 //! `engine::save` owns the flash-image format; this module owns the session rules:
 //! boot classification, save lineage, overwrite consent, and stale-writer refusal.
 //!
+//! A continued session refuses to write over a reload it cannot explain.
+//! A continuable reload ahead of the session's counter is refused
+//! ([`StoreOutcome::RefusedStaleSession`]). A reload at the session's own
+//! counter over a different base is refused unless the legacy storage donor
+//! this session merged was lost. A reload at a counter the session is ahead
+//! of is a fallback only when this session's newest slot was damaged: the
+//! reload is [`SaveFileStatus::Error`] at exactly `session - 1`, or no slot is
+//! intact at all. Past an identical base or a lost donor, any other lower
+//! counter -- including a clean one -- is another save swapped in after load
+//! and is refused ([`StoreOutcome::RefusedConflictingSave`]), the file left
+//! unchanged.
+//!
 //! An unreadable image latches upstream's `SAVE_STATUS_NO_FLASH`, so [`SaveSlot`]
 //! disables saving for the session like `TrySavingData` (`save.c:765-771, 871-879`).
 
@@ -101,8 +113,9 @@ pub(crate) enum StoreOutcome {
     /// The file is unchanged.
     RefusedStaleSession,
     /// The disk holds this session's generation number over a different
-    /// base that donor loss does not explain, so it may be another save
-    /// swapped in after load. The file is unchanged.
+    /// base that donor loss does not explain, or an older generation that
+    /// damage to this session's newest slot does not explain, so it may be
+    /// another save swapped in after load. The file is unchanged.
     RefusedConflictingSave,
 }
 
@@ -149,26 +162,61 @@ enum BaseReconcile {
 
 /// Reconciles a reload at `disk` with a continued session at `session`.
 ///
-/// The disk falling back past the session's generation restores, as before.
 /// Equal counters over an identical base -- every ordinary save -- keep it.
 /// Equal counters over a different base restore only on `donor_lost`
 /// ([`donor_was_lost`]); anything else is refused, because equal counters
 /// prove neither common lineage nor equal contents, and a restore would put
 /// this session's storage into both slots within two saves.
+///
+/// A disk the session is ahead of is no different: a lower counter proves
+/// damage no more than an equal one proves lineage. It restores over an
+/// identical base (a no-op), on `donor_lost`, or on `damage_fallback`
+/// ([`damage_explains_fallback`]) -- the reload fell back past a generation
+/// this session wrote. Any other lower-counter base may be a save swapped in
+/// after load and is refused, because restoring would write this session's
+/// storage over it.
 const fn reconcile_base(
     disk: u32,
     session: u32,
     same_base: bool,
     donor_lost: bool,
+    damage_fallback: bool,
 ) -> BaseReconcile {
     if counter_is_ahead(disk, session) {
-        BaseReconcile::Restore
+        if same_base || donor_lost || damage_fallback {
+            BaseReconcile::Restore
+        } else {
+            BaseReconcile::Refuse
+        }
     } else if disk != session || same_base {
         BaseReconcile::Keep
     } else if donor_lost {
         BaseReconcile::Restore
     } else {
         BaseReconcile::Refuse
+    }
+}
+
+/// Whether a reload that the session is ahead of is the damage-driven
+/// fallback past this session's own newest generation, rather than a
+/// different save.
+///
+/// Every write advances the counter by one into the other slot, so when the
+/// session's generation is damaged the only generation left to adopt is
+/// `session - 1`, and the slot that held the session's generation is
+/// damaged, not empty: the reload is [`SaveFileStatus::Error`] at exactly
+/// that counter. A reload with no intact slot ([`SaveFileStatus::Empty`] or
+/// [`SaveFileStatus::Corrupt`]) leaves no save to protect. A cleanly `Ok`
+/// reload, or an `Error` one at any other counter, is a save that never
+/// passed through this session's slots.
+///
+/// This is evidence, not proof: a foreign save that happens to sit at
+/// `session - 1` beside a damaged slot is indistinguishable by counters.
+const fn damage_explains_fallback(disk_status: SaveFileStatus, disk: u32, session: u32) -> bool {
+    match disk_status {
+        SaveFileStatus::Empty | SaveFileStatus::Corrupt => true,
+        SaveFileStatus::Error => disk == session.wrapping_sub(1),
+        SaveFileStatus::Ok | SaveFileStatus::NoFlash => false,
     }
 }
 
@@ -423,8 +471,9 @@ impl SaveSlot {
                 // the session read it (tests::healing_a_damaged_newest_slot_*),
                 // or kept the same legacy head but lost the donor that
                 // supplied its storage (tests::equal_counter_donor_loss_*);
-                // any other equal-counter mismatch is refused
-                // (tests::an_equal_counter_replacement_is_refused_*).
+                // any other equal- or lower-counter mismatch is refused
+                // (tests::an_equal_counter_replacement_is_refused_*,
+                // tests::an_older_counter_unrelated_replacement_is_refused_*).
                 let same_base = store.base_matches(session_base);
                 let donor_lost = !same_base
                     && donor_was_lost(
@@ -432,7 +481,15 @@ impl SaveSlot {
                         disk_load.storage_source,
                         store.base_blocks_match(session_base),
                     );
-                match reconcile_base(disk_counter, session_counter, same_base, donor_lost) {
+                let damage_fallback =
+                    damage_explains_fallback(disk_status, disk_counter, session_counter);
+                match reconcile_base(
+                    disk_counter,
+                    session_counter,
+                    same_base,
+                    donor_lost,
+                    damage_fallback,
+                ) {
                     BaseReconcile::Keep => {}
                     BaseReconcile::Restore => store.restore_base(session_base.clone()),
                     BaseReconcile::Refuse => return Ok(StoreOutcome::RefusedConflictingSave),

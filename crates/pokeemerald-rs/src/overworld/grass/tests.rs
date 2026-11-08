@@ -25,10 +25,17 @@ fn owner_gone() -> PlayerState {
     PlayerState::new((TILE.0 + 1, TILE.1), ELEVATION, Direction::East)
 }
 
+/// The tiles of `owner` as the effects' owner lookup reports them, for the
+/// player's effects only.
+fn tiles_of(owner: &PlayerState) -> impl Fn(Owner) -> Option<OwnerTiles> {
+    let tiles = (owner.position(), owner.previous_position());
+    move |effect_owner| (effect_owner == Owner::Player).then_some(tiles)
+}
+
 fn image_after_each_update(mut effects: TallGrassEffects, owner: &PlayerState) -> Vec<u16> {
     (0..60)
         .map(|_| {
-            effects.advance(owner, grass_everywhere);
+            effects.advance(tiles_of(owner), grass_everywhere);
             effects
                 .effects
                 .first()
@@ -40,7 +47,7 @@ fn image_after_each_update(mut effects: TallGrassEffects, owner: &PlayerState) -
 #[test]
 fn a_stepped_on_effect_shows_images_one_to_four_then_the_settled_cell_ten_frames_each() {
     let mut effects = TallGrassEffects::new();
-    effects.spawn_step(TILE, ELEVATION);
+    effects.spawn_step(Owner::Player, TILE, ELEVATION);
     let images = image_after_each_update(effects, &owner_on_tile());
     // `sAnim_TallGrass`: images 1, 2, 3, 4, 0, each for ten updates, the last
     // one held after the animation ends.
@@ -59,7 +66,7 @@ fn a_stepped_on_effect_shows_images_one_to_four_then_the_settled_cell_ten_frames
 #[test]
 fn a_placed_effect_starts_on_the_settled_cell() {
     let mut effects = TallGrassEffects::new();
-    effects.spawn_placement(TILE, ELEVATION);
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
     assert!(image_after_each_update(effects, &owner_on_tile())
         .iter()
         .all(|&image| image == 0));
@@ -84,22 +91,22 @@ fn the_animation_ends_after_fifty_one_updates_and_a_placed_one_after_eleven() {
 #[test]
 fn an_effect_whose_owner_left_early_is_removed_on_the_update_after_the_animation_ends() {
     let mut effects = TallGrassEffects::new();
-    effects.spawn_step(TILE, ELEVATION);
+    effects.spawn_step(Owner::Player, TILE, ELEVATION);
     let owner = owner_gone();
     for update in 1..=51 {
-        effects.advance(&owner, grass_everywhere);
+        effects.advance(tiles_of(&owner), grass_everywhere);
         assert_eq!(effects.len(), 1, "update {update}");
     }
-    effects.advance(&owner, grass_everywhere);
+    effects.advance(tiles_of(&owner), grass_everywhere);
     assert_eq!(effects.len(), 0, "update 52");
 }
 
 #[test]
 fn an_owner_that_stays_keeps_the_effect_indefinitely() {
     let mut effects = TallGrassEffects::new();
-    effects.spawn_step(TILE, ELEVATION);
+    effects.spawn_step(Owner::Player, TILE, ELEVATION);
     for _ in 0..500 {
-        effects.advance(&owner_on_tile(), grass_everywhere);
+        effects.advance(tiles_of(&owner_on_tile()), grass_everywhere);
     }
     assert_eq!(effects.len(), 1);
 }
@@ -108,14 +115,15 @@ fn an_owner_that_stays_keeps_the_effect_indefinitely() {
 fn an_effect_on_a_tile_that_is_no_longer_tall_grass_is_removed_at_once() {
     for behavior in [Some(MB_NORMAL), Some(MB_LONG_GRASS), None] {
         let mut effects = TallGrassEffects::new();
-        effects.spawn_step(TILE, ELEVATION);
-        effects.advance(&owner_on_tile(), |_| behavior);
+        effects.spawn_step(Owner::Player, TILE, ELEVATION);
+        effects.advance(tiles_of(&owner_on_tile()), |_| behavior);
         assert_eq!(effects.len(), 0, "{behavior:?}");
     }
 }
 
 fn effect(elevation: u8, on_first_command: bool) -> TallGrassEffect {
     TallGrassEffect {
+        owner: Owner::Player,
         tile: TILE,
         elevation,
         animation: Animation::fresh(),
@@ -183,4 +191,37 @@ fn an_effect_wholly_off_screen_is_not_drawn() {
     assert!(!on_screen(112, 176));
     assert!(!on_screen(-21, 72));
     assert!(on_screen(-20, 72));
+}
+
+#[test]
+fn an_effect_whose_owner_cannot_be_found_is_removed_at_once() {
+    let mut effects = TallGrassEffects::new();
+    effects.spawn_placement(Owner::Object(2), TILE, ELEVATION);
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
+    // Only the player answers: the object's slot has no sprite any more.
+    effects.advance(tiles_of(&owner_on_tile()), grass_everywhere);
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects.effects[0].owner, Owner::Player);
+}
+
+#[test]
+fn each_effect_is_judged_against_its_own_owners_tiles() {
+    let mut effects = TallGrassEffects::new();
+    effects.spawn_step(Owner::Object(0), TILE, ELEVATION);
+    effects.spawn_step(Owner::Object(1), TILE, ELEVATION);
+    // Object 0 stays on the tile; object 1 stands one tile east of it.
+    let lookup = |owner| match owner {
+        Owner::Object(0) => Some((TILE, TILE)),
+        Owner::Object(1) => Some(((TILE.0 + 1, TILE.1), (TILE.0 + 1, TILE.1))),
+        _ => None,
+    };
+    for _ in 0..52 {
+        effects.advance(lookup, grass_everywhere);
+    }
+    assert_eq!(
+        effects.len(),
+        1,
+        "only the owner that left loses its effect"
+    );
+    assert_eq!(effects.effects[0].owner, Owner::Object(0));
 }

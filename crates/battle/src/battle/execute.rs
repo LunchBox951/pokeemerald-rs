@@ -39,6 +39,7 @@ use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
 mod attract;
 mod burn;
+mod cute_charm;
 mod effect_spore;
 mod pipelines;
 mod rollout;
@@ -243,6 +244,7 @@ impl Battle {
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
