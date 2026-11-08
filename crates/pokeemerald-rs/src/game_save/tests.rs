@@ -1023,11 +1023,26 @@ fn equal_counter_donor_loss_heals_the_boxes_on_the_next_save() {
 #[test]
 fn equal_counter_same_image_does_not_restore_the_base_on_ordinary_saves() {
     use super::{reconcile_base, BaseReconcile};
-    assert_eq!(reconcile_base(3, 3, true, false), BaseReconcile::Keep);
-    assert_eq!(reconcile_base(3, 3, false, true), BaseReconcile::Restore);
-    assert_eq!(reconcile_base(3, 3, false, false), BaseReconcile::Refuse);
-    assert_eq!(reconcile_base(2, 3, true, false), BaseReconcile::Restore);
-    assert_eq!(reconcile_base(4, 3, false, false), BaseReconcile::Keep);
+    assert_eq!(
+        reconcile_base(3, 3, true, false, false),
+        BaseReconcile::Keep
+    );
+    assert_eq!(
+        reconcile_base(3, 3, false, true, false),
+        BaseReconcile::Restore
+    );
+    assert_eq!(
+        reconcile_base(3, 3, false, false, false),
+        BaseReconcile::Refuse
+    );
+    assert_eq!(
+        reconcile_base(2, 3, true, false, false),
+        BaseReconcile::Restore
+    );
+    assert_eq!(
+        reconcile_base(4, 3, false, false, false),
+        BaseReconcile::Keep
+    );
 
     let temp = TempSave::new("donor-same-image");
     let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
@@ -1301,4 +1316,198 @@ fn at_path_fails_closed_when_the_medium_is_unusable() {
     std::fs::remove_file(&save.path).unwrap();
     std::fs::create_dir(&save.path).unwrap();
     assert!(SaveSlot::at_path(&save.path).is_err());
+}
+
+/// A valid, unrelated save at an older counter swapped in after load is not
+/// a damaged newest slot of this session's lineage, so it is refused rather
+/// than overwritten.
+#[test]
+fn an_older_counter_unrelated_replacement_is_refused_rather_than_overwritten() {
+    const SESSION_COUNTER: u32 = 10;
+    const OLDER_COUNTER: u32 = 8;
+    let temp = TempSave::new("older-counter-replacement");
+    let (block1, block2) = replacement_blocks();
+    write_full_generation(
+        &temp,
+        SESSION_COUNTER,
+        &block1,
+        &block2,
+        SESSION_STORAGE_FILL,
+    );
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+    assert_eq!(slot.session_counter, Some(SESSION_COUNTER));
+
+    write_full_generation(
+        &temp,
+        OLDER_COUNTER,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Ok);
+    let replacement = std::fs::read(&temp.path).unwrap();
+
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+}
+
+/// Writes the adjacent generations `counter` (session storage) and
+/// `counter - 1` (`older_storage_fill`) of one lineage into their parity
+/// slots, so either can be the fallback of the other.
+fn write_two_full_generations(
+    temp: &TempSave,
+    counter: u32,
+    block1: &SaveBlock1,
+    block2: &SaveBlock2,
+    older_storage_fill: u8,
+) {
+    const SLOT_BYTES: usize = SECTORS_PER_SLOT * SECTOR_SIZE;
+    write_full_generation(temp, counter - 1, block1, block2, older_storage_fill);
+    let older = std::fs::read(&temp.path).unwrap();
+    write_full_generation(temp, counter, block1, block2, SESSION_STORAGE_FILL);
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let older_slot = usize::try_from((counter - 1) % 2).unwrap();
+    image[older_slot * SLOT_BYTES..(older_slot + 1) * SLOT_BYTES]
+        .copy_from_slice(&older[older_slot * SLOT_BYTES..(older_slot + 1) * SLOT_BYTES]);
+    std::fs::write(&temp.path, &image).unwrap();
+}
+
+fn damage_slot(temp: &TempSave, slot: usize) {
+    let mut image = std::fs::read(&temp.path).unwrap();
+    corrupt_sector_payload(&mut image, slot * SECTORS_PER_SLOT);
+    std::fs::write(&temp.path, &image).unwrap();
+}
+
+/// The genuine fallback: this session's newest generation is damaged after
+/// load and the other slot's generation of the same lineage is adopted. Its
+/// storage differs from the session's, yet the session's base is restored, so
+/// the heal writes the session's storage.
+#[test]
+fn a_same_lineage_older_generation_still_restores_the_sessions_base() {
+    const SESSION_COUNTER: u32 = 10;
+    const OLDER_STORAGE_FILL: u8 = 0x33;
+    let temp = TempSave::new("older-counter-fallback");
+    let (block1, block2) = replacement_blocks();
+    write_two_full_generations(&temp, SESSION_COUNTER, &block1, &block2, OLDER_STORAGE_FILL);
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+    assert_eq!(slot.session_counter, Some(SESSION_COUNTER));
+
+    damage_slot(&temp, usize::try_from(SESSION_COUNTER % 2).unwrap());
+    let fallback = temp.slot().load();
+    assert_eq!(fallback.status, SaveFileStatus::Error);
+
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+    // The heal rewrites the damaged generation's own slot from the fallback's
+    // counter, carrying the session's storage rather than the fallback's.
+    assert_slot_storage(
+        &temp,
+        usize::try_from(SESSION_COUNTER % 2).unwrap(),
+        SESSION_COUNTER,
+        SESSION_STORAGE_FILL,
+    );
+}
+
+/// A clean `Ok` reload one generation back is not a damaged-newest fallback:
+/// no slot of the session's lineage is damaged.
+#[test]
+fn an_intact_save_one_generation_back_is_refused() {
+    const SESSION_COUNTER: u32 = 10;
+    let temp = TempSave::new("one-back-replacement");
+    let (block1, block2) = replacement_blocks();
+    write_full_generation(
+        &temp,
+        SESSION_COUNTER,
+        &block1,
+        &block2,
+        SESSION_STORAGE_FILL,
+    );
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+
+    write_full_generation(
+        &temp,
+        SESSION_COUNTER - 1,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    let replacement = std::fs::read(&temp.path).unwrap();
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+}
+
+/// Damage beside a stale generation does not make it this session's: the
+/// fallback a damaged newest slot leaves is exactly one generation back.
+#[test]
+fn a_damaged_pair_that_falls_back_further_than_one_generation_is_refused() {
+    const SESSION_COUNTER: u32 = 10;
+    const OLDER_COUNTER: u32 = 8;
+    let temp = TempSave::new("two-back-replacement");
+    let (block1, block2) = replacement_blocks();
+    write_full_generation(
+        &temp,
+        SESSION_COUNTER,
+        &block1,
+        &block2,
+        SESSION_STORAGE_FILL,
+    );
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+
+    write_two_full_generations(
+        &temp,
+        OLDER_COUNTER + 1,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    damage_slot(&temp, usize::try_from((OLDER_COUNTER + 1) % 2).unwrap());
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Error);
+    let replacement = std::fs::read(&temp.path).unwrap();
+
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+}
+
+#[test]
+fn a_lower_counter_restores_only_when_something_explains_it() {
+    use super::{damage_explains_fallback, reconcile_base, BaseReconcile};
+    assert_eq!(
+        reconcile_base(2, 3, false, false, false),
+        BaseReconcile::Refuse
+    );
+    assert_eq!(
+        reconcile_base(2, 3, false, true, false),
+        BaseReconcile::Restore
+    );
+    assert_eq!(
+        reconcile_base(2, 3, false, false, true),
+        BaseReconcile::Restore
+    );
+    assert_eq!(
+        reconcile_base(u32::MAX, 0, false, false, false),
+        BaseReconcile::Refuse
+    );
+
+    assert!(damage_explains_fallback(SaveFileStatus::Error, 9, 10));
+    assert!(damage_explains_fallback(SaveFileStatus::Error, u32::MAX, 0));
+    assert!(!damage_explains_fallback(SaveFileStatus::Error, 8, 10));
+    assert!(!damage_explains_fallback(SaveFileStatus::Ok, 9, 10));
+    assert!(damage_explains_fallback(SaveFileStatus::Corrupt, 0, 10));
+    assert!(damage_explains_fallback(SaveFileStatus::Empty, 0, 10));
+    assert!(!damage_explains_fallback(SaveFileStatus::NoFlash, 0, 10));
 }
