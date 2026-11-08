@@ -203,6 +203,84 @@ fn script_hold(event: &BattleEvent, position: usize, count: usize) -> u16 {
     }
 }
 
+/// What `event` did to the opponent's hit points: negative for HP lost, positive
+/// for HP regained, by the amounts the engine actually applied.
+fn opponent_hp_change(event: &BattleEvent) -> i64 {
+    match *event {
+        // A hit lands on, and an absorbing ability heals, the side that did not
+        // use the move.
+        BattleEvent::Hit {
+            by_player: true,
+            damage,
+            ..
+        }
+        // These name the battler that lost the HP.
+        | BattleEvent::ConfusionSelfHit {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::Recoil {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::LiquidOoze {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::RoughSkinDamage {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::HurtByPoison {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::HurtByBurn {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::SappedByLeechSeed {
+            by_player: false,
+            damage,
+        } => -i64::from(damage),
+        BattleEvent::AbilityHealed {
+            by_player: true,
+            healed,
+            ..
+        }
+        // These name the battler that regained the HP.
+        | BattleEvent::Drained {
+            by_player: false,
+            healed,
+            ..
+        }
+        | BattleEvent::LeechSeedHealed {
+            by_player: false,
+            healed,
+        }
+        | BattleEvent::ItemRestoredHealth {
+            by_player: false,
+            healed,
+            ..
+        } => i64::from(healed),
+        _ => 0,
+    }
+}
+
+/// The opponent's hit points when the events before `later` had happened,
+/// recovered from its hit points once `later` has too. A turn resolves whole,
+/// so a replacement's send-out is narrated after the end-of-turn effects that
+/// follow it, yet upstream reads the opponent's health at the switch-in.
+fn opponent_health_at(enemy: &battle::BattlePokemon, later: &[BattleEvent]) -> u32 {
+    let changed: i64 = later.iter().map(opponent_hp_change).sum();
+    let before =
+        (i64::from(enemy.current_hp()) - changed).clamp(0, i64::from(enemy.stats().max_hp));
+    u32::try_from(before).unwrap_or(0)
+}
+
 impl BattleSequence {
     /// Opens the battle's text: the introduction, then each side's first
     /// send-out (`STRINGID_INTROMSG`, `STRINGID_INTROSENDOUT`,
@@ -259,11 +337,12 @@ impl BattleSequence {
         events: &[BattleEvent],
     ) -> Result<VecDeque<PrintStep>, NarrationError> {
         let mut steps = VecDeque::new();
-        for event in events {
+        for (index, event) in events.iter().enumerate() {
             if matches!(event, BattleEvent::PlayerSentOut { .. }) {
                 let enemy = battle.enemy();
+                let health = opponent_health_at(enemy, &events[index + 1..]);
                 self.narrator
-                    .observe_opponent_health(enemy.current_hp(), enemy.stats().max_hp);
+                    .observe_opponent_health(health, enemy.stats().max_hp);
                 if let Some(replacement) = self.reserves.get(self.sent_out) {
                     self.narrator
                         .stage_replacement(Side::Player, replacement.clone());

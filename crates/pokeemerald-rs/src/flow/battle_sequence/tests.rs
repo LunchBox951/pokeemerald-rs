@@ -71,3 +71,128 @@ fn only_the_last_print_of_a_replaced_move_holds() {
         .collect();
     assert_eq!(holds, [0, 0, 0, WAIT_TIME_LONG]);
 }
+
+/// A wild opponent poisoned at 75% faints the lead while the player tries to
+/// run; the reserve's send-out reads the opponent's health at that moment
+/// (scale 0, "Go!"), not after the end-of-turn poison drops it below 70%.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_replacement_wording_follows_the_opponents_health_at_the_send_out() {
+    use super::{BattleSequence, TurnPolicy};
+    use crate::battle_narration::{BattleKind, Battler, Scene};
+    use assets::SpeciesId;
+    use battle::{Battle, BattlePokemon, Dex, Ivs, Status1, MAX_IV};
+    use engine::rng::Rng;
+
+    let ivs = Ivs {
+        hp: MAX_IV,
+        attack: MAX_IV,
+        defense: MAX_IV,
+        speed: MAX_IV,
+        sp_attack: MAX_IV,
+        sp_defense: MAX_IV,
+    };
+    let mon = |species: u16, level: u8| {
+        BattlePokemon::new(
+            &Dex::new(),
+            SpeciesId(species),
+            level,
+            ivs,
+            0,
+            vec![MoveId::POUND],
+        )
+        .unwrap()
+    };
+    let battler = |name: &str| Battler {
+        name: name.to_owned(),
+        ability: None,
+    };
+    for seed in 1..200u32 {
+        let mut lead = mon(213, 2);
+        lead.apply_damage(lead.stats().max_hp - 1);
+        let reserve = mon(290, 5);
+        let mut enemy = mon(277, 50);
+        let max = enemy.stats().max_hp;
+        let at_send_out = max * 3 / 4;
+        enemy.apply_damage(max - at_send_out);
+        enemy.set_status1(Status1::Poisoned);
+        let mut rng = Rng::new(seed);
+        let mut battle = Battle::new_with_player_reserves(
+            Dex::new(),
+            lead,
+            vec![reserve],
+            enemy,
+            false,
+            &mut crate::flow::wild_encounter::SharedRng::new(&mut rng),
+        )
+        .unwrap();
+        let pack = assets::pack::AssetPack::load(&assets::pack::AssetPack::repo_pack_path())
+            .expect("needs a local pack: run `cargo xtask extract` first");
+        let scene = Scene {
+            kind: BattleKind::Wild,
+            player_name: "MAY".to_owned(),
+            player: battler("SHUCKLE"),
+            opponent: battler("TREECKO"),
+            trainer: None,
+            hp_scale: 0,
+        };
+        let mut sequence =
+            BattleSequence::begin(pack, 0, scene, TurnPolicy::Run, vec![battler("WURMPLE")])
+                .unwrap();
+        let events = sequence.take_turn(&mut battle, &mut rng);
+        if !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::PlayerSentOut { .. }))
+        {
+            continue;
+        }
+        let end_hp = battle.enemy().current_hp();
+        assert!(
+            end_hp * 100 / max < 70,
+            "poison dropped the opponent below 70%"
+        );
+        assert!(at_send_out * 100 / max >= 70);
+        sequence.print_steps(&battle, &events).unwrap();
+        assert_eq!(
+            sequence.scene().hp_scale,
+            0,
+            "the send-out happened at {at_send_out}/{max} HP (at least 70%: \"Go!\")"
+        );
+        return;
+    }
+    panic!("no seed produced a failed run and a lead faint");
+}
+
+#[test]
+fn the_opponents_health_at_a_send_out_undoes_the_effects_after_it() {
+    use super::opponent_health_at;
+    use battle::{BattlePokemon, Dex, Ivs};
+
+    let mut enemy = BattlePokemon::new(
+        &Dex::new(),
+        assets::SpeciesId(277),
+        50,
+        Ivs::default(),
+        0,
+        vec![MoveId::POUND],
+    )
+    .unwrap();
+    enemy.apply_damage(enemy.stats().max_hp - 50);
+    let later = [
+        BattleEvent::HurtByPoison {
+            by_player: false,
+            damage: 12,
+        },
+        BattleEvent::LeechSeedHealed {
+            by_player: false,
+            healed: 3,
+        },
+        // The player's own battler changes nothing about the opponent.
+        BattleEvent::HurtByBurn {
+            by_player: true,
+            damage: 9,
+        },
+    ];
+    assert_eq!(opponent_health_at(&enemy, &later), 50 + 12 - 3);
+    assert_eq!(opponent_health_at(&enemy, &[]), 50);
+}
