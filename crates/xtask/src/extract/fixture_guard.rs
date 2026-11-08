@@ -39,23 +39,61 @@ type Token = win_fs::WindowsFileIdentity;
 #[cfg(not(any(unix, windows)))]
 type Token = ();
 
-/// The per-object identity of the entry at `path`: `Ok(None)` when nothing is
-/// there, `Err` when the read itself failed.
-fn identity_of(path: &Path) -> io::Result<Option<Token>> {
+/// What the entry at a path is: its kind and its per-object token.
+#[derive(Debug, PartialEq, Eq)]
+struct Identity {
+    token: Token,
+    /// A real directory (not a symlink to one). An unpinned symlink's token
+    /// can be recycled, so the kind bounds what a recycled match can remove.
+    is_dir: bool,
+}
+
+/// The identity of the entry at `path`: `Ok(None)` when nothing is there,
+/// `Err` when the read itself failed.
+fn identity_of(path: &Path) -> io::Result<Option<Identity>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let is_dir = metadata.file_type().is_dir();
     #[cfg(unix)]
-    let read = {
+    let token = {
         use std::os::unix::fs::MetadataExt as _;
-        std::fs::symlink_metadata(path).map(|m| (m.dev(), m.ino()))
+        (metadata.dev(), metadata.ino())
     };
     #[cfg(windows)]
-    let read = win_fs::open_for_verified_delete(path)
-        .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle));
+    let token = win_fs::open_for_verified_delete(path)
+        .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle))?;
     #[cfg(not(any(unix, windows)))]
-    let read: io::Result<Token> = Err(io::ErrorKind::Unsupported.into());
-    match read {
-        Ok(token) => Ok(Some(token)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
+    let token: Token = return Err(io::ErrorKind::Unsupported.into());
+    #[cfg(any(unix, windows))]
+    Ok(Some(Identity { token, is_dir }))
+}
+
+/// Opens the directory `identity` was read from and keeps the handle, if it
+/// is still that directory: an inode (Unix) or file ID (Windows) is not
+/// recycled while something holds it open, so a directory deleted and
+/// recreated at the path cannot inherit the planted identity.
+fn pin(path: &Path, identity: &Identity) -> Option<std::fs::File> {
+    if !identity.is_dir {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let handle = std::fs::File::open(path).ok()?;
+        let metadata = handle.metadata().ok()?;
+        ((metadata.dev(), metadata.ino()) == identity.token).then_some(handle)
+    }
+    #[cfg(windows)]
+    {
+        let handle = win_fs::open_for_verified_delete(path).ok()?;
+        (win_fs::WindowsFileIdentity::of(&handle).ok()? == identity.token).then_some(handle)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
     }
 }
 
@@ -64,7 +102,12 @@ struct PlantedEntry {
     path: PathBuf,
     /// `None` when the identity could not be read at planting: the entry can
     /// then not be told from a replacement and is never removed.
-    identity: Option<Token>,
+    identity: Option<Identity>,
+    /// Open on a planted directory from planting until drop, so its identity
+    /// cannot be recycled by a replacement. `None` for a symlink (which
+    /// cannot be opened without following it) or when pinning failed; a
+    /// directory without one is never removed.
+    handle: Option<std::fs::File>,
 }
 
 /// Entries the guard created, removed on drop whatever the fixture did, as
@@ -74,9 +117,12 @@ struct Planted(Vec<PlantedEntry>);
 impl Planted {
     /// Records the entry now at `path`, right after the guard planted it.
     fn entry(path: &Path) -> PlantedEntry {
+        let identity = identity_of(path).ok().flatten();
+        let handle = identity.as_ref().and_then(|identity| pin(path, identity));
         PlantedEntry {
             path: path.to_path_buf(),
-            identity: identity_of(path).ok().flatten(),
+            identity,
+            handle,
         }
     }
 }
@@ -85,8 +131,10 @@ impl Drop for Planted {
     /// Removes an entry only while its path still names the one the guard
     /// planted (the rule of `OwnedDir`): a path that now holds anything else,
     /// such as the planted directory renamed aside and an unrelated one put
-    /// in its place, is left alone and reported. A path that is gone is
-    /// skipped silently.
+    /// in its place, or deleted and recreated, is left alone and reported. A
+    /// path that is gone is skipped silently. A planted directory is checked
+    /// against the handle held since planting; a directory that was never
+    /// pinned cannot be told from a replacement and is left alone.
     ///
     /// A removal that fails for any reason but the entry already being gone
     /// leaves it behind, so it panics once every entry has been tried, unless
@@ -94,19 +142,28 @@ impl Drop for Planted {
     /// entries on disk unreported (the convention of `OwnedDir`).
     fn drop(&mut self) {
         let mut failures = Vec::new();
-        for PlantedEntry { path, identity } in &self.0 {
+        for entry in &mut self.0 {
+            let path = &entry.path;
             match identity_of(path) {
                 Ok(None) => {}
                 Err(error) => failures.push(format!("{}: {error}", path.display())),
-                Ok(Some(current)) if Some(&current) != identity.as_ref() => failures.push(format!(
-                    "{}: not the entry the guard planted, left alone",
-                    path.display()
-                )),
-                Ok(Some(_)) => {
-                    let removed = if path.is_symlink() {
-                        std::fs::remove_file(path)
-                    } else {
+                Ok(Some(current))
+                    if Some(&current) != entry.identity.as_ref()
+                        || (current.is_dir && entry.handle.is_none()) =>
+                {
+                    failures.push(format!(
+                        "{}: not the entry the guard planted, left alone",
+                        path.display()
+                    ));
+                }
+                Ok(Some(current)) => {
+                    // The directory cannot be removed while a handle is open
+                    // on Windows.
+                    drop(entry.handle.take());
+                    let removed = if current.is_dir {
                         std::fs::remove_dir_all(path)
+                    } else {
+                        std::fs::remove_file(path)
                     };
                     if let Err(error) = removed {
                         if error.kind() != io::ErrorKind::NotFound {
@@ -153,13 +210,27 @@ fn plant_all(
     let deadline = Instant::now() + PLANT_WAIT;
     for path in names {
         loop {
+            let absent =
+                std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
             match plant(path) {
                 Ok(()) => break,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline => {
                     on_wait();
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                Err(e) => panic!("{prefix}: cannot plant {}: {e}", path.display()),
+                Err(e) => {
+                    // A plant that created the entry and then failed (to
+                    // populate it, say) leaves it behind: a name that was
+                    // free before and is taken now is the guard's, so record
+                    // it for the cleanup the panic unwinds through.
+                    if absent
+                        && e.kind() != io::ErrorKind::AlreadyExists
+                        && std::fs::symlink_metadata(path).is_ok()
+                    {
+                        planted.0.push(Planted::entry(path));
+                    }
+                    panic!("{prefix}: cannot plant {}: {e}", path.display());
+                }
             }
         }
         planted.0.push(Planted::entry(path));
@@ -392,6 +463,69 @@ mod tests {
         assert!(
             reported.is_err(),
             "Planted::drop skipped {} without reporting it",
+            path.display()
+        );
+    }
+
+    /// A planted directory deleted outright, with an unrelated populated
+    /// directory then created at its path, must survive the drop even when
+    /// the filesystem hands the replacement the freed inode.
+    #[cfg(unix)]
+    #[test]
+    fn planted_drop_leaves_a_replacement_that_recycled_the_inode() {
+        use std::os::unix::fs::MetadataExt as _;
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-recycled-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let planted = Planted(vec![Planted::entry(&path)]);
+        let before = std::fs::symlink_metadata(&path).unwrap().ino();
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let after = std::fs::symlink_metadata(&path).unwrap().ino();
+        eprintln!("planted inode {before}, replacement inode {after}");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let survived = untouched(&path);
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(
+            survived,
+            "Planted::drop deleted an unrelated directory at {}",
+            path.display()
+        );
+    }
+
+    /// A plant that creates its directory and then fails to populate it
+    /// must not leave that directory behind when planting panics.
+    #[test]
+    fn plant_all_removes_a_directory_whose_population_failed() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-populate-fails-{}",
+            std::process::id()
+        ));
+        let names = vec![path.clone()];
+        let result = std::panic::catch_unwind(|| {
+            plant_all(
+                "populate-fails",
+                &names,
+                |p| {
+                    std::fs::create_dir(p)?;
+                    Err(io::Error::other("injected population failure"))
+                },
+                &|| {},
+            )
+        });
+        let left_behind = path.exists();
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(
+            result.is_err(),
+            "plant_all did not panic on population failure"
+        );
+        assert!(
+            !left_behind,
+            "plant_all left {} behind after population failed",
             path.display()
         );
     }
