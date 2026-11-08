@@ -340,7 +340,7 @@ impl OverworldPhase {
 
         // An active battle owns the frame ahead of the dialog check, as the
         // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
-        if self.advance_active_battle_frame() {
+        if self.advance_active_battle_frame(buttons) {
             return;
         }
 
@@ -360,7 +360,8 @@ impl OverworldPhase {
             self.step_field_frame(buttons);
         }
         self.advance_object_events();
-        self.scene.advance_tall_grass(&self.player);
+        self.scene
+            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no

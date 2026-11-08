@@ -41,8 +41,9 @@
 //!
 //! # Field effects
 //!
-//! The scene owns the player's tall-grass effects ([`grass`]): the phase starts
-//! them as the player steps onto or is placed on tall grass and advances them
+//! The scene owns the tall-grass effects of the player and the object events
+//! ([`grass`]): the phase starts them as either steps onto or is placed on tall
+//! grass, and advances them
 //! once a frame ([`OverworldScene::advance_tall_grass`]); composing only draws
 //! them, as OBJs beside the player and the object events.
 //!
@@ -431,7 +432,7 @@ pub struct OverworldScene {
     blank_tile_index: u16,
     tile_anims: tileset_anims::AnimatedTileset,
     sprites: sprites::SceneSprites,
-    /// The player's tall-grass effects, simulated by
+    /// The player's and object events' tall-grass effects, simulated by
     /// [`Self::advance_tall_grass`] and only read by composition.
     grass: grass::TallGrassEffects,
     /// The events `from_pack` received, fixed for the visit. Their owner is

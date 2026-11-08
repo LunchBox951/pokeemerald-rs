@@ -156,6 +156,11 @@ impl SceneSprites {
         self.grass_base_tile.is_some()
     }
 
+    /// The elevation an object on `tile` settles at (`CellElevations::settled`).
+    pub(super) fn settled_elevation(&self, tile: (i32, i32), elevation: u8) -> u8 {
+        self.cell_elevations.settled(tile, elevation)
+    }
+
     /// [`Self::live_entries`] over the template-seeded state.
     #[must_use]
     pub(super) fn entries(

@@ -428,6 +428,27 @@ fn attract_names_the_target_and_the_infatuated_actor_with_its_attractor() {
     );
 }
 
+/// `BattleScript_CuteCharmActivates` prints `STRINGID_PKMNSXINFATUATEDY` with
+/// the holder as the defender and the infatuated attacker
+/// (`data/battle_scripts_1.s:4193`-`:4197`).
+#[test]
+fn cute_charm_names_its_holder_and_the_attacker_it_infatuated() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("SKITTY", Some(AbilityId::CUTE_CHARM));
+    let mut narrator = Narrator::new(scene);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[BattleEvent::InfatuatedByCuteCharm {
+                by_player: true,
+                move_id: MoveId::TACKLE,
+            }]
+        )),
+        ["Wild SKITTY's CUTE CHARM\ninfatuated TORCHIC!"]
+    );
+}
+
 #[test]
 fn a_replacement_is_named_after_the_faint_that_precedes_it() {
     let mut narrator = narrator(BattleKind::Trainer);

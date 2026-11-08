@@ -670,6 +670,36 @@ fn tall_grass_entries() -> [Entry; 2] {
     [image, palette]
 }
 
+/// [`synthetic_scene_with_tall_grass_sprites`], loaded with `events` and an
+/// opaque people sheet for each of `sprite_paths`.
+pub(crate) fn synthetic_scene_with_tall_grass_sprites_and_events(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+    events: &'static assets::MapEvents,
+    sprite_paths: &[&str],
+) -> super::OverworldScene {
+    let mut entries = special_tile_entries_at_elevations(width, height, specials);
+    entries.extend(tall_grass_entries());
+    for path in sprite_paths {
+        entries.push(Entry {
+            id: format!("sprite/{path}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+    }
+    synthetic_scene_result_with_connections_and_events(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+        &[],
+        events,
+    )
+    .expect("synthetic pack should decode cleanly")
+}
+
 /// [`synthetic_scene_with_special_tiles_at_elevations`] over a pack that also
 /// carries the tall-grass field-effect sheet and palette.
 pub(crate) fn synthetic_scene_with_tall_grass_sprites(
