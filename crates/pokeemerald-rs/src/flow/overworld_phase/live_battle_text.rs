@@ -8,6 +8,7 @@
 //! sequencer reports the battle over.
 
 use battle::Battle;
+use engine::save::Pokemon;
 use engine::text::decode_to_string;
 use platform::ButtonState;
 use rendering::Framebuffer;
@@ -15,10 +16,11 @@ use rendering::Framebuffer;
 use crate::battle_narration::{
     AssetNames, BattleKind, Battler, NarrationError, NarrationNames, Scene,
 };
-use crate::flow::battle_sequence::{BattleSequence, Progress, SequenceError};
+use crate::flow::battle_sequence::{BattleSequence, Progress, SequenceError, TurnPolicy};
 use crate::overworld::dialog::confirm_printer_input;
 
 use super::OverworldPhase;
+use crate::party::LoadedLead;
 
 /// Test-only: whether a phase's battles play their text. Production phases
 /// always do.
@@ -32,11 +34,32 @@ pub(in crate::flow) enum BattleText {
     Skipped,
 }
 
+/// The name a saved member is printed under: its nickname, or its species'
+/// name when the record carries none.
+fn nickname_or_species(
+    record: &Pokemon,
+    species: assets::SpeciesId,
+) -> Result<String, NarrationError> {
+    decode_to_string(&record.box_data.nickname())
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map_or_else(
+            || {
+                AssetNames
+                    .species_name(species)
+                    .ok_or(NarrationError::UnknownName("species"))
+            },
+            Ok,
+        )
+}
+
 impl OverworldPhase {
     /// The text sequencer for `battle`, a wild battle against the lead on
     /// loan, or `None` when this test phase's battles skip their text.
     ///
     /// The pack is read once per battle from the phase's [`Self::pack_source`].
+    /// `policy` is the action each of the battle's turns takes, and `reserves`
+    /// the owners of the player's members after the lead, in the battle's order.
     ///
     /// # Errors
     ///
@@ -45,14 +68,34 @@ impl OverworldPhase {
     pub(super) fn open_wild_battle_text(
         &self,
         battle: &Battle,
+        policy: TurnPolicy,
+        reserves: &[LoadedLead],
     ) -> Result<Option<BattleSequence>, SequenceError> {
         #[cfg(test)]
         if self.battle_text == BattleText::Skipped {
             return Ok(None);
         }
         let scene = self.wild_scene(battle)?;
+        let replacements = battle
+            .player_members()
+            .skip(1)
+            .zip(reserves)
+            .map(|(member, owner)| {
+                Ok(Battler {
+                    name: nickname_or_species(owner.record(), member.species())?,
+                    ability: Some(member.ability()),
+                })
+            })
+            .collect::<Result<Vec<_>, NarrationError>>()?;
         let pack = self.pack_source.load()?;
-        BattleSequence::begin(pack, self.save2.options_text_speed, scene).map(Some)
+        BattleSequence::begin(
+            pack,
+            self.save2.options_text_speed,
+            scene,
+            policy,
+            replacements,
+        )
+        .map(Some)
     }
 
     /// The narrator's opening scene for a wild battle: the player's name, the
@@ -66,13 +109,8 @@ impl OverworldPhase {
                 .species_name(species)
                 .ok_or(NarrationError::UnknownName("species"))
         };
-        let nickname = self
-            .lead
-            .as_ref()
-            .and_then(|lead| decode_to_string(&lead.record().box_data.nickname()).ok())
-            .filter(|name| !name.is_empty());
-        let player_name = match nickname {
-            Some(name) => name,
+        let player_name = match &self.lead {
+            Some(lead) => nickname_or_species(lead.record(), player.species())?,
             None => species_name(player.species())?,
         };
         Ok(Scene {

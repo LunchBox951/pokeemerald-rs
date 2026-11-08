@@ -30,9 +30,10 @@ use rendering::Framebuffer;
 
 use super::first_usable_move::take_first_usable_move_turn;
 use super::move_learn::decline_pending_move_learn;
+use super::wild_encounter::take_run_turn;
 use crate::battle_narration::{
-    AssetNames, BattleMessageLayer, NarrationError, NarrationGate, NarrationRequest, Narrator,
-    PresentationError, Scene, Side,
+    AssetNames, BattleMessageLayer, Battler, NarrationError, NarrationGate, NarrationRequest,
+    Narrator, PresentationError, Scene, Side,
 };
 
 /// `B_WAIT_TIME_LONG` (`pokeemerald/include/constants/battle.h:324`).
@@ -72,6 +73,17 @@ impl From<assets::pack::PackError> for SequenceError {
     fn from(error: assets::pack::PackError) -> Self {
         Self::Presentation(error.into())
     }
+}
+
+/// What the player does on each turn the sequencer starts; the battle has no
+/// action menu, so the flow that owns the battle names its one choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnPolicy {
+    /// The first move slot the engine accepts: the scripted Route 101 fight.
+    FirstUsableMove,
+    /// An attempt to run, until the party escapes or is defeated: a wild
+    /// encounter.
+    Run,
 }
 
 /// What a frame of the sequencer decided.
@@ -141,6 +153,12 @@ pub(super) struct BattleSequence {
     layer: BattleMessageLayer<assets::fonts::OwnedFontGlyphSheet>,
     narrator: Narrator,
     stage: Stage,
+    policy: TurnPolicy,
+    /// The player's reserves in the order the engine sends them out, named as
+    /// the replacement's print needs them.
+    reserves: Vec<Battler>,
+    /// How many replacements have been narrated.
+    sent_out: usize,
     turn_failed: bool,
 }
 
@@ -185,34 +203,15 @@ fn script_hold(event: &BattleEvent, position: usize, count: usize) -> u16 {
     }
 }
 
-/// The prints for `events` in order, each with its hold.
-fn print_steps(
-    narrator: &mut Narrator,
-    events: &[BattleEvent],
-) -> Result<VecDeque<PrintStep>, NarrationError> {
-    let mut steps = VecDeque::new();
-    for event in events {
-        let requests = narrator.requests(&AssetNames, event)?;
-        let count = requests.len();
-        steps.extend(
-            requests
-                .into_iter()
-                .enumerate()
-                .map(|(position, request)| PrintStep {
-                    request,
-                    hold: script_hold(event, position, count),
-                }),
-        );
-    }
-    Ok(steps)
-}
-
 impl BattleSequence {
     /// Opens the battle's text: the introduction, then each side's first
     /// send-out (`STRINGID_INTROMSG`, `STRINGID_INTROSENDOUT`,
     /// `pokeemerald/src/battle_main.c:3564-3607`), printed before any turn.
     ///
-    /// `raw_text_speed` is the saved text-speed option.
+    /// `raw_text_speed` is the saved text-speed option, and `policy` the action
+    /// each turn takes. `reserves` are the player's other members in the order
+    /// the engine sends them out, so a replacement is named by its nickname and
+    /// ability.
     ///
     /// # Errors
     ///
@@ -222,6 +221,8 @@ impl BattleSequence {
         pack: AssetPack,
         raw_text_speed: u8,
         scene: Scene,
+        policy: TurnPolicy,
+        reserves: Vec<Battler>,
     ) -> Result<Self, SequenceError> {
         let mut layer = BattleMessageLayer::from_pack(&pack, raw_text_speed)?;
         let narrator = Narrator::new(scene);
@@ -237,8 +238,57 @@ impl BattleSequence {
             layer,
             narrator,
             stage,
+            policy,
+            reserves,
+            sent_out: 0,
             turn_failed: false,
         })
+    }
+
+    /// The prints for `events` in order, each with its hold.
+    ///
+    /// A replacement is staged before its send-out is narrated, with the
+    /// opponent's health that picks the wording: upstream names the incoming
+    /// mon by its nickname (`Cmd_switchindataupdate`,
+    /// `pokeemerald/src/battle_script_commands.c:4669`) and runs
+    /// `hpthresholds BS_FAINTED` ahead of `STRINGID_SWITCHINMON`
+    /// (`pokeemerald/data/battle_scripts_1.s:2887-2888`).
+    fn print_steps(
+        &mut self,
+        battle: &Battle,
+        events: &[BattleEvent],
+    ) -> Result<VecDeque<PrintStep>, NarrationError> {
+        let mut steps = VecDeque::new();
+        for event in events {
+            if matches!(event, BattleEvent::PlayerSentOut { .. }) {
+                let enemy = battle.enemy();
+                self.narrator
+                    .observe_opponent_health(enemy.current_hp(), enemy.stats().max_hp);
+                if let Some(replacement) = self.reserves.get(self.sent_out) {
+                    self.narrator
+                        .stage_replacement(Side::Player, replacement.clone());
+                }
+                self.sent_out += 1;
+            }
+            let requests = self.narrator.requests(&AssetNames, event)?;
+            let count = requests.len();
+            steps.extend(
+                requests
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, request)| PrintStep {
+                        request,
+                        hold: script_hold(event, position, count),
+                    }),
+            );
+        }
+        Ok(steps)
+    }
+
+    /// The scene as the narrator last staged it.
+    #[cfg(test)]
+    pub(super) const fn scene(&self) -> &Scene {
+        self.narrator.scene()
     }
 
     /// Resolves the first of `steps` into `gate`, or nothing when there is
@@ -322,15 +372,19 @@ impl BattleSequence {
         } else {
             self.take_turn(battle, rng)
         };
-        let steps = print_steps(&mut self.narrator, &events)?;
+        let steps = self.print_steps(battle, &events)?;
         self.stage = Self::start_printing(&mut self.layer, &self.pack, gate, steps)?;
         Ok(Progress::Running)
     }
 
-    /// The headless policy's move: the first slot the engine accepts. A failed
-    /// turn keeps the events it committed.
+    /// The turn the sequence's [`TurnPolicy`] takes. A failed turn keeps the
+    /// events it committed.
     fn take_turn(&mut self, battle: &mut Battle, rng: &mut Rng) -> Vec<BattleEvent> {
-        match take_first_usable_move_turn(battle, rng) {
+        let turn = match self.policy {
+            TurnPolicy::FirstUsableMove => take_first_usable_move_turn(battle, rng),
+            TurnPolicy::Run => take_run_turn(battle, rng),
+        };
+        match turn {
             Ok(events) => events,
             Err(error) => {
                 eprintln!(
