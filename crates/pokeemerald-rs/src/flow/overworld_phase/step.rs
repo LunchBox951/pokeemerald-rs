@@ -721,7 +721,12 @@ impl OverworldPhase {
         else {
             return;
         };
-        if self.cross_connection(to_map, to_position) {
+        // The departed-to-entered translation: the step has already left the
+        // player in the entered map's coordinates, so its previous tile there
+        // against its pre-step tile is the camera offset.
+        let (from, previous) = (pre_step_player.position(), self.player.previous_position());
+        let shift = (previous.0 - from.0, previous.1 - from.1);
+        if self.cross_connection(to_map, to_position, shift) {
             // The crossing step's own begin-step pass, on the entered map.
             self.scene
                 .player_step_began(to_position, self.player.previous_elevation());

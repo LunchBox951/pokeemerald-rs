@@ -482,7 +482,7 @@ fn successful_warp_and_connection_replace_live_object_events() {
     let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     phase.pack_source = PackSource::Test(leaked_path);
     let local_id = walk_footprints_man(&mut phase);
-    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
+    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
     assert_replaced(&phase, local_id, "the connection crossing");
 
     let _ = std::fs::remove_file(&path);

@@ -104,7 +104,7 @@ fn a_pending_pan_change_commits_by_the_next_sustain_refresh_on_wave() {
     // `envelopeCounter == 0` boundary, not only a retrigger-worthy one
     // (`m4a.c:1081-1082`), so its rendered route must catch up with no
     // second live write, unlike square and noise.
-    let mut voice = wave_voice(false, TestNote::default());
+    let mut voice = wave_voice(false, TestNote::unmodulated());
     let (centred_left, centred_right) = frame_side_energy(&mut voice); // enters sustain
     assert!(
         centred_left > 0 && centred_right > 0,
