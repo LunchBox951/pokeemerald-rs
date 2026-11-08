@@ -11,6 +11,7 @@ use super::*;
 use crate::overworld::background_event::SecretBaseContext;
 use crate::overworld::metatile_behavior as mb;
 use crate::overworld::object_event::ObjectEventCollection;
+use crate::overworld::object_event_harness::{admit, admitted};
 
 const STANDING: (i32, i32) = (2, 3);
 const FRONT: (i32, i32) = (2, 2);
@@ -407,6 +408,54 @@ fn a_hidden_object_is_skipped_until_its_flag_clears() {
     );
 }
 
+/// Selects at `FRONT` through a bound collection a stationary player's frames admitted, with the
+/// object's hide flag set (`hidden_first`) or clear when admission ran, and flipped afterwards.
+fn select_after_flag_flip(hidden_first: bool) -> Option<InteractionTarget> {
+    let flag = assets::object_event_flags::resolve(HIDDEN_BY_DEFAULT_FLAG).unwrap();
+    let mut guarded = object(OBJECT_ID, FRONT, ELEVATION, OBJECT_SCRIPT);
+    guarded.flag = HIDDEN_BY_DEFAULT_FLAG;
+    scene(
+        &[],
+        vec![guarded],
+        vec![any_sign(FRONT)],
+        |runtime, templates| {
+            let mut data = EventData::new();
+            if hidden_first {
+                data.flag_set(flag).unwrap();
+            }
+            let mut live = ObjectEventCollection::from_templates(templates);
+            admit(&mut live, STANDING, &data);
+            if hidden_first {
+                data.flag_clear(flag).unwrap();
+            } else {
+                data.flag_set(flag).unwrap();
+            }
+            // The player has not moved, so these frames reconcile nothing.
+            admit(&mut live, STANDING, &data);
+            select_interaction_target(
+                &player_facing(Direction::North),
+                &(*runtime).with_object_events(&live),
+                &data,
+                &[],
+            )
+        },
+    )
+}
+
+#[test]
+fn an_object_the_scheduler_never_admitted_is_not_interactable_after_its_flag_clears() {
+    assert_eq!(
+        select_after_flag_flip(true),
+        Some(selected_sign()),
+        "the sign behind the unspawned object is what the player faces"
+    );
+}
+
+#[test]
+fn an_admitted_object_stays_interactable_after_its_flag_is_set() {
+    assert_eq!(select_after_flag_flip(false), Some(selected_object()));
+}
+
 #[test]
 fn a_moved_object_is_selected_at_its_live_tile_only() {
     scene(
@@ -414,7 +463,7 @@ fn a_moved_object_is_selected_at_its_live_tile_only() {
         vec![object(OBJECT_ID, FAR, ELEVATION, OBJECT_SCRIPT)],
         vec![any_sign(FRONT)],
         |runtime, templates| {
-            let mut live = ObjectEventCollection::from_templates(templates);
+            let mut live = admitted(templates, STANDING);
             live.get_mut(OBJECT_ID)
                 .unwrap()
                 .state_mut()

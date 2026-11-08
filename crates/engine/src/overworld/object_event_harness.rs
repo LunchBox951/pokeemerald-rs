@@ -81,6 +81,33 @@ pub(crate) fn leaked(events: Vec<ObjectEvent>) -> &'static [ObjectEvent] {
     Box::leak(events.into_boxed_slice())
 }
 
+/// Runs the map-load admission pass over `collection` with the player at `player` and `event_data`
+/// as the flags: every in-window entry whose hide flag is clear becomes active.
+pub(crate) fn admit(
+    collection: &mut ObjectEventCollection,
+    player: TilePos,
+    event_data: &EventData,
+) {
+    collection.run_frame(
+        &FrameContext {
+            player_position: player,
+            event_data,
+            frozen: false,
+        },
+        &mut ScriptedRng::exhausted(),
+    );
+}
+
+/// Seeds `templates` and admits every one in view of `player` with no flag set.
+pub(crate) fn admitted(
+    templates: &'static [ObjectEvent],
+    player: TilePos,
+) -> ObjectEventCollection {
+    let mut collection = ObjectEventCollection::from_templates(templates);
+    admit(&mut collection, player, &EventData::new());
+    collection
+}
+
 /// One collection, its flags, the player's tile, a freeze switch, and a field RNG.
 pub(crate) struct Rig {
     pub(crate) collection: ObjectEventCollection,

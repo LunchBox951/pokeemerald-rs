@@ -62,15 +62,25 @@ impl ObjectEventCollection {
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it; the
     /// fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
-        if self.reconciled_at.is_none() {
-            self.reconcile_with_view(context);
-        }
+        self.admit_for_map_load(context);
         if !context.frozen {
             for entry in &mut self.entries {
                 entry.run_movement_type(rng);
             }
         }
         if self.reconciled_at != Some(context.player_position) {
+            self.reconcile_with_view(context);
+        }
+    }
+
+    /// Runs map load's admission pass if no pass has run yet: spawns every in-window, unhidden
+    /// entry, as `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`).
+    ///
+    /// Position queries return only admitted entries, so a caller that queries before its first
+    /// [`Self::run_frame`] calls this at map load. Later calls do nothing, and `context.frozen` is
+    /// not read.
+    pub fn admit_for_map_load(&mut self, context: &FrameContext<'_>) {
+        if self.reconciled_at.is_none() {
             self.reconcile_with_view(context);
         }
     }
