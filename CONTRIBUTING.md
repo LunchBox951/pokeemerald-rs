@@ -1,136 +1,84 @@
 # Contributing to pokeemerald-rs
 
-Thanks for your interest. This is a **pre-alpha, hobby reimplementation** of
-Pokémon Emerald in native Rust, maintained largely by an autonomous routine (see
-below). Contributions are welcome, but a few rules are load-bearing — please read
-this in full before opening a PR.
+Contributions are welcome. This is a pre-alpha clean-room reimplementation of Pokémon Emerald. Read [`docs/principles.md`](docs/principles.md) before working, then use [`docs/README.md`](docs/README.md) to load only the context required by the task.
 
-The project's invariants live in [`docs/principles.md`](docs/principles.md), each
-with a grep-able `(handle)`. This guide cites them inline; the principles file is
-the authority.
+## Setup
+
+On Debian or Ubuntu, install the Rust toolchain and `libasound2-dev`. Then build the local references and asset pack before running the application:
+
+```bash
+./init.sh
+cargo xtask extract
+cargo run --release -p pokeemerald-rs
+```
+
+The application cannot start without the extracted pack. It reports the missing-pack path and the extraction command; it never downloads or redistributes game assets.
 
 ## Where work goes
 
-- **Target `dev`** for normal contributions — features, design work, docs,
-  tooling, fixes. `dev` is the developer integration branch.
-- Don't target `unstable`, `stable`, or `main` directly. Those are promotion-only
-  channels on the release ladder (`dev → unstable → stable → main`) and are
-  player-facing toward the top `(gated-by-default)`. See
-  [`RELEASE.md`](RELEASE.md).
-- Work the project toward v1. Open a roadmap issue or pick one up, and ladder it
-  to an acceptance ID (`F-1`, `S-1`, `I-4`, …) in
-  [`docs/acceptance/v1.md`](docs/acceptance/v1.md). PRs should name the acceptance
-  ID they advance.
+- Target `dev` for normal work. `unstable`, `stable`, and `main` accept only direct next-rung promotion pull requests `(gated-by-default)`.
+- Link work to the relevant stable ID in [`docs/acceptance/v1.md`](docs/acceptance/v1.md). Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
+- Give each roadmap issue exactly one milestone. Read the live [milestone descriptions](../../milestones?state=all) for current acceptance-ID ownership and scope.
+- Put consciously deferred work in M8. Its issue body records why it was deferred and includes a `Revisit when` section listing the observable conditions that return it to active work, such as an issue closing, a dependency release, or an owner decision. Check those conditions instead of researching the issue again. Deferral does not remove single-player work from v1; only a recorded exclusion does.
+- Close a milestone only when each acceptance ID it owns is ☑ or a recorded ⊘. The issue progress bar is not the completion gate.
 
-## Legal posture — read this first
+Milestone descriptions own their current scope, upstream references, acceptance IDs, and completion checks `(constitution-vs-roadmap)`.
 
-This project ships **no license**, intentionally, matching the
-[`pret/pokeemerald`](https://github.com/pret/pokeemerald) disassembly it ports.
-It reproduces the observable behaviour of a work owned by Nintendo / Game Freak /
-The Pokémon Company. There is no `LICENSE` file, and you should not add one.
+## Issues and labels
 
-Because of that posture, contributions **must be clean-room reimplementations**:
+File every work item in the body shape [`.github/ISSUE_TEMPLATE/roadmap_task.yml`](.github/ISSUE_TEMPLATE/roadmap_task.yml) defines, including an issue filed with `gh issue create` or the API, which skips the web form. Bug, feature-request, and playtest reports use their own templates; work accepted from one is filed in the roadmap task shape.
 
-- **Never copy upstream source code.** Read the behaviour in `pokeemerald/`, then
-  re-express it in idiomatic Rust `(no-verbatim)`. Translating a table of
-  constants is fine; transliterating a C function line-for-line is not.
-- **Never commit copyrighted game assets.** No ROM rips, no sprite/tile/audio
-  blobs from the game in the git tree. Assets are *extracted at build time* from
-  the user's own upstream checkout by the extraction pipeline — they are
-  not redistributed here.
-- `pokeemerald/` and `mgba/` are **read-only references** `(reference-only)`,
-  cloned by `init.sh` and gitignored. Never edit, commit, or link against them.
+[`.github/labels.yml`](.github/labels.yml) lists the baseline labels; each description says when the label applies and, for a state label, when it comes off. Live GitHub may carry further topical labels. Every template applies `needs-review` to a new issue. An issue counts as triaged once its labels and, for roadmap work, its milestone are set.
 
-If you can't implement something without looking at — and effectively copying —
-upstream code, stop and ask in an issue.
+## Clean-room rules
 
-## Engineering rules
+The repository has no `LICENSE` file and reproduces a copyrighted work. Contributions must follow these boundaries:
 
-- **Behavioural fidelity `(behavioral-fidelity)`** — match the game's *observable*
-  behaviour (dialog, trainers, encounters, music, damage outcomes, pacing), not
-  its internal structure. We do not chase byte-for-byte parity with hardware or
-  mGBA.
-- **No FFI `(no-ffi)`** — no `bindgen`, no linking to the upstream C, no shelling
-  out to an emulator at runtime. This is a clean native rewrite, not a wrapper.
-- **Minimal dependencies `(minimal-deps)`** — default to the standard library.
-  **Every new `Cargo.toml` dependency needs explicit owner approval** and a
-  line-by-line justification in the PR (and in `README.md`). Don't add a crate and
-  hope; raise it first.
-- **OOP boundaries `(oop-boundaries)`** — model subsystems as owned types with
-  methods and traits; keep module boundaries explicit; avoid global mutable state.
-  A file over ~600 lines is usually doing too much.
-- **Test ratchet `(test-ratchet)`** — never delete, skip, or weaken a test to make
-  a gate pass. Fix the code, or fix the test with a recorded reason.
+- Never copy upstream source. Read behaviour, then re-express it idiomatically `(no-verbatim)`.
+- Never commit ROM data, sprite, tile, audio, or other copyrighted game assets. Extraction reads the contributor's local reference checkout, and `--import-rom` reads the player's own cartridge image; the ROM, its path, and its bytes never enter git, CI, artifacts, or logs. `crates/rom-import/src/lib.rs` owns that contract.
+- Never edit, commit, or link against `pokeemerald/` or `mgba/` `(reference-only, no-ffi)`.
+- Never add an external Cargo dependency without explicit owner approval for the exact crate, receiving workspace member, features, and purpose `(minimal-deps)`.
 
-> The Rust workspace isn't scaffolded yet. Until it lands, the `cargo`
-> commands below are the contract, and CI runs them as placeholders that echo
-> `TODO` and exit 0. Once the workspace exists they become real with no change to
-> the release model.
+If a clean-room boundary or dependency decision remains ambiguous, open a GitHub Discussion before implementing it.
+
+## Rust and verification
+
+[`crates/README.md`](crates/README.md) owns workspace-wide Rust conventions and source ownership. Run focused tests while iterating, then the gates in [`AGENTS.md` §Verify](AGENTS.md#verify), which names the CI jobs that define them and the real-ROM check CI cannot run.
+
+Never weaken, skip, or delete a test to make a gate pass `(test-ratchet)`.
+
+## Coverage ledger
+
+The ledger records every upstream artifact, its disposition, and its Rust or asset destination. Update it in the same pull request as ported behaviour and only through the CLI:
 
 ```bash
-cargo build --release --workspace
-cargo test --workspace
-cargo clippy --all-targets --workspace -- -D warnings
-cargo fmt --check
-```
-
-## The coverage ledger
-
-The ledger at `ledger/pokeemerald.json` records every upstream artifact that
-needs a Rust home and where its behaviour lives now. If your PR re-implements code
-or extracts an asset, update the ledger **in the same PR**, and only via the CLI
-so the JSON stays diff-friendly:
-
-```bash
-python3 scripts/ledger.py gaps --prefix include/battle   # what's left
-python3 scripts/ledger.py inspect include/random.h        # one entry
+python3 scripts/ledger.py gaps --prefix include/battle
+python3 scripts/ledger.py inspect include/random.h
 python3 scripts/ledger.py mark include/random.h \
-    --target crates/engine/src/rng.rs --spec 06-engine \
-    --reason "Direct LCG port; same constants as upstream."
-python3 scripts/ledger.py verify                          # CI runs this too
+    --target crates/engine/src/rng.rs --spec S-5 \
+    --reason "Direct LCG rewrite with upstream constants and draw order."
+python3 scripts/ledger.py verify
 ```
 
-Don't hand-edit the JSON — it will desync and fail validation. Full workflow and
-the meaning of each status (`pending`, `rewritten`, `ported`, `stubbed`,
-`folded`, `dropped`) are in [`CLAUDE.md`](CLAUDE.md).
+Run `python3 scripts/ledger.py -h` and focused subcommand help for current statuses, arguments, and completion rules. Never hand-edit `ledger/pokeemerald.json`. A `--reason` states why the destination covers the artifact. Cite an issue only to name where a stubbed or partial entry's remaining work is tracked; the issue that did the work belongs in git history, not in the reason.
 
-## Opening a pull request
+## Pull requests
 
-The PR template (`.github/pull_request_template.md`) asks for these — fill them in
-honestly:
+Keep each pull request focused and complete its template honestly:
 
-- **Linked issue** — what roadmap issue this advances, and the acceptance ID(s)
-  it ladders to.
-- **Test evidence** — what you ran and what it showed (a placeholder CI pass is
-  acceptable while the workspace is still stubbed, but say so).
-- **Ledger impact** — `none`, `verify-only`, or the list of touched entries.
-- **Dependency impact** — `none`, or the explicit owner-approved dependency with
-  its justification `(minimal-deps)`.
-- **Release impact** — `none`, `patch`, `minor`, `major`, or `final-gate` (see the
-  version rules in [`RELEASE.md`](RELEASE.md)).
+- Link its issue and acceptance ID, or explain `none`.
+- Record test evidence and outcomes for the current head. After pushing a fix, update the evidence to match the new head.
+- State ledger impact as `none`, `verify-only`, or the touched entries.
+- State dependency impact as `none` or link the exact owner approval.
 
-Keep PRs focused. Don't mix unrelated work, and never fold feature changes into a
-release-promotion PR.
+Write each commit subject as `<subsystem>: <imperative description> (<acceptance ID or none>, #<issue>)`, for example `battle: refresh Deoxys's Speed Forme stats at each battle start (S-6, #2253)`. The subsystem is the crate or area the commit changes, such as `battle`, `ledger`, or `docs`. Work that advances no acceptance ID writes `none`, the word this file and the pull request template use, never a synonym such as `routine`. A commit that serves no issue omits `, #<issue>`, as in `docs: fix a broken link (none)`.
 
-## Review, and the automated maintainer
+Release impact is not a template field: the `VERSION` bump and CI's gates are its sole authority (see [`RELEASE.md`](RELEASE.md)).
 
-Alongside human review, an **automated maintainer process** works this repo on a
-schedule: it reviews and merges ready work, promotes release channels, and triages
-issues. **Your PR may be reviewed and merged by automation**, not only by a human.
+Every ordinary pull request into `dev` advances `VERSION` past the `VERSION` on current `dev`, not past the version your branch started from. After merging `dev` into your branch, redo the bump from the merged `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump, and check it with `python3 scripts/version_check.py --base origin/dev --require-bump` after fetching `dev`. Follow [`RELEASE.md` §Changelog](RELEASE.md#changelog) for required patch notes. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
 
-A couple of things follow from that:
-
-- Make it easy to say yes: small, well-described PRs with tests included get
-  through review faster — especially a first contribution.
-- A PR is **not merged in the same pass that opened or last changed it**; review
-  accumulates between passes, so expect asynchronous review rather than instant
-  merges, and don't be surprised if a later pass re-reviews an aged PR.
-- Everything the automation does is recorded on GitHub. If something genuinely
-  needs a human — a dependency, a design fork, a playtest — it raises
-  `needs-operator` rather than guessing.
+Repository automation may review and merge ready work. The `needs-operator` label marks a decision or review that automation cannot supply.
 
 ## Questions
 
-For questions, use **GitHub Discussions**; for bugs, open an **Issue**. See
-[`SUPPORT.md`](SUPPORT.md). Everyone interacting here is expected to follow the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+Use GitHub Discussions for questions and design decisions, Issues for bugs, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting. Everyone must follow the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).

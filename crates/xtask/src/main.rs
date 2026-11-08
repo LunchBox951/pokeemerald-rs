@@ -1,0 +1,1565 @@
+//! Development tasks invoked as `cargo xtask <command>`.
+//!
+//! A recognised command must not report success without running its check:
+//! an unimplemented suite or a feature-gated command built without its
+//! feature returns an error rather than exiting 0, so a `RELEASE.md` gate
+//! command can never be satisfied by a no-op `(gated-by-default)`.
+//!
+//! `mod e2e`, `mod record_snapshot`, and `mod scenario` pull in the
+//! workspace-local `pokeemerald-rs` crate to drive a real scene, so each
+//! sits behind a Cargo feature that keeps a default build free of it. `mod
+//! record_snapshot` is gated on the shared `scenes` feature rather than on
+//! the caller-facing `record-snapshot` feature, so its synthetic-pack unit
+//! tests still compile and run under CI's `cargo test -p xtask --features
+//! smoke` leg. `mod scenario` compiles under `scenario` or under `cfg(test)`
+//! with `scenes` for the same reason, but its dispatch arm still checks the
+//! caller-facing `scenario` feature on its own, so the subcommand stays
+//! unavailable in a `smoke`-only build even though the module compiles.
+//!
+//! A feature-gated subcommand needs the `cargo run` form so the feature
+//! flag lands before the `--`, e.g. `cargo run -p xtask --features smoke --
+//! e2e --suite smoke`.
+
+use std::error::Error;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::process::ExitCode;
+
+#[cfg(feature = "smoke")]
+mod e2e;
+mod extract;
+mod gen_rom_profile;
+mod profile_launch;
+#[cfg(feature = "scenes")]
+mod record_snapshot;
+mod rom_build;
+#[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
+mod scenario;
+mod staging_names;
+
+/// Usage text shown on stderr for any parse error.
+const USAGE: &str = "\
+usage: cargo xtask <command>
+
+commands:
+  extract            extract data/assets from the upstream reference
+  gen-rom-profile --rom <path> [--out <file>] [--map <file>]
+                     derive rom-import's ROM address table from a
+                     cartridge image (developer-only)
+  rom-build          build the pinned upstream checkout in scratch storage and
+                     check its compiled outputs (developer-only)
+  record-snapshot --scene <name>
+                     record a deterministic frame capture; <name> is
+                     title | main-menu-new-game | main-menu-option
+  scenario --name <name> [--rom <path>]
+                     run a scripted gameplay scenario; <name> is
+                     boot-to-main-menu | boot-to-first-fight
+  e2e --suite <s> [--release]
+                     run the end-to-end suite; <s> is smoke | full | soak";
+
+/// Errors from parsing or running an `xtask` invocation.
+///
+/// Each `*Unavailable` variant fires when its dispatch arm's required Cargo
+/// feature is absent, so a subcommand that never ran cannot report success
+/// `(gated-by-default)`.
+#[derive(Debug)]
+pub enum XtaskError {
+    /// No subcommand, or an unrecognised one. Carries the offending input
+    /// (empty string when no subcommand was given).
+    UnknownCommand(String),
+    /// `e2e` was given a `--suite` value that is not `smoke`, `full`, or `soak`.
+    InvalidSuite(String),
+    /// `e2e --suite` was present but no value followed it.
+    MissingSuiteValue,
+    /// `record-snapshot` was given a `--scene` value that is not one of
+    /// [`Scene`]'s known names.
+    InvalidScene(String),
+    /// `record-snapshot --scene` was present but no value followed it, or
+    /// `record-snapshot` was given no `--scene` at all.
+    MissingSceneValue,
+    /// `scenario` was given a `--name` value that is not one of
+    /// [`ScenarioName`]'s known names.
+    InvalidScenario(String),
+    /// `scenario --name` was present but no value followed it, or
+    /// `scenario` was given no `--name` at all.
+    MissingScenarioName,
+    /// A subcommand received an argument it does not accept. Carries the
+    /// offending token.
+    UnexpectedArg(String),
+    /// A recognised subcommand whose behaviour is not implemented yet. Carries
+    /// the command's name. Returned so stub subcommands fail *closed* (non-zero
+    /// exit) rather than silently reporting success — the `RELEASE.md` gate
+    /// commands must never be satisfiable by a no-op `(gated-by-default)`
+    /// `(test-ratchet)`.
+    NotImplemented(&'static str),
+    /// `gen-rom-profile` was given no `--rom`, or an option with no value.
+    /// Carries the option's name.
+    MissingOptionValue(&'static str),
+    /// `gen-rom-profile` ran but failed. Carries
+    /// [`gen_rom_profile::GenRomProfileError`]'s rendered message.
+    GenRomProfileFailed(String),
+    /// `extract` ran but failed. Carries [`extract::ExtractError`]'s
+    /// rendered message.
+    ExtractFailed(String),
+    /// `rom-build` ran but failed. Carries [`rom_build::RomBuildError`]'s
+    /// rendered message.
+    RomBuildFailed(String),
+    /// `e2e --suite smoke` ran but did not report a clean boot. Carries
+    /// `e2e::E2eError`'s rendered message.
+    SmokeFailed(String),
+    /// `e2e --suite smoke --release` could not run the release child that
+    /// Cargo's release profile requires. Never falls back to a debug run.
+    E2eReleaseFailed(String),
+    /// `e2e --suite smoke` was requested, but this binary lacks the `smoke`
+    /// feature, so `mod e2e` was not compiled in.
+    SmokeUnavailable,
+    /// `record-snapshot` ran but failed. Carries
+    /// `record_snapshot::RecordSnapshotError`'s rendered message.
+    RecordSnapshotFailed(String),
+    /// `record-snapshot` was requested, but this binary lacks the shared
+    /// `scenes` feature (enabled by `smoke`, `record-snapshot`, or
+    /// `scenario`), so `mod record_snapshot` was not compiled in.
+    RecordSnapshotUnavailable,
+    /// `scenario` ran but its real headless app failed to start, accept an
+    /// input frame, advance, or reach an expected milestone.
+    ScenarioFailed(String),
+    /// `scenario` was requested, but this binary lacks the caller-facing
+    /// `scenario` feature, even if another feature compiled the shared
+    /// scene dependencies.
+    ScenarioUnavailable,
+}
+
+impl fmt::Display for XtaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Arms below that `return` report a runtime or build-configuration
+        // failure rather than a malformed invocation, so they skip the
+        // USAGE tail every other arm falls through to.
+        match self {
+            Self::UnknownCommand(cmd) if cmd.is_empty() => {
+                writeln!(f, "error: no subcommand given")?;
+            }
+            Self::UnknownCommand(cmd) => {
+                writeln!(f, "error: unknown subcommand `{cmd}`")?;
+            }
+            Self::InvalidSuite(suite) => {
+                writeln!(f, "error: unknown e2e suite `{suite}`")?;
+            }
+            Self::MissingSuiteValue => {
+                writeln!(f, "error: `e2e --suite` requires a value")?;
+            }
+            Self::InvalidScene(scene) => {
+                writeln!(f, "error: unknown record-snapshot scene `{scene}`")?;
+            }
+            Self::MissingSceneValue => {
+                writeln!(f, "error: `record-snapshot --scene` requires a value")?;
+            }
+            Self::InvalidScenario(name) => {
+                writeln!(f, "error: unknown scenario `{name}`")?;
+            }
+            Self::MissingScenarioName => {
+                writeln!(f, "error: `scenario --name` requires a value")?;
+            }
+            Self::UnexpectedArg(arg) => {
+                writeln!(f, "error: unexpected argument `{arg}`")?;
+            }
+            Self::NotImplemented(what) => {
+                return write!(f, "error: `{what}` is not implemented yet");
+            }
+            Self::MissingOptionValue(option) => {
+                writeln!(f, "error: `{option}` requires a value")?;
+            }
+            Self::GenRomProfileFailed(reason) => {
+                return write!(f, "error: `gen-rom-profile` failed: {reason}");
+            }
+            Self::ExtractFailed(reason) => {
+                return write!(f, "error: `extract` failed: {reason}");
+            }
+            Self::RomBuildFailed(reason) => {
+                return write!(f, "error: `rom-build` failed: {reason}");
+            }
+            Self::SmokeFailed(reason) => {
+                return write!(f, "error: `e2e --suite smoke` failed: {reason}");
+            }
+            Self::E2eReleaseFailed(reason) => {
+                return write!(f, "error: `e2e --suite smoke --release` failed: {reason}");
+            }
+            Self::SmokeUnavailable => {
+                return write!(
+                    f,
+                    "error: `e2e --suite smoke` requires the `smoke` feature: rebuild with \
+                     `cargo run -p xtask --features smoke -- e2e --suite smoke`"
+                );
+            }
+            Self::RecordSnapshotFailed(reason) => {
+                return write!(f, "error: `record-snapshot` failed: {reason}");
+            }
+            Self::RecordSnapshotUnavailable => {
+                return write!(
+                    f,
+                    "error: `record-snapshot` requires the `record-snapshot` feature: \
+                     rebuild with `cargo run -p xtask --features record-snapshot -- \
+                     record-snapshot --scene <name>`"
+                );
+            }
+            Self::ScenarioFailed(reason) => {
+                return write!(f, "error: `scenario` failed: {reason}");
+            }
+            Self::ScenarioUnavailable => {
+                return write!(
+                    f,
+                    "error: `scenario` requires the `scenario` feature: rebuild with \
+                     `cargo run -p xtask --features scenario -- scenario --name <name>`"
+                );
+            }
+        }
+        write!(f, "{USAGE}")
+    }
+}
+
+impl Error for XtaskError {}
+
+/// The `e2e` test suite selected via `--suite`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Suite {
+    /// Fast confidence check.
+    Smoke,
+    /// Full regression run.
+    Full,
+    /// Long-running stability run.
+    Soak,
+}
+
+impl Suite {
+    /// The suite `--suite` names: `smoke`, `full`, or `soak`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XtaskError::InvalidSuite`] if `value` is not a known suite.
+    pub fn parse(value: &str) -> Result<Self, XtaskError> {
+        match value {
+            "smoke" => Ok(Self::Smoke),
+            "full" => Ok(Self::Full),
+            "soak" => Ok(Self::Soak),
+            other => Err(XtaskError::InvalidSuite(other.to_owned())),
+        }
+    }
+}
+
+/// The scene `record-snapshot --scene <name>` captures.
+///
+/// Defined here at the crate root, not inside the feature-gated
+/// `record_snapshot` module, so [`parse`] can route (and reject unknown)
+/// scene names even in a build without the `scenes` feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scene {
+    /// The real title screen.
+    Title,
+    /// The no-save main menu with its default selection, `NEW GAME`.
+    MainMenuNewGame,
+    /// The no-save main menu with `OPTION` selected (one `DPAD_DOWN` press
+    /// from the default selection).
+    MainMenuOption,
+}
+
+impl Scene {
+    /// The scene whose [`Self::name`] is `value`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XtaskError::InvalidScene`] if `value` is not a known scene.
+    pub fn parse(value: &str) -> Result<Self, XtaskError> {
+        match value {
+            "title" => Ok(Self::Title),
+            "main-menu-new-game" => Ok(Self::MainMenuNewGame),
+            "main-menu-option" => Ok(Self::MainMenuOption),
+            other => Err(XtaskError::InvalidScene(other.to_owned())),
+        }
+    }
+
+    /// This scene's canonical name — the exact string [`Self::parse`]
+    /// accepts back, and the stem `record_snapshot::run_with_paths` uses
+    /// for its `<name>.rgb`/`<name>.meta` output files.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::MainMenuNewGame => "main-menu-new-game",
+            Self::MainMenuOption => "main-menu-option",
+        }
+    }
+}
+
+/// A named scripted gameplay scenario.
+///
+/// Defined here at the crate root, not inside the feature-gated `scenario`
+/// module, so [`parse`] can route (and reject unknown) scenario names even
+/// in a build without the `scenario` feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioName {
+    /// Boot the real title screen and press Start into the no-save main menu.
+    BootToMainMenu,
+    /// Boot to the title, start a new game, walk the protagonist's room and
+    /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and drive it until the
+    /// battle resolves with a retained terminal outcome.
+    BootToFirstFight,
+}
+
+impl ScenarioName {
+    /// The scenario whose [`Self::name`] is `value`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XtaskError::InvalidScenario`] for an unknown name.
+    pub fn parse(value: &str) -> Result<Self, XtaskError> {
+        match value {
+            "boot-to-main-menu" => Ok(Self::BootToMainMenu),
+            "boot-to-first-fight" => Ok(Self::BootToFirstFight),
+            other => Err(XtaskError::InvalidScenario(other.to_owned())),
+        }
+    }
+
+    /// The exact name accepted by [`Self::parse`].
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::BootToMainMenu => "boot-to-main-menu",
+            Self::BootToFirstFight => "boot-to-first-fight",
+        }
+    }
+}
+
+/// A parsed, validated `xtask` invocation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Command {
+    /// `extract`
+    Extract,
+    /// `rom-build`
+    RomBuild,
+    /// `gen-rom-profile --rom <path> [--out <file>] [--map <file>]`
+    GenRomProfile {
+        /// The parsed invocation.
+        options: gen_rom_profile::Options,
+    },
+    /// `record-snapshot --scene <name>`
+    RecordSnapshot {
+        /// The scene to capture.
+        scene: Scene,
+    },
+    /// `scenario --name <name> [--rom <path>]`
+    Scenario {
+        /// The scripted run to execute.
+        name: ScenarioName,
+        /// A supported ROM to import into the run's own pack, instead of
+        /// copying the checkout-extracted one.
+        rom: Option<std::path::PathBuf>,
+    },
+    /// `e2e --suite <suite> [--release]`
+    E2e {
+        /// The selected test suite.
+        suite: Suite,
+        /// Whether `--release` was requested.
+        release: bool,
+    },
+}
+
+/// Parse the post-program-name arguments into a [`Command`].
+///
+/// `args` is the slice *after* the program name (i.e. what `cargo xtask`
+/// forwards). The first element is the subcommand.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::UnknownCommand`] for an empty or unrecognised
+/// subcommand, or the [`XtaskError`] variant naming what is wrong with its
+/// arguments.
+pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
+    let Some(subcommand) = args.first() else {
+        return Err(XtaskError::UnknownCommand(String::new()));
+    };
+    let rest = &args[1..];
+
+    // An undecodable subcommand is simply not one of the five names below,
+    // so it takes the same path any other unknown name does. Named lossily
+    // because the message exists to show the developer what they typed.
+    let Some(subcommand) = subcommand.to_str() else {
+        return Err(XtaskError::UnknownCommand(
+            subcommand.to_string_lossy().into_owned(),
+        ));
+    };
+
+    match subcommand {
+        // The one subcommand whose arguments are *paths*. Its values stay
+        // `OsString` end to end (see `parse_gen_rom_profile`).
+        "gen-rom-profile" => {
+            parse_gen_rom_profile(rest).map(|options| Command::GenRomProfile { options })
+        }
+        // Every other subcommand's arguments are option names and fixed
+        // enum spellings -- `--scene title`, `--suite smoke`. None of them
+        // can be non-UTF-8 and still be valid, so they are decoded once
+        // here and the parsers below keep taking `&str`.
+        "extract" => no_args(&decode(rest)?).map(|()| Command::Extract),
+        "rom-build" => no_args(&decode(rest)?).map(|()| Command::RomBuild),
+        "record-snapshot" => {
+            parse_record_snapshot(&decode(rest)?).map(|scene| Command::RecordSnapshot { scene })
+        }
+        "scenario" => parse_scenario(rest).map(|(name, rom)| Command::Scenario { name, rom }),
+        "e2e" => parse_e2e(&decode(rest)?).map(|(suite, release)| Command::E2e { suite, release }),
+        other => Err(XtaskError::UnknownCommand(other.to_owned())),
+    }
+}
+
+/// Decode a subcommand's arguments, for the subcommands whose arguments are
+/// all option names and fixed enum spellings.
+///
+/// # Errors
+///
+/// [`XtaskError::UnexpectedArg`] naming the token, lossily, if any of them
+/// is not UTF-8. That is the same answer these parsers give any token they
+/// do not recognise, and an undecodable one is never a name they know.
+fn decode(rest: &[OsString]) -> Result<Vec<String>, XtaskError> {
+    rest.iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| XtaskError::UnexpectedArg(arg.to_string_lossy().into_owned()))
+        })
+        .collect()
+}
+
+/// Reject any trailing arguments for a subcommand that accepts none.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::UnexpectedArg`] carrying the first stray token.
+fn no_args(rest: &[String]) -> Result<(), XtaskError> {
+    match rest.first() {
+        None => Ok(()),
+        Some(arg) => Err(XtaskError::UnexpectedArg(arg.clone())),
+    }
+}
+
+/// Parse the arguments following the `record-snapshot` subcommand:
+/// `--scene <value>`, required.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::MissingSceneValue`] if `--scene` is missing or has
+/// no value, [`XtaskError::InvalidScene`] for an unknown scene name, and
+/// [`XtaskError::UnexpectedArg`] for any other token (including a
+/// duplicate `--scene`).
+fn parse_record_snapshot(rest: &[String]) -> Result<Scene, XtaskError> {
+    let mut scene: Option<Scene> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--scene" if scene.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingSceneValue)?;
+                scene = Some(Scene::parse(value)?);
+                i += 2;
+            }
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        }
+    }
+    scene.ok_or(XtaskError::MissingSceneValue)
+}
+
+/// Parse the arguments following `gen-rom-profile`: a required
+/// `--rom <path>`, an optional `--out <file>`, and an optional
+/// `--map <file>`.
+///
+/// Takes [`OsString`]s and keeps every *value* as one. This is the only
+/// subcommand whose arguments are paths rather than fixed names, so it is
+/// the only one that can be handed bytes no `String` holds — and a path the
+/// filesystem accepts must not be a path the generator refuses.
+///
+/// # Errors
+///
+/// [`XtaskError::MissingOptionValue`] if `--rom` is absent or any option
+/// has no value, [`XtaskError::UnexpectedArg`] for any other token,
+/// including one in option-name position that is not UTF-8 (it is not a
+/// name this subcommand knows).
+fn parse_gen_rom_profile(rest: &[OsString]) -> Result<gen_rom_profile::Options, XtaskError> {
+    let mut rom: Option<std::path::PathBuf> = None;
+    let mut out: Option<std::path::PathBuf> = None;
+    let mut map: Option<std::path::PathBuf> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        // Only the option *name* is matched as text; the value beside it is
+        // never decoded. A ROM, an output, or a map whose name is not UTF-8
+        // is a path `PathBuf` can hold and the filesystem accepts, so the
+        // generator must be able to take it -- the shipped `--import-rom`
+        // CLI is `OsStr`-clean for the same reason.
+        let named = |arg: &OsStr| -> Option<&'static str> {
+            match arg.to_str()? {
+                "--rom" => Some("--rom"),
+                "--out" => Some("--out"),
+                "--map" => Some("--map"),
+                _ => None,
+            }
+        };
+        let (slot, name) = match named(&rest[i]) {
+            Some("--rom") if rom.is_none() => (&mut rom, "gen-rom-profile --rom"),
+            Some("--out") if out.is_none() => (&mut out, "gen-rom-profile --out"),
+            Some("--map") if map.is_none() => (&mut map, "gen-rom-profile --map"),
+            _ => {
+                return Err(XtaskError::UnexpectedArg(
+                    rest[i].to_string_lossy().into_owned(),
+                ))
+            }
+        };
+        let value = rest
+            .get(i + 1)
+            .ok_or(XtaskError::MissingOptionValue(name))?;
+        *slot = Some(std::path::PathBuf::from(value));
+        i += 2;
+    }
+    Ok(gen_rom_profile::Options {
+        rom: rom.ok_or(XtaskError::MissingOptionValue("gen-rom-profile --rom"))?,
+        out,
+        map,
+    })
+}
+
+/// Parse `scenario --name <value> [--rom <path>]`, with exactly one required
+/// name and at most one ROM. Only the option and scenario names are decoded
+/// as UTF-8; the ROM stays an [`OsString`] path, since a valid filename need
+/// not be UTF-8.
+fn parse_scenario(
+    rest: &[OsString],
+) -> Result<(ScenarioName, Option<std::path::PathBuf>), XtaskError> {
+    let unexpected = |arg: &OsString| XtaskError::UnexpectedArg(arg.to_string_lossy().into_owned());
+    let mut name: Option<ScenarioName> = None;
+    let mut rom: Option<std::path::PathBuf> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].to_str() {
+            Some("--name") if name.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingScenarioName)?;
+                name = Some(ScenarioName::parse(
+                    value.to_str().ok_or_else(|| unexpected(value))?,
+                )?);
+                i += 2;
+            }
+            Some("--rom") if rom.is_none() => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| XtaskError::UnexpectedArg("--rom".to_owned()))?;
+                rom = Some(value.into());
+                i += 2;
+            }
+            _ => return Err(unexpected(&rest[i])),
+        }
+    }
+    Ok((name.ok_or(XtaskError::MissingScenarioName)?, rom))
+}
+
+/// Parse the arguments following the `e2e` subcommand:
+/// `--suite <value> [--release]`.
+///
+/// `--suite <value>` is required; `--release` is an optional flag. The two
+/// may appear in either order, but any other token — or a repeated/stray
+/// argument — is an [`XtaskError::UnexpectedArg`]. Returns the suite and
+/// whether release mode was requested.
+fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
+    let mut suite: Option<Suite> = None;
+    let mut release = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--suite" if suite.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingSuiteValue)?;
+                suite = Some(Suite::parse(value)?);
+                i += 2;
+            }
+            "--release" if !release => {
+                release = true;
+                i += 1;
+            }
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        }
+    }
+    let suite = suite.ok_or(XtaskError::MissingSuiteValue)?;
+    Ok((suite, release))
+}
+
+/// Dispatch a parsed command.
+///
+/// `e2e`'s `full` and `soak` suites are the only stubs: each returns
+/// [`XtaskError::NotImplemented`] rather than exiting 0, so a `RELEASE.md`
+/// promotion gate that runs this exact command can never pass on a no-op
+/// `(gated-by-default)` `(test-ratchet)`.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::NotImplemented`] for a still-stubbed suite,
+/// `*Failed` if the matching subcommand ran but did not succeed, or
+/// `*Unavailable` if it was requested without the Cargo feature its
+/// dispatch arm requires.
+fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
+    match cmd {
+        Command::Extract => {
+            let report =
+                extract::run().map_err(|err| XtaskError::ExtractFailed(err.to_string()))?;
+            println!(
+                "extracted {} asset(s), {} bytes, to {}",
+                report.entry_count,
+                report.pack_size,
+                report.output_path.display()
+            );
+            Ok(())
+        }
+        Command::RomBuild => {
+            let artifact =
+                rom_build::run().map_err(|err| XtaskError::RomBuildFailed(err.to_string()))?;
+            println!(
+                "built pinned revision {} ({}): {} byte image, linker map read",
+                artifact.provenance().pinned_revision,
+                artifact.provenance().build_command,
+                artifact.rom().len(),
+            );
+            Ok(())
+        }
+        Command::GenRomProfile { options } => {
+            let report = gen_rom_profile::run(options)
+                .map_err(|err| XtaskError::GenRomProfileFailed(err.to_string()))?;
+            for line in &report.lines {
+                let note = line.note.as_deref().unwrap_or("");
+                println!(
+                    "{:08X} {:>8} {:>7} {}{}{note}",
+                    line.addr,
+                    line.len,
+                    line.resolution.label(),
+                    line.id,
+                    if note.is_empty() { "" } else { "  -- " },
+                );
+            }
+            println!(
+                "{} root(s): {} pinned by a unique signature, {} needing a struct or \
+                 pointer resolution, {} picked arbitrarily among identical copies; \
+                 written to {}",
+                report.root_count(),
+                report.root_count() - report.resolved_count(),
+                report.resolved_count() - report.arbitrary_count(),
+                report.arbitrary_count(),
+                report.out_path.display()
+            );
+            if let Some(summary) = report.map_summary() {
+                println!("{summary}");
+            }
+            Ok(())
+        }
+        #[cfg(feature = "scenes")]
+        Command::RecordSnapshot { scene } => {
+            let report = record_snapshot::run(*scene)
+                .map_err(|err| XtaskError::RecordSnapshotFailed(err.to_string()))?;
+            println!(
+                "recorded `{}` snapshot ({} byte(s)) to {} (+ {}); rgb hash {}, pack hash {}, git sha {}",
+                scene.name(),
+                report.payload_len,
+                report.rgb_path.display(),
+                report.meta_path.display(),
+                report.rgb_hash,
+                report.pack_hash,
+                report.git_sha,
+            );
+            Ok(())
+        }
+        #[cfg(not(feature = "scenes"))]
+        Command::RecordSnapshot { .. } => Err(XtaskError::RecordSnapshotUnavailable),
+        #[cfg(feature = "scenario")]
+        Command::Scenario { name, rom } => {
+            let report = scenario::run_with(*name, rom.as_deref())
+                .map_err(|err| XtaskError::ScenarioFailed(err.to_string()))?;
+            println!(
+                "scenario `{}` passed: {} frame(s), milestones {:?}, first battle outcome {:?}",
+                name.name(),
+                report.frames_run,
+                report.milestones,
+                report.first_battle_outcome,
+            );
+            Ok(())
+        }
+        #[cfg(not(feature = "scenario"))]
+        Command::Scenario { .. } => Err(XtaskError::ScenarioUnavailable),
+        Command::E2e { suite, release } => dispatch_e2e(
+            *suite,
+            *release,
+            profile_launch::built_for_release(),
+            profile_launch::launch,
+            smoke_in_process,
+        ),
+    }
+}
+
+/// Runs the smoke check in this process.
+fn smoke_in_process() -> Result<(), XtaskError> {
+    #[cfg(feature = "smoke")]
+    {
+        e2e::run_smoke().map_err(|err| XtaskError::SmokeFailed(err.to_string()))
+    }
+    #[cfg(not(feature = "smoke"))]
+    {
+        Err(XtaskError::SmokeUnavailable)
+    }
+}
+
+/// Dispatches `e2e`, honouring `--release` (F-3, V-1; issue #1878).
+///
+/// A release request against a non-release binary re-executes under Cargo's
+/// release profile through `launch` and returns its result; it never also
+/// runs the debug smoke. `full` and `soak` stay fail-closed stubs.
+fn dispatch_e2e<L, S>(
+    suite: Suite,
+    release: bool,
+    already_release: bool,
+    mut launch: L,
+    smoke: S,
+) -> Result<(), XtaskError>
+where
+    L: FnMut(&mut std::process::Command) -> Result<(), XtaskError>,
+    S: FnOnce() -> Result<(), XtaskError>,
+{
+    if suite != Suite::Smoke {
+        return Err(XtaskError::NotImplemented("e2e"));
+    }
+    if !cfg!(feature = "smoke") {
+        return Err(XtaskError::SmokeUnavailable);
+    }
+    if release && !already_release {
+        let mut command = profile_launch::smoke_release_command(
+            &profile_launch::cargo_executable(),
+            &extract::repo_root(),
+            &profile_launch::enabled_features(),
+        );
+        return launch(&mut command);
+    }
+    smoke()
+}
+
+/// Parse and dispatch a single invocation.
+///
+/// Kept separate from `main` so tests can drive it without spawning a process.
+///
+/// # Errors
+///
+/// Propagates any [`XtaskError`] from [`parse`] or [`dispatch`].
+pub fn run(args: &[OsString]) -> Result<(), XtaskError> {
+    let cmd = parse(args)?;
+    dispatch(&cmd)
+}
+
+fn main() -> ExitCode {
+    // `args_os`, not `args`: the latter panics on an argument that is not
+    // UTF-8, and `gen-rom-profile` takes paths the filesystem may spell in
+    // bytes no `String` can hold.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        dispatch_e2e, extract, gen_rom_profile, parse, run, Command, OsString, ScenarioName, Scene,
+        Suite, XtaskError, USAGE,
+    };
+    use std::ffi::OsStr;
+
+    fn args(parts: &[&str]) -> Vec<OsString> {
+        parts.iter().map(|s| OsString::from(*s)).collect()
+    }
+
+    #[test]
+    fn parse_extract_routes() {
+        assert_eq!(parse(&args(&["extract"])).unwrap(), Command::Extract);
+    }
+
+    #[test]
+    fn parse_rom_build_routes_and_rejects_arguments() {
+        assert_eq!(parse(&args(&["rom-build"])).unwrap(), Command::RomBuild);
+        assert!(matches!(
+            parse(&args(&["rom-build", "--x"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+    }
+
+    #[test]
+    fn parse_gen_rom_profile_routes() {
+        let cmd = parse(&args(&["gen-rom-profile", "--rom", "/tmp/a.gba"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::GenRomProfile {
+                options: gen_rom_profile::Options {
+                    rom: std::path::PathBuf::from("/tmp/a.gba"),
+                    out: None,
+                    map: None,
+                }
+            }
+        );
+        let cmd = parse(&args(&[
+            "gen-rom-profile",
+            "--map",
+            "/tmp/p.map",
+            "--out",
+            "/tmp/out.rs",
+            "--rom",
+            "/tmp/a.gba",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::GenRomProfile {
+                options: gen_rom_profile::Options {
+                    rom: std::path::PathBuf::from("/tmp/a.gba"),
+                    out: Some(std::path::PathBuf::from("/tmp/out.rs")),
+                    map: Some(std::path::PathBuf::from("/tmp/p.map")),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn gen_rom_profile_needs_a_rom() {
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile"])),
+            Err(XtaskError::MissingOptionValue("gen-rom-profile --rom"))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--rom"])),
+            Err(XtaskError::MissingOptionValue("gen-rom-profile --rom"))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--rom", "a", "--rom", "b"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--wat", "a"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gen_rom_profile_paths_survive_bytes_no_string_can_hold() {
+        // A ROM, an output, and a map whose names are not UTF-8. The
+        // filesystem accepts them and `PathBuf` holds them, so the
+        // generator has to take them -- and the option *names* beside them
+        // are still matched as text.
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let rom = OsString::from_vec(b"/tmp/\xff\xfe-rom.gba".to_vec());
+        let out = OsString::from_vec(b"/tmp/\xff\xfe-out.rs".to_vec());
+        let map = OsString::from_vec(b"/tmp/\xff\xfe.map".to_vec());
+        assert!(rom.to_str().is_none(), "the fixture must be undecodable");
+
+        let cmd = parse(&[
+            OsString::from("gen-rom-profile"),
+            OsString::from("--rom"),
+            rom.clone(),
+            OsString::from("--out"),
+            out.clone(),
+            OsString::from("--map"),
+            map.clone(),
+        ])
+        .expect("undecodable paths are still valid paths");
+
+        let Command::GenRomProfile { options } = cmd else {
+            panic!("expected gen-rom-profile");
+        };
+        assert_eq!(options.rom.as_os_str().as_bytes(), rom.as_bytes());
+        assert_eq!(
+            options.out.expect("an --out").as_os_str().as_bytes(),
+            out.as_bytes()
+        );
+        assert_eq!(
+            options.map.expect("a --map").as_os_str().as_bytes(),
+            map.as_bytes()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_undecodable_option_name_is_an_unexpected_arg_not_a_panic() {
+        // The other half: a token in *option-name* position that is not
+        // UTF-8 is simply not a name this subcommand knows, and it must be
+        // reported rather than panicked over.
+        use std::os::unix::ffi::OsStringExt as _;
+
+        assert!(matches!(
+            parse(&[
+                OsString::from("gen-rom-profile"),
+                OsString::from_vec(b"--\xff".to_vec()),
+                OsString::from("a"),
+            ]),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+        assert!(matches!(
+            parse(&[OsString::from_vec(b"extr\xffact".to_vec())]),
+            Err(XtaskError::UnknownCommand(_))
+        ));
+        assert!(matches!(
+            parse(&[
+                OsString::from("e2e"),
+                OsString::from("--suite"),
+                OsString::from_vec(b"smo\xffke".to_vec()),
+            ]),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+    }
+
+    #[test]
+    fn parse_record_snapshot_routes() {
+        assert_eq!(
+            parse(&args(&["record-snapshot", "--scene", "title"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::Title
+            }
+        );
+        assert_eq!(
+            parse(&args(&["record-snapshot", "--scene", "main-menu-new-game"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::MainMenuNewGame
+            }
+        );
+        assert_eq!(
+            parse(&args(&["record-snapshot", "--scene", "main-menu-option"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::MainMenuOption
+            }
+        );
+    }
+
+    #[test]
+    fn parse_record_snapshot_requires_scene() {
+        let err = parse(&args(&["record-snapshot"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSceneValue));
+    }
+
+    #[test]
+    fn parse_record_snapshot_missing_scene_value() {
+        let err = parse(&args(&["record-snapshot", "--scene"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSceneValue));
+    }
+
+    #[test]
+    fn parse_record_snapshot_invalid_scene() {
+        let err = parse(&args(&["record-snapshot", "--scene", "bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::InvalidScene(s) if s == "bogus"));
+    }
+
+    #[test]
+    fn parse_record_snapshot_rejects_trailing_args() {
+        let err = parse(&args(&["record-snapshot", "--scene", "title", "extra"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "extra"));
+    }
+
+    #[test]
+    fn parse_record_snapshot_rejects_duplicate_scene() {
+        let err = parse(&args(&[
+            "record-snapshot",
+            "--scene",
+            "title",
+            "--scene",
+            "title",
+        ]))
+        .unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--scene"));
+    }
+
+    #[test]
+    fn scene_parse_roundtrip() {
+        assert_eq!(Scene::parse("title").unwrap(), Scene::Title);
+        assert_eq!(
+            Scene::parse("main-menu-new-game").unwrap(),
+            Scene::MainMenuNewGame
+        );
+        assert_eq!(
+            Scene::parse("main-menu-option").unwrap(),
+            Scene::MainMenuOption
+        );
+        assert!(matches!(
+            Scene::parse("nope").unwrap_err(),
+            XtaskError::InvalidScene(_)
+        ));
+    }
+
+    #[test]
+    fn scene_name_round_trips_through_parse() {
+        for scene in [Scene::Title, Scene::MainMenuNewGame, Scene::MainMenuOption] {
+            assert_eq!(Scene::parse(scene.name()).unwrap(), scene);
+        }
+    }
+
+    #[test]
+    fn parse_scenario_routes() {
+        assert_eq!(
+            parse(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap(),
+            Command::Scenario {
+                name: ScenarioName::BootToMainMenu,
+                rom: None,
+            }
+        );
+        assert_eq!(
+            parse(&args(&[
+                "scenario",
+                "--name",
+                "boot-to-main-menu",
+                "--rom",
+                "emerald.gba"
+            ]))
+            .unwrap(),
+            Command::Scenario {
+                name: ScenarioName::BootToMainMenu,
+                rom: Some("emerald.gba".into()),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scenario_rom_path_survives_bytes_no_string_can_hold() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let rom = OsString::from_vec(b"/tmp/emerald-\xff.gba".to_vec());
+        assert!(rom.to_str().is_none(), "the fixture must be undecodable");
+        let cmd = parse(&[
+            OsString::from("scenario"),
+            OsString::from("--name"),
+            OsString::from("boot-to-main-menu"),
+            OsString::from("--rom"),
+            rom.clone(),
+        ])
+        .expect("an undecodable ROM path is still a valid path");
+        assert_eq!(
+            cmd,
+            Command::Scenario {
+                name: ScenarioName::BootToMainMenu,
+                rom: Some(std::path::PathBuf::from(rom)),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_scenario_rejects_a_valueless_or_repeated_rom() {
+        for bad in [
+            &["scenario", "--name", "boot-to-main-menu", "--rom"][..],
+            &[
+                "scenario",
+                "--rom",
+                "a",
+                "--rom",
+                "b",
+                "--name",
+                "boot-to-main-menu",
+            ][..],
+        ] {
+            assert!(matches!(
+                parse(&args(bad)).unwrap_err(),
+                XtaskError::UnexpectedArg(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn parse_scenario_requires_name() {
+        assert!(matches!(
+            parse(&args(&["scenario"])).unwrap_err(),
+            XtaskError::MissingScenarioName
+        ));
+        assert!(matches!(
+            parse(&args(&["scenario", "--name"])).unwrap_err(),
+            XtaskError::MissingScenarioName
+        ));
+    }
+
+    #[test]
+    fn parse_scenario_rejects_unknown_and_duplicate_names() {
+        assert!(matches!(
+            parse(&args(&["scenario", "--name", "bogus"])).unwrap_err(),
+            XtaskError::InvalidScenario(name) if name == "bogus"
+        ));
+        assert!(matches!(
+            parse(&args(&[
+                "scenario",
+                "--name",
+                "boot-to-main-menu",
+                "--name",
+                "boot-to-main-menu"
+            ]))
+            .unwrap_err(),
+            XtaskError::UnexpectedArg(arg) if arg == "--name"
+        ));
+    }
+
+    #[test]
+    fn every_scenario_name_round_trips_and_appears_in_usage() {
+        const ALL: &[ScenarioName] =
+            &[ScenarioName::BootToMainMenu, ScenarioName::BootToFirstFight];
+        for name in ALL {
+            // Compile-forced completeness: adding a `ScenarioName` variant
+            // breaks this match, steering the author here to extend `ALL`
+            // -- which then drags along `parse` (whose string catch-all
+            // the compiler cannot check) and USAGE's hardcoded name list.
+            match name {
+                ScenarioName::BootToMainMenu | ScenarioName::BootToFirstFight => {}
+            }
+            assert_eq!(ScenarioName::parse(name.name()).unwrap(), *name);
+            assert!(
+                USAGE.contains(name.name()),
+                "USAGE must list `{}`",
+                name.name()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_e2e_smoke() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "smoke"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_full() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "full"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Full,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_soak() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "soak"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Soak,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_full_release() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "full", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Full,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_soak_release() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "soak", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Soak,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_release_before_suite() {
+        assert_eq!(
+            parse(&args(&["e2e", "--release", "--suite", "smoke"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_rejects_duplicate_release() {
+        let err = parse(&args(&["e2e", "--suite", "full", "--release", "--release"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--release"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_unknown_flag() {
+        let err = parse(&args(&["e2e", "--suite", "smoke", "--bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--bogus"));
+    }
+
+    #[test]
+    fn parse_e2e_invalid_suite() {
+        let err = parse(&args(&["e2e", "--suite", "bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::InvalidSuite(s) if s == "bogus"));
+    }
+
+    #[test]
+    fn parse_e2e_missing_suite_value() {
+        let err = parse(&args(&["e2e", "--suite"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSuiteValue));
+    }
+
+    #[test]
+    fn parse_e2e_requires_suite_flag() {
+        let err = parse(&args(&["e2e"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSuiteValue));
+    }
+
+    #[test]
+    fn parse_rejects_trailing_args() {
+        let err = parse(&args(&["extract", "foo"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "foo"));
+        let err = parse(&args(&["scenario", "x", "y"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "x"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_leading_token() {
+        let err = parse(&args(&["e2e", "junk", "--suite", "smoke"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "junk"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_trailing_token() {
+        let err = parse(&args(&["e2e", "--suite", "smoke", "extra"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "extra"));
+    }
+
+    #[test]
+    fn parse_unknown_command() {
+        let err = parse(&args(&["frobnicate"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnknownCommand(s) if s == "frobnicate"));
+    }
+
+    #[test]
+    fn parse_empty() {
+        let err = parse(&args(&[])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnknownCommand(s) if s.is_empty()));
+    }
+
+    #[test]
+    fn suite_parse_roundtrip() {
+        assert_eq!(Suite::parse("smoke").unwrap(), Suite::Smoke);
+        assert_eq!(Suite::parse("full").unwrap(), Suite::Full);
+        assert_eq!(Suite::parse("soak").unwrap(), Suite::Soak);
+        assert!(matches!(
+            Suite::parse("nope").unwrap_err(),
+            XtaskError::InvalidSuite(_)
+        ));
+    }
+
+    #[test]
+    fn release_smoke_dispatch_launches_cargo_before_running_smoke() {
+        let Command::E2e { suite, release } =
+            parse(&args(&["e2e", "--suite", "smoke", "--release"])).unwrap()
+        else {
+            panic!("expected e2e");
+        };
+        assert!(release);
+        let mut launched = false;
+        let result = dispatch_e2e(
+            suite,
+            release,
+            false,
+            |child| {
+                launched = true;
+                let argv: Vec<&OsStr> = child.get_args().collect();
+                let split = argv.iter().position(|a| *a == OsStr::new("--")).unwrap();
+                assert!(argv[..split].contains(&OsStr::new("--release")));
+                assert!(argv[..split].contains(&OsStr::new("--locked")));
+                assert_eq!(
+                    argv[split + 1..],
+                    ["e2e", "--suite", "smoke", "--release"].map(OsStr::new)
+                );
+                Err(XtaskError::E2eReleaseFailed("sentinel".into()))
+            },
+            || panic!("debug smoke must not run after release is requested"),
+        );
+        if cfg!(feature = "smoke") {
+            assert!(launched);
+            assert!(matches!(result, Err(XtaskError::E2eReleaseFailed(s)) if s == "sentinel"));
+        } else {
+            assert!(!launched);
+            assert!(matches!(result, Err(XtaskError::SmokeUnavailable)));
+        }
+    }
+
+    #[test]
+    fn smoke_dispatch_runs_in_process_when_no_launch_is_needed() {
+        for (release, already) in [(false, false), (false, true), (true, true)] {
+            let mut ran = false;
+            let result = dispatch_e2e(
+                Suite::Smoke,
+                release,
+                already,
+                |_| panic!("must not launch"),
+                || {
+                    ran = true;
+                    Ok(())
+                },
+            );
+            if cfg!(feature = "smoke") {
+                assert!(result.is_ok() && ran);
+            } else {
+                assert!(matches!(result, Err(XtaskError::SmokeUnavailable)) && !ran);
+            }
+        }
+    }
+
+    #[test]
+    fn full_and_soak_dispatch_never_launch_or_run() {
+        for suite in [Suite::Full, Suite::Soak] {
+            for (release, already) in [(false, false), (true, false), (true, true)] {
+                let result = dispatch_e2e(
+                    suite,
+                    release,
+                    already,
+                    |_| panic!("must not launch"),
+                    || panic!("must not run"),
+                );
+                assert!(matches!(result, Err(XtaskError::NotImplemented("e2e"))));
+            }
+        }
+    }
+
+    #[test]
+    fn run_stub_commands_fail_closed() {
+        // `extract`, `e2e --suite smoke`, `record-snapshot`, and `scenario`
+        // are absent here because each already has dedicated dispatch
+        // coverage: `extract` via `extract_dispatch_fails_closed_without_
+        // local_checkout`/`extract_dispatch_succeeds_with_local_checkout`
+        // below; `e2e --suite smoke` via
+        // `crate::e2e::tests::smoke_suite_boots_cleanly_headless` (with the
+        // feature) and `e2e_smoke_without_feature_fails_closed` below
+        // (without it); `record-snapshot` via
+        // `record_snapshot_without_feature_fails_closed` below (without the
+        // feature) and `crate::record_snapshot::tests` (with it); and
+        // `scenario` via the unavailable check below, the two
+        // `scenario_dispatch_*` wiring tests below, and `crate::scenario::tests`.
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "soak", "--release"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+    }
+
+    #[test]
+    fn extract_dispatch_fails_closed_without_local_checkout() {
+        // In an environment with no `pokeemerald/` checkout (e.g. CI, or a
+        // fresh clone before `./init.sh`), `extract` must fail loudly, not
+        // silently report success `(gated-by-default)`. Checked read-only
+        // (`extract::upstream_present`) rather than by calling
+        // `extract::run()` and inspecting the result, so this test never
+        // triggers a real (slow, disk-writing) extraction as a side effect
+        // in a dev environment that *does* have a checkout -- that path is
+        // covered instead by `extract_dispatch_succeeds_with_local_checkout`.
+        if extract::upstream_present() {
+            return;
+        }
+        let err = run(&args(&["extract"])).unwrap_err();
+        assert!(matches!(err, XtaskError::ExtractFailed(_)));
+        assert!(err.to_string().contains("init.sh"));
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn extract_dispatch_succeeds_with_local_checkout() {
+        // Rewrites the real pack -- exclude concurrent real-pack readers
+        // (see `extract::REAL_PACK_LOCK`).
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run(&args(&["extract"])).expect("extract should succeed against a real checkout");
+    }
+
+    // Without `--features smoke`, `mod e2e` is not compiled in at all, so
+    // this binary must fail *closed* rather than silently no-opping
+    // `(gated-by-default)` `(test-ratchet)`. `cargo test --workspace` (the
+    // required CI job) builds without the feature, so this is exactly the
+    // path that job exercises for `e2e --suite smoke` — it must NOT run the
+    // real smoke boot (that stays confined to the non-required `smoke` CI
+    // job building with `--features smoke`; see
+    // `crate::e2e::tests::smoke_suite_boots_cleanly_headless`).
+    #[test]
+    #[cfg(not(feature = "smoke"))]
+    fn e2e_smoke_without_feature_fails_closed() {
+        let err = run(&args(&["e2e", "--suite", "smoke"])).unwrap_err();
+        assert!(matches!(err, XtaskError::SmokeUnavailable));
+    }
+
+    // Identical reasoning to `e2e_smoke_without_feature_fails_closed`, for
+    // `record-snapshot`: in a build with neither `scenes`-implying feature,
+    // `mod record_snapshot` is not compiled in, so this must fail *closed*
+    // rather than silently no-opping `(gated-by-default)` `(test-ratchet)`.
+    // Gated on `scenes`, not `record-snapshot`, to match the module's own
+    // `#[cfg]` (crate docs' "asymmetric" note): under `--features smoke` the
+    // subcommand *is* compiled in and dispatch really runs it, so asserting
+    // `RecordSnapshotUnavailable` there would be asserting the opposite of
+    // the truth. The determinism/metadata behaviour with the module present
+    // lives in `crate::record_snapshot::tests` instead.
+    #[test]
+    #[cfg(not(feature = "scenes"))]
+    fn record_snapshot_without_feature_fails_closed() {
+        let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
+        assert!(matches!(err, XtaskError::RecordSnapshotUnavailable));
+    }
+
+    #[test]
+    #[cfg(not(feature = "scenario"))]
+    fn scenario_without_feature_fails_closed_after_validating_the_name() {
+        let err = run(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap_err();
+        assert!(matches!(err, XtaskError::ScenarioUnavailable));
+
+        let invalid = run(&args(&["scenario", "--name", "bogus"])).unwrap_err();
+        assert!(matches!(invalid, XtaskError::InvalidScenario(name) if name == "bogus"));
+    }
+
+    // The other half of `scenario`'s wiring proof, mirroring
+    // `record_snapshot_dispatch_fails_closed_without_a_pack` below: with
+    // the feature-enabled arm compiled in, dispatch must really reach
+    // `scenario::run_with` -- an arm that swallowed the error (or returned
+    // `Ok(())` without running anything) would let `cargo xtask scenario`
+    // report success with zero validation `(gated-by-default)`
+    // `(test-ratchet)`. Checked through the pack-missing failure path so a
+    // pack-free `--features scenario` test run exercises it, and skips
+    // read-only on a box whose real pack would make the run succeed --
+    // that full path is `scenario_dispatch_succeeds_against_the_real_pack`
+    // below.
+    #[test]
+    #[cfg(feature = "scenario")]
+    fn scenario_dispatch_fails_closed_without_a_pack() {
+        // Hold the real-pack lock across the existence probe *and* the
+        // run, exactly as the record-snapshot twin does: under
+        // `--include-ignored`, `extract_dispatch_succeeds_with_local_
+        // checkout` could otherwise create the pack between the two and
+        // turn the expected error into a success.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if assets::pack::AssetPack::default_path().exists() {
+            return;
+        }
+        let err = run(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap_err();
+        assert!(matches!(err, XtaskError::ScenarioFailed(_)));
+        assert!(err.to_string().contains("pack"));
+    }
+
+    // The success half of the same wiring proof, run by CI's ignored
+    // real-checkout xtask leg (`--features record-snapshot,scenario --
+    // --ignored`, pack present): the one automated invocation that drives
+    // the feature-enabled `Command::Scenario` arm end to end.
+    // `crate::scenario`'s own ignored real-pack test proves the runner but
+    // calls `scenario::run_with` directly, bypassing dispatch.
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn scenario_dispatch_succeeds_against_the_real_pack() {
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run(&args(&["scenario", "--name", "boot-to-main-menu"]))
+            .expect("boot-to-main-menu should pass through dispatch against the real pack");
+    }
+
+    // The other half of the wiring proof, mirroring
+    // `extract_dispatch_fails_closed_without_local_checkout`: with the
+    // module compiled in, dispatch must really reach
+    // `record_snapshot::run` -- a stub arm that reported success would
+    // satisfy a gate with zero validation `(gated-by-default)`
+    // `(test-ratchet)`. Checked through the pack-missing error path so
+    // this runs (and fails a no-op mutation) in pack-free CI, and skips
+    // read-only on a dev box whose real pack would make `run` succeed --
+    // that full path is `record_snapshot`'s own ignored real-pack test.
+    #[test]
+    #[cfg(feature = "scenes")]
+    fn record_snapshot_dispatch_fails_closed_without_a_pack() {
+        // Hold the real-pack lock across the existence probe *and* the
+        // run: under `--include-ignored`, `extract_dispatch_succeeds_with_
+        // local_checkout` could otherwise create the pack between the two
+        // and turn the expected error into a success.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if assets::pack::AssetPack::default_path().exists() {
+            return;
+        }
+        let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
+        assert!(matches!(err, XtaskError::RecordSnapshotFailed(_)));
+        assert!(err.to_string().contains("pack"));
+    }
+
+    #[test]
+    fn smoke_unavailable_display_names_the_feature_and_has_no_usage_tail() {
+        let rendered = XtaskError::SmokeUnavailable.to_string();
+        assert!(rendered.contains("--features smoke"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn not_implemented_display_has_no_usage_tail() {
+        let rendered = XtaskError::NotImplemented("e2e").to_string();
+        assert!(rendered.contains("not implemented"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn smoke_failed_display_carries_the_reason_and_has_no_usage_tail() {
+        let rendered = XtaskError::SmokeFailed("boom".to_owned()).to_string();
+        assert!(rendered.contains("e2e --suite smoke"));
+        assert!(rendered.contains("boom"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn record_snapshot_unavailable_display_names_the_feature_and_has_no_usage_tail() {
+        let rendered = XtaskError::RecordSnapshotUnavailable.to_string();
+        assert!(rendered.contains("--features record-snapshot"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn record_snapshot_failed_display_carries_the_reason_and_has_no_usage_tail() {
+        let rendered = XtaskError::RecordSnapshotFailed("boom".to_owned()).to_string();
+        assert!(rendered.contains("record-snapshot"));
+        assert!(rendered.contains("boom"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn scenario_unavailable_display_names_the_feature_and_has_no_usage_tail() {
+        let rendered = XtaskError::ScenarioUnavailable.to_string();
+        assert!(rendered.contains("--features scenario"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn scenario_failed_display_carries_the_reason_and_has_no_usage_tail() {
+        let rendered = XtaskError::ScenarioFailed("boom".to_owned()).to_string();
+        assert!(rendered.contains("scenario"));
+        assert!(rendered.contains("boom"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn run_err_for_unknown() {
+        assert!(run(&args(&["frobnicate"])).is_err());
+    }
+
+    #[test]
+    fn display_includes_usage() {
+        let rendered = XtaskError::UnknownCommand("x".to_owned()).to_string();
+        assert!(rendered.contains("usage: cargo xtask"));
+        assert!(rendered.contains("extract"));
+        assert!(rendered.contains("e2e --suite"));
+    }
+}

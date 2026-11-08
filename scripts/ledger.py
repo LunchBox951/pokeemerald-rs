@@ -1,85 +1,8 @@
 #!/usr/bin/env python3
-"""
-ledger.py — coverage ledger for the pokeemerald-rs rewrite.
+"""Track upstream coverage for the pokeemerald-rs rewrite.
 
-The ledger is a JSON file (one per upstream project) tracking which upstream
-files and asset directories have been accounted for, where their behavior
-now lives in the Rust workspace, and why items without a Rust counterpart
-were dropped or folded into another module.
-
-This is a passive bookkeeping tool. It does NOT dispatch agents. Specs in
-the v1 acceptance criteria and GitHub issues drive work; this ledger is consulted at planning time and
-updated post-merge to keep an audit trail of what got rewritten/ported and
-what intentionally didn't.
-
-The ledger file (`ledger/pokeemerald.json`) is committed to the repo
-and is the source of truth at every commit. Update only via this CLI so
-the canonical JSON format stays diff-friendly.
-
-USAGE
-─────
-
-    ledger.py status                   one-line summary per project
-    ledger.py categories               counts per category
-    ledger.py report                   detailed markdown report
-    ledger.py scan                     refresh entry list from disk
-    ledger.py gaps [--prefix X | --category K]
-                                       list pending entries
-    ledger.py inspect <path>           show one entry's row
-
-    ledger.py mark <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py port <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py stub <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py fold <path> --into   <target>    --spec <id> --reason "..."
-    ledger.py drop <path>                       --spec <id> --reason "..."
-    ledger.py unmark <path>                      reset to pending
-
-    ledger.py verify                   check rust_target paths still exist
-    ledger.py audit <spec-id>          suggest mappings from a merge commit
-    ledger.py migrate                  upgrade v1 ledger to current schema
-    ledger.py init                     create empty ledgers (one-time)
-
-STATUSES
-────────
-
-    pending     untouched (default; the only non-terminal status)
-    rewritten   code re-implemented in Rust at `rust_target`
-    ported      data/asset extracted/transcoded into `rust_target`
-    stubbed     typed shell exists at `rust_target`, behavior deferred
-    folded      behavior absorbed into `fold_target` (must be specific)
-    dropped     intentionally excluded from the Rust port
-
-The `rewritten` vs `ported` distinction is informational: rewritten = code
-re-implementation, ported = data/asset extracted via the asset pipeline.
-Both are terminal "done" states.
-
-ENTRY SHAPE
-───────────
-
-Every entry carries:
-    status       one of the statuses above
-    category     a category key (see `ledger.py categories`)
-    kind         "file" or "dir"
-
-Optional:
-    spec_owner   predicted owning spec (informational, only on pending)
-    spec         the spec under which work was done (required when terminal)
-    reason       why this status was chosen (required when terminal)
-    rust_target  where in the workspace it lives (rewritten/ported/stubbed)
-    fold_target  what module absorbed it (folded only)
-
-CONSTRAINTS (enforced)
-──────────────────────
-
-    - Every entry needs `status`, `category`, `kind`.
-    - Every non-pending entry needs `spec` and `reason`.
-    - `rewritten`, `ported`, `stubbed` require `rust_target`.
-    - `folded` requires `fold_target`. Vague targets (`various`,
-      `everywhere`, `scattered`, `tbd`) are rejected — fold honestly or
-      drop honestly, never both.
-    - `dropped` must not carry `rust_target` or `fold_target`.
-    - Pending entries may carry only `status`, `category`, `kind`,
-      `spec_owner` (no spec / reason / rust_target / fold_target).
+This passive bookkeeping CLI does not dispatch agents. Run
+"ledger.py COMMAND -h" for focused guidance.
 """
 
 import argparse
@@ -93,13 +16,73 @@ from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LEDGER_DIR = REPO_ROOT / "ledger"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TERMINAL_STATUSES = ("rewritten", "ported", "stubbed", "folded", "dropped")
 ALL_STATUSES = ("pending",) + TERMINAL_STATUSES
 INVALID_FOLD_TARGETS = {"various", "everywhere", "scattered", "tbd", "many", "multiple"}
 
 REF_COMMENT_RE = re.compile(r"//\s*(?:STUB:\s*from\s+|from\s+)pokeemerald/([\w./-]+)")
+
+
+# ─── acceptance-ID vocabulary ───────────────────────────────────────────────
+#
+# `docs/acceptance/v1.md` is the one owner of the exact v1 spec-ID vocabulary
+# (its own header names it authoritative). Every criterion-table row has the
+# shape `| <ID> | <criterion text> | <status marker> |`; parsing them here,
+# once, at import time, keeps this the single source of truth instead of a
+# second hand-maintained list that could drift out of sync (issue #424).
+# The row pattern is anchored on the doc's own "Status markers" legend (the
+# five glyphs below) so a stray `| C-99 |`-shaped line elsewhere in the doc
+# (prose, an example) can't be mistaken for a real criterion row.
+
+ACCEPTANCE_DOC = REPO_ROOT / "docs" / "acceptance" / "v1.md"
+_STATUS_MARKERS = "☐◐☑⏸⊘"
+_ACCEPTANCE_ROW_RE = re.compile(
+    r"^\|\s*([A-Z]-[1-9][0-9]*)\s*\|.+\|\s*[" + _STATUS_MARKERS + r"]\s*\|\s*$")
+
+
+def _parse_acceptance_ids(doc_path: Path) -> frozenset:
+    if not doc_path.exists():
+        sys.exit(f"cannot find acceptance doc: {doc_path}")
+    ids = set()
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        m = _ACCEPTANCE_ROW_RE.match(line)
+        if m:
+            ids.add(m.group(1))
+    if not ids:
+        sys.exit(f"no acceptance IDs parsed from {doc_path}")
+    return frozenset(ids)
+
+
+ACCEPTANCE_IDS = _parse_acceptance_ids(ACCEPTANCE_DOC)
+
+# Pending `spec_owner` hints used to predate real acceptance IDs and were
+# free-text area names; `migrate` rewrites any that still linger in a saved
+# ledger to the exact v1 ID that replaced them (issue #424).
+LEGACY_SPEC_OWNER_MAP = {
+    "02-rendering": "S-2",
+    "03-audio": "S-3",
+    "05-assets": "S-4",
+    "06-engine": "S-5",
+    "07-battle": "S-6",
+}
+
+
+def invalid_spec_id(value):
+    """`None` if `value` is a valid v1 acceptance ID, else an error string.
+
+    Rejects both a malformed/legacy value (`06-engine`) and a well-formed but
+    nonexistent one (`C-99`) the same way: exact membership in the ID set
+    `docs/acceptance/v1.md` actually declares. `value` may be any JSON type a
+    hand-mangled or merge-mangled ledger could carry (not just `str`) — the
+    `isinstance` guard keeps this a validation error, never an unhandled
+    `TypeError` from an unhashable list/dict landing in a set-membership test.
+    """
+    if isinstance(value, str) and value in ACCEPTANCE_IDS:
+        return None
+    return (f"invalid spec id {value!r}: must be one of the acceptance IDs "
+            f"declared in docs/acceptance/v1.md")
 
 
 # ─── category rules ────────────────────────────────────────────────────────
@@ -129,36 +112,41 @@ class Rule:
 POKEEMERALD_RULES = [
     # ─ CODE ────────────────────────────────────────────────────────────────
     Rule("code.source",    "files", ["src/**/*.c"]),
+    # Hand-written assembly sources under src/ that the *.c glob misses:
+    # the m4a mixer/sequencer core plus GBA boot glue.
+    Rule("code.source",    "files", ["src/m4a_1.s"], spec_owner="S-3"),
+    Rule("code.source",    "files", ["src/crt0.s", "src/libgcnmultiboot.s",
+                                     "src/rom_header.s"]),
     Rule("code.header",    "files", ["src/**/*.h", "include/**/*.h"],
          exclude=["include/constants/*.h"]),
     Rule("code.constants", "files", ["include/constants/*.h"]),
 
     # ─ DATA ────────────────────────────────────────────────────────────────
-    Rule("data.map",     "dirs",  ["data/maps/*"],    spec_owner="05-assets"),
+    Rule("data.map",     "dirs",  ["data/maps/*"],    spec_owner="S-4"),
     Rule("data.map",     "files", ["data/maps/map_groups.json"],
-         spec_owner="05-assets"),
-    Rule("data.layout",  "dirs",  ["data/layouts/*"], spec_owner="05-assets"),
+         spec_owner="S-4"),
+    Rule("data.layout",  "dirs",  ["data/layouts/*"], spec_owner="S-4"),
     Rule("data.layout",  "files", ["data/layouts/layouts.json"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("data.tileset", "dirs",  ["data/tilesets/primary/*",
                                    "data/tilesets/secondary/*"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("data.script",  "files", [
         "data/event_scripts.s",
         "data/field_effect_scripts.s",
         "data/scripts/*.inc",
         "data/specials.inc",
         "data/script_cmd_table.inc",
-    ], spec_owner="06-engine"),
+    ], spec_owner="S-5"),
     Rule("data.script",  "files", [
         "data/battle_scripts_1.s",
         "data/battle_scripts_2.s",
         "data/battle_anim_scripts.s",
         "data/battle_ai_scripts.s",
         "data/contest_ai_scripts.s",
-    ], spec_owner="07-battle"),
+    ], spec_owner="S-6"),
     Rule("data.script",  "files", ["data/sound_data.s"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     Rule("data.script",  "files", [
         "data/mystery_event_script_cmd_table.s",
         "data/mystery_gift.s",
@@ -168,21 +156,23 @@ POKEEMERALD_RULES = [
         "data/maps.s",
         "data/map_events.s",
     ]),  # no predicted owner: out-of-scope (link/mystery/multiboot) or build glue
-    Rule("data.text",    "files", ["data/text/*.inc"], spec_owner="06-engine"),
+    Rule("data.text",    "files", ["data/text/*.inc"], spec_owner="S-5"),
     Rule("data.misc",    "files", ["data/*.gba"]),  # multiboot blobs
 
     # ─ GRAPHICS ────────────────────────────────────────────────────────────
     Rule("graphics.pokemon",      "dirs", ["graphics/pokemon/*"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.trainer",      "files", ["graphics/trainers/front_pics/*.png",
-                                            "graphics/trainers/back_pics/*.png"],
-         spec_owner="05-assets"),
+                                            "graphics/trainers/back_pics/*.png",
+                                            "graphics/trainers/palettes/*.pal"],
+         spec_owner="S-4"),
     Rule("graphics.object_event", "dirs",  ["graphics/object_events/pics/*"],
-         spec_owner="05-assets"),
-    Rule("graphics.item",         "files", ["graphics/items/icons/*.png"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
+    Rule("graphics.item",         "files", ["graphics/items/icons/*.png",
+                                            "graphics/items/icon_palettes/*.pal"],
+         spec_owner="S-4"),
     Rule("graphics.font",         "dirs", ["graphics/fonts"],
-         spec_owner="02-rendering"),
+         spec_owner="S-2"),
     Rule("graphics.ui", "dirs", [
         "graphics/bag", "graphics/balls", "graphics/berries",
         "graphics/decorations", "graphics/diploma", "graphics/easy_chat",
@@ -195,12 +185,12 @@ POKEEMERALD_RULES = [
         "graphics/types", "graphics/union_room_chat", "graphics/wallclock",
         "graphics/wireless_status_screen", "graphics/wonder_card",
         "graphics/wonder_news",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.battle", "dirs", [
         "graphics/battle_anims", "graphics/battle_environment",
         "graphics/battle_frontier", "graphics/battle_interface",
         "graphics/battle_transitions", "graphics/trainer_hill",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.scene", "dirs", [
         "graphics/berry_blender", "graphics/berry_crush", "graphics/berry_fix",
         "graphics/birch_speech", "graphics/cable_car", "graphics/cave_transition",
@@ -211,25 +201,28 @@ POKEEMERALD_RULES = [
         "graphics/reset_rtc_screen", "graphics/rotating_gates",
         "graphics/roulette", "graphics/slot_machine", "graphics/title_screen",
         "graphics/weather",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.misc", "dirs",  ["graphics/misc", "graphics/unused"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.misc", "files", ["graphics/pokemon/unused_garbage.bin"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
 
     # ─ AUDIO ───────────────────────────────────────────────────────────────
     Rule("audio.song",       "files", ["sound/songs/midi/*.mid"],
-         spec_owner="03-audio"),
-    Rule("audio.voicegroup", "files", ["sound/voicegroups/*.inc"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
+    # `**` so the `drumsets/`/`keysplits/` subdirectories (issue #182's own
+    # voicegroup resolver reaches both) are tracked too, not just the ~180
+    # top-level files -- `*` alone does not cross `/`.
+    Rule("audio.voicegroup", "files", ["sound/voicegroups/**/*.inc"],
+         spec_owner="S-3"),
     Rule("audio.sample",     "files", ["sound/direct_sound_samples/*",
                                        "sound/programmable_wave_samples/*"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     Rule("audio.misc",       "files", ["sound/*.inc", "sound/*.s"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
 
     # ─ META ────────────────────────────────────────────────────────────────
-    Rule("meta.charmap", "files", ["charmap.txt"], spec_owner="02-rendering"),
+    Rule("meta.charmap", "files", ["charmap.txt"], spec_owner="S-2"),
     Rule("meta.build",   "files", [
         "Makefile", "*.mk", "*.ld", "sym_*.txt", "rom.sha1",
         "asmdiff.sh", "asmdiff.ps1", "build_tools.sh",
@@ -264,12 +257,13 @@ def _read_raw(project: str) -> dict:
 def load_ledger(project: str) -> dict:
     data = _read_raw(project)
     v = data.get("schema_version")
-    if v != SCHEMA_VERSION:
-        if v == 1:
-            sys.exit(f"{ledger_path(project)}: schema_version=1 (tool={SCHEMA_VERSION}).\n"
-                     f"Run: python3 scripts/ledger.py migrate")
-        sys.exit(f"{ledger_path(project)}: unknown schema_version={v!r}")
-    return data
+    # A v2 file is a valid v3 file with zero sub-artifacts, so it reads as-is.
+    if v in (2, SCHEMA_VERSION):
+        return data
+    if v == 1:
+        sys.exit(f"{ledger_path(project)}: schema_version=1 (tool={SCHEMA_VERSION}).\n"
+                 f"Run: python3 scripts/ledger.py migrate")
+    sys.exit(f"{ledger_path(project)}: unknown schema_version={v!r}")
 
 
 def save_ledger(project: str, data: dict) -> None:
@@ -283,8 +277,83 @@ def save_ledger(project: str, data: dict) -> None:
     ledger_path(project).write_text(text + "\n", encoding="utf-8")
 
 
+def split_artifact(path: str):
+    """Split `file#name` into (file_path, name); plain path → (path, None)."""
+    file_path, sep, name = path.partition("#")
+    return file_path, (name if sep else None)
+
+
+def effective_status(entry: dict) -> str:
+    """The status a file counts as for `pending`/coverage purposes.
+
+    A file is accounted for only when its own status is terminal AND every
+    sub-artifact is terminal; otherwise it counts as `pending`. With no
+    artifacts this is exactly the file's own status.
+    """
+    own = entry.get("status", "pending")
+    arts = entry.get("artifacts")
+    if not arts:
+        return own
+    if own == "pending":
+        return "pending"
+    for sub in arts.values():
+        if sub.get("status", "pending") not in TERMINAL_STATUSES:
+            return "pending"
+    return own
+
+
+def validate_artifact(name, sub):
+    if not isinstance(name, str) or not name:
+        return f"artifact name must be a non-empty string (got {name!r})"
+    if "#" in name:
+        return f"artifact name must not contain '#': {name!r}"
+    if not isinstance(sub, dict):
+        return f"artifact {name!r} must be an object"
+    if "artifacts" in sub:
+        return f"artifact {name!r} must not itself carry 'artifacts' (no recursion)"
+
+    if "status" not in sub:
+        return f"artifact {name!r}: missing 'status'"
+    status = sub["status"]
+    if status not in ALL_STATUSES:
+        return f"artifact {name!r}: invalid status {status!r} (valid: {ALL_STATUSES})"
+
+    if status == "pending":
+        extras = set(sub.keys()) - {"status"}
+        if extras:
+            return f"artifact {name!r}: pending artifacts must not carry: {sorted(extras)}"
+        return None
+
+    for key in ("spec", "reason"):
+        if not sub.get(key):
+            return f"artifact {name!r}: {status} requires '{key}'"
+    err = invalid_spec_id(sub["spec"])
+    if err:
+        return f"artifact {name!r}: {err}"
+    if status in ("rewritten", "ported", "stubbed"):
+        if not sub.get("rust_target"):
+            return f"artifact {name!r}: {status} requires 'rust_target'"
+        if sub.get("fold_target"):
+            return f"artifact {name!r}: {status} must not carry 'fold_target'"
+    if status == "folded":
+        ft = sub.get("fold_target", "")
+        if not ft:
+            return f"artifact {name!r}: folded requires 'fold_target'"
+        if ft.lower() in INVALID_FOLD_TARGETS:
+            return (f"artifact {name!r}: fold_target must be a single concrete "
+                    f"target (got: {ft!r}).")
+        if sub.get("rust_target"):
+            return f"artifact {name!r}: folded must not carry 'rust_target'"
+    if status == "dropped":
+        if sub.get("rust_target") or sub.get("fold_target"):
+            return f"artifact {name!r}: dropped must not carry 'rust_target' or 'fold_target'"
+    return None
+
+
 def validate_entry(entry: dict):
-    status = entry.get("status", "pending")
+    if "status" not in entry:
+        return "missing 'status'"
+    status = entry["status"]
     if status not in ALL_STATUSES:
         return f"invalid status: {status!r} (valid: {ALL_STATUSES})"
 
@@ -297,16 +366,34 @@ def validate_entry(entry: dict):
     if kind not in ("file", "dir"):
         return f"invalid kind: {kind!r} (must be 'file' or 'dir')"
 
+    arts = entry.get("artifacts")
+    if arts is not None:
+        if not isinstance(arts, dict):
+            return "'artifacts' must be an object"
+        for name, sub in arts.items():
+            err = validate_artifact(name, sub)
+            if err:
+                return err
+
     if status == "pending":
-        allowed = {"status", "category", "kind", "spec_owner"}
+        allowed = {"status", "category", "kind", "spec_owner", "artifacts"}
         extras = set(entry.keys()) - allowed
         if extras:
             return f"pending entries must not carry: {sorted(extras)}"
+        # `in`, not truthiness: a present-but-falsy owner ("", [], null) is
+        # still a malformed value, not "no owner set" (issue #424).
+        if "spec_owner" in entry:
+            err = invalid_spec_id(entry["spec_owner"])
+            if err:
+                return f"spec_owner: {err}"
         return None
 
     for key in ("spec", "reason"):
         if not entry.get(key):
             return f"{status} entries require '{key}'"
+    err = invalid_spec_id(entry["spec"])
+    if err:
+        return err
 
     if status in ("rewritten", "ported", "stubbed"):
         if not entry.get("rust_target"):
@@ -364,6 +451,15 @@ def scan_project(project: str):
 
 # ─── commands ───────────────────────────────────────────────────────────────
 
+def _pending_entry(cat, kind, owner, artifacts=None):
+    entry = {"status": "pending", "category": cat, "kind": kind}
+    if owner:
+        entry["spec_owner"] = owner
+    if artifacts:
+        entry["artifacts"] = artifacts
+    return entry
+
+
 def cmd_scan(args):
     project = args.project
     ledger = load_ledger(project)
@@ -377,21 +473,18 @@ def cmd_scan(args):
     refreshed = 0
     for p in added:
         cat, kind, owner = scanned[p]
-        entry = {"status": "pending", "category": cat, "kind": kind}
-        if owner:
-            entry["spec_owner"] = owner
-        existing[p] = entry
+        existing[p] = _pending_entry(cat, kind, owner)
     # Re-apply rule-derived fields to existing pending entries — these are
     # owned by the scan rules, not by users, so a rule edit should flow
     # through. Terminal entries keep whatever they were marked with.
+    # Manually-registered sub-artifacts are not discoverable from disk, so
+    # they are carried forward across a rescan.
     for p in existing_set & disk:
         entry = existing[p]
         if entry.get("status", "pending") != "pending":
             continue
         cat, kind, owner = scanned[p]
-        new = {"status": "pending", "category": cat, "kind": kind}
-        if owner:
-            new["spec_owner"] = owner
+        new = _pending_entry(cat, kind, owner, entry.get("artifacts"))
         if new != entry:
             existing[p] = new
             refreshed += 1
@@ -399,7 +492,8 @@ def cmd_scan(args):
     if args.prune:
         for p in removed:
             entry = existing.get(p, {})
-            if entry.get("status", "pending") == "pending":
+            # Never prune an entry carrying manual sub-artifact data.
+            if entry.get("status", "pending") == "pending" and not entry.get("artifacts"):
                 del existing[p]
                 pruned.append(p)
 
@@ -415,7 +509,8 @@ def cmd_scan(args):
 def cmd_status(args):
     for project in args.projects:
         ledger = load_ledger(project)
-        counts = Counter(e.get("status", "pending") for e in ledger["files"].values())
+        files = ledger["files"].values()
+        counts = Counter(effective_status(e) for e in files)
         total = sum(counts.values())
         terminal = sum(counts[s] for s in TERMINAL_STATUSES)
         pct = (100.0 * terminal / total) if total else 0.0
@@ -424,6 +519,17 @@ def cmd_status(args):
             parts.append(f"{s}={counts.get(s, 0)}")
         parts.append(f"coverage={pct:.1f}%")
         print("  ".join(parts))
+        # Second line only when sub-artifacts exist, so today's output is
+        # unchanged for a ledger that has none.
+        art_total = art_pending = 0
+        for e in ledger["files"].values():
+            for sub in e.get("artifacts", {}).values():
+                art_total += 1
+                if sub.get("status", "pending") not in TERMINAL_STATUSES:
+                    art_pending += 1
+        if art_total:
+            print(f"  artifacts: total={art_total} "
+                  f"accounted={art_total - art_pending} pending={art_pending}")
 
 
 def cmd_categories(args):
@@ -432,7 +538,10 @@ def cmd_categories(args):
     by_cat = {}
     for path, e in ledger["files"].items():
         cat = e.get("category", "?")
-        st = e.get("status", "pending")
+        # Use effective_status so a terminal parent with a still-pending
+        # sub-artifact counts as pending here, consistent with status/report/
+        # gaps and the L-1 accounting rule.
+        st = effective_status(e)
         by_cat.setdefault(cat, Counter())[st] += 1
     if not by_cat:
         print(f"{project}: ledger is empty (run `init` or `scan`)")
@@ -454,7 +563,7 @@ def cmd_report(args):
     project = args.project
     ledger = load_ledger(project)
     files = ledger["files"]
-    counts = Counter(e.get("status", "pending") for e in files.values())
+    counts = Counter(effective_status(e) for e in files.values())
     total = sum(counts.values())
     terminal = sum(counts[s] for s in TERMINAL_STATUSES)
     def pct(n): return (100.0 * n / total) if total else 0.0
@@ -475,7 +584,7 @@ def cmd_report(args):
     by_cat = {}
     for e in files.values():
         cat = e.get("category", "?")
-        st = e.get("status", "pending")
+        st = effective_status(e)
         by_cat.setdefault(cat, Counter())[st] += 1
     if by_cat:
         out.append("")
@@ -494,7 +603,7 @@ def cmd_report(args):
     # By spec (actual)
     spec_counts = Counter()
     for e in files.values():
-        if e.get("status") in TERMINAL_STATUSES and e.get("spec"):
+        if effective_status(e) in TERMINAL_STATUSES and e.get("spec"):
             spec_counts[e["spec"]] += 1
     if spec_counts:
         out.append("")
@@ -504,6 +613,23 @@ def cmd_report(args):
         out.append("|---|---:|")
         for spec, c in sorted(spec_counts.items()):
             out.append(f"| `{spec}` | {c} |")
+
+    # By sub-artifact status (only when any artifacts exist)
+    art_counts = Counter()
+    for e in files.values():
+        for sub in e.get("artifacts", {}).values():
+            art_counts[sub.get("status", "pending")] += 1
+    if art_counts:
+        art_total = sum(art_counts.values())
+        out.append("")
+        out.append("## By sub-artifact status")
+        out.append("")
+        out.append("| Status | Count |")
+        out.append("|---|---:|")
+        for s in ALL_STATUSES:
+            if art_counts.get(s):
+                out.append(f"| {s} | {art_counts[s]} |")
+        out.append(f"| **total** | **{art_total}** |")
 
     # By predicted owner (informational, pending only)
     owner_counts = Counter()
@@ -524,28 +650,54 @@ def cmd_report(args):
 
 def cmd_inspect(args):
     ledger = load_ledger(args.project)
-    if args.path not in ledger["files"]:
-        sys.exit(f"not in ledger: {args.project}:{args.path}\n"
+    file_path, name = split_artifact(args.path)
+    if file_path not in ledger["files"]:
+        sys.exit(f"not in ledger: {args.project}:{file_path}\n"
                  f"(maybe the entry was added since the last `scan`?)")
-    entry = ledger["files"][args.path]
-    print(f"# {args.project}:{args.path}\n")
+    entry = ledger["files"][file_path]
+    if name is not None:
+        arts = entry.get("artifacts", {})
+        if name not in arts:
+            sys.exit(f"no such artifact: {args.project}:{file_path}#{name}")
+        sub = arts[name]
+        print(f"# {args.project}:{file_path}#{name}\n")
+        for k in ("status", "rust_target", "fold_target", "spec", "reason"):
+            if k in sub:
+                print(f"{k+':':14s} {sub[k]}")
+        return
+    print(f"# {args.project}:{file_path}\n")
     for k in ("status", "category", "kind", "spec_owner",
               "rust_target", "fold_target", "spec", "reason"):
         if k in entry:
             print(f"{k+':':14s} {entry[k]}")
+    arts = entry.get("artifacts")
+    if arts:
+        print(f"\nartifacts ({len(arts)}):")
+        for aname in sorted(arts):
+            sub = arts[aname]
+            st = sub.get("status", "pending")
+            tgt = sub.get("rust_target") or sub.get("fold_target") or ""
+            print(f"  {aname}  [{st}]  {tgt}".rstrip())
 
 
 def cmd_gaps(args):
     ledger = load_ledger(args.project)
     pending = []
     for path, e in ledger["files"].items():
-        if e.get("status", "pending") != "pending":
-            continue
         if args.prefix and not path.startswith(args.prefix):
             continue
         if args.category and e.get("category") != args.category:
             continue
-        pending.append(path)
+        if e.get("status", "pending") == "pending":
+            # A pending parent already accounts for the whole file (a pending
+            # own-status keeps the file pending regardless of its artifacts —
+            # see the ACCOUNTED-FOR RULE). Listing per-artifact gaps here would
+            # double-count, so surface only the parent path.
+            pending.append(path)
+            continue
+        for name, sub in e.get("artifacts", {}).items():
+            if sub.get("status", "pending") == "pending":
+                pending.append(f"{path}#{name}")
     pending.sort()
     n = len(pending)
     limit = args.limit if args.limit > 0 else n
@@ -556,15 +708,74 @@ def cmd_gaps(args):
     print(f"{n} pending entr{'y' if n == 1 else 'ies'}", file=sys.stderr)
 
 
+def _covers(target, path):
+    """True when `target` is `path` itself or a file under directory `path`."""
+    root = path.rstrip("/")
+    return target == root or target.startswith(root + "/")
+
+
+def cmd_targets(args):
+    ledger = load_ledger(args.project)
+    rows = []
+    for path, e in ledger["files"].items():
+        tgt = e.get("rust_target")
+        if tgt and _covers(tgt, args.path):
+            rows.append((path, e["status"], tgt))
+        for name, sub in e.get("artifacts", {}).items():
+            tgt = sub.get("rust_target")
+            if tgt and _covers(tgt, args.path):
+                rows.append((f"{path}#{name}", sub["status"], tgt))
+    rows.sort()
+    for row_path, status, tgt in rows:
+        print(f"{row_path}  [{status}]  {tgt}")
+    n = len(rows)
+    print(f"{n} entr{'y' if n == 1 else 'ies'} with rust_target under "
+          f"{args.path}", file=sys.stderr)
+
+
+def _resolve_reason(stored, reason, append_reason):
+    """Return the reason to store: a full replacement, or `stored` extended."""
+    if append_reason is None:
+        return reason
+    if not stored:
+        sys.exit("--append-reason needs an existing reason; use --reason")
+    return f"{stored} {append_reason}"
+
+
 def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
-               spec=None, reason=None):
+               spec=None, reason=None, append_reason=None):
+    if spec is not None:
+        err = invalid_spec_id(spec)
+        if err:
+            sys.exit(err)
     ledger = load_ledger(project)
-    if path not in ledger["files"]:
-        sys.exit(f"unknown entry: {project}:{path}\n"
+    file_path, name = split_artifact(path)
+    if file_path not in ledger["files"]:
+        sys.exit(f"unknown entry: {project}:{file_path}\n"
                  f"Run `ledger.py scan` first, or check the path.")
-    cur = ledger["files"][path]
+    cur = ledger["files"][file_path]
+    stored = (cur.get("artifacts", {}).get(name, {}) if name is not None
+              else cur).get("reason")
+    reason = _resolve_reason(stored, reason, append_reason)
+
+    if name is not None:
+        # Set a sub-artifact, leaving the parent file's own status untouched.
+        sub = {"status": status}
+        if spec is not None:    sub["spec"] = spec
+        if reason is not None:  sub["reason"] = reason
+        if rust_target is not None: sub["rust_target"] = rust_target
+        if fold_target is not None: sub["fold_target"] = fold_target
+        arts = dict(cur.get("artifacts", {}))
+        arts[name] = sub
+        cur = dict(cur)
+        cur["artifacts"] = arts
+        ledger["files"][file_path] = cur
+        save_ledger(project, ledger)
+        print(f"{project}:{path} → {status}")
+        return
+
     # Preserve category & kind (immutable identity fields); drop spec_owner
-    # since it only applies to pending entries.
+    # since it only applies to pending entries. Sub-artifacts survive.
     new = {
         "status": status,
         "category": cur["category"],
@@ -574,49 +785,72 @@ def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
     if reason is not None:  new["reason"] = reason
     if rust_target is not None: new["rust_target"] = rust_target
     if fold_target is not None: new["fold_target"] = fold_target
-    ledger["files"][path] = new
+    if cur.get("artifacts"):
+        new["artifacts"] = cur["artifacts"]
+    ledger["files"][file_path] = new
     save_ledger(project, ledger)
     print(f"{project}:{path} → {status}")
 
 
 def cmd_mark(args):
     _set_entry(args.project, args.path, "rewritten",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_port(args):
     _set_entry(args.project, args.path, "ported",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_stub(args):
     _set_entry(args.project, args.path, "stubbed",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_fold(args):
     _set_entry(args.project, args.path, "folded",
-               fold_target=args.into, spec=args.spec, reason=args.reason)
+               fold_target=args.into, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_drop(args):
     _set_entry(args.project, args.path, "dropped",
-               spec=args.spec, reason=args.reason)
+               spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_unmark(args):
     ledger = load_ledger(args.project)
-    if args.path not in ledger["files"]:
-        sys.exit(f"unknown entry: {args.project}:{args.path}")
-    cur = ledger["files"][args.path]
+    file_path, name = split_artifact(args.path)
+    if file_path not in ledger["files"]:
+        sys.exit(f"unknown entry: {args.project}:{file_path}")
+    cur = ledger["files"][file_path]
+
+    if name is not None:
+        # Reset (or register) a sub-artifact to pending, keeping the parent.
+        arts = dict(cur.get("artifacts", {}))
+        arts[name] = {"status": "pending"}
+        cur = dict(cur)
+        cur["artifacts"] = arts
+        ledger["files"][file_path] = cur
+        save_ledger(args.project, ledger)
+        print(f"{args.project}:{args.path} → pending")
+        return
+
     entry = {"status": "pending", "category": cur["category"], "kind": cur["kind"]}
     # Re-attach spec_owner if the current rule predicts one.
     scanned = scan_project(args.project)
-    if args.path in scanned:
-        _, _, owner = scanned[args.path]
+    if file_path in scanned:
+        _, _, owner = scanned[file_path]
         if owner:
             entry["spec_owner"] = owner
-    ledger["files"][args.path] = entry
+    # Preserve any manually-registered sub-artifacts on the parent.
+    if cur.get("artifacts"):
+        entry["artifacts"] = cur["artifacts"]
+    ledger["files"][file_path] = entry
     save_ledger(args.project, ledger)
     print(f"{args.project}:{args.path} → pending")
 
@@ -624,13 +858,19 @@ def cmd_unmark(args):
 def cmd_verify(args):
     project = args.project
     ledger = load_ledger(project)
+    for path, entry in sorted(ledger["files"].items()):
+        err = validate_entry(entry)
+        if err:
+            sys.exit(f"ledger validation failed for {path}: {err}")
     stale = []
     for path, entry in sorted(ledger["files"].items()):
         target = entry.get("rust_target")
-        if not target:
-            continue
-        if not (REPO_ROOT / target).exists():
+        if target and not (REPO_ROOT / target).exists():
             stale.append((path, target))
+        for name, sub in sorted(entry.get("artifacts", {}).items()):
+            st = sub.get("rust_target")
+            if st and not (REPO_ROOT / st).exists():
+                stale.append((f"{path}#{name}", st))
     if not stale:
         print(f"{project}: all rust_target pointers resolve.")
         return
@@ -660,6 +900,9 @@ STEM_HINTS = {
 
 def cmd_audit(args):
     spec = args.spec_id
+    err = invalid_spec_id(spec)
+    if err:
+        sys.exit(err)
     base = args.base
     rev = args.rev
 
@@ -737,6 +980,25 @@ def cmd_audit(args):
         print("```")
 
 
+def _remap_legacy_spec_owners(data):
+    """Rewrite lingering legacy `spec_owner` hints in place; returns the count
+    changed. `LEGACY_SPEC_OWNER_MAP` is the exact and only remap (issue #424)
+    — an unrecognized owner is left alone so `verify`/`validate_entry` can
+    flag a genuine mistake instead of this silently masking one.
+    """
+    changed = 0
+    for entry in data.get("files", {}).values():
+        owner = entry.get("spec_owner")
+        # `owner` may be any JSON type in a hand-mangled ledger; only a
+        # string can be a dict key here, and only a string can be a legacy
+        # hint anyway (issue #424).
+        new_owner = LEGACY_SPEC_OWNER_MAP.get(owner) if isinstance(owner, str) else None
+        if new_owner:
+            entry["spec_owner"] = new_owner
+            changed += 1
+    return changed
+
+
 def cmd_migrate(args):
     del args
     for project in PROJECTS:
@@ -746,8 +1008,22 @@ def cmd_migrate(args):
             continue
         data = _read_raw(project)
         v = data.get("schema_version")
+        remapped = _remap_legacy_spec_owners(data)
         if v == SCHEMA_VERSION:
-            print(f"{p.relative_to(REPO_ROOT)}: already at v{SCHEMA_VERSION}")
+            if remapped:
+                save_ledger(project, data)
+                print(f"{p.relative_to(REPO_ROOT)}: remapped {remapped} legacy "
+                      f"spec_owner hint(s) to their current v1 ID")
+            else:
+                print(f"{p.relative_to(REPO_ROOT)}: already at v{SCHEMA_VERSION}")
+            continue
+        if v == 2:
+            # v2 → v3 is a pure version bump: the shapes are identical (a v2
+            # file has zero sub-artifacts), so no field back-fill is needed.
+            data["schema_version"] = SCHEMA_VERSION
+            save_ledger(project, data)
+            print(f"{p.relative_to(REPO_ROOT)}: migrated v2 → v{SCHEMA_VERSION} "
+                  f"(version bump only)")
             continue
         if v != 1:
             sys.exit(f"{p}: unsupported schema_version={v!r}; manual migration required")
@@ -822,33 +1098,105 @@ def _add_project(p, multi=False):
                        choices=list(PROJECTS))
 
 
-def main():
+def _add_reason(p):
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--reason",
+        help="Replace the stored reason in full. Use it when the update "
+             "changes what is or is not modelled, and carry forward the "
+             "upstream citations and modelling facts that are still true.")
+    group.add_argument(
+        "--append-reason", metavar="TEXT",
+        help="Keep the stored reason and append TEXT after it. It only adds "
+             "facts, so never use it when the stored reason would become "
+             "false. Fails when the entry has no reason yet.")
+
+
+def build_parser():
     ap = argparse.ArgumentParser(
         prog="ledger.py",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
-    p = sub.add_parser("scan", help="Refresh entry list from disk")
+    p = sub.add_parser(
+        "scan",
+        help="Refresh entry list from disk",
+        description=(
+            "Refresh entries from the read-only upstream tree while preserving "
+            "existing ledger decisions. --prune removes only missing pending "
+            "entries without sub-artifacts."
+        ),
+    )
     _add_project(p)
     p.add_argument("--prune", action="store_true",
                    help="Drop pending entries no longer on disk")
 
-    p = sub.add_parser("status", help="Per-project counts (one line each)")
+    p = sub.add_parser(
+        "status",
+        help="Per-project counts (one line each)",
+        description=(
+            "Count coverage by effective file status. A file is accounted for "
+            "only when its own status and every sub-artifact status are "
+            "terminal. A split file's own status stands for everything not "
+            "carved into named sub-artifacts; mark it terminal only when that "
+            "remainder is done."
+        ),
+    )
     _add_project(p, multi=True)
 
-    p = sub.add_parser("categories", help="Per-category counts")
+    p = sub.add_parser(
+        "categories",
+        help="Per-category counts",
+        description="Group effective file-status counts by ledger category.",
+    )
     _add_project(p)
 
-    p = sub.add_parser("report", help="Detailed markdown coverage report")
+    p = sub.add_parser(
+        "report",
+        help="Detailed markdown coverage report",
+        description=(
+            "Render Markdown coverage totals by status, category, spec, and "
+            "sub-artifact status."
+        ),
+    )
     _add_project(p)
 
-    p = sub.add_parser("inspect", help="Show one entry's ledger row")
+    p = sub.add_parser(
+        "inspect",
+        help="Show one entry's ledger row",
+        description=(
+            "Show one file entry or one named sub-artifact. Address a "
+            "sub-artifact as path#name."
+        ),
+    )
     _add_project(p)
-    p.add_argument("path")
+    p.add_argument("path", help="upstream path, or path#artifact for a "
+                   "sub-file table")
 
-    p = sub.add_parser("gaps", help="List pending entries")
+    p = sub.add_parser(
+        "targets",
+        help="List entries by rust_target",
+        description=(
+            "List every file entry and sub-artifact whose rust_target is PATH "
+            "or a file under directory PATH. Read-only. Use it before moving "
+            "or splitting Rust code to find the rows that point at it; "
+            "fold_target values are not searched."
+        ),
+    )
+    _add_project(p)
+    p.add_argument("path", help="Rust file or directory, repo-relative "
+                   "(e.g. crates/battle/src/battle.rs)")
+
+    p = sub.add_parser(
+        "gaps",
+        help="List pending entries",
+        description=(
+            "List work units: a pending parent appears once; otherwise each "
+            "pending sub-artifact appears as path#name."
+        ),
+    )
     _add_project(p)
     p.add_argument("--prefix", default="", help="Path-prefix filter")
     p.add_argument("--category", default="", help="Category-key filter",
@@ -856,54 +1204,140 @@ def main():
     p.add_argument("--limit", type=int, default=50,
                    help="Max rows to print (0 = unlimited)")
 
-    for name, status in (("mark", "rewritten"),
-                         ("port", "ported"),
-                         ("stub", "stubbed")):
-        p = sub.add_parser(name, help=f"Mark entry as {status}")
+    for name, status, meaning in (
+            ("mark", "rewritten", "its behavior is reimplemented as Rust code"),
+            ("port", "ported",
+             "its data is extracted or transcoded from upstream"),
+            ("stub", "stubbed",
+             "a typed Rust shell exists and some or all of its behavior "
+             "stays deferred. Use it for a sub-artifact that is only partly "
+             "modelled, and name in the reason what is modelled and what "
+             "is not. A stubbed entry is terminal: it counts as accounted "
+             "for")):
+        p = sub.add_parser(
+            name,
+            help=f"Mark entry as {status}",
+            description=(
+                f"Set a file or path#artifact to {status}: {meaning}. "
+                "Terminal entries require a concrete Rust target, spec ID, "
+                "and reason."
+            ),
+        )
         _add_project(p)
-        p.add_argument("path")
+        p.add_argument("path", help="upstream path, or path#artifact for a "
+                       "sub-file table")
         p.add_argument("--target", required=True,
                        help="Rust file or asset path (e.g. crates/engine/src/rng.rs "
                             "or crates/assets/data/maps/littleroot_town)")
-        p.add_argument("--spec", required=True, help="Spec id (e.g. 06-engine)")
-        p.add_argument("--reason", required=True)
+        p.add_argument("--spec", required=True,
+                       help="v1 acceptance ID from docs/acceptance/v1.md "
+                            "(e.g. S-5)")
+        _add_reason(p)
 
-    p = sub.add_parser("fold", help="Mark folded into another module")
+    p = sub.add_parser(
+        "fold",
+        help="Mark folded into another module",
+        description=(
+            "Set a file or path#artifact to folded. Folded entries require one "
+            "concrete target, a spec ID, and a reason."
+        ),
+    )
     _add_project(p)
-    p.add_argument("path")
+    p.add_argument("path", help="upstream path, or path#artifact for a "
+                   "sub-file table")
     p.add_argument("--into", required=True,
                    help="One concrete target (e.g. crates/engine::save). "
                         "Vague targets are rejected.")
-    p.add_argument("--spec", required=True)
-    p.add_argument("--reason", required=True)
+    p.add_argument("--spec", required=True,
+                   help="v1 acceptance ID from docs/acceptance/v1.md "
+                        "(e.g. S-5)")
+    _add_reason(p)
 
-    p = sub.add_parser("drop", help="Mark intentionally excluded")
+    p = sub.add_parser(
+        "drop",
+        help="Mark intentionally excluded",
+        description=(
+            "Set a file or path#artifact to dropped. Dropped entries require a "
+            "spec ID and an exclusion reason, and carry no target. The reason "
+            "must name one of the two grounds C-6 in docs/acceptance/v1.md "
+            "permits: multiplayer/link-only, or unreachable on an English "
+            "retail cartridge."
+        ),
+    )
     _add_project(p)
-    p.add_argument("path")
-    p.add_argument("--spec", required=True)
-    p.add_argument("--reason", required=True)
+    p.add_argument("path", help="upstream path, or path#artifact for a "
+                   "sub-file table")
+    p.add_argument("--spec", required=True,
+                   help="v1 acceptance ID from docs/acceptance/v1.md "
+                        "(e.g. S-5)")
+    _add_reason(p)
 
-    p = sub.add_parser("unmark", help="Reset entry to pending")
+    p = sub.add_parser(
+        "unmark",
+        help="Reset entry to pending (path#artifact is created if missing)",
+        description=(
+            "Reset a file or sub-artifact to pending. An unknown path#artifact "
+            "registers that artifact on its existing parent; it stays pending "
+            "until marked terminal."
+        ),
+    )
     _add_project(p)
-    p.add_argument("path")
+    p.add_argument("path", help="upstream path, or path#artifact for a "
+                   "sub-file table (a missing artifact is created as pending)")
 
-    p = sub.add_parser("verify", help="Check all rust_target paths exist")
+    p = sub.add_parser(
+        "verify",
+        help="Validate entry shape, then check rust_target paths exist",
+        description=(
+            "Validate every file and sub-artifact entry, then fail if any "
+            "rust_target path does not exist."
+        ),
+    )
     _add_project(p)
 
-    p = sub.add_parser("audit", help="Suggest mappings from a merge commit")
+    p = sub.add_parser(
+        "audit",
+        help="Suggest mappings from a merge commit",
+        description=(
+            "Inspect changed Rust files and print heuristic upstream mappings. "
+            "Suggestions do not modify the ledger."
+        ),
+    )
     _add_project(p)
-    p.add_argument("spec_id", help="Spec id (e.g. 06-engine)")
-    p.add_argument("--base", default="main", help="git base ref (default: main)")
+    p.add_argument("spec_id", help="v1 acceptance ID from "
+                   "docs/acceptance/v1.md (e.g. S-5)")
+    p.add_argument("--base", default="origin/dev",
+                   help="git base ref (default: origin/dev)")
     p.add_argument("--rev", default="HEAD", help="git target ref (default: HEAD)")
 
-    sub.add_parser("migrate", help="Upgrade a v1 ledger to the current schema")
-    sub.add_parser("init", help="Create empty ledgers and run first scan")
+    sub.add_parser(
+        "migrate",
+        help="Upgrade schema; remap legacy spec_owner hints",
+        description=(
+            "Upgrade every existing ledger to the current schema, and remap "
+            "any legacy pending spec_owner hint to its current v1 acceptance "
+            "ID (docs/acceptance/v1.md)."
+        ),
+    )
+    sub.add_parser(
+        "init",
+        help="Create empty ledgers and run first scan",
+        description=(
+            "Create any missing ledger files, preserve existing decisions, "
+            "then scan every upstream tree; a scan can add new entries and "
+            "refresh rule-derived fields on pending ones."
+        ),
+    )
 
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
     handlers = {
         "scan": cmd_scan, "status": cmd_status,
         "categories": cmd_categories, "report": cmd_report,
-        "inspect": cmd_inspect, "gaps": cmd_gaps,
+        "inspect": cmd_inspect, "targets": cmd_targets, "gaps": cmd_gaps,
         "mark": cmd_mark, "port": cmd_port, "stub": cmd_stub,
         "fold": cmd_fold, "drop": cmd_drop, "unmark": cmd_unmark,
         "verify": cmd_verify, "audit": cmd_audit,
