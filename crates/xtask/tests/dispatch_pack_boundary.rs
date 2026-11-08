@@ -144,8 +144,28 @@ impl SnapshotsRestore {
         }
     }
 
+    /// The `<dir>/title.rgb` path of `<rgb> (+ <meta>); rgb hash ...`.
+    ///
+    /// A checkout path may itself contain the ` (+ ` delimiter, so neither the
+    /// first nor the last occurrence is reliably the separator. The two
+    /// artifacts share one directory, so the separator is the occurrence
+    /// whose left side ends in `title.rgb`, whose right side ends in
+    /// `title.meta`, and whose directories (separators normalised) agree.
+    fn rgb_path_of(line: &str) -> Option<&str> {
+        const DELIMITER: &str = " (+ ";
+        let (body, _) = line.rsplit_once("); rgb hash ")?;
+        let norm = |path: &str| path.replace('\\', "/");
+        body.match_indices(DELIMITER).find_map(|(at, _)| {
+            let rgb = &body[..at];
+            let meta = &body[at + DELIMITER.len()..];
+            let rgb_dir = rgb.strip_suffix("title.rgb")?;
+            let meta_dir = meta.strip_suffix("title.meta")?;
+            (norm(rgb_dir) == norm(meta_dir)).then_some(rgb)
+        })
+    }
+
     /// Records the generation directory named by `record-snapshot`'s
-    /// success line (`... to <dir>/title.rgb (+ ...`), when it sits directly
+    /// success line (`... to <dir>/title.rgb (+ <dir>/title.meta); rgb hash ...`), when it sits directly
     /// under this guard's directory. The line carries a native
     /// `Path::display()` path, so `/` and `\` both separate components
     /// (Windows prints `\`); the comparison normalises both to `/`.
@@ -156,7 +176,7 @@ impl SnapshotsRestore {
         let Some((_, rest)) = rest.split_once(" to ") else {
             return;
         };
-        let Some((rgb_path, _)) = rest.split_once(" (+ ") else {
+        let Some(rgb_path) = Self::rgb_path_of(rest.lines().next().unwrap_or(rest)) else {
             return;
         };
         let rgb_path = rgb_path.replace('\\', "/");
@@ -238,34 +258,44 @@ impl SnapshotsRestore {
             }
         }
         after_grab();
-        let outcome = self.settle_grabbed_pointer(&aside, pid);
-        match std::fs::remove_file(&aside) {
-            Ok(()) => outcome,
-            Err(error) => {
-                let note = format!("cannot remove {}: {error}", aside.display());
-                match outcome {
-                    Ok(()) => Err(note),
-                    Err(first) => Err(format!("{first}; {note}")),
-                }
-            }
+        match self.settle_grabbed_pointer(&aside, pid) {
+            Ok(()) => std::fs::remove_file(&aside)
+                .map_err(|error| format!("cannot remove {}: {error}", aside.display())),
+            Err(Settled::AsideDone(report)) => match std::fs::remove_file(&aside) {
+                Ok(()) => Err(report),
+                Err(error) => Err(format!(
+                    "{report}; cannot remove {}: {error}",
+                    aside.display()
+                )),
+            },
+            // The aside may be the only copy of a pointer: never delete it.
+            Err(Settled::AsideNeeded(report)) => Err(format!(
+                "{report}; the grabbed pointer is preserved at {}",
+                aside.display()
+            )),
         }
     }
 
     /// Decides what the grabbed pointer at `aside` means and acts on it.
-    fn settle_grabbed_pointer(&self, aside: &Path, pid: u32) -> Result<(), String> {
-        let put_back = |reason: String| -> Result<(), String> {
+    ///
+    /// An `Err` says whether the aside is still needed: it is the only copy
+    /// of the pointer whenever the put-back itself failed.
+    fn settle_grabbed_pointer(&self, aside: &Path, pid: u32) -> Result<(), Settled> {
+        let put_back = |reason: String| -> Result<(), Settled> {
             match std::fs::hard_link(aside, &self.pointer) {
-                Ok(()) => Err(format!(
+                Ok(()) => Err(Settled::AsideDone(format!(
                     "{reason}; the pointer was put back and the generations kept"
-                )),
+                ))),
                 // A publisher already landed a newer pointer; it stands.
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
-                    "{reason}; a newer pointer is in place and the generations are kept"
-                )),
-                Err(error) => Err(format!(
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(Settled::AsideDone(format!(
+                        "{reason}; a newer pointer is in place and the generations are kept"
+                    )))
+                }
+                Err(error) => Err(Settled::AsideNeeded(format!(
                     "{reason}; the pointer could not be put back from {}: {error}",
                     aside.display()
-                )),
+                ))),
             }
         };
         let text = match std::fs::read(aside) {
@@ -282,10 +312,10 @@ impl SnapshotsRestore {
             return match std::fs::hard_link(aside, &self.pointer) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                Err(error) => Err(format!(
+                Err(error) => Err(Settled::AsideNeeded(format!(
                     "cannot put back another publisher's pointer from {}: {error}",
                     aside.display()
-                )),
+                ))),
             };
         }
         let Some(bytes) = &self.pointer_before else {
@@ -308,6 +338,15 @@ impl SnapshotsRestore {
             )),
         }
     }
+}
+
+/// Why [`SnapshotsRestore::settle_grabbed_pointer`] did not finish cleanly.
+enum Settled {
+    /// The grabbed file is back at the pointer, or a newer pointer replaced
+    /// it by design: the aside is redundant and may be removed.
+    AsideDone(String),
+    /// The aside may be the only copy of the pointer: it must stay.
+    AsideNeeded(String),
 }
 
 impl Drop for SnapshotsRestore {
@@ -566,5 +605,76 @@ fn snapshots_restore_removes_only_its_own_generation_and_restores_the_pointer() 
         std::fs::read(dir.join("title.generation")).expect("pointer"),
         b"title.generation-1-0\n"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A checkout path may legally contain the ` (+ ` that separates the two
+/// artifact paths on the success line; the generation must still be found.
+#[test]
+fn snapshots_restore_parses_a_path_containing_the_artifact_delimiter() {
+    let base = scratch_snapshots("delimiter-in-path");
+    let dir = base.join("odd (+ checkout").join("snapshots");
+    std::fs::create_dir_all(&dir).expect("snapshots dir");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let own = dir.join("title.generation-79-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-79-0\n").expect("pointer");
+    restore.own_generation_from_stdout(&success_line(&own));
+    assert_eq!(
+        restore.own_generations,
+        ["title.generation-79-0"],
+        "the delimiter inside the checkout path must not truncate the parsed path"
+    );
+    drop(restore);
+    assert!(!own.exists(), "the child's own generation is removed");
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-1-0\n"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// When the grabbed foreign pointer cannot be put back, the aside file is
+/// the only remaining copy: it must be kept and named in the report.
+#[test]
+#[cfg(unix)]
+fn snapshots_restore_keeps_the_aside_when_the_put_back_fails() {
+    let dir = scratch_snapshots("put-back-fails");
+    // The pointer is reached through a symlink so the test can break the
+    // put-back without relying on directory modes (root ignores those).
+    let real = dir.join("real");
+    std::fs::create_dir(&real).expect("real dir");
+    std::os::unix::fs::symlink(&real, dir.join("via")).expect("symlink");
+    let foreign = b"title.generation-4294967295-0\n";
+    std::fs::write(real.join("title.generation"), foreign).expect("foreign pointer");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    restore.pointer = dir.join("via").join("title.generation");
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    restore.own_generation_from_stdout(&success_line(&own));
+    assert_eq!(restore.own_generations, ["title.generation-77-0"]);
+
+    let errors = restore.finish_with(|| {
+        // Retarget the link after the grab: the put-back now fails ENOENT.
+        std::fs::remove_file(dir.join("via")).expect("unlink");
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("via")).expect("relink");
+    });
+    let aside = dir.join(format!(
+        "title.generation.guard-aside-{}",
+        std::process::id()
+    ));
+    assert!(!errors.is_empty(), "the failed put-back must be reported");
+    assert!(
+        errors.iter().any(|e| e.contains(&*aside.to_string_lossy())),
+        "the report must name the preserved aside {}: {errors:?}",
+        aside.display()
+    );
+    assert_eq!(
+        std::fs::read(&aside).expect("the aside must survive a failed put-back"),
+        foreign
+    );
+    assert!(own.exists(), "the generations are kept on failure");
     let _ = std::fs::remove_dir_all(&dir);
 }
