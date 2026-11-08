@@ -152,7 +152,7 @@ fn a_won_trainer_battle_merges_write_back_into_the_selected_slot() {
         if !phase.is_rival_battle_active() {
             break;
         }
-        phase.advance_active_battle_frame();
+        phase.advance_active_battle_frame(platform::ButtonState::default());
     }
     assert_eq!(
         phase.rival_battle_outcome,
