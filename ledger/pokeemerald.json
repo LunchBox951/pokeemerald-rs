@@ -31443,7 +31443,7 @@
           "status": "rewritten"
         },
         "IsMetatileDirectionallyImpassable": {
-          "reason": "Rewritten as engine::overworld::collision::directionally_impassable (issue #218), wired into PlayerState::step at GetCollisionAtCoords' own position -- ||'d into the same COLLISION_IMPASSABLE arm as the grid collision bits (:4663), ahead of IsElevationMismatchAt. Both of upstream's function tables are modelled: gOppositeDirectionBlockedMetatileFuncs against the tile the mover stands on (same-direction predicate) and gDirectionBlockedMetatileFuncs against the destination (opposite-direction predicate), :893-905. The standing tile's behavior is re-read from the grid at the mover's position rather than cached in an objectEvent field, which ObjectEventUpdateMetatileBehaviors (:7428-7432) keeps equal to that same read. NOT modelled: the destination half across a map connection -- ConnectedMapData exposes decoded cells but not the neighbouring map's tileset attribute tables, so a connection landing tile reads as MB_NORMAL (no bundled map places an MB_IMPASSABLE_* tile on a connection edge); and this port only calls it for the player, since NPCs do not move.",
+          "reason": "Rewritten as engine::overworld::collision::directionally_impassable (issue #218), wired into PlayerState::step and into object_event_collision::collision_in_direction (an object's own step check) at GetCollisionAtCoords' own position -- ||'d into the same COLLISION_IMPASSABLE arm as the grid collision bits (:4663), ahead of IsElevationMismatchAt. Both of upstream's function tables are modelled: gOppositeDirectionBlockedMetatileFuncs against the tile the mover stands on (same-direction predicate) and gDirectionBlockedMetatileFuncs against the destination (opposite-direction predicate), :893-905. The standing tile's behavior is re-read from the grid at the mover's position rather than cached in an objectEvent field, which ObjectEventUpdateMetatileBehaviors (:7428-7432) keeps equal to that same read. NOT modelled: the destination half across a map connection -- ConnectedMapData exposes decoded cells but not the neighbouring map's tileset attribute tables, so a connection landing tile reads as MB_NORMAL (no bundled map places an MB_IMPASSABLE_* tile on a connection edge); and no movement type calls collision_in_direction yet, so only the player's step and trainer sight's intermediate-tile check (engine::overworld::trainer_sight, GetCollisionFlagsAtCoords' directional arm) reach it in play.",
           "rust_target": "crates/engine/src/overworld/collision.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -32120,7 +32120,7 @@
           "status": "rewritten"
         },
         "MapGridGetCollisionAt": {
-          "reason": "Grid collision-bit lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::collision), consumed by PlayerState::step's collision check",
+          "reason": "Grid collision-bit lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::collision), consumed by PlayerState::step's collision check and by object_event_collision::collision_in_direction for an object's own step (no movement type calls it yet)",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
           "status": "rewritten"
