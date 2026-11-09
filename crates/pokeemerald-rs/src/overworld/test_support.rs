@@ -713,11 +713,12 @@ pub(crate) fn synthetic_scene_with_tall_grass_sprites_and_events(
     let mut entries = special_tile_entries_at_elevations(width, height, specials);
     entries.extend(tall_grass_entries());
     for path in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(path);
         entries.push(Entry {
             id: format!("sprite/{path}"),
             kind_tag: IMAGE_KIND_TAG,
-            meta: image_meta(144, 32, 8),
-            payload: vec![3u8; 144 * 32],
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
         });
     }
     synthetic_scene_result_with_connections_and_events(
