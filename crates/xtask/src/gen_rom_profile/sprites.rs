@@ -428,7 +428,11 @@ mod tests {
     fn a_palette_named_by_the_table_after_sixteen_lower_copies_is_still_found() {
         // Sixteen unreferenced copies fill the ordinary search cap below the
         // copy the table names.
-        let records = [record(0x0800_2000, 0x1100), record(0x0803_0000, 0x1101)];
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0803_0000, 0x1101),
+            terminator(),
+        ];
         let mut copies: Vec<usize> = (0..16).map(|copy| 0x5000 + copy * 0x40).collect();
         copies.push(0x3_0000);
         let (rom, entries) = fixture(&records, &copies);
