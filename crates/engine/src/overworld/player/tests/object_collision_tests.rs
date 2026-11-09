@@ -315,22 +315,23 @@ fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
     assert_eq!(player.facing(), Direction::North);
 }
 
-fn moved_east_runtime() -> MapRuntime<'static> {
-    // Authored at (2, 3); walked east to the live tile (3, 3).
+/// Authored at (2, 3), stepping east to the live tile (3, 3); `settled` ends the step, as its
+/// sixteenth frame does, so the tile it left stops being held.
+fn moved_east_runtime(settled: bool) -> MapRuntime<'static> {
     let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
     let mut collection = ObjectEventCollection::from_templates(objects);
-    collection
-        .get_mut(1)
-        .unwrap()
-        .state_mut()
-        .walk(Direction::East);
+    let state = collection.get_mut(1).unwrap().state_mut();
+    state.walk(Direction::East);
+    if settled {
+        state.settle_previous_position();
+    }
     let collection: &'static ObjectEventCollection = Box::leak(Box::new(collection));
     runtime_with_objects(objects).with_object_events(collection)
 }
 
 #[test]
 fn a_moved_object_event_no_longer_blocks_its_authored_tile() {
-    let runtime = moved_east_runtime();
+    let runtime = moved_east_runtime(true);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
     assert_eq!(
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
@@ -343,7 +344,7 @@ fn a_moved_object_event_no_longer_blocks_its_authored_tile() {
 
 #[test]
 fn a_moved_object_event_blocks_its_live_tile() {
-    let runtime = moved_east_runtime();
+    let runtime = moved_east_runtime(true);
     let mut player = PlayerState::new((3, 2), 3, Direction::South);
     assert_eq!(
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
@@ -354,4 +355,21 @@ fn a_moved_object_event_blocks_its_live_tile() {
     );
     assert_eq!(player.position(), (3, 2));
     assert!(!player.in_transit());
+}
+
+#[test]
+fn an_object_event_mid_step_blocks_both_the_tile_it_left_and_the_tile_it_entered() {
+    let runtime = moved_east_runtime(false);
+    for tile in [(2, 2), (3, 2)] {
+        let mut player = PlayerState::new(tile, 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ObjectEvent,
+            },
+            "stepping south from {tile:?}"
+        );
+        assert!(!player.in_transit());
+    }
 }

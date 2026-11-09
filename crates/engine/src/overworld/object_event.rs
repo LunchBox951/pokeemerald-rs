@@ -19,7 +19,14 @@ use crate::event_data::EventData;
 
 #[path = "live_object_events.rs"]
 mod live_object_events;
-pub use live_object_events::{FrameContext, LiveObjectEvent, ObjectEventCollection};
+pub use live_object_events::{
+    collision_in_direction, FrameContext, LiveObjectEvent, MovementRange, NpcCollision,
+    ObjectEventCollection, Occupant,
+};
+
+#[path = "object_event_motion.rs"]
+mod motion;
+pub use motion::{StepAction, StepKind, NORMAL_STEP_FRAMES};
 
 /// Returns whether an object's hide flag permits it to spawn.
 ///
@@ -80,6 +87,24 @@ pub fn visible_object_event_at<'a>(
 ) -> Option<&'a ObjectEvent> {
     runtime
         .object_events_at(x, y, elevation)
+        .find(|event| object_event_is_visible(event, event_data))
+}
+
+/// Returns the first visible object that blocks a step onto a tile and elevation, in declaration
+/// order: one standing on the tile, or one still leaving it (`DoesObjectCollideWithObjectAt`,
+/// `event_object_movement.c:4724-4741`).
+///
+/// [`visible_object_event_at`] identifies the object *on* a tile instead, for interaction.
+#[must_use]
+pub fn blocking_object_event_at<'a>(
+    runtime: &MapRuntime<'a>,
+    x: i32,
+    y: i32,
+    elevation: u8,
+    event_data: &EventData,
+) -> Option<&'a ObjectEvent> {
+    runtime
+        .collision_objects_at(x, y, elevation)
         .find(|event| object_event_is_visible(event, event_data))
 }
 
@@ -249,6 +274,7 @@ pub struct ObjectEventState {
     movement_type: MovementType,
     template_position: TilePos,
     template_movement_type: MovementType,
+    step: Option<StepAction>,
 }
 
 impl ObjectEventState {
@@ -264,6 +290,7 @@ impl ObjectEventState {
             movement_type: event.movement_type,
             template_position: position,
             template_movement_type: event.movement_type,
+            step: None,
         }
     }
 
@@ -320,7 +347,8 @@ impl ObjectEventState {
         self.facing = direction;
     }
 
-    /// Commits a one-tile walk immediately without collision checks or elevation changes.
+    /// Commits a one-tile walk immediately without collision checks or elevation changes. The
+    /// tile it leaves stays held for collision until [`Self::settle_previous_position`].
     pub const fn walk(&mut self, direction: Direction) {
         self.facing = direction;
         self.previous_position = self.position;
@@ -330,10 +358,48 @@ impl ObjectEventState {
 
     /// Settles the previous tile onto the current one without changing facing, as the
     /// fixed-facing face action does when it re-faces the current direction
-    /// (`FaceDirection` and `ShiftStillObjectEventCoords`,
-    /// `event_object_movement.c:2162-2164,5048-5056`).
+    /// (`FaceDirection`, `event_object_movement.c:5048-5056`).
     pub const fn face_in_place(&mut self) {
+        self.settle_previous_position();
+    }
+
+    /// `ShiftStillObjectEventCoords` (`event_object_movement.c:2162-2164`): the tile the object
+    /// left stops being occupied.
+    pub const fn settle_previous_position(&mut self) {
         self.previous_position = self.position;
+    }
+
+    /// Starts a normal-speed walk: commits the destination as [`Self::walk`] does and runs the
+    /// action's first frame. [`Self::advance_step`] runs the rest.
+    pub const fn begin_normal_walk(&mut self, direction: Direction) {
+        self.walk(direction);
+        self.step = Some(StepAction::begin(StepKind::Walk, direction));
+    }
+
+    /// Starts a normal-speed walk in place, facing `direction` and staying on the tile.
+    pub const fn begin_normal_walk_in_place(&mut self, direction: Direction) {
+        self.face(direction);
+        self.step = Some(StepAction::begin(StepKind::WalkInPlace, direction));
+    }
+
+    /// Returns the running normal-speed action, if any.
+    #[must_use]
+    pub const fn step(&self) -> Option<StepAction> {
+        self.step
+    }
+
+    /// Runs one more frame of the running action; `true` once none is left to run, which for a
+    /// walk is the frame that also settles the previous tile.
+    pub const fn advance_step(&mut self) -> bool {
+        let Some(step) = &mut self.step else {
+            return true;
+        };
+        if !step.advance() {
+            return false;
+        }
+        self.step = None;
+        self.settle_previous_position();
+        true
     }
 
     /// Restores the position, movement type, and initial facing a respawn gives an object from
@@ -345,6 +411,7 @@ impl ObjectEventState {
         self.previous_position = self.template_position;
         self.movement_type = self.template_movement_type;
         self.facing = initial_facing_direction(self.template_movement_type);
+        self.step = None;
     }
 
     /// Changes the current movement type.

@@ -43,6 +43,7 @@ fn run(
     frames: usize,
 ) {
     let event_data = crate::event_data::EventData::new();
+    let terrain = crate::overworld::object_event_harness::Terrain::flat();
     for _ in 0..frames {
         collection.run_frame(
             &FrameContext {
@@ -50,6 +51,9 @@ fn run(
                 event_data: &event_data,
                 frozen: false,
                 player_dashing: dashing,
+                terrain: terrain.runtime(),
+                player_previous_position: player,
+                player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
             },
             rng,
         );

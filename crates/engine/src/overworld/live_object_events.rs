@@ -23,6 +23,10 @@ mod scheduler;
 pub use scheduler::FrameContext;
 use scheduler::Lifecycle;
 
+#[path = "object_event_collision.rs"]
+mod object_collision;
+pub use object_collision::{collision_in_direction, MovementRange, NpcCollision, Occupant};
+
 /// One authored object-event template paired with its live, mutable state.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveObjectEvent {
@@ -126,6 +130,26 @@ impl ObjectEventCollection {
         self.entries.iter().filter(move |entry| {
             let (ex, ey) = entry.state.position();
             ex == x && ey == y && elevations_compatible(entry.state.elevation(), elevation)
+        })
+    }
+
+    /// Iterates entries that hold `(x, y, elevation)` for collision, by their *live* current
+    /// or previous tile, in declaration order.
+    ///
+    /// A walker holds the tile it is leaving until its step settles, so this is wider than
+    /// [`Self::object_events_at`], which identifies the object standing on a tile by its current
+    /// tile alone. Elevation matches as there (`DoesObjectCollideWithObjectAt`,
+    /// `event_object_movement.c:4724-4741`).
+    pub fn collision_objects_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter().filter(move |entry| {
+            let state = &entry.state;
+            (state.position() == (x, y) || state.previous_position() == (x, y))
+                && elevations_compatible(state.elevation(), elevation)
         })
     }
 

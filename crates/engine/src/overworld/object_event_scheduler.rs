@@ -23,6 +23,7 @@
 use assets::MovementType;
 
 use crate::event_data::EventData;
+use crate::overworld::map_runtime::MapRuntime;
 use crate::overworld::object_event::{object_event_is_visible, tile_is_in_view};
 use crate::overworld::player::TilePos;
 use crate::rng::RandomSource;
@@ -79,6 +80,14 @@ pub struct FrameContext<'a> {
     /// waking early to the player running nearby (`ObjectEventIsTrainerAndCloseToPlayer`,
     /// `:2643`).
     pub player_dashing: bool,
+    /// The map's cells and metatile behaviours, for an object's step to be checked against
+    /// (`GetCollisionAtCoords`). Unbound: other objects come from the collection itself.
+    pub terrain: MapRuntime<'a>,
+    /// The tile the player is leaving, `gObjectEvents[0].previousCoords`; equal to
+    /// `player_position` while the player stands still.
+    pub player_previous_position: TilePos,
+    /// The player's collision elevation, `gObjectEvents[0].currentElevation`.
+    pub player_elevation: u8,
 }
 
 impl ObjectEventCollection {

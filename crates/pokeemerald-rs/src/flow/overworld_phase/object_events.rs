@@ -34,6 +34,9 @@ impl OverworldPhase {
             event_data: &self.save1.event_data,
             frozen,
             player_dashing: self.player.dashing(),
+            terrain: self.scene.runtime(),
+            player_previous_position: self.player.previous_position(),
+            player_elevation: self.player.elevation(),
         };
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
