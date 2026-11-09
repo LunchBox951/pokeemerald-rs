@@ -5,6 +5,7 @@ use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::{extract_to, repo_root, upstream_present};
 use super::{extract_map, extract_party_menu, extract_sheet, pack_ids, PARTY_MENU_DIRECTORY};
 use super::{MAPS, SHEETS};
+use crate::extract::owned_fixture::OwnedDir;
 use crate::extract::{read_file, ExtractError};
 use pack_format::{DirectoryEntry, EntryKind, PackWriter};
 
@@ -47,14 +48,10 @@ const MAP_LENGTHS: [(&str, usize); 8] = [
     ("cancel_button", 28),
 ];
 
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-party-menu-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(PARTY_MENU_DIRECTORY)).unwrap();
-    dir
+fn scratch_dir(name: &str) -> OwnedDir {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-party-menu-{name}")).unwrap();
+    std::fs::create_dir_all(owned.path().join(PARTY_MENU_DIRECTORY)).unwrap();
+    owned
 }
 
 fn source_dir(upstream: &Path) -> PathBuf {
@@ -210,15 +207,16 @@ fn the_inventory_is_the_fourteen_listed_ids_without_the_small_ball() {
 
 #[test]
 fn a_complete_checkout_yields_every_entry_with_its_shape_and_payload() {
-    let upstream = scratch_dir("valid");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("valid");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     // Unlisted neighbours must not change the pack and are never opened: the
     // small Poké Ball sheet, outside this manifest, is not even a PNG here.
-    write(&upstream, "pokeball_small.png", b"not a png");
-    write(&upstream, "bg.4bpp", b"built");
-    write(&upstream, "stray.bin", b"stray");
+    write(upstream, "pokeball_small.png", b"not a png");
+    write(upstream, "bg.4bpp", b"built");
+    write(upstream, "stray.bin", b"stray");
 
-    let pack = extracted(&upstream);
+    let pack = extracted(upstream);
     let entries = pack_format::parse_directory(&pack).unwrap();
     assert_eq!(entries.len(), 14);
     assert_eq!(
@@ -264,14 +262,14 @@ fn a_complete_checkout_yields_every_entry_with_its_shape_and_payload() {
             }
         }
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn the_background_is_narrowed_then_cut_to_its_first_62_tiles_in_tile_order() {
-    let upstream = scratch_dir("bg-cut");
-    write_valid_checkout(&upstream);
-    let pack = extracted(&upstream);
+    let owned = scratch_dir("bg-cut");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
+    let pack = extracted(upstream);
     let entries = pack_format::parse_directory(&pack).unwrap();
     let bg = entries
         .iter()
@@ -292,14 +290,14 @@ fn the_background_is_narrowed_then_cut_to_its_first_62_tiles_in_tile_order() {
     let recovered = pack_format::tiles_from_image(strip, 4, 8, 496, None).unwrap();
     assert_eq!(recovered.len(), 62 * 32);
     assert_eq!(recovered, built);
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn a_background_with_colour_in_a_dropped_tile_is_rejected_after_narrowing() {
-    let upstream = scratch_dir("bg-dropped");
+    let owned = scratch_dir("bg-dropped");
+    let upstream = owned.path();
     let sheet = &SHEETS[0];
-    let dir = source_dir(&upstream);
+    let dir = source_dir(upstream);
     let (_, width, height, depth, colors, _) = shape("bg");
     let path = dir.join("bg.png");
     for (index, accepted) in [(0x10, true), (0x11, false), (0x01, false), (0x3F, false)] {
@@ -325,32 +323,32 @@ fn a_background_with_colour_in_a_dropped_tile_is_rejected_after_narrowing() {
         mismatch_path(extract_sheet(&dir, sheet, &mut PackWriter::new()).unwrap_err()),
         path
     );
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn a_missing_source_fails_extraction_naming_that_file() {
     for file in source_files() {
-        let upstream = scratch_dir("missing-one");
-        write_valid_checkout(&upstream);
-        std::fs::remove_file(source_dir(&upstream).join(&file)).unwrap();
-        let err = extract_party_menu(&upstream, &mut PackWriter::new()).unwrap_err();
+        let owned = scratch_dir("missing-one");
+        let upstream = owned.path();
+        write_valid_checkout(upstream);
+        std::fs::remove_file(source_dir(upstream).join(&file)).unwrap();
+        let err = extract_party_menu(upstream, &mut PackWriter::new()).unwrap_err();
         assert!(
             matches!(&err, ExtractError::ReadFailed(path, _) if path.ends_with(&file)),
             "{file}: {err}"
         );
-        std::fs::remove_dir_all(upstream).unwrap();
     }
 }
 
 #[test]
 fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_queued() {
-    let upstream = scratch_dir("sheet-shape");
-    let dir = source_dir(&upstream);
+    let owned = scratch_dir("sheet-shape");
+    let upstream = owned.path();
+    let dir = source_dir(upstream);
     for (sheet, shape) in SHEETS.iter().zip(SHEET_SHAPES) {
         let (stem, w, h, depth, colors, _) = shape;
         let file = format!("{stem}.png");
-        let path = write(&upstream, &file, b"not a png");
+        let path = write(upstream, &file, b"not a png");
         let mut writer = PackWriter::new();
         let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
         assert!(
@@ -392,7 +390,7 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
             ),
         ];
         for (name, bytes) in cases {
-            write(&upstream, &file, bytes);
+            write(upstream, &file, bytes);
             let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{file} {name}");
         }
@@ -402,7 +400,7 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
             continue;
         }
         write(
-            &upstream,
+            upstream,
             &file,
             png(stem, &source_pixels(stem), w, h, depth, colors + 1),
         );
@@ -410,27 +408,26 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
         assert_eq!(mismatch_path(err), path, "{file} one colour more");
 
         assert_eq!(writer.len(), 0, "{file}");
-        write(&upstream, &file, sheet_png(stem));
+        write(upstream, &file, sheet_png(stem));
         extract_sheet(&dir, sheet, &mut writer).unwrap();
         assert_eq!(writer.len(), 2, "{file}");
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
 fn maps_of_the_wrong_length_are_rejected() {
-    let upstream = scratch_dir("map-length");
-    let dir = source_dir(&upstream);
+    let owned = scratch_dir("map-length");
+    let upstream = owned.path();
+    let dir = source_dir(upstream);
     let mut writer = PackWriter::new();
     for (stem, expected) in MAP_LENGTHS {
         for len in [0, expected - 1, expected + 1, expected * 2] {
-            let path = write(&upstream, &format!("{stem}.bin"), vec![0; len]);
+            let path = write(upstream, &format!("{stem}.bin"), vec![0; len]);
             let err = extract_map(&dir, stem, expected, &mut read_file, &mut writer).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{stem} {len} bytes");
         }
     }
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
@@ -465,10 +462,10 @@ fn a_map_entry_holds_the_validated_bytes() {
 
 #[test]
 fn extraction_is_deterministic() {
-    let upstream = scratch_dir("determinism");
-    write_valid_checkout(&upstream);
-    assert_eq!(extracted(&upstream), extracted(&upstream));
-    std::fs::remove_dir_all(upstream).unwrap();
+    let owned = scratch_dir("determinism");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
+    assert_eq!(extracted(upstream), extracted(upstream));
 }
 
 #[test]
@@ -562,4 +559,35 @@ fn the_real_checkout_yields_the_whole_family() {
         assert_eq!(payload(&pack, entry), source.as_slice(), "{stem}");
     }
     let _ = std::fs::remove_file(path);
+}
+
+/// A populated directory at the name `scratch_dir` used to build (prefix, test
+/// name, pid) must survive the helper claiming its own fixture.
+#[test]
+fn scratch_dir_spares_a_preexisting_directory() {
+    let planted = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-party-menu-preexisting-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&planted)
+        .unwrap_or_else(|error| panic!("{} is already taken: {error}", planted.display()));
+    let sentinel = planted.join("unrelated.txt");
+    std::fs::write(&sentinel, b"not the test's").unwrap();
+
+    let claimed = scratch_dir("preexisting");
+    let survived = std::fs::read(&sentinel).ok();
+    drop(claimed);
+    let after_drop = std::fs::read(&sentinel).ok();
+    let _ = std::fs::remove_dir_all(&planted);
+
+    assert_eq!(
+        survived.as_deref(),
+        Some(&b"not the test's"[..]),
+        "scratch_dir deleted a directory it did not create"
+    );
+    assert_eq!(
+        after_drop.as_deref(),
+        Some(&b"not the test's"[..]),
+        "dropping the fixture deleted a directory it did not create"
+    );
 }

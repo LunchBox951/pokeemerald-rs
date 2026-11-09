@@ -9,20 +9,15 @@ use assets::{AssetPack, BattlerDirection, PackError, TrainerPicId};
 use pack_format::PackWriter;
 
 use super::{extract_trainer_battlers, TRAINERS};
+use crate::extract::owned_fixture::OwnedDir;
 use crate::extract::png::tests::indexed_png_from_raw_with_plte;
 use crate::extract::trainer_pic::extract_trainer_pics;
 use crate::extract::{extract_to, png, repo_root, upstream_present, ExtractError};
 
 const FRAME_ROWS: u32 = 64;
 
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-trainer-battler-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch_dir(name: &str) -> OwnedDir {
+    OwnedDir::create(&format!("pokeemerald-rs-trainer-battler-{name}")).unwrap()
 }
 
 fn palette_text(colors: usize, first: u8) -> String {
@@ -120,9 +115,10 @@ fn the_manifest_names_two_trainers_with_six_unique_ids_and_their_files() {
 
 #[test]
 fn a_complete_checkout_extracts_four_direction_pairs_that_resolve() {
-    let dir = scratch_dir("complete");
-    write_checkout(&dir);
-    let (pack, _) = extracted(&dir);
+    let owned = scratch_dir("complete");
+    let dir = owned.path();
+    write_checkout(dir);
+    let (pack, _) = extracted(dir);
     for (index, trainer) in TRAINERS.iter().enumerate() {
         let id = trainer.pic.trainer_pic;
         let front = pack.trainer_battler(id, BattlerDirection::Front).unwrap();
@@ -158,16 +154,16 @@ fn a_complete_checkout_extracts_four_direction_pairs_that_resolve() {
         pack.trainer_battler(TrainerPicId::HIKER, BattlerDirection::Back),
         Err(PackError::UnsupportedTrainerBattler(TrainerPicId::HIKER))
     ));
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn the_battler_entries_repeat_the_portrait_art_under_their_own_ids() {
-    let dir = scratch_dir("with-portraits");
-    write_checkout(&dir);
+    let owned = scratch_dir("with-portraits");
+    let dir = owned.path();
+    write_checkout(dir);
     let mut writer = PackWriter::new();
-    extract_trainer_pics(&dir, &mut writer).unwrap();
-    extract_trainer_battlers(&dir, &mut writer).unwrap();
+    extract_trainer_pics(dir, &mut writer).unwrap();
+    extract_trainer_battlers(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), 10);
     let path = dir.join("t.pack");
     std::fs::write(&path, writer.finish().unwrap()).unwrap();
@@ -184,30 +180,29 @@ fn the_battler_entries_repeat_the_portrait_art_under_their_own_ids() {
             front.palette.colors().collect::<Vec<_>>()
         );
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn missing_sources_fail_instead_of_being_skipped() {
-    let dir = scratch_dir("missing");
+    let owned = scratch_dir("missing");
+    let dir = owned.path();
     let mut writer = PackWriter::new();
-    let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
-    assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+    let err = extract_trainer_battlers(dir, &mut writer).unwrap_err();
+    assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn a_missing_back_sheet_names_its_path() {
-    let dir = scratch_dir("missing-back");
-    write_checkout(&dir);
+    let owned = scratch_dir("missing-back");
+    let dir = owned.path();
+    write_checkout(dir);
     let back = dir.join("graphics/trainers/back_pics/may.png");
     std::fs::remove_file(&back).unwrap();
     let mut writer = PackWriter::new();
-    let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
+    let err = extract_trainer_battlers(dir, &mut writer).unwrap_err();
     assert!(matches!(err, ExtractError::ReadFailed(path, _) if path == back));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -245,11 +240,12 @@ fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
         ),
     ];
     for (name, file, bytes) in cases {
-        let dir = scratch_dir(&name.replace(' ', "-"));
-        write_checkout(&dir);
-        write_at(&dir, file, bytes);
+        let owned = scratch_dir(&name.replace(' ', "-"));
+        let dir = owned.path();
+        write_checkout(dir);
+        write_at(dir, file, bytes);
         let mut writer = PackWriter::new();
-        let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
+        let err = extract_trainer_battlers(dir, &mut writer).unwrap_err();
         let expected = dir.join("graphics/trainers").join(file);
         assert!(
             matches!(&err, ExtractError::TrainerPicAssetMismatch { path, .. } if *path == expected),
@@ -257,21 +253,20 @@ fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
         );
         // Brendan validated first, yet nothing was queued.
         assert_eq!(writer.len(), 0, "{name}");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
 #[test]
 fn sources_that_are_not_png_are_rejected() {
-    let dir = scratch_dir("bad-png");
-    write_checkout(&dir);
-    write_at(&dir, "back_pics/brendan.png", b"not a png");
+    let owned = scratch_dir("bad-png");
+    let dir = owned.path();
+    write_checkout(dir);
+    write_at(dir, "back_pics/brendan.png", b"not a png");
     let path = dir.join("graphics/trainers/back_pics/brendan.png");
     let mut writer = PackWriter::new();
-    let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
+    let err = extract_trainer_battlers(dir, &mut writer).unwrap_err();
     assert!(matches!(err, ExtractError::Png(p, _) if p == path));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -302,4 +297,35 @@ fn trainer_battlers_are_extracted_and_resolve_through_the_typed_lookup() {
         }
     }
     let _ = std::fs::remove_file(path);
+}
+
+/// A populated directory at the name `scratch_dir` used to build (prefix, test
+/// name, pid) must survive the helper claiming its own fixture.
+#[test]
+fn scratch_dir_spares_a_preexisting_directory() {
+    let planted = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-trainer-battler-preexisting-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&planted)
+        .unwrap_or_else(|error| panic!("{} is already taken: {error}", planted.display()));
+    let sentinel = planted.join("unrelated.txt");
+    std::fs::write(&sentinel, b"not the test's").unwrap();
+
+    let claimed = scratch_dir("preexisting");
+    let survived = std::fs::read(&sentinel).ok();
+    drop(claimed);
+    let after_drop = std::fs::read(&sentinel).ok();
+    let _ = std::fs::remove_dir_all(&planted);
+
+    assert_eq!(
+        survived.as_deref(),
+        Some(&b"not the test's"[..]),
+        "scratch_dir deleted a directory it did not create"
+    );
+    assert_eq!(
+        after_drop.as_deref(),
+        Some(&b"not the test's"[..]),
+        "dropping the fixture deleted a directory it did not create"
+    );
 }
