@@ -15,7 +15,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::{only_one_matching, to_offset, u16_at_addr, u32_at_addr};
+use super::locate::{only_one_matching, slice_at_addr, to_offset, u16_at_addr, u32_at_addr};
 use super::plan::{PalettePlan, ReportLine, Resolution, SpritePlan};
 use super::tilesets::len32;
 use super::Context;
@@ -180,9 +180,11 @@ fn find_palette_table(ctx: &Context<'_>, seed: u32) -> Result<PaletteTable, GenR
     while is_neighbour(ctx, end, seed_tag) {
         end += RECORD_BYTES;
     }
-    // The importer reads records up to one with a NULL `data`, so a table
-    // ending in anything else (filler, a stray record) is one it cannot read.
-    if u32_at_addr(ctx.rom, end) != Some(0) {
+    // The importer reads whole records up to one with a NULL `data`, so a
+    // table ending in anything else (filler, a stray record) or whose
+    // terminator record is cut short by the image end is one it cannot read.
+    let terminator = slice_at_addr(ctx.rom, end, RECORD_BYTES as usize);
+    if terminator.map(|record| &record[..4]) != Some(&[0, 0, 0, 0]) {
         return Err(GenRomProfileError::StructMismatch {
             id: id.to_owned(),
             reason: format!("the table at {start:#010X} does not end in a NULL terminator"),
@@ -464,6 +466,30 @@ mod tests {
                 "sprite-palette-static-map",
                 plan.palette_table,
                 &mut report,
+            );
+        });
+    }
+
+    #[test]
+    fn a_terminator_cut_short_by_the_image_end_is_refused() {
+        // Two live records end four bytes before the image end, so only the
+        // terminator's `data` field fits: the importer's eight-byte read of
+        // that record is Truncated, so the locator must refuse the table.
+        let (mut rom, entries) = fixture(&[], &[0x3000]);
+        let len = rom.len();
+        let tail: Vec<u8> = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            vec![0, 0, 0, 0],
+        ]
+        .concat();
+        rom[len - tail.len()..].copy_from_slice(&tail);
+        with_context("sprite-palette-short-terminator", &rom, entries, |ctx| {
+            let result = locate(ctx, &mut Vec::new());
+            assert!(
+                result.is_err(),
+                "located a table whose terminator the importer cannot read: {:?}",
+                result.map(|plan| plan.palette_table)
             );
         });
     }
