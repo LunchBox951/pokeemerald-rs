@@ -333,7 +333,12 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             Ok(battle) => {
-                match self.open_wild_battle_text(&battle, TurnPolicy::Run, &reserves) {
+                match self.open_wild_battle_text(
+                    &battle,
+                    TurnPolicy::Run,
+                    &reserves,
+                    unplayable_member_remains,
+                ) {
                     Ok(sequence) => self.battle_sequence = sequence,
                     Err(error) => {
                         // The saved records were never touched, so dropping the

@@ -136,9 +136,15 @@ fn the_replacement_wording_follows_the_opponents_health_at_the_send_out() {
             trainer: None,
             hp_scale: 0,
         };
-        let mut sequence =
-            BattleSequence::begin(pack, 0, scene, TurnPolicy::Run, vec![battler("WURMPLE")])
-                .unwrap();
+        let mut sequence = BattleSequence::begin(
+            pack,
+            0,
+            scene,
+            TurnPolicy::Run,
+            vec![battler("WURMPLE")],
+            false,
+        )
+        .unwrap();
         let events = sequence.take_turn(&mut battle, &mut rng);
         if !events
             .iter()

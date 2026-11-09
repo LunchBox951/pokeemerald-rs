@@ -15,6 +15,7 @@ use super::live_first_battle_tests::{
 };
 use super::test_support::*;
 use super::{ActiveBattle, OverworldPhase};
+use crate::battle_narration::TemplateId;
 use crate::pack_source::PackSource;
 use crate::party;
 use assets::{MapId, MoveId, SpeciesId};
@@ -359,4 +360,97 @@ fn an_encounter_after_a_rejected_setup_starts_with_its_own_text() {
     assert!(phase.is_wild_battle_active(), "{NEEDS_PACK}");
     assert!(phase.battle_sequence.is_some());
     assert!(phase.lead_for_test().is_none());
+}
+
+/// `STRINGID_PLAYERWHITEOUT` and `STRINGID_PLAYERWHITEOUT2`
+/// (`battle_narration::string_ids`).
+const PLAYER_WHITE_OUT: TemplateId = TemplateId::Table(31);
+const PLAYER_WHITE_OUT_2: TemplateId = TemplateId::Table(32);
+
+/// A lead faint that leaves only a healthy, unplayable member out of the roster
+/// is no defeat (`complete_wild_battle`), so the text must not say the player
+/// is out of usable POKéMON or whited out
+/// (`BattleScript_LocalBattleLost`, `data/battle_scripts_1.s:2945-2955`, runs
+/// only for a `B_OUTCOME_LOST` that `Cmd_checkteamslost` reports once the whole
+/// party's HP is zero, `src/battle_script_commands.c:3534-3564`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_loss_with_an_unplayable_healthy_member_left_out_plays_no_white_out_text() {
+    let lead = frail_shuckle();
+    let mightyena = mon(SpeciesId::MIGHTYENA, 50);
+    let records = [saved(&lead), saved(&mightyena)];
+    let mut phase = phase_in_battle(&records, lead);
+    let mut queued = Vec::new();
+    let mut frame = 0;
+    while phase.is_wild_battle_active() {
+        if let Some(sequence) = &phase.battle_sequence {
+            queued.extend(sequence.queued_templates());
+        }
+        phase.step(tapping(frame));
+        frame += 1;
+        assert!(frame < FRAME_LIMIT * 4, "the battle ends");
+    }
+    assert_eq!(phase.save1.money, 2001, "nothing whited out");
+    assert_eq!(phase.lead_slot_for_test(), Some(1));
+    for white_out in [PLAYER_WHITE_OUT, PLAYER_WHITE_OUT_2] {
+        assert!(
+            !queued.contains(&white_out),
+            "the text said the player was out of usable POKéMON though no white-out ran"
+        );
+    }
+}
+
+/// A lost text-gated wild battle: money, healing, the lead's return and the
+/// white-out stay pending through the loss's last prompt and its hold.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_lost_wild_battle_whites_out_only_after_its_last_prompt_and_hold() {
+    let mut phase = phase_in_battle(&[], frail_shuckle());
+
+    assert_eq!(
+        tap_until_the_engine_decides(&mut phase),
+        BattleOutcome::PlayerLost,
+        "the lone Shuckle's run fails and the Wurmple faints it"
+    );
+    wait_without_answering(&mut phase);
+    assert_still_in_battle_on_loan(&phase);
+
+    // Answer one prompt at a time, then idle; nothing is published until the
+    // battle ends, and the battle ends only a full hold after the last answer.
+    let idle_after_last_answer;
+    let mut presses = 0;
+    'outer: loop {
+        phase.step(pressed(Buttons::B));
+        presses += 1;
+        assert!(presses < 50, "the loss's prompts end");
+        if !phase.is_wild_battle_active() {
+            idle_after_last_answer = 0;
+            break;
+        }
+        assert_still_in_battle_on_loan(&phase);
+        for idle in 1..=IDLE_FRAMES {
+            phase.step(ButtonState::new());
+            if !phase.is_wild_battle_active() {
+                idle_after_last_answer = idle;
+                break 'outer;
+            }
+            assert_still_in_battle_on_loan(&phase);
+        }
+    }
+    assert!(
+        idle_after_last_answer >= WAIT_TIME_LONG,
+        "the battle ended {idle_after_last_answer} frames after the last answer"
+    );
+    assert!(phase.battle_sequence.is_none());
+    assert_eq!(phase.save1.money, 1000, "the white-out halves the money");
+    let lead = phase.lead_for_test().expect("the lead is handed back");
+    assert_eq!(
+        lead.current_hp(),
+        lead.stats().max_hp,
+        "the white-out heals"
+    );
+    assert_eq!(
+        lead.moves()[0].pp,
+        Dex::new().move_data(MoveId::POUND).unwrap().pp
+    );
 }

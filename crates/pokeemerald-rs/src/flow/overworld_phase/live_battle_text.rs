@@ -60,6 +60,7 @@ impl OverworldPhase {
     /// The pack is read once per battle from the phase's [`Self::pack_source`].
     /// `policy` is the action each of the battle's turns takes, and `reserves`
     /// the owners of the player's members after the lead, in the battle's order.
+    /// `unplayable_member_remains` is [`WildBattle`]'s flag of that name.
     ///
     /// # Errors
     ///
@@ -70,6 +71,7 @@ impl OverworldPhase {
         battle: &Battle,
         policy: TurnPolicy,
         reserves: &[LoadedLead],
+        unplayable_member_remains: bool,
     ) -> Result<Option<BattleSequence>, SequenceError> {
         #[cfg(test)]
         if self.battle_text == BattleText::Skipped {
@@ -94,6 +96,7 @@ impl OverworldPhase {
             scene,
             policy,
             replacements,
+            unplayable_member_remains,
         )
         .map(Some)
     }

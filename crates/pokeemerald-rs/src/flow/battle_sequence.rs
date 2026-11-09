@@ -23,7 +23,7 @@
 use std::collections::VecDeque;
 
 use assets::pack::AssetPack;
-use battle::{Battle, BattleEvent};
+use battle::{Battle, BattleEvent, BattleOutcome};
 use engine::rng::Rng;
 use engine::text::render::PrinterInput;
 use rendering::Framebuffer;
@@ -159,6 +159,9 @@ pub(super) struct BattleSequence {
     reserves: Vec<Battler>,
     /// How many replacements have been narrated.
     sent_out: usize,
+    /// A healthy member the engine cannot play was left out of the roster, so
+    /// the roster's loss is not the party's defeat and no white-out text plays.
+    unplayable_member_remains: bool,
     turn_failed: bool,
 }
 
@@ -291,6 +294,13 @@ impl BattleSequence {
     /// the engine sends them out, so a replacement is named by its nickname and
     /// ability.
     ///
+    /// `unplayable_member_remains` is set when a healthy saved member was left
+    /// out of the battle's roster. The roster's fainting then reports a loss
+    /// that upstream never reaches: `Cmd_checkteamslost` sums the HP of the
+    /// whole party (`pokeemerald/src/battle_script_commands.c:3534-3564`), so
+    /// `BattleScript_LocalBattleLost`'s two white-out prints
+    /// (`pokeemerald/data/battle_scripts_1.s:2945-2955`) are not played.
+    ///
     /// # Errors
     ///
     /// Returns [`SequenceError`] when the pack lacks the battle text or an
@@ -301,6 +311,7 @@ impl BattleSequence {
         scene: Scene,
         policy: TurnPolicy,
         reserves: Vec<Battler>,
+        unplayable_member_remains: bool,
     ) -> Result<Self, SequenceError> {
         let mut layer = BattleMessageLayer::from_pack(&pack, raw_text_speed)?;
         let narrator = Narrator::new(scene);
@@ -319,6 +330,7 @@ impl BattleSequence {
             policy,
             reserves,
             sent_out: 0,
+            unplayable_member_remains,
             turn_failed: false,
         })
     }
@@ -349,7 +361,13 @@ impl BattleSequence {
                 }
                 self.sent_out += 1;
             }
-            let requests = self.narrator.requests(&AssetNames, event)?;
+            let requests = if self.unplayable_member_remains
+                && matches!(event, BattleEvent::Ended(BattleOutcome::PlayerLost))
+            {
+                Vec::new()
+            } else {
+                self.narrator.requests(&AssetNames, event)?
+            };
             let count = requests.len();
             steps.extend(
                 requests
@@ -362,6 +380,19 @@ impl BattleSequence {
             );
         }
         Ok(steps)
+    }
+
+    /// The templates still queued behind the print on screen.
+    #[cfg(test)]
+    pub(super) fn queued_templates(&self) -> Vec<crate::battle_narration::TemplateId> {
+        match &self.stage {
+            Stage::Printing(printing) => printing
+                .rest
+                .iter()
+                .map(|step| step.request.template)
+                .collect(),
+            Stage::Finished => Vec::new(),
+        }
     }
 
     /// The scene as the narrator last staged it.
