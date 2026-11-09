@@ -559,6 +559,82 @@ const BIRCH_LAB_STATE_PRESET: u16 = 7;
 /// leaves so the trigger fires again.
 const ROUTE101_STATE_TRIGGER_READY: u16 = 1;
 
+/// The state a conclusion whose lab load failed must leave behind.
+fn assert_conclusion_rolled_back(phase: &OverworldPhase, outcome: BattleOutcome, max_hp: u32) {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    assert_eq!(
+        phase.map_id, ROUTE_101,
+        "setup: the lab warp must have failed"
+    );
+    assert_eq!(phase.player.position(), (tx, ty), "the player stays put");
+    let data = &phase.save1.event_data;
+    assert_eq!(
+        data.var_get(VAR_ROUTE101_STATE),
+        Ok(ROUTE101_STATE_TRIGGER_READY),
+        "{outcome:?}: neither concluded (3) nor consumed (2): the rescue is re-armed"
+    );
+    assert_eq!(
+        data.var_get(VAR_BIRCH_LAB_STATE),
+        Ok(BIRCH_LAB_STATE_PRESET)
+    );
+    assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_MUDKIP));
+    assert_eq!(
+        data.var_get(VAR_UNRELATED_SENTINEL),
+        Ok(UNRELATED_SENTINEL_VALUE)
+    );
+    for (flag, expected, name) in [
+        (FLAG_HIDE_ROUTE_101_ZIGZAGOON, false, "Zigzagoon"),
+        (
+            FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,
+            false,
+            "Route 101 Birch",
+        ),
+        (
+            FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH,
+            true,
+            "lab Birch",
+        ),
+        (
+            FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG,
+            false,
+            "starters bag",
+        ),
+    ] {
+        assert_eq!(
+            data.flag_get(flag),
+            Ok(expected),
+            "{outcome:?}: the {name} hide flag is back where it was"
+        );
+    }
+    assert_eq!(phase.save1.money, STARTING_MONEY, "no money change");
+    let lead = phase.lead_for_test().expect("the lead is still present");
+    assert!(!lead.is_fainted());
+    assert_eq!(lead.current_hp(), max_hp, "the heal stays committed");
+}
+
+/// The state the retried rescue's conclusion leaves once the lab loads.
+fn assert_retried_handoff_landed(phase: &OverworldPhase) {
+    assert_eq!(
+        phase.map_id, BIRCHS_LAB,
+        "the retried handoff lands in the lab"
+    );
+    assert_eq!(phase.player.position(), BIRCHS_LAB_ARRIVAL);
+    let data = &phase.save1.event_data;
+    assert_eq!(
+        data.var_get(VAR_ROUTE101_STATE),
+        Ok(ROUTE101_STATE_CONCLUDED)
+    );
+    assert_eq!(
+        data.var_get(VAR_BIRCH_LAB_STATE),
+        Ok(BIRCH_LAB_STATE_STARTER_GIVEN)
+    );
+    assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_TREECKO));
+    assert_eq!(
+        data.flag_get(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH),
+        Ok(false)
+    );
+}
+
 /// Upstream's `warp` cannot fail (`src/scrcmd.c:740-751`), so a lab that will
 /// not load must not leave the conclusion half applied: the player stays on
 /// Route 101, none of the story vars or hide flags the script writes before
@@ -610,54 +686,7 @@ fn a_failed_lab_load_rolls_the_conclusion_back_and_the_rescue_retries() {
             Some(expected_outcome),
             "setup: seed {seed} must produce {expected_outcome:?}"
         );
-        assert_eq!(
-            phase.map_id, ROUTE_101,
-            "setup: the lab warp must have failed"
-        );
-        assert_eq!(phase.player.position(), (tx, ty), "the player stays put");
-        let data = &phase.save1.event_data;
-        assert_eq!(
-            data.var_get(VAR_ROUTE101_STATE),
-            Ok(ROUTE101_STATE_TRIGGER_READY),
-            "{expected_outcome:?}: neither concluded (3) nor consumed (2): the rescue is re-armed"
-        );
-        assert_eq!(
-            data.var_get(VAR_BIRCH_LAB_STATE),
-            Ok(BIRCH_LAB_STATE_PRESET)
-        );
-        assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_MUDKIP));
-        assert_eq!(
-            data.var_get(VAR_UNRELATED_SENTINEL),
-            Ok(UNRELATED_SENTINEL_VALUE)
-        );
-        for (flag, expected, name) in [
-            (FLAG_HIDE_ROUTE_101_ZIGZAGOON, false, "Zigzagoon"),
-            (
-                FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,
-                false,
-                "Route 101 Birch",
-            ),
-            (
-                FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH,
-                true,
-                "lab Birch",
-            ),
-            (
-                FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG,
-                false,
-                "starters bag",
-            ),
-        ] {
-            assert_eq!(
-                data.flag_get(flag),
-                Ok(expected),
-                "{expected_outcome:?}: the {name} hide flag is back where it was"
-            );
-        }
-        assert_eq!(phase.save1.money, STARTING_MONEY, "no money change");
-        let lead = phase.lead_for_test().expect("the lead is still present");
-        assert!(!lead.is_fainted());
-        assert_eq!(lead.current_hp(), max_hp, "the heal stays committed");
+        assert_conclusion_rolled_back(&phase, expected_outcome, max_hp);
 
         // Standing on the trigger tile does not restart the fight.
         for _ in 0..10 {
@@ -683,25 +712,7 @@ fn a_failed_lab_load_rolls_the_conclusion_back_and_the_rescue_retries() {
             frames += 1;
             assert!(frames < 20, "the fixture battles must resolve quickly");
         }
-        assert_eq!(
-            phase.map_id, BIRCHS_LAB,
-            "the retried handoff lands in the lab"
-        );
-        assert_eq!(phase.player.position(), BIRCHS_LAB_ARRIVAL);
-        let data = &phase.save1.event_data;
-        assert_eq!(
-            data.var_get(VAR_ROUTE101_STATE),
-            Ok(ROUTE101_STATE_CONCLUDED)
-        );
-        assert_eq!(
-            data.var_get(VAR_BIRCH_LAB_STATE),
-            Ok(BIRCH_LAB_STATE_STARTER_GIVEN)
-        );
-        assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_TREECKO));
-        assert_eq!(
-            data.flag_get(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH),
-            Ok(false)
-        );
+        assert_retried_handoff_landed(&phase);
     }
 }
 
