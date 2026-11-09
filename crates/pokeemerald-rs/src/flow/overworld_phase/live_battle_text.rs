@@ -65,9 +65,6 @@ impl OverworldPhase {
         sequence.map(Some)
     }
 
-    /// The pack battles play their text from: the one already loaded, else
-    /// the one just read from [`Self::pack_source`] and kept for the next
-    /// battle. A failed load keeps nothing.
     fn loaded_battle_pack(&self) -> Result<Rc<assets::pack::AssetPack>, assets::pack::PackError> {
         if let Some(pack) = &*self.battle_pack.borrow() {
             return Ok(Rc::clone(pack));
