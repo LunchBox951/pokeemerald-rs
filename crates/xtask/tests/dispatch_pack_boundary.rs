@@ -132,23 +132,53 @@ impl SnapshotsRestore {
     /// When the pointer exists but cannot be read: recording that as absent
     /// would delete a file this guard never understood.
     fn capture_in(dir: PathBuf) -> Self {
+        Self::capture_in_with(dir, || {})
+    }
+
+    /// [`Self::capture_in`] with `after_pointer_read` run between the pointer
+    /// read and the generation re-enumeration, so a test can land a publisher
+    /// in that window.
+    ///
+    /// The baseline is a consistent snapshot: generations are listed, the
+    /// pointer read, and the generations listed again until both listings
+    /// agree. A publisher landing in the window changes the listing and
+    /// forces a re-read, so its generation is never recorded as present
+    /// beside the older pointer it replaced.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::capture_in`]; also when the listing never settles.
+    fn capture_in_with(dir: PathBuf, mut after_pointer_read: impl FnMut()) -> Self {
         let pointer = dir.join("title.generation");
-        let pointer_before = match std::fs::read(&pointer) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => panic!(
-                "cannot read the existing snapshot pointer {}: {error}",
-                pointer.display()
-            ),
-        };
-        Self {
-            dir_existed: dir.exists(),
-            pointer_before,
-            generations_before: Self::generation_names(&dir),
-            own_generations: Vec::new(),
-            dir,
-            pointer,
+        for _ in 0..1000 {
+            let mut generations_before = Self::generation_names(&dir);
+            let pointer_before = match std::fs::read(&pointer) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!(
+                    "cannot read the existing snapshot pointer {}: {error}",
+                    pointer.display()
+                ),
+            };
+            after_pointer_read();
+            let mut relisted = Self::generation_names(&dir);
+            generations_before.sort();
+            relisted.sort();
+            if generations_before == relisted {
+                return Self {
+                    dir_existed: dir.exists(),
+                    pointer_before,
+                    generations_before,
+                    own_generations: Vec::new(),
+                    dir,
+                    pointer,
+                };
+            }
         }
+        panic!(
+            "the snapshot generations under {} never settled; a publisher keeps landing",
+            dir.display()
+        );
     }
 
     /// The `title.generation-*` directories directly under `dir`.
@@ -791,6 +821,41 @@ fn snapshots_restore_keeps_a_pointer_published_before_the_refreshed_baseline() {
         "the publisher that landed before the refresh keeps its pointer"
     );
     assert!(dir.join("title.generation-4294967295-0").exists());
+    assert!(!own.exists(), "the child's own generation is removed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A publisher landing between the baseline's pointer read and its
+/// generation re-listing must be in the baseline pointer, not recorded as a
+/// present generation beside the older pointer it replaced.
+#[test]
+fn snapshots_capture_retries_when_a_publisher_lands_between_pointer_read_and_listing() {
+    let dir = scratch_snapshots("capture-window");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer A");
+    let mut landed = false;
+    let mut restore = SnapshotsRestore::capture_in_with(dir.clone(), || {
+        if !landed {
+            landed = true;
+            std::fs::create_dir(dir.join("title.generation-4294967295-0")).expect("B generation");
+            std::fs::write(
+                dir.join("title.generation"),
+                b"title.generation-4294967295-0\n",
+            )
+            .expect("pointer B");
+        }
+    });
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-77-0\n").expect("pointer C");
+    restore.own_generation_from_stdout(&success_line(&own));
+    let errors = restore.finish_with(|| {});
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        std::fs::read(dir.join("title.generation")).expect("pointer"),
+        b"title.generation-4294967295-0\n",
+        "B's publication, landed in the capture window, must be the restored pointer"
+    );
     assert!(!own.exists(), "the child's own generation is removed");
     let _ = std::fs::remove_dir_all(&dir);
 }
