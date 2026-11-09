@@ -52,6 +52,7 @@ mod text_window;
 mod tilesets;
 mod title;
 mod trainer_battlers;
+mod trainer_defeat_speeches;
 mod trainer_front;
 
 use std::collections::hash_map::RandomState;
@@ -179,6 +180,7 @@ fn locate_profile(
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
         field_messages: field_messages::locate(ctx, lines)?,
+        trainer_defeat_speeches: trainer_defeat_speeches::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
@@ -543,3 +545,5 @@ mod field_message_tests;
 mod inventory_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trainer_defeat_speech_tests;

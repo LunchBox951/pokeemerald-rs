@@ -147,9 +147,10 @@ pub use species::{
 pub use species_names::SpeciesNames;
 pub use tmhm_learnsets::{is_hm_move, TmHmLearnsets, TmHmSlot};
 pub use trainers::{
-    AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
-    TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,
-    TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
+    AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerDefeatSpeechContext,
+    TrainerDefeatSpeechTable, TrainerId, TrainerMonItemCustomMoves, TrainerMonItemDefaultMoves,
+    TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves, TrainerParty, TrainerPicId,
+    TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT, TRAINER_DEFEAT_SPEECH_COUNT,
 };
 pub use type_chart::{Effectiveness, Type, TypeChart};
 pub use wild_encounters::{

@@ -23,6 +23,7 @@ mod real_pack;
 mod starter_chooser;
 mod text_printer;
 mod trainer_battler;
+mod trainer_defeat_speech;
 mod trainer_pic;
 
 mod battle_interface_frames;

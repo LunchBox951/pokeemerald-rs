@@ -129,6 +129,24 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_exactly_the_trainer_defeat_speech_inventory() {
+        use assets::TrainerDefeatSpeechContext;
+
+        let roots = EMERALD_US_REV0.roots.trainer_defeat_speeches;
+        assert_eq!(roots.len(), TrainerDefeatSpeechContext::ALL.len());
+        for (root, context) in roots.iter().zip(TrainerDefeatSpeechContext::ALL) {
+            assert_eq!(root.symbol, context.symbol());
+            assert_ne!(root.addr, crate::reader::GbaPtr::AT_BASE, "{context:?}");
+            // Only a speech whose text recurs in the image names its command.
+            assert_eq!(
+                root.script.is_some(),
+                crate::trainer_defeat_speech_witness_head(context).is_some(),
+                "{context:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_hash_that_matches_nothing_is_unsupported() {
         // The fixture is a synthetic image, so it can never match a shipped
         // profile however convincing its header is.

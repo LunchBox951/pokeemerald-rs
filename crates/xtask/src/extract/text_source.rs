@@ -103,3 +103,52 @@ pub(in crate::extract) fn parse_definitions(
     }
     Ok(out)
 }
+
+/// The whitelisted assembly `labels`: `.string` pieces concatenated up to the
+/// next label, comments and blank lines skipped. The explicit `$` in each
+/// string supplies the terminator, so none is appended. Other labels and their
+/// lines are ignored; a selected label that is defined twice, missing, or
+/// holds any other directive is refused.
+pub(in crate::extract) fn parse_assembly_strings(
+    text: &str,
+    charmap: &Charmap,
+    labels: &[&str],
+) -> Result<HashMap<String, Vec<u8>>, Fault> {
+    let mut out: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut current: Option<&str> = None;
+    for (index, raw) in text.lines().enumerate() {
+        let line = index + 1;
+        let trimmed = raw.trim();
+        if let Some(label) = trimmed
+            .strip_suffix("::")
+            .or_else(|| trimmed.strip_suffix(':'))
+        {
+            current = labels.iter().copied().find(|l| *l == label);
+            if let Some(label) = current {
+                if out.insert(label.to_owned(), Vec::new()).is_some() {
+                    return Err(Fault::new(line, format!("`{label}` is defined twice")));
+                }
+            }
+            continue;
+        }
+        let Some(label) = current else { continue };
+        if trimmed.is_empty() || trimmed.starts_with('@') {
+            continue;
+        }
+        let body = trimmed
+            .strip_prefix(".string")
+            .and_then(|rest| rest.trim().strip_prefix('"'))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .ok_or_else(|| Fault::new(line, format!("unsupported line in `{label}`")))?;
+        let bytes = charmap.convert(body, line)?;
+        out.get_mut(label)
+            .expect("label was inserted when it was opened")
+            .extend(bytes);
+    }
+    for label in labels {
+        if !out.contains_key(*label) {
+            return Err(Fault::new(0, format!("`{label}` is not defined")));
+        }
+    }
+    Ok(out)
+}

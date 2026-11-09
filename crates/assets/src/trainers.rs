@@ -1,4 +1,5 @@
-//! Typed trainer identities, encounter metadata, and battle parties.
+//! Typed trainer identities, encounter metadata, battle parties, and
+//! script-context defeat speeches.
 
 use crate::error::AssetError;
 use crate::items::ItemId;
@@ -23109,6 +23110,128 @@ impl TrainerTable {
 impl Default for TrainerTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The number of [`TrainerDefeatSpeechContext`] values.
+pub const TRAINER_DEFEAT_SPEECH_COUNT: usize = TrainerDefeatSpeechContext::ALL.len();
+
+/// A battle-script context that selects one trainer defeat speech.
+///
+/// Upstream names the speech in the `trainerbattle_*` command of the script
+/// that starts the fight, so one [`TrainerId`] can have several: Amy and Liv
+/// and their rematches share `TRAINER_AMY_AND_LIV_1` and carry four. Each
+/// rival gender has one speech for its three starter variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrainerDefeatSpeechContext {
+    /// `Route103_Text_DaisyDefeated` (`data/text/trainers.inc:76`), the defeat text of `Route103_EventScript_Daisy`.
+    Route103Daisy,
+    /// `Route103_Text_AmyDefeated` (`data/text/trainers.inc:88`), the defeat text of `Route103_EventScript_Amy`.
+    Route103Amy,
+    /// `Route103_Text_LivDefeated` (`data/text/trainers.inc:105`), the defeat text of `Route103_EventScript_Liv`.
+    Route103Liv,
+    /// `Route103_Text_AmyRematchDefeated` (`data/text/trainers.inc:127`), the defeat text of `Route102_EventScript_AmyRematch`.
+    Route103AmyRematch,
+    /// `Route103_Text_LivRematchDefeated` (`data/text/trainers.inc:145`), the defeat text of `Route102_EventScript_LivRematch`.
+    Route103LivRematch,
+    /// `Route103_Text_AndrewDefeated` (`data/text/trainers.inc:164`), the defeat text of `Route103_EventScript_Andrew`.
+    Route103Andrew,
+    /// `Route103_Text_MiguelDefeated` (`data/text/trainers.inc:176`), the defeat text of `Route103_EventScript_Miguel`.
+    Route103Miguel,
+    /// `Route103_Text_MiguelRematchDefeated` (`data/text/trainers.inc:192`), the defeat text of `Route103_EventScript_MiguelRematch`.
+    Route103MiguelRematch,
+    /// `Route103_Text_PeteDefeated` (`data/text/trainers.inc:204`), the defeat text of `Route103_EventScript_Pete`.
+    Route103Pete,
+    /// `Route103_Text_IsabelleDefeated` (`data/text/trainers.inc:217`), the defeat text of `Route103_EventScript_Isabelle`.
+    Route103Isabelle,
+    /// `Route103_Text_RhettDefeated` (`data/text/trainers.inc:228`), the defeat text of `Route103_EventScript_Rhett`.
+    Route103Rhett,
+    /// `Route103_Text_MarcosDefeated` (`data/text/trainers.inc:239`), the defeat text of `Route103_EventScript_Marcos`.
+    Route103Marcos,
+    /// `Route103_Text_MayDefeated` (`data/maps/Route103/scripts.inc:302`), the defeat text of the three `trainerbattle_no_intro` May starters, `:62-72`.
+    Route103May,
+    /// `Route103_Text_BrendanDefeated` (`data/maps/Route103/scripts.inc:328`), the defeat text of the three `trainerbattle_no_intro` Brendan starters, `:77-87`.
+    Route103Brendan,
+}
+
+impl TrainerDefeatSpeechContext {
+    /// Every context, in ID order.
+    pub const ALL: [Self; 14] = [
+        Self::Route103Daisy,
+        Self::Route103Amy,
+        Self::Route103Liv,
+        Self::Route103AmyRematch,
+        Self::Route103LivRematch,
+        Self::Route103Andrew,
+        Self::Route103Miguel,
+        Self::Route103MiguelRematch,
+        Self::Route103Pete,
+        Self::Route103Isabelle,
+        Self::Route103Rhett,
+        Self::Route103Marcos,
+        Self::Route103May,
+        Self::Route103Brendan,
+    ];
+
+    /// The record ID: the context's index in [`Self::ALL`].
+    #[must_use]
+    pub const fn id(self) -> u16 {
+        match self {
+            Self::Route103Daisy => 0,
+            Self::Route103Amy => 1,
+            Self::Route103Liv => 2,
+            Self::Route103AmyRematch => 3,
+            Self::Route103LivRematch => 4,
+            Self::Route103Andrew => 5,
+            Self::Route103Miguel => 6,
+            Self::Route103MiguelRematch => 7,
+            Self::Route103Pete => 8,
+            Self::Route103Isabelle => 9,
+            Self::Route103Rhett => 10,
+            Self::Route103Marcos => 11,
+            Self::Route103May => 12,
+            Self::Route103Brendan => 13,
+        }
+    }
+
+    /// The upstream label of the defeat text.
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::Route103Daisy => "Route103_Text_DaisyDefeated",
+            Self::Route103Amy => "Route103_Text_AmyDefeated",
+            Self::Route103Liv => "Route103_Text_LivDefeated",
+            Self::Route103AmyRematch => "Route103_Text_AmyRematchDefeated",
+            Self::Route103LivRematch => "Route103_Text_LivRematchDefeated",
+            Self::Route103Andrew => "Route103_Text_AndrewDefeated",
+            Self::Route103Miguel => "Route103_Text_MiguelDefeated",
+            Self::Route103MiguelRematch => "Route103_Text_MiguelRematchDefeated",
+            Self::Route103Pete => "Route103_Text_PeteDefeated",
+            Self::Route103Isabelle => "Route103_Text_IsabelleDefeated",
+            Self::Route103Rhett => "Route103_Text_RhettDefeated",
+            Self::Route103Marcos => "Route103_Text_MarcosDefeated",
+            Self::Route103May => "Route103_Text_MayDefeated",
+            Self::Route103Brendan => "Route103_Text_BrendanDefeated",
+        }
+    }
+}
+
+/// The defeat speech of every [`TrainerDefeatSpeechContext`], as charmap token
+/// streams borrowing the pack.
+///
+/// Streams end in `EOS` and keep `{PLAYER}` and `{KUN}` as their control
+/// sequences for the consumer to expand. `AssetPack::trainer_defeat_speeches`
+/// builds and validates the table; the pack module owns its encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrainerDefeatSpeechTable<'a> {
+    pub(crate) streams: [&'a [u8]; TRAINER_DEFEAT_SPEECH_COUNT],
+}
+
+impl<'a> TrainerDefeatSpeechTable<'a> {
+    /// The token stream of `context`, `EOS` included.
+    #[must_use]
+    pub fn speech(&self, context: TrainerDefeatSpeechContext) -> &'a [u8] {
+        self.streams[usize::from(context.id())]
     }
 }
 

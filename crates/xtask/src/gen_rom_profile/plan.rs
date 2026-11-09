@@ -442,6 +442,25 @@ pub struct FieldMessagePlan {
     pub messages: Vec<FieldMessageRootPlan>,
 }
 
+/// One trainer defeat speech's root, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerDefeatSpeechRootPlan {
+    /// The upstream label, as `TrainerDefeatSpeechContext::symbol` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the speech's token stream.
+    pub addr: u32,
+    /// The GBA bus address of the `trainerbattle` command that names the
+    /// speech, for one whose text alone does not identify it.
+    pub script: Option<u32>,
+}
+
+/// The trainer defeat-speech roots, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerDefeatSpeechPlan {
+    /// Every speech, in `TrainerDefeatSpeechContext::ALL` order.
+    pub speeches: Vec<TrainerDefeatSpeechRootPlan>,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -665,6 +684,8 @@ pub struct ProfilePlan {
     pub battle_messages: BattleMessagePlan,
     /// The field-message token table.
     pub field_messages: FieldMessagePlan,
+    /// The trainer defeat-speech table.
+    pub trainer_defeat_speeches: TrainerDefeatSpeechPlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
