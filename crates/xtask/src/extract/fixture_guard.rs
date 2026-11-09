@@ -39,17 +39,14 @@ type Token = win_fs::WindowsFileIdentity;
 #[cfg(not(any(unix, windows)))]
 type Token = ();
 
-/// What the entry at a path is: its kind and its per-object token.
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
     token: Token,
-    /// A real directory (not a symlink to one). An unpinned symlink's token
-    /// can be recycled, so the kind bounds what a recycled match can remove.
+    /// An unpinned symlink's token can be recycled, so the kind bounds what a
+    /// recycled match can remove.
     is_dir: bool,
 }
 
-/// The identity of the entry at `path`: `Ok(None)` when nothing is there,
-/// `Err` when the read itself failed.
 fn identity_of(path: &Path) -> io::Result<Option<Identity>> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -97,25 +94,20 @@ fn pin(path: &Path, identity: &Identity) -> Option<std::fs::File> {
     }
 }
 
-/// An entry the guard created and what it was at planting.
 struct PlantedEntry {
     path: PathBuf,
     /// `None` when the identity could not be read at planting: the entry can
     /// then not be told from a replacement and is never removed.
     identity: Option<Identity>,
-    /// Open on a planted directory from planting until drop, so its identity
-    /// cannot be recycled by a replacement. `None` for a symlink (which
-    /// cannot be opened without following it) or when pinning failed; a
-    /// directory without one is never removed.
+    /// Held open on a planted directory so a replacement cannot recycle its
+    /// identity. A symlink cannot be opened without following it, so it has
+    /// none; a directory without one is never removed.
     handle: Option<std::fs::File>,
 }
 
-/// Entries the guard created, removed on drop whatever the fixture did, as
-/// long as the path still names the entry the guard created.
 struct Planted(Vec<PlantedEntry>);
 
 impl Planted {
-    /// Records the entry now at `path`, right after the guard planted it.
     fn entry(path: &Path) -> PlantedEntry {
         let identity = identity_of(path).ok().flatten();
         let handle = identity.as_ref().and_then(|identity| pin(path, identity));
@@ -129,17 +121,9 @@ impl Planted {
 
 impl Drop for Planted {
     /// Removes an entry only while its path still names the one the guard
-    /// planted (the rule of `OwnedDir`): a path that now holds anything else,
-    /// such as the planted directory renamed aside and an unrelated one put
-    /// in its place, or deleted and recreated, is left alone and reported. A
-    /// path that is gone is skipped silently. A planted directory is checked
-    /// against the handle held since planting; a directory that was never
-    /// pinned cannot be told from a replacement and is left alone.
-    ///
-    /// A removal that fails for any reason but the entry already being gone
-    /// leaves it behind, so it panics once every entry has been tried, unless
-    /// the thread is already unwinding: a passing test must not leave planted
-    /// entries on disk unreported (the convention of `OwnedDir`).
+    /// planted (the rule of `OwnedDir`), and reports any left behind unless the
+    /// thread is unwinding: a passing test must not leave planted entries
+    /// unreported.
     fn drop(&mut self) {
         let mut failures = Vec::new();
         for entry in &mut self.0 {
@@ -180,10 +164,8 @@ impl Drop for Planted {
     }
 }
 
-/// Every name planted for one fixture: the predictable `{prefix}-{pid}`,
-/// `{prefix}-{pid}-{line}` for a fixture that appended `line!()` (every line
-/// up to `line_limit` outside the `OwnedDir` range), and the first
-/// `OwnedDir` candidates `{prefix}-{pid}-{n}`.
+/// Every name a predictable-path fixture could have used, plus the first
+/// `OwnedDir` candidates.
 fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
     let base = std::env::temp_dir();
     let pid = std::process::id();
@@ -195,11 +177,9 @@ fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
     names
 }
 
-/// Plants an entry with `plant` at every name. A name held by a concurrent
-/// run of the same fixture is waited for, so the guard owns every name
-/// before the fixture runs; one still held after `PLANT_WAIT`, or any other
-/// failure, panics. `on_wait` runs each time a name is found held, before the
-/// guard waits for it.
+/// A name held by a concurrent run of the same fixture is waited for, so the
+/// guard owns every name before the fixture runs. `on_wait` runs each time a
+/// name is found held.
 fn plant_all(
     prefix: &str,
     names: &[PathBuf],
@@ -258,10 +238,8 @@ fn untouched(dir: &Path) -> bool {
 /// Runs `fixture`, the real test function, with something planted at each
 /// former and candidate name for `prefix`, and fails if it touched them.
 ///
-/// Pass one plants populated directories: deleting by path, or writing into
-/// what is already at the name, disturbs them. Pass two (Unix) plants
-/// symlinks to a victim directory: writing through one adds files to the
-/// victim, and unlinking one makes the link vanish.
+/// A second pass (Unix) plants symlinks, which see a write-through or an
+/// unlink that leaves every populated directory intact.
 ///
 /// `line_limit` is the highest line a fixture that appended `line!()` to its
 /// former name could have been on; pass the line count of its file.
@@ -273,9 +251,8 @@ pub(crate) fn assert_fixture_ignores_planted_names(
     assert_fixture_ignores_planted_names_observing(prefix, line_limit, fixture, &|| {});
 }
 
-/// [`assert_fixture_ignores_planted_names`], calling `on_wait` whenever
-/// planting finds a name held, so a test can release the holder on an
-/// observed planting attempt instead of a timer.
+/// [`assert_fixture_ignores_planted_names`] with `on_wait`, so a test can
+/// release a holder on an observed planting attempt instead of a timer.
 fn assert_fixture_ignores_planted_names_observing(
     prefix: &str,
     line_limit: Option<usize>,
@@ -343,8 +320,7 @@ mod tests {
 
     const PREFIX: &str = "pokeemerald-rs-fixture-guard-sibling";
 
-    /// Releases the sibling, then joins it, on drop, so a panic unwinding
-    /// past it, or a guard that never waits, cannot leave it blocked.
+    /// Joins the sibling even when a panic unwinds past it.
     struct Sibling {
         release: std::sync::mpsc::Sender<()>,
         thread: Option<std::thread::JoinHandle<()>>,
@@ -356,7 +332,6 @@ mod tests {
         }
     }
 
-    /// A fixture that writes to `OwnedDir` candidate 0 without claiming it.
     fn fixture_reusing_candidate_zero() {
         let dir = std::env::temp_dir().join(format!("{PREFIX}-{}-0", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -365,9 +340,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The guard must wait out a sibling holding candidate 0 and still plant
-    /// it. The sibling frees the name only after the guard reports meeting it
-    /// held, so the outcome does not depend on scheduling.
+    /// The sibling frees the name only after the guard reports meeting it
+    /// held, so a guard that skipped occupied names fails on any schedule.
     #[test]
     #[should_panic(expected = "disturbed populated directories")]
     fn guard_catches_a_fixture_that_reuses_candidate_zero_while_a_sibling_held_it_at_planting() {
@@ -376,7 +350,6 @@ mod tests {
         let thread = std::thread::spawn(move || {
             let held = OwnedDir::create(PREFIX).unwrap();
             claimed.send(()).unwrap();
-            // Returns on the guard's report, or when `Sibling` drops.
             release_rx.recv().unwrap();
             drop(held);
         });
@@ -396,8 +369,6 @@ mod tests {
         );
     }
 
-    /// Removal of a planted entry that fails for a reason other than the
-    /// entry being gone is reported, not discarded.
     #[cfg(unix)]
     #[test]
     fn planted_drop_reports_a_failed_removal() {
@@ -425,9 +396,6 @@ mod tests {
         );
     }
 
-    /// A planted directory renamed aside and replaced at its path by an
-    /// unrelated populated directory is not the entry the guard created: the
-    /// replacement survives the drop, which reports it instead.
     #[cfg(unix)]
     #[test]
     fn planted_drop_leaves_an_unrelated_replacement() {
@@ -458,9 +426,8 @@ mod tests {
         );
     }
 
-    /// A planted directory deleted outright, with an unrelated populated
-    /// directory then created at its path, must survive the drop even when
-    /// the filesystem hands the replacement the freed inode.
+    /// The replacement taking the freed inode is the case a bare identity
+    /// compare cannot tell apart.
     #[cfg(unix)]
     #[test]
     fn planted_drop_leaves_a_replacement_that_recycled_the_inode() {
@@ -488,8 +455,6 @@ mod tests {
         );
     }
 
-    /// A plant that creates its directory and then fails to populate it
-    /// must not leave that directory behind when planting panics.
     #[test]
     fn plant_all_removes_a_directory_whose_population_failed() {
         let path = std::env::temp_dir().join(format!(
@@ -524,7 +489,6 @@ mod tests {
     #[cfg(unix)]
     const SYMLINK_PREFIX: &str = "pokeemerald-rs-fixture-guard-symlink-only";
 
-    /// Unlinks a planted symlink and touches no directory.
     #[cfg(unix)]
     fn fixture_unlinking_only_a_symlink() {
         let path = std::env::temp_dir().join(format!("{SYMLINK_PREFIX}-{}-0", std::process::id()));
@@ -549,7 +513,6 @@ mod tests {
     #[cfg(unix)]
     const WRITE_THROUGH_PREFIX: &str = "pokeemerald-rs-fixture-guard-write-through";
 
-    /// Writes through a planted symlink and touches no directory.
     #[cfg(unix)]
     fn fixture_writing_through_only_a_symlink() {
         let path =
