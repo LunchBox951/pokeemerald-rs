@@ -9,14 +9,17 @@
 //! host's palette stage, and a closed screen keeps drawing, as the source of
 //! the fade out, until the host drops it. A confirmed action, a selected item,
 //! and a close all return to the caller as [`BagScreenTick`] data: using,
-//! tossing, registering, consuming, suspending a battle, or routing back to the
+//! registering, consuming, suspending a battle, or routing back to the
 //! field is the host's, as are the entries that open this screen.
 //!
 //! The screen never writes the caller's [`Bag`]: it reads it at [`open`], so
 //! the rows show the quantities of that moment, and keeps its own copy. SELECT
 //! picks an item up and the cursor puts it down elsewhere in its pocket, which
 //! reorders that copy and returns the new bag as [`BagScreenTick::Reordered`]
-//! for the host to keep. [`BagScreen::positions`] returns
+//! for the host to keep. TOSS runs upstream's prompt on the screen itself
+//! (`toss.rs`): the quantity window, the yes/no and the "Threw away" message,
+//! after which the count leaves that copy and the new bag comes back as
+//! [`BagScreenTick::Tossed`]. [`BagScreen::positions`] returns
 //! the per-pocket cursor and scroll for the host to pass into the next
 //! [`BagScreenRequest`], which is how a reopen keeps its place.
 //!
@@ -50,11 +53,13 @@ mod labels;
 mod scroll;
 mod sprite;
 mod swap;
+mod toss;
 
 use crate::key_repeat::{self, KeyRepeat};
 use chrome::BagChrome;
 use scroll::ArrowClock;
 use swap::ItemSwap;
+use toss::ItemToss;
 
 /// Which caller opened the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,8 +167,9 @@ pub(crate) enum BagScreenResult {
 pub(crate) enum BagScreenTick {
     /// The screen still owns input.
     Open,
-    /// A field choice was confirmed. The screen stays open; the host applies
-    /// the action's effect and, for effects that change the bag, reopens.
+    /// A field choice other than TOSS, which the screen runs itself, was
+    /// confirmed. The screen stays open; the host applies the action's effect
+    /// and, for effects that change the bag, reopens.
     Action {
         action: BagAction,
         selection: BagSelection,
@@ -172,6 +178,11 @@ pub(crate) enum BagScreenTick {
     /// and shows the new order; the host keeps `bag`, the bag as the screen
     /// now holds it, in place of the one it opened with.
     Reordered { bag: Box<Bag> },
+    /// A count was tossed from a stack, after the player acknowledged the
+    /// "Threw away" message. The screen stays open and shows the list without
+    /// it; the host keeps `bag`, the bag as the screen now holds it, in place
+    /// of the one it opened with.
+    Tossed { bag: Box<Bag> },
     /// The screen is done; the host drops it and acts on the result.
     Closed(BagScreenResult),
 }
@@ -234,9 +245,12 @@ pub(crate) struct BagScreen {
     /// host passed it in until then.
     menu_request: BagMenuRequest,
     swap: Option<ItemSwap>,
+    /// The TOSS prompt, once TOSS is chosen.
+    toss: Option<ItemToss>,
     /// `ReadKeys`' per-frame repeat counter, which the item list's held Up
-    /// and Down read, in the list and while swapping. It opens at the boot
-    /// delay of 40: upstream's session-global `gKeyRepeatStartDelay` is not
+    /// and Down read, in the list and while swapping, and the TOSS count
+    /// reads for all four directions. It opens at the boot delay of 40:
+    /// upstream's session-global `gKeyRepeatStartDelay` is not
     /// modelled, so a naming screen's 16 does not carry over.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
@@ -255,7 +269,8 @@ impl BagScreen {
     /// switch pockets only in the L/R button mode. While the item list has
     /// the input, a held Up or Down repeats as `JOY_REPEAT` does: the first
     /// repeat 40 frames after the press, then every 5 frames
-    /// (`ReadKeys`, `main.c:251-275`). Every other input, and the choice
+    /// (`ReadKeys`, `main.c:251-275`). The TOSS count repeats all four
+    /// directions on the same clock. Every other input, and the choice
     /// windows' directions, read only fresh presses.
     ///
     /// A pocket switch runs for the next 17 ticks. Only a fresh switch
@@ -280,6 +295,9 @@ impl BagScreen {
         if let Some(swap) = self.swap {
             return self.advance_swap(swap, buttons, repeated);
         }
+        if let Some(toss) = self.toss {
+            return self.advance_toss(toss, buttons, repeated);
+        }
         if self.can_switch_pocket() {
             if let Some(direction) = switch_direction(buttons, self.lr_buttons) {
                 self.switch = Some(PocketSwitch::start(direction));
@@ -303,6 +321,13 @@ impl BagScreen {
         let in_context = self.menu.context_grid().is_some();
         match self.apply(input) {
             None => BagScreenTick::Open,
+            Some(BagMenuOutcome::Action {
+                action: BagAction::Toss,
+                selection,
+            }) => {
+                self.start_toss(selection);
+                BagScreenTick::Open
+            }
             Some(BagMenuOutcome::Action { action, selection }) => {
                 BagScreenTick::Action { action, selection }
             }
@@ -487,6 +512,7 @@ fn open_from_pack(
         bag: bag.clone(),
         menu_request: engine_request,
         swap: None,
+        toss: None,
         repeat: KeyRepeat::new(key_repeat::START_DELAY),
         done: None,
         closed_from_context: false,
