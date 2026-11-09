@@ -218,9 +218,7 @@ pub(crate) fn check(
     }
     let second = u32::from(rng.next_u16() & 255);
     if ((level + limit) * second) >> 8 < limit {
-        // `battle_util.c:3975`-`:3998`: every other slot unusable loafs;
-        // otherwise `MOD(Random(), MAX_MON_MOVES)` is drawn until it lands
-        // on a usable slot, each draw counted.
+        // `battle_util.c:3975`-`:3998`.
         let unusable = unusable_slots(mon, chosen_slot);
         if unusable == ALL_MOVES_MASK {
             return Ok(Obedience::Loafs(LoafMessage::from_roll(rng.next_u16())));
