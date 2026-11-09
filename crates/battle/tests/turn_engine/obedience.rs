@@ -389,3 +389,110 @@ fn a_domestic_mew_above_its_limit_obeys_because_the_port_does_not_model_the_fate
     assert_eq!(gated_draws, ungated_draws);
     assert_eq!(gated_pp, ungated_pp);
 }
+
+/// A traded Gastly knowing Tackle and `alternate`, choosing Tackle against a
+/// level-5 `enemy_species` whose first ability slot is active, fed the
+/// alternate-move script: A=255 disobeys, B=0 picks the alternate branch,
+/// slot draws 0 (the chosen Tackle, rejected) then 1, target draws 0 (the
+/// attacker, rejected) then 1.
+fn alternate_move_turn(
+    alternate: MoveId,
+    enemy_species: u16,
+) -> (
+    Battle,
+    Result<Vec<BattleEvent>, battle::TurnError>,
+    SequenceRng,
+) {
+    let dex = Dex::new();
+    let player =
+        max_iv_mon(&dex, GASTLY, 20, vec![TACKLE, alternate]).with_original_trainer_id(OTHER_ID);
+    let enemy = max_iv_mon(&dex, enemy_species, 5, vec![TACKLE]).with_ability_slot(0);
+    let mut values = vec![0, 0, 0, 255, 0, 0, 1, 0, 1];
+    values.extend([0; 32]);
+    let mut rng = SequenceRng::new(values);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .unwrap()
+        .with_player_obedience(no_badges());
+    let result = battle.take_turn(PlayerAction::UseMove(0), &mut rng);
+    (battle, result, rng)
+}
+
+/// The alternate move gets the same ability-interaction screen a directly
+/// selected one does: Flame Wheel's burn against a healthy Synchronize
+/// holder would be reflected by `MOVEEND_SYNCHRONIZE_TARGET`
+/// (`battle_util.c:2971`-`:2986`), which is unmodelled, so the turn is
+/// refused before the alternate move is announced or spends PP.
+#[test]
+fn an_alternate_move_with_an_unmodelled_ability_interaction_is_refused() {
+    let ralts = assets::SpeciesId::RALTS.0;
+    let dex = Dex::new();
+    let enemy = max_iv_mon(&dex, ralts, 5, vec![TACKLE]).with_ability_slot(0);
+    assert_eq!(enemy.ability(), assets::AbilityId::SYNCHRONIZE);
+    // Selecting Flame Wheel directly is refused before any draw.
+    let player = max_iv_mon(&dex, GASTLY, 20, vec![TACKLE, MoveId::FLAME_WHEEL]);
+    let mut rng = SequenceRng::new(vec![0; 8]);
+    let mut direct = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let draws_before = rng.draws();
+    let refused = direct
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap_err();
+    assert_eq!(
+        refused.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE)
+    );
+    assert_eq!(rng.draws(), draws_before);
+
+    let (battle, result, rng) = alternate_move_turn(MoveId::FLAME_WHEEL, ralts);
+    let refused = result.unwrap_err();
+    assert_eq!(
+        refused.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE)
+    );
+    assert_eq!(refused.events(), [BattleEvent::IgnoredOrders]);
+    assert_eq!(
+        rng.draws(),
+        3 + 2 + 2 + 2,
+        "setup, gate, slot and target draws"
+    );
+    let full_pp: Vec<u8> = max_iv_mon(&Dex::new(), GASTLY, 20, vec![TACKLE, MoveId::FLAME_WHEEL])
+        .moves()
+        .iter()
+        .map(|slot| slot.pp)
+        .collect();
+    let pps: Vec<u8> = battle.player().moves().iter().map(|slot| slot.pp).collect();
+    assert_eq!(pps, full_pp, "neither slot spends PP");
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+}
+
+/// An alternate move with no executable pipeline is refused with the error a
+/// direct selection gets, before it is announced or spends PP.
+#[test]
+fn an_alternate_move_without_an_executable_pipeline_is_refused() {
+    let (battle, result, _) = alternate_move_turn(MoveId::HORN_DRILL, ZIGZAGOON);
+    let refused = result.unwrap_err();
+    assert_eq!(
+        refused.error(),
+        BattleError::UnsupportedMoveEffect(MoveId::HORN_DRILL)
+    );
+    assert_eq!(refused.events(), [BattleEvent::IgnoredOrders]);
+    let full_pp = max_iv_mon(&Dex::new(), GASTLY, 20, vec![MoveId::HORN_DRILL]).moves()[0].pp;
+    assert_eq!(battle.player().moves()[1].pp, full_pp);
+}
+
+/// The screen admits an alternate move whose interaction is modelled: the
+/// same Flame Wheel against a non-Synchronize foe runs and spends its PP.
+#[test]
+fn an_admissible_alternate_move_still_runs() {
+    let (battle, result, _) = alternate_move_turn(MoveId::FLAME_WHEEL, ZIGZAGOON);
+    let events = result.unwrap();
+    assert_eq!(events[0], BattleEvent::IgnoredOrders);
+    assert_eq!(
+        events[1],
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: MoveId::FLAME_WHEEL,
+        }
+    );
+    let full_pp = max_iv_mon(&Dex::new(), GASTLY, 20, vec![MoveId::FLAME_WHEEL]).moves()[0].pp;
+    assert_eq!(battle.player().moves()[1].pp, full_pp - 1);
+}

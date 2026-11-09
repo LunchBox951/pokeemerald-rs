@@ -1730,6 +1730,13 @@ impl Battle {
                 // drawn slot (`battle_util.c:3989`-`:3993`), so the move-end
                 // records and `ppreduce` see the alternate move.
                 let alternate = self.player.moves()[slot].move_id;
+                // A directly selected move passes `validate_player_move`'s
+                // pipeline and ability-interaction screens before the turn;
+                // the drawn move only exists after the gate's draws, so it
+                // is screened here, against the current participants,
+                // before it is announced or spends PP.
+                ensure_executable(&self.dex, alternate)?;
+                secondary::ensure_admissible(&self.dex, alternate, &self.player, &self.enemy)?;
                 self.last_move_used = alternate;
                 self.admit_and_execute(player_is_attacker, alternate, Some(slot), true, rng, events)
             }

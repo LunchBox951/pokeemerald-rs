@@ -61,7 +61,9 @@ pub enum BattleError {
     UnportedSecondaryEffect(MoveId),
 
     /// A battler's ability rewrites the outcome in a way no pipeline models,
-    /// reported by the pre-turn and constructor screens before any draw.
+    /// reported by the pre-turn and constructor screens before any draw, or,
+    /// for a disobedient battler's drawn alternate move, after the obedience
+    /// draws and before that move is announced or spends PP.
     UnportedAbilityInteraction(AbilityId),
 
     /// A traded Mew or Deoxys above its obedience limit, reported before the
