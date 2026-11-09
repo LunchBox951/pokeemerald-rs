@@ -1973,22 +1973,13 @@ impl Battle {
         attacker.deduct_pp_by(slot, pp_cost)
     }
 
-    /// `IsMonDisobedient` runs after the no-PP abort and before
-    /// `ppreduce` (`battle_script_commands.c:944`-`:957`), so a refused
-    /// action spends no PP. A loaf and a nap end through `moveendto
-    /// MOVEEND_NEXT_TARGET` (`data/battle_scripts_1.s:4232`-`:4250`), whose
-    /// `MOVEEND_UPDATE_LAST_MOVES` still names the attacker as its target's
-    /// last hitter and records `MOVE_UNAVAILABLE` because `HITMARKER_OBEYS`
-    /// is unset (`battle_script_commands.c:4405`-`:4417`); the self-hit
-    /// rejoins `BattleScript_MoveEnd` like confusion's. The nap is
-    /// `setmoveeffect MOVE_EFFECT_SLEEP | MOVE_EFFECT_AFFECTS_USER` then
-    /// `seteffectprimary` (`:4247`-`:4248`): `SetMoveEffect`'s guards
-    /// already held at the gate, so the sleep lands with the ordinary
-    /// `(Random() & 3) + 2` duration draw and cancels the sleeper's
-    /// multi-turn move (`battle_script_commands.c:2296`, `:2480`-`:2481`).
-    /// The alternate move prints `STRINGID_PKMNIGNOREDORDERS` and then runs
-    /// as the action (`BattleScript_IgnoresAndUsesRandomMove`, `:4227`-
-    /// `:4230`).
+    /// `IsMonDisobedient` sits after the no-PP abort and before `ppreduce`
+    /// (`battle_script_commands.c:944`-`:957`), so a refused action spends no
+    /// PP. Non-obvious: a loaf and a nap still run `MOVEEND_UPDATE_LAST_MOVES`
+    /// (`data/battle_scripts_1.s:4232`-`:4250`, `battle_script_commands.c:4405`-
+    /// `:4417`), so the attacker becomes its target's last hitter even though
+    /// no move ran. The nap's sleep guards already held at the gate, so
+    /// `SetMoveEffect` cannot fail there (`:2287`-`:2298`).
     fn run_obedience_gate(
         &mut self,
         player_is_attacker: bool,

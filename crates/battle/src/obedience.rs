@@ -159,13 +159,9 @@ fn unusable_slots(mon: &BattlePokemon, chosen_slot: Option<usize>) -> u8 {
 }
 
 /// `GetMoveTarget(move, NO_TARGET_OVERRIDE)` for the player's battler in a
-/// single battle (`battle_util.c:3836`-`:3910`): `MOVE_TARGET_SELECTED`
-/// samples `Random() % gBattlersCount` until the result is not the attacker
-/// (`:3851`-`:3853`), so with two battlers and the player at index 0 every
-/// even draw is rejected. Every other target kind resolves without a draw
-/// in singles, including `MOVE_TARGET_RANDOM` (`:3882`-`:3902`). Follow Me
-/// (`followmeTimer`) is unmodelled and the Lightning Rod redirect (`:3854`-
-/// `:3861`) cannot flip in singles because the lone opponent is the holder.
+/// single battle (`battle_util.c:3836`-`:3910`). Only `MOVE_TARGET_SELECTED`
+/// draws (`:3851`-`:3853`); Follow Me is unmodelled and the Lightning Rod
+/// redirect (`:3854`-`:3861`) cannot flip in singles.
 pub(crate) fn draw_move_target(target: MoveTarget, rng: &mut impl BattleRng) {
     if target != MoveTarget::SELECTED {
         return;
