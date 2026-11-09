@@ -815,9 +815,19 @@ pub enum BattleEvent {
         /// second buffer (`src/battle_script_commands.c:3381`-`:3397`).
         boosted: bool,
     },
+    /// A level-up move took a free slot without asking the player.
+    ///
+    /// One event per learned move, in the order the level-up walk reached
+    /// them. They follow [`BattleEvent::ExpGained`] and precede any
+    /// [`BattleEvent::MoveLearnPrompt`] the same award opens.
+    MoveLearned {
+        /// The newly learned move.
+        move_id: MoveId,
+    },
     /// Move learning paused experience application and faint resolution.
     ///
-    /// This follows [`BattleEvent::ExpGained`] or a previous move-learning answer
+    /// This follows [`BattleEvent::ExpGained`], a [`BattleEvent::MoveLearned`],
+    /// or a previous move-learning answer
     /// and blocks further turns until the player answers it.
     MoveLearnPrompt {
         /// The move offered to the player.

@@ -557,3 +557,87 @@ fn a_map_edge_crossing_onto_ordinary_ground_leaves_the_entered_scene_without_eff
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
     std::fs::remove_file(path).expect("scratch pack");
 }
+
+/// Route 101 with tall grass on its top-edge tile `(13, 0)`, the player at rest
+/// one tile south of it facing north.
+fn route_101_phase_with_grass_on_the_edge_tile() -> (OverworldPhase, std::path::PathBuf) {
+    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+    phase.scene =
+        synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 0), MB_TALL_GRASS, GROUND)])
+            .in_room_for_test(ROUTE_101);
+    phase.player = PlayerState::new((LANDING_X, 1), GROUND, Direction::North);
+    (phase, path)
+}
+
+/// `UpdateTallGrassFieldEffect` (`field_effect_helpers.c:324-337`) translates a
+/// still-live effect by the camera offset on a connection crossing and keeps it
+/// while the player has not yet left the departed tile's coordinates.
+#[test]
+fn a_map_edge_crossing_keeps_the_departed_tiles_live_effect() {
+    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.player.position(), (LANDING_X, 0));
+    idle(&mut phase, 15);
+    assert!(!phase.player.in_transit());
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1, "before crossing");
+    let before = shown_image(&phase);
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, OLDALE_TOWN, "the crossing rebound the scene");
+    let count = phase.scene.tall_grass_effect_count();
+    let after = shown_image(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(
+        count, 1,
+        "the departed tile's live effect survives the crossing"
+    );
+    assert_eq!(
+        after, before,
+        "the animation continues rather than restarting"
+    );
+}
+
+/// The carried effect keeps its moved-away and animation-ended state: it ends
+/// once the player has left the departed tile and its animation has finished.
+#[test]
+fn a_carried_effect_still_ends_when_its_animation_finishes_after_the_owner_leaves() {
+    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    phase.step(held(Buttons::UP));
+    idle(&mut phase, 15);
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, OLDALE_TOWN);
+    idle(&mut phase, 5);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1, "mid-animation");
+    for _ in 0..40 {
+        phase.step(held(Buttons::UP));
+    }
+    idle(&mut phase, 60);
+    let count = phase.scene.tall_grass_effect_count();
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(count, 0, "the carried effect ended after the owner left");
+}
+
+/// A carried effect must lie inside the entered map's retained strip (seven
+/// metatiles beyond its south edge): a tile farther out is dropped.
+#[test]
+fn a_carried_effect_outside_the_entered_maps_retained_strip_is_dropped() {
+    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+    phase.scene =
+        synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 7), MB_TALL_GRASS, GROUND)])
+            .in_room_for_test(ROUTE_101);
+    phase.scene.player_step_began((13, 7), GROUND);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1, "before crossing");
+    // Route 101's `(13, 7)` is `(13, 26)` in Oldale's coordinates, the last row
+    // of the 6 the backup map holds beyond the south edge: retained.
+    assert!(phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), (0, 19)));
+    let retained = phase.scene.tall_grass_effect_count();
+
+    // One row farther out, `(13, 27)`, no cell backs it.
+    phase.scene =
+        synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 7), MB_TALL_GRASS, GROUND)])
+            .in_room_for_test(ROUTE_101);
+    phase.scene.player_step_began((13, 7), GROUND);
+    assert!(phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), (0, 20)));
+    let dropped = phase.scene.tall_grass_effect_count();
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!((retained, dropped), (1, 0));
+}
