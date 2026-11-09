@@ -15,6 +15,7 @@ use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
+use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
@@ -438,6 +439,13 @@ pub(crate) const FONTS: [FontSource; 5] = [
     },
 ];
 
+/// The keypad-icon sheet (`graphics/fonts/keypad_icons.png`), the bitmap
+/// `sKeypadIconTiles` holds (`pokeemerald/src/text.c:117`).
+pub(crate) const KEYPAD_ICONS: FontSource = FontSource {
+    filename: "keypad_icons.png",
+    pack_id: "font/keypad_icons",
+};
+
 #[derive(Clone, Copy)]
 pub(crate) struct LayoutSource {
     pub(crate) upstream_id: &'static str,
@@ -715,6 +723,12 @@ pub(crate) fn opening_scene_ids() -> Vec<String> {
 /// palettes, and two tilemaps.
 pub(crate) fn evolution_scene_ids() -> Vec<String> {
     evolution_scene_pack_ids()
+}
+
+/// Every `party-menu/` pack id extraction emits: three sheets, three
+/// palettes, and eight maps.
+pub(crate) fn party_menu_ids() -> Vec<String> {
+    party_menu_pack_ids()
 }
 
 /// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its

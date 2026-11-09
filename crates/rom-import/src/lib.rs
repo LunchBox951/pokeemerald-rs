@@ -42,7 +42,8 @@
 //!   tables, animation frames), the map layouts (`layout/*`: metatile grids
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
 //!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
-//!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
+//!   decoded from `gbagfx`'s `.latfont` layout) and the keypad icon sheet
+//!   (`font/keypad_icons`), and the text windows
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
@@ -133,8 +134,8 @@ pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
-    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
+    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 };
