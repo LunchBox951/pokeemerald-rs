@@ -141,7 +141,8 @@ fn a_completed_turn_on_a_forced_tile_never_observes() {
         ROUTE_101,
         PlayerState::new(TILE, 3, Direction::East),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(ENCOUNTER_SEED);
     let rng_before = phase.rng.state();
     start_and_drain_turn(&mut phase, Buttons::DOWN);

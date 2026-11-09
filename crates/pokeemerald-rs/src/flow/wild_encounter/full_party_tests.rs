@@ -69,12 +69,18 @@ fn decoded(record: &Pokemon) -> BattlePokemon {
 /// A Route 101 room with the seeded grass at `(7, 5)` and money 2001, whose saved party
 /// is `records` (count = their number) and whose lead is `lead` backed by `lead_slot`.
 fn phase_with_party(records: &[Pokemon], lead_slot: usize, lead: BattlePokemon) -> OverworldPhase {
-    let mut phase = route_101_phase_with_grass(
-        20,
-        10,
-        PlayerState::new((2, 5), 3, Direction::East),
-        &[(7, 5)],
-    );
+    phase_with_party_on_grass(records, lead_slot, lead, &[(7, 5)])
+}
+
+/// [`phase_with_party`] with the room's tall grass at `grass`.
+fn phase_with_party_on_grass(
+    records: &[Pokemon],
+    lead_slot: usize,
+    lead: BattlePokemon,
+    grass: &[(u16, u16)],
+) -> OverworldPhase {
+    let mut phase =
+        route_101_phase_with_grass(20, 10, PlayerState::new((2, 5), 3, Direction::East), grass);
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.save1.money = 2001;
     for (slot, record) in records.iter().enumerate() {
@@ -501,5 +507,72 @@ fn an_undecodable_reserve_retains_a_nonzero_slot_fainted_lead() {
         phase.lead_slot_for_test(),
         Some(1),
         "the fainted slot-1 lead is retained"
+    );
+}
+
+/// After the undecodable-reserve loss the retained lead is fainted, so the shared lead screen
+/// disables the encounter roll: later grass steps draw nothing and every saved record keeps
+/// its bytes.
+#[test]
+fn later_grass_steps_after_an_undecodable_reserve_loss_draw_nothing() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&lead), odd];
+    let mut phase = phase_with_party_on_grass(
+        &records,
+        0,
+        lead,
+        &[
+            (7, 5),
+            (8, 5),
+            (9, 5),
+            (10, 5),
+            (11, 5),
+            (12, 5),
+            (13, 5),
+            (14, 5),
+            (15, 5),
+            (16, 5),
+        ],
+    );
+    phase.save1.last_heal_location.map_group = -1;
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+    assert_eq!(decoded(&phase.save1.player_party[0]).current_hp(), 0);
+    let party_after_loss: Vec<_> = phase
+        .save1
+        .player_party
+        .iter()
+        .map(|record| record.to_bytes())
+        .collect();
+    let rng_after_loss = phase.rng.state();
+
+    walk_east_and_land(&mut phase, 9);
+
+    assert_eq!(
+        phase.player.position(),
+        (16, 5),
+        "nine more grass tiles walked, past the encounter immunity"
+    );
+    assert!(!phase.is_wild_battle_active(), "no encounter may start");
+    assert_eq!(phase.rng.state(), rng_after_loss, "no roll draws");
+    let party_now: Vec<_> = phase
+        .save1
+        .player_party
+        .iter()
+        .map(|record| record.to_bytes())
+        .collect();
+    assert_eq!(
+        party_now, party_after_loss,
+        "the saved party keeps its bytes"
     );
 }
