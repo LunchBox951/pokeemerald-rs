@@ -463,6 +463,33 @@ pub(super) enum PutBack {
     Gone(String),
 }
 
+/// The longest a single path component may be on the platforms this runs
+/// on (`NAME_MAX`: 255 bytes on Linux, Android and Apple filesystems).
+const NAME_MAX: usize = 255;
+
+/// The `n`th recovery name for `name`: `<name>.restored-<n>`, with `name`
+/// cut short (at a character boundary if it is valid UTF-8) so the result
+/// fits [`NAME_MAX`]; a full-length name would otherwise get `ENAMETOOLONG`
+/// for every candidate.
+fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    let suffix = format!(".restored-{n}");
+    let room = NAME_MAX.saturating_sub(suffix.len());
+    let bytes = name.as_bytes();
+    let mut keep = bytes.len().min(room);
+    if keep < bytes.len() && std::str::from_utf8(bytes).is_ok() {
+        // Valid UTF-8: back off to the start of the character the cut fell in.
+        while keep > 0 && (bytes[keep] & 0xC0) == 0x80 {
+            keep -= 1;
+        }
+    }
+    let mut aside = Vec::with_capacity(keep + suffix.len());
+    aside.extend_from_slice(&bytes[..keep]);
+    aside.extend_from_slice(suffix.as_bytes());
+    std::ffi::OsString::from_vec(aside)
+}
+
 /// [`restore_capture`], telling a capture that vanished from the
 /// quarantine apart from one stranded there.
 fn put_back(
@@ -478,8 +505,7 @@ fn put_back(
         return PutBack::InPlace;
     }
     for n in 0..16 {
-        let mut aside = dir.name.clone();
-        aside.push(format!(".restored-{n}"));
+        let aside = restored_name(&dir.name, n);
         if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &aside).is_ok() {
             return PutBack::Aside {
                 warning: format!(
