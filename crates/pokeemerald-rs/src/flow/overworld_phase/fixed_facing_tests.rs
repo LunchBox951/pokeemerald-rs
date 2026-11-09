@@ -287,7 +287,8 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
 }
 
 #[test]
-fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_scheduled() {
+#[allow(clippy::too_many_lines)] // one pack and two sibling transitions; splitting would re-set-up the pack
+fn a_warp_reseeds_unadmitted_authored_facing_and_a_crossing_keeps_the_live_visit() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -369,10 +370,56 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
     phase.warp_to(OLDALE_TOWN, 0);
     assert_reseeded(&mut phase, "the warp");
 
+    // A crossing is not a map load: upstream leaves the active objects in place
+    // (`LoadMapFromCameraTransition`, `src/overworld.c:784-825`), so with nothing to shift the
+    // live visit is exactly what it was, turned facings and admissions included.
     let mut phase = build();
     turn_everyone_south_and_run(&mut phase);
+    let live_visit = |phase: &OverworldPhase| -> Vec<_> {
+        phase
+            .object_events
+            .iter()
+            .map(|entry| {
+                (
+                    entry.template().local_id,
+                    entry.is_active(),
+                    entry.state().facing(),
+                )
+            })
+            .collect()
+    };
+    let before = live_visit(&phase);
+    assert!(
+        before.iter().any(|&(_, active, _)| active),
+        "setup: some entries are admitted"
+    );
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
-    assert_reseeded(&mut phase, "the connection crossing");
+    assert_eq!(
+        phase.map_id, OLDALE_TOWN,
+        "the connection crossing completed"
+    );
+    let after = live_visit(&phase);
+    for template in events.object_events {
+        let (id, was_active, was_facing) = *before
+            .iter()
+            .find(|&&(id, ..)| id == template.local_id)
+            .unwrap();
+        let (_, now_active, now_facing) = *after.iter().find(|&&(i, ..)| i == id).unwrap();
+        assert_eq!(
+            now_active, was_active,
+            "local {id}: no admission by the crossing"
+        );
+        assert_eq!(
+            now_facing,
+            if was_active {
+                was_facing
+            } else {
+                authored_facing(template.movement_type)
+            },
+            "local {id}: an admitted entry stays live as it was; one never admitted has no \
+             object to carry and is seeded afresh"
+        );
+    }
 
     let _ = std::fs::remove_file(&path);
 }
