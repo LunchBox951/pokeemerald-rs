@@ -120,15 +120,37 @@ fn select_active_battler_surfaces_slot_0s_decode_error_when_nothing_is_usable() 
 #[test]
 fn an_unmodelled_status_slot_is_skipped_for_a_later_healthy_slot_and_left_untouched() {
     let dex = Dex::new();
-    let mut toxic = to_save_pokemon(&dex, &treecko_fixture());
-    toxic.status = 0x80;
+    let mut mixed = to_save_pokemon(&dex, &treecko_fixture());
+    // Toxic beside ordinary poison is two conditions at once.
+    mixed.status = 0x88;
     let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
-    let party = [toxic, healthy];
+    let party = [mixed, healthy];
 
     let lead = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
 
     assert_eq!(lead.slot(), 1);
-    assert_eq!(party[0].status, 0x80);
+    assert_eq!(party[0].status, 0x88);
+}
+
+/// A living badly poisoned first slot is modelled (`STATUS1_TOXIC_POISON`
+/// with any counter), so it is selected as the lead rather than skipped.
+#[test]
+fn a_living_badly_poisoned_first_slot_is_selected_not_skipped() {
+    let dex = Dex::new();
+    for counter in [0u8, 5, 15] {
+        let mut toxic = to_save_pokemon(&dex, &treecko_fixture());
+        toxic.status = 0x80 | u32::from(counter) << 8;
+        let healthy = to_save_pokemon(&dex, &torchic_before_learning_peck());
+        let party = [toxic, healthy];
+
+        let lead = LoadedLead::load(&dex, &party).expect("slot 0 is usable");
+
+        assert_eq!(lead.slot(), 0, "counter {counter}");
+        assert_eq!(
+            lead.battler().status1(),
+            battle::Status1::BadPoisoned { counter }
+        );
+    }
 }
 
 /// A living frozen first slot is modelled (`STATUS1_FREEZE`, `0x20`), so it

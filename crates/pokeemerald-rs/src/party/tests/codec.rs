@@ -572,19 +572,68 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     }
 }
 
-/// Bad poison `0x80` and its counter bits
-/// (`0x0F00`), several conditions at once, a sleep count beside poison, and
-/// bits above `STATUS1_ANY` are not modelled
+/// `STATUS1_TOXIC_POISON | STATUS1_TOXIC_TURN(counter)` is `0x80 | counter <<
+/// 8`, every one of the sixteen counters
+/// (`pokeemerald/include/constants/battle.h:117,123-125`): each decodes to its
+/// counter, merges back byte for byte, and encodes from a fresh battler.
+#[test]
+fn every_bad_poison_word_decodes_and_encodes_back_to_itself() {
+    let dex = Dex::new();
+    for counter in 0u8..=15 {
+        let word = 0x80 | u32::from(counter) << 8;
+        let expected = battle::Status1::BadPoisoned { counter };
+        let mut record = to_save_pokemon(&dex, &treecko_fixture());
+        record.status = word;
+
+        assert_eq!(
+            from_save_pokemon(&dex, &record).unwrap().status1(),
+            expected,
+            "word {word:#x}"
+        );
+        let mut loaded = LoadedLead::load(&dex, &[record]).expect("a toxic word decodes");
+        assert_eq!(loaded.battler().status1(), expected, "word {word:#x}");
+        assert_eq!(loaded.merge_and_save(&dex).status, word, "word {word:#x}");
+        let mut fresh = treecko_fixture();
+        fresh.set_status1(expected);
+        assert_eq!(to_save_pokemon(&dex, &fresh).status, word, "word {word:#x}");
+    }
+    assert_eq!(0x80 | 5u32 << 8, 0x580, "the issue's worked example");
+}
+
+#[test]
+fn a_toxic_counter_beyond_the_status_words_four_bits_is_refused_rather_than_truncated() {
+    let mut lead = treecko_fixture();
+    lead.set_status1(battle::Status1::BadPoisoned { counter: 15 });
+    assert_eq!(to_save_pokemon(&Dex::new(), &lead).status, 0xF80);
+
+    // The battle crate refuses an out-of-range counter at the setter; the
+    // encoder carries its own guard against a bypass.
+    let outcome = std::panic::catch_unwind(|| {
+        let mut lead = treecko_fixture();
+        lead.set_status1(battle::Status1::BadPoisoned { counter: 16 });
+        to_save_pokemon(&Dex::new(), &lead)
+    });
+    assert!(outcome.is_err(), "counter 16 would otherwise set bit 12");
+}
+
+/// A counter without the toxic flag, several conditions at once (toxic
+/// beside poison, burn or sleep included), a sleep count beside poison, and
+/// bits above the counter are not modelled
 /// (`pokeemerald/include/constants/battle.h:117-125`): decoding fails closed
 /// and names the original word, never masking it to a neighbour.
 #[test]
 fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
     let dex = Dex::new();
     for word in [
-        0x80,
-        0x180,
-        0xF80,
         0x100,
+        0xF00,
+        0x188,
+        0x81,
+        0x90,
+        0xA0,
+        0xC0,
+        0x1080,
+        0x1F80,
         0x9,
         0x48,
         0x88,
@@ -623,4 +672,97 @@ fn an_internal_sleep_count_beyond_the_status_word_is_refused_rather_than_truncat
         outcome.is_err(),
         "turns 8 would otherwise encode as STATUS1_POISON"
     );
+}
+
+/// Re-writes `slot`'s saved PP byte, re-checksumming the record.
+fn with_saved_pp(dex: &Dex, mon: &BattlePokemon, slot: usize, pp: u8) -> Pokemon {
+    let mut saved = to_save_pokemon(dex, mon);
+    let mut subs = saved.box_data.substructures().unwrap();
+    subs.attacks[EXPECTED_ATTACK_PP_OFFSET + slot] = pp;
+    saved.box_data.set_substructures(&subs);
+    saved
+}
+
+fn saved_pp(record: &Pokemon, slot: usize) -> u8 {
+    record.box_data.substructures().unwrap().attacks[EXPECTED_ATTACK_PP_OFFSET + slot]
+}
+
+#[test]
+fn saved_pp_above_the_maximum_survives_decode_and_merge() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 1);
+
+    let decoded = from_save_pokemon(&dex, &saved).expect("checksummed record decodes");
+    assert_eq!(
+        decoded.moves()[0].pp,
+        max + 1,
+        "`GetMonData(MON_DATA_PP1)` returns the stored byte unclamped (`pokemon.c:3851-3855`)"
+    );
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(
+        saved_pp(&merged, 0),
+        max + 1,
+        "a merge with no battle or heal must write the saved PP byte back unchanged"
+    );
+}
+
+#[test]
+fn every_saved_pp_byte_survives_decode_and_merge_in_every_slot() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    for slot in 0..mon.moves().len() {
+        for byte in [0, 1, mon.max_pp(&dex, slot).unwrap(), u8::MAX] {
+            let saved = with_saved_pp(&dex, &mon, slot, byte);
+            let decoded = from_save_pokemon(&dex, &saved).expect("checksummed record decodes");
+            let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+            assert_eq!(
+                merged.box_data.substructures().unwrap().attacks,
+                saved.box_data.substructures().unwrap().attacks,
+                "slot {slot} PP {byte}"
+            );
+        }
+    }
+}
+
+#[test]
+fn saved_pp_at_exactly_the_maximum_round_trips() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max);
+
+    let decoded = from_save_pokemon(&dex, &saved).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max);
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(saved_pp(&merged, 0), max);
+}
+
+#[test]
+fn a_move_spent_from_above_the_maximum_counts_down_from_the_saved_value() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 5);
+
+    let mut decoded = from_save_pokemon(&dex, &saved).unwrap();
+    decoded.deduct_pp(0).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max + 4);
+
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(saved_pp(&merged, 0), max + 4);
+}
+
+#[test]
+fn healing_a_record_saved_above_the_maximum_restores_the_maximum() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 1);
+
+    let mut decoded = from_save_pokemon(&dex, &saved).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max + 1, "the heal starts from above");
+    decoded.heal(&dex).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max);
 }

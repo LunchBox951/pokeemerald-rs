@@ -83,7 +83,12 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "evolution-scene/",
     "poke-ball/",
     "naming-screen/",
+    "party-menu/",
 ];
+
+/// The text printer's page-prompt arrow, by id: `interface/` is a complete
+/// prefix, but a sheet both backends drop together would pass it.
+const DOWN_ARROW_IDS: [&str; 1] = ["interface/image/down_arrow"];
 
 /// The species whose static battler art both backends must carry: the
 /// starters, then the checkpoint's other eleven Pokémon.
@@ -240,6 +245,27 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/raw/bg_outer",
 ];
 
+/// The party menu's fourteen pack ids, named independently of the checkout
+/// extractor and of the profile: three sheets, three palettes, the
+/// background screen, five slot panels, and two buttons. `party-menu/` is a
+/// complete prefix, but a record both backends drop together would pass it.
+const PARTY_MENU_IDS: [&str; 14] = [
+    "party-menu/image/bg",
+    "party-menu/image/pokeball",
+    "party-menu/image/hold_icons",
+    "party-menu/palette/bg",
+    "party-menu/palette/pokeball",
+    "party-menu/palette/hold_icons",
+    "party-menu/raw/bg",
+    "party-menu/raw/slot_main",
+    "party-menu/raw/slot_main_no_hp",
+    "party-menu/raw/slot_wide",
+    "party-menu/raw/slot_wide_no_hp",
+    "party-menu/raw/slot_wide_empty",
+    "party-menu/raw/confirm_button",
+    "party-menu/raw/cancel_button",
+];
+
 /// The Birch-speech portraits: the front image and palette of Brendan and of
 /// May. Named by id so portraits both backends drop together still fail.
 const TRAINER_PORTRAIT_IDS: [&str; 4] = [
@@ -383,6 +409,8 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
+        .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
+        .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -526,6 +554,136 @@ fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
         .colors()
         .eq(from_checkout.sheet.palette.colors()));
     assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
+}
+
+/// Every party-menu graphic resolves through the typed accessor from both
+/// packs and is equal. The accessor validates each shape, so a ROM import that
+/// wrote a different raster, palette length, or map width fails here as well
+/// as in the byte comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_party_menu_handle_is_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-party-menu-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+    let imported = assets::AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = assets::AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let ours = imported.party_menu().expect("the imported party menu");
+    let theirs = checkout.party_menu().expect("the checkout party menu");
+
+    let (a, b) = (&ours.background.sheet, &theirs.background.sheet);
+    assert_eq!((a.width, a.height, a.bit_depth), (8, 62 * 8, 4));
+    assert_eq!(
+        (a.width, a.height, a.bit_depth, a.pixels),
+        (b.width, b.height, b.bit_depth, b.pixels)
+    );
+    assert_eq!(ours.background.palette.color_count, 11 * 16);
+    assert!(ours
+        .background
+        .palette
+        .colors()
+        .eq(theirs.background.palette.colors()));
+    assert_eq!(ours.background.tilemap, theirs.background.tilemap);
+    for (name, ours, theirs, size) in [
+        ("Poké Ball", &ours.poke_ball, &theirs.poke_ball, (32, 64)),
+        ("held item", &ours.held_item, &theirs.held_item, (8, 16)),
+    ] {
+        let (a, b) = (&ours.image, &theirs.image);
+        assert_eq!(
+            (a.width, a.height, a.bit_depth),
+            (size.0, size.1, 4),
+            "{name}"
+        );
+        assert_eq!(
+            (a.width, a.height, a.bit_depth, a.pixels),
+            (b.width, b.height, b.bit_depth, b.pixels),
+            "{name}"
+        );
+        assert_eq!(ours.palette.color_count, 16, "{name}");
+        assert!(ours.palette.colors().eq(theirs.palette.colors()), "{name}");
+    }
+    assert_eq!(ours.slots, theirs.slots);
+    assert_eq!(ours.confirm_button, theirs.confirm_button);
+    assert_eq!(ours.cancel_button, theirs.cancel_button);
+    // The five panels and two buttons are different maps, not one repeated.
+    for (index, slot) in ours.slots.iter().enumerate() {
+        assert!(
+            ours.slots[index + 1..].iter().all(|other| other != slot),
+            "slot {index} repeats"
+        );
+    }
+    assert_ne!(ours.confirm_button, ours.cancel_button);
+    eprintln!("party-menu record equal through both backends");
+}
+
+/// The down arrow resolves through the typed accessor from both packs, and
+/// all four frames are equal. The accessor validates the sheet's shape, so a
+/// ROM import that wrote the wrong raster fails here as well as in the byte
+/// comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-down-arrow-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let from_rom = imported
+        .text_printer_down_arrow()
+        .expect("the imported pack's down arrow");
+    let from_checkout = checkout
+        .text_printer_down_arrow()
+        .expect("the checkout pack's down arrow");
+    let _ = std::fs::remove_file(imported_path);
+
+    for index in 0..4 {
+        let (rom_frame, checkout_frame) = (from_rom.frame(index), from_checkout.frame(index));
+        assert_eq!(
+            (rom_frame.width, rom_frame.height),
+            (8, 16),
+            "frame {index}"
+        );
+        assert!(
+            rom_frame.pixels.iter().any(|&pixel| pixel != 0),
+            "frame {index} is blank"
+        );
+        assert_eq!(rom_frame.pixels, checkout_frame.pixels, "frame {index}");
+    }
 }
 
 /// The cries, named by id: the `audio/cry/table` entry, exactly
@@ -733,6 +891,65 @@ fn the_naming_screen_profile_roots_are_the_manifest_ids() {
         .collect();
     profiled.sort_unstable();
     assert_eq!(profiled, expected);
+}
+
+/// The profile's party-menu roots are exactly the 14 pinned ids, with the
+/// encodings and shapes upstream stores, so the complete `party-menu/` prefix
+/// cannot pass by both backends dropping the same entry.
+#[test]
+fn the_party_menu_profile_roots_are_the_pinned_ids() {
+    use rom_import::Encoding::{Lz77, Raw};
+    let roots = &rom_import::EMERALD_US_REV0.roots.party_menu;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut expected = PARTY_MENU_IDS;
+    expected.sort_unstable();
+    assert_eq!(profiled, expected);
+
+    let image = |id: &str| {
+        let root = roots.images.iter().find(|root| root.id == id).unwrap();
+        (
+            root.encoding,
+            root.width,
+            root.height,
+            root.tile_count,
+            root.rom_bit_depth,
+            root.pack_bit_depth,
+        )
+    };
+    // The background is cut to its first 62 tiles by `-num_tiles 62`.
+    assert_eq!(image("party-menu/image/bg"), (Lz77, 8, 62 * 8, 62, 4, 4));
+    assert_eq!(image("party-menu/image/pokeball"), (Lz77, 32, 64, 32, 4, 4));
+    assert_eq!(image("party-menu/image/hold_icons"), (Raw, 8, 16, 2, 4, 4));
+    let palette = |id: &str| {
+        let root = roots.palettes.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.color_count)
+    };
+    assert_eq!(palette("party-menu/palette/bg"), (Lz77, 11 * 16));
+    assert_eq!(palette("party-menu/palette/pokeball"), (Lz77, 16));
+    assert_eq!(palette("party-menu/palette/hold_icons"), (Raw, 16));
+    let map = |id: &str| {
+        let root = roots.tilemaps.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.len)
+    };
+    assert_eq!(map("party-menu/raw/bg"), (Lz77, 32 * 32 * 2));
+    for (id, len) in [
+        ("slot_main", 10 * 7),
+        ("slot_main_no_hp", 10 * 7),
+        ("slot_wide", 18 * 3),
+        ("slot_wide_no_hp", 18 * 3),
+        ("slot_wide_empty", 18 * 3),
+        ("confirm_button", 7 * 2 * 2),
+        ("cancel_button", 7 * 2 * 2),
+    ] {
+        assert_eq!(map(&format!("party-menu/raw/{id}")), (Raw, len), "{id}");
+    }
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

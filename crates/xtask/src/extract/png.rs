@@ -7,6 +7,11 @@
 //! unpacked palette-index pixels in scanline order. [`decode_palette`] reads
 //! an embedded `PLTE` chunk for assets whose in-game palette comes from the
 //! PNG itself.
+//!
+//! A `PLTE` with more than `2^bit_depth` entries is malformed (PNG 1.2
+//! §4.1.2). [`decode`] refuses it; libpng truncates it, so
+//! [`decode_truncating_palette`] and [`decode_palette`] do the same for the
+//! upstream PNGs that ship one.
 
 use std::fmt;
 
@@ -61,13 +66,16 @@ pub enum PngError {
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
     TooManyPaletteEntries(usize),
     /// The `PLTE` chunk has more entries than the `IHDR` bit depth can index
-    /// (at most `2^bit_depth`).
+    /// (at most `2^bit_depth`; PNG 1.2 §4.1.2).
     PaletteExceedsBitDepth {
         /// The number of `PLTE` entries.
         count: usize,
         /// The `IHDR` bit depth.
         bit_depth: u8,
     },
+    /// The image's colour type may not carry a `PLTE` chunk (PNG 1.2 §4.1.2:
+    /// it must not appear for colour types 0 and 4).
+    PaletteForbiddenForColorType(u8),
     /// A critical chunk appears out of the order, or more often than, PNG
     /// allows, or `IEND` carries data.
     MalformedChunkStructure([u8; 4]),
@@ -119,6 +127,10 @@ impl fmt::Display for PngError {
                 f,
                 "PNG PLTE chunk declares {count} entries: a {bit_depth}-bit indexed image can index at most {}",
                 1usize << bit_depth
+            ),
+            Self::PaletteForbiddenForColorType(color_type) => write!(
+                f,
+                "PNG has a PLTE chunk, which colour type {color_type} images must not carry"
             ),
         }
     }
@@ -424,13 +436,47 @@ fn scanline_layout(
     Ok((packed_row_bytes, scanline_size, expected_len))
 }
 
+/// How [`decode`] treats a `PLTE` with more entries than the bit depth can
+/// index (PNG 1.2 §4.1.2 forbids one).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OversizePalette {
+    /// Fail with [`PngError::PaletteExceedsBitDepth`].
+    Reject,
+    /// Keep the first `2^bit_depth` entries, as libpng's `png_handle_PLTE`
+    /// does.
+    Truncate,
+}
+
 /// Decode a PNG file's bytes into an [`IndexedImage`].
+///
+/// A `PLTE` with more than `2^bit_depth` entries is malformed (PNG 1.2
+/// §4.1.2) and is refused. Use [`decode_truncating_palette`] for the upstream
+/// PNGs that ship one.
 ///
 /// # Errors
 ///
 /// Returns [`PngError`] when framing, the supported image shape, compressed
 /// data, scanline filters, or an optional palette is invalid.
 pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
+    decode_with(data, OversizePalette::Reject)
+}
+
+/// Like [`decode`], but a `PLTE` longer than the `2^bit_depth` slots the image
+/// can address is truncated to those first slots rather than refused, as
+/// [`decode_palette`] does and libpng's `png_handle_PLTE` does. Upstream ships
+/// 24 such 4-bit PNGs (for example `graphics/birch_speech/shadow.png`, 32
+/// entries). The returned `palette` is the truncated one, so a caller that
+/// counts `PLTE` entries must use [`decode`].
+///
+/// # Errors
+///
+/// Returns [`PngError`] for everything [`decode`] does except an oversize
+/// `PLTE`.
+pub fn decode_truncating_palette(data: &[u8]) -> Result<IndexedImage, PngError> {
+    decode_with(data, OversizePalette::Truncate)
+}
+
+fn decode_with(data: &[u8], oversize: OversizePalette) -> Result<IndexedImage, PngError> {
     let rest = data
         .strip_prefix(&SIGNATURE)
         .ok_or(PngError::BadSignature)?;
@@ -461,7 +507,13 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
         }
     }
     let palette = match chunks.iter().find(|chunk| chunk.kind == PLTE) {
-        Some(chunk) => parse_plte(chunk.data)?,
+        Some(chunk) => {
+            let entries = header.parse_palette(chunk.data)?;
+            match oversize {
+                OversizePalette::Reject => header.reject_oversize(entries)?,
+                OversizePalette::Truncate => header.truncate_to_addressable(entries),
+            }
+        }
         None => Vec::new(),
     };
 
@@ -472,6 +524,46 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
         pixels,
         palette,
     })
+}
+
+impl Header {
+    /// Parses a `PLTE` chunk's data for this header. PNG 1.2 §4.1.2 forbids
+    /// `PLTE` for greyscale images (colour types 0 and 4) and permits it as a
+    /// suggested palette for truecolour (types 2 and 6); this decoder accepts
+    /// it only for indexed images (type 3), the one use the extracted assets
+    /// have. §11.2.3 fixes the length. The `2^bit_depth` limit (§4.1.2) is
+    /// applied after parsing, by [`Self::reject_oversize`] or
+    /// [`Self::truncate_to_addressable`].
+    fn parse_palette(&self, data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
+        if self.color_type != INDEXED_COLOR_TYPE {
+            return Err(PngError::PaletteForbiddenForColorType(self.color_type));
+        }
+        parse_plte(data)
+    }
+}
+
+impl Header {
+    /// The palette slots an image of this bit depth can address (PNG 1.2
+    /// §4.1.2): the one cap [`Self::reject_oversize`] and
+    /// [`Self::truncate_to_addressable`] share.
+    fn addressable_palette_entries(&self) -> usize {
+        1usize << self.bit_depth
+    }
+
+    fn reject_oversize(&self, entries: Vec<[u8; 3]>) -> Result<Vec<[u8; 3]>, PngError> {
+        if entries.len() > self.addressable_palette_entries() {
+            return Err(PngError::PaletteExceedsBitDepth {
+                count: entries.len(),
+                bit_depth: self.bit_depth,
+            });
+        }
+        Ok(entries)
+    }
+
+    fn truncate_to_addressable(&self, mut entries: Vec<[u8; 3]>) -> Vec<[u8; 3]> {
+        entries.truncate(self.addressable_palette_entries());
+        entries
+    }
 }
 
 fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
@@ -614,6 +706,12 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 
 /// Reads a PNG's embedded palette in index order.
 ///
+/// A `PLTE` longer than the `2^bit_depth` slots the image can address (PNG 1.2
+/// §4.1.2 forbids it) is truncated to those first slots rather than rejected,
+/// as libpng's `png_handle_PLTE` does when it clamps `num` to the bit depth's
+/// palette size. Upstream ships 24 such 4-bit PNGs (for example
+/// `graphics/birch_speech/shadow.png`, 32 entries).
+///
 /// # Errors
 ///
 /// Returns [`PngError`] when framing, a parsed chunk's CRC, the `IHDR`, or the
@@ -639,15 +737,7 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .find(|chunk| chunk.kind == PLTE)
         .ok_or(PngError::MissingOrBadPalette)?;
 
-    let entries = parse_plte(plte.data)?;
-    // An indexed image of bit depth `d` can address `2^d` palette slots; the
-    // PNG specification forbids a longer `PLTE`.
-    if entries.len() > 1usize << header.bit_depth {
-        return Err(PngError::PaletteExceedsBitDepth {
-            count: entries.len(),
-            bit_depth: header.bit_depth,
-        });
-    }
+    let entries = header.truncate_to_addressable(header.parse_palette(plte.data)?);
 
     Ok(entries
         .into_iter()
@@ -657,7 +747,7 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{decode, decode_palette, paeth_predictor, PngError};
+    use super::{decode, decode_palette, decode_truncating_palette, paeth_predictor, PngError};
     use crate::extract::jasc_pal::Rgb888;
 
     const ADLER_MODULUS: u32 = 65_521;
@@ -1414,24 +1504,156 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn decode_palette_rejects_more_plte_entries_than_the_bit_depth_indexes() {
-        let at_cap =
-            indexed_png_from_raw_with_plte(1, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3, 4, 5, 6]);
-        assert_eq!(decode_palette(&at_cap).unwrap().len(), 2);
+    fn decode_palette_truncates_a_plte_longer_than_the_bit_depth_indexes() {
+        let plte_of =
+            |count: u8| -> Vec<u8> { (0..count).flat_map(|i| [i, i + 1, i + 2]).collect() };
+        let palette_of = |bit_depth: u8, count: u8| {
+            let raw = [super::FILTER_NONE, 0];
+            decode_palette(&indexed_png_from_raw_with_plte(
+                bit_depth,
+                1,
+                1,
+                &raw,
+                &plte_of(count),
+            ))
+            .unwrap()
+        };
+        let expected = |count: u8| -> Vec<Rgb888> {
+            (0..count)
+                .map(|i| Rgb888 {
+                    r: i,
+                    g: i + 1,
+                    b: i + 2,
+                })
+                .collect()
+        };
 
-        let over_cap = indexed_png_from_raw_with_plte(
+        assert_eq!(palette_of(4, 32), expected(16));
+        assert_eq!(palette_of(2, 5), expected(4));
+        assert_eq!(palette_of(1, 3), expected(2));
+        assert_eq!(palette_of(4, 16), expected(16));
+        assert_eq!(palette_of(4, 15), expected(15));
+        assert_eq!(palette_of(2, 4), expected(4));
+        assert_eq!(palette_of(8, 200), expected(200));
+    }
+
+    #[test]
+    fn decode_rejects_plte_on_a_grayscale_image() {
+        // PNG 1.2 §4.1.2: PLTE must not appear for colour types 0 and 4.
+        let raw = [super::FILTER_NONE, 0];
+        let png = png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            super::FOUR_BIT_DEPTH,
             1,
+            1,
+            &raw,
+            Some(&[0, 0, 0]),
+        );
+        assert_eq!(
+            decode(&png).unwrap_err(),
+            PngError::PaletteForbiddenForColorType(super::GRAYSCALE_COLOR_TYPE)
+        );
+        assert!(
+            decode(&grayscale_png_from_raw(super::FOUR_BIT_DEPTH, 1, 1, &raw)).is_ok(),
+            "a grayscale image without PLTE still decodes"
+        );
+    }
+
+    fn plte_of(count: usize) -> Vec<u8> {
+        (0..count).flat_map(plte_entry).collect()
+    }
+
+    fn plte_entry(i: usize) -> [u8; 3] {
+        let i = u8::try_from(i % 256).unwrap();
+        [i, i.wrapping_add(1), i.wrapping_add(2)]
+    }
+
+    fn one_pixel_png(bit_depth: u8, plte_entries: usize) -> Vec<u8> {
+        let raw = [super::FILTER_NONE, 0];
+        indexed_png_from_raw_with_plte(bit_depth, 1, 1, &raw, &plte_of(plte_entries))
+    }
+
+    #[test]
+    fn decode_refuses_a_plte_with_more_entries_than_the_bit_depth_indexes() {
+        // PNG 1.2 §4.1.2: at most 2^bit_depth entries.
+        for (bit_depth, count) in [(2, 5), (4, 17), (4, 32)] {
+            assert_eq!(
+                decode(&one_pixel_png(bit_depth, count)).unwrap_err(),
+                PngError::PaletteExceedsBitDepth { count, bit_depth },
+                "{count} entries at {bit_depth}-bit"
+            );
+        }
+        assert_eq!(
+            PngError::PaletteExceedsBitDepth {
+                count: 5,
+                bit_depth: 2
+            }
+            .to_string(),
+            "PNG PLTE chunk declares 5 entries: a 2-bit indexed image can index at most 4"
+        );
+    }
+
+    #[test]
+    fn decode_accepts_a_plte_up_to_the_bit_depth_cap() {
+        // The cap is 2^bit_depth, and a shorter palette is legal.
+        for (bit_depth, count) in [(2, 4), (2, 3), (4, 16), (4, 15), (8, 200), (8, 256)] {
+            assert_eq!(
+                decode(&one_pixel_png(bit_depth, count)).unwrap().palette,
+                plte_entries(count),
+                "{count} entries at {bit_depth}-bit"
+            );
+        }
+    }
+
+    fn plte_entries(count: usize) -> Vec<[u8; 3]> {
+        (0..count).map(plte_entry).collect()
+    }
+
+    #[test]
+    fn decode_truncating_palette_keeps_the_first_addressable_plte_entries() {
+        // Upstream's `birch_speech/shadow.png` is 4-bit with 32 entries and
+        // libpng truncates it rather than rejecting it.
+        for (bit_depth, count, kept) in [
+            (4, 32, 16),
+            (4, 17, 16),
+            (2, 5, 4),
+            (4, 16, 16),
+            (4, 15, 15),
+        ] {
+            let image = decode_truncating_palette(&one_pixel_png(bit_depth, count)).unwrap();
+            assert_eq!(
+                image.palette,
+                plte_entries(kept),
+                "{count} entries at {bit_depth}-bit"
+            );
+            assert_eq!(image.pixels, [0]);
+        }
+    }
+
+    #[test]
+    fn decode_truncating_palette_still_enforces_every_other_check() {
+        let grayscale = png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            super::FOUR_BIT_DEPTH,
             1,
             1,
             &[super::FILTER_NONE, 0],
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+            Some(&plte_of(32)),
         );
         assert_eq!(
-            decode_palette(&over_cap).unwrap_err(),
-            PngError::PaletteExceedsBitDepth {
-                count: 3,
-                bit_depth: 1
-            }
+            decode_truncating_palette(&grayscale).unwrap_err(),
+            PngError::PaletteForbiddenForColorType(super::GRAYSCALE_COLOR_TYPE)
+        );
+        assert_eq!(
+            decode_truncating_palette(&indexed_png_from_raw_with_plte(
+                4,
+                1,
+                1,
+                &[super::FILTER_NONE, 0],
+                &plte_of(257)
+            ))
+            .unwrap_err(),
+            PngError::TooManyPaletteEntries(257)
         );
     }
 

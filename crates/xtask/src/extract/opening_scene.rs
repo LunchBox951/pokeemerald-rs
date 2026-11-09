@@ -181,7 +181,8 @@ pub(super) fn extract_opening_scene(
 
 fn image_entry(graphics: &Path, source: ImageSource) -> Result<PackEntry, ExtractError> {
     let path = graphics.join(source.png);
-    let image = png::decode(&read_file(&path)?).map_err(|e| ExtractError::Png(path.clone(), e))?;
+    let image = png::decode_truncating_palette(&read_file(&path)?)
+        .map_err(|e| ExtractError::Png(path.clone(), e))?;
     if image.width != source.width || image.height != source.height {
         return Err(mismatch(
             &path,

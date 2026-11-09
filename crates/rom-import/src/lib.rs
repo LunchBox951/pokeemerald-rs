@@ -30,19 +30,20 @@
 //!   gen-rom-profile` into [`profiles::bpee_rev0`]. It covers every asset
 //!   domain the pack holds: tilesets and their animations, the title
 //!   screen, object-event sprites, map layouts, fonts, text windows,
-//!   interface palettes, and `MUS_TITLE`'s audio tree.
+//!   interface art, and `MUS_TITLE`'s audio tree.
 //! - [`Sha1`] is a hand-rolled FIPS 180-4 implementation, because the hash
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
 //! - `domains` holds one reader per asset domain. Every graphics domain is
 //!   wired: the title screen (`title/image/*`, `title/raw/*`,
-//!   `title/palette/*`), the interface palettes (`interface/palette/*`),
+//!   `title/palette/*`), the interface art (`interface/image/*`, `interface/palette/*`),
 //!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
 //!   tables, animation frames), the map layouts (`layout/*`: metatile grids
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
 //!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
-//!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
+//!   decoded from `gbagfx`'s `.latfont` layout) and the keypad icon sheet
+//!   (`font/keypad_icons`), and the text windows
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
@@ -133,8 +134,8 @@ pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
-    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
+    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 };

@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
 
 use crate::error::BattleError;
@@ -134,12 +135,79 @@ pub enum BattleEvent {
         /// HP removed from that battler, capped at its HP before the hit.
         damage: u32,
     },
+    /// A traded Pokémon above its obedience limit ignored the order and
+    /// loafed (`IsMonDisobedient`, `src/battle_util.c:4030`-`:4035`). No PP
+    /// is spent.
+    Disobeyed {
+        /// The loaf text drawn.
+        message: crate::obedience::LoafMessage,
+    },
+    /// A traded Pokémon above its obedience limit ignored the order and is
+    /// about to use another of its moves instead (`src/battle_util.c:3985`-
+    /// `:3997`; `BattleScript_IgnoresAndUsesRandomMove`). The
+    /// [`BattleEvent::UsedMove`] that follows names that move, whose PP is
+    /// spent in place of the chosen move's.
+    IgnoredOrders,
+    /// A traded Pokémon above its obedience limit ignored the order and fell
+    /// asleep for the ordinary two-to-five turn duration
+    /// (`src/battle_util.c:4004`-`:4016`; `BattleScript_IgnoresAndFallsAsleep`).
+    /// No PP is spent.
+    DisobedientNap,
+    /// A disobedient player Pokémon hurt itself instead of acting
+    /// (`src/battle_util.c:4020`-`:4027`). No PP is spent.
+    DisobedientSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
         /// Whether the player's battler was cancelled.
         by_player: bool,
         /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// An infatuated battler's action reached `CANCELER_IN_LOVE`
+    /// (`BattleScript_MoveUsedIsInLove`, `data/battle_scripts_1.s:3840`-
+    /// `:3844`), which announces the infatuation on either coin outcome. The
+    /// battler is in love with the opposing battler, the only one that can
+    /// have attracted it in singles. It is followed by
+    /// [`BattleEvent::ImmobilizedByLove`] or the move's own events, and
+    /// precedes the thaw and PP handling.
+    InLove {
+        /// Whether the player's battler is infatuated and acting.
+        by_player: bool,
+    },
+    /// The infatuation coin cancelled the chosen move before any PP was
+    /// spent (`BattleScript_MoveUsedIsInLoveCantAttack`,
+    /// `data/battle_scripts_1.s:3846`-`:3849`). It follows
+    /// [`BattleEvent::InLove`].
+    ImmobilizedByLove {
+        /// Whether the player's battler was cancelled.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// Attract infatuated its target (`STRINGID_PKMNFELLINLOVE`,
+    /// `BattleScript_EffectAttract`, `data/battle_scripts_1.s:1653`). A miss
+    /// reports [`BattleEvent::Missed`], a gender or reapplication failure
+    /// [`BattleEvent::ButItFailed`], and an Oblivious target
+    /// [`BattleEvent::ObliviousPreventsAttraction`], instead.
+    Infatuated {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that infatuated the target.
+        move_id: MoveId,
+    },
+    /// Attract's target prevented the attraction with Oblivious
+    /// (`BattleScript_ObliviousPreventsAttraction`,
+    /// `data/battle_scripts_1.s:4140`-`:4144`).
+    ObliviousPreventsAttraction {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that was prevented.
         move_id: MoveId,
     },
     /// A move connected, but the target's typing made it ineffective. An
@@ -401,6 +469,27 @@ pub enum BattleEvent {
         /// The move that inflicted poison.
         move_id: MoveId,
     },
+    /// A burn secondary inflicted [`crate::status1::Status1::Burned`]
+    /// (`BattleScript_MoveEffectBurn`, `data/battle_scripts_1.s:3893`-`:3897`;
+    /// `STRINGID_PKMNWASBURNED` through `gGotBurnedStringIds`).
+    Burned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted the burn.
+        move_id: MoveId,
+    },
+    /// A Fire move thawed a frozen target that survived its damage
+    /// (`MOVEEND_DEFROST`, `battle_script_commands.c:4257`-`:4272`;
+    /// `BattleScript_DefrostedViaFireMove`, `data/battle_scripts_1.s:3767`-`:3771`,
+    /// `STRINGID_PKMNWASDEFROSTED`). It consumes no RNG and precedes the
+    /// target's Synchronize and contact abilities.
+    TargetDefrosted {
+        /// Whether the player used the Fire move; the thawed battler is its
+        /// target.
+        by_player: bool,
+        /// The Fire move that thawed the target.
+        move_id: MoveId,
+    },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
     /// back onto the original attacker after the target's own faint settlement
     /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
@@ -504,6 +593,23 @@ pub enum BattleEvent {
         /// Whether the player used the contact move and so was paralysed.
         by_player: bool,
         /// The contact move that triggered Effect Spore.
+        move_id: MoveId,
+    },
+    /// The target's [`AbilityId::CUTE_CHARM`] infatuated the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_CUTE_CHARM`,
+    /// `battle_util.c:2851`-`:2870`; `BattleScript_CuteCharmActivates`,
+    /// `data/battle_scripts_1.s:4193`-`:4197`).
+    ///
+    /// The roll is one `Random() % 3` draw spent only when both battlers
+    /// survived the hit; only a zero roll on an opposite-gender pair, an
+    /// attacker without Oblivious and one not already infatuated emits this
+    /// event. The attacker then carries the holder's slot as its
+    /// infatuation, exactly as after Attract.
+    InfatuatedByCuteCharm {
+        /// Whether the player used the contact move and so was infatuated.
+        by_player: bool,
+        /// The contact move that triggered Cute Charm.
         move_id: MoveId,
     },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
@@ -612,7 +718,9 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
-    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`): the
+    /// `ENDTURN_POISON` tick and the `ENDTURN_BAD_POISON` tick, which share
+    /// `BattleScript_PoisonTurnDmg`.
     HurtByPoison {
         /// Whether the player's battler was hurt.
         by_player: bool,
@@ -628,6 +736,67 @@ pub enum BattleEvent {
         by_player: bool,
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
+    },
+    /// Leech Seed took hold of its target (`STRINGID_PKMNSEEDED`,
+    /// `Cmd_setseeded`, `src/battle_script_commands.c:6731`-`:6735`). A miss
+    /// or an already-seeded target reports [`BattleEvent::LeechSeedEvaded`],
+    /// and a Grass-type target [`BattleEvent::NoEffect`], instead
+    /// (`gLeechSeedStringIds`, `src/battle_message.c:960`-`:967`).
+    Seeded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that planted the seed.
+        move_id: MoveId,
+    },
+    /// Leech Seed missed its accuracy check or found its target already
+    /// seeded (`B_MSG_LEECH_SEED_MISS`, `Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6720`-`:6724`). Unlike
+    /// [`BattleEvent::Missed`], this names the target:
+    /// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+    /// `BattleScript_DoLeechSeed` on a miss too (`data/battle_scripts_1.s:1163`),
+    /// so both failures print `gLeechSeedStringIds`' `STRINGID_PKMNEVADEDATTACK`
+    /// (`src/battle_message.c:963`). Marks `MOVE_RESULT_MISSED` like a miss.
+    LeechSeedEvaded {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that failed.
+        move_id: MoveId,
+    },
+    /// `STRINGID_PKMNSAPPEDBYLEECHSEED` (`data/battle_scripts_1.s:3265`-
+    /// `:3284`): the seeded battler's `ENDTURN_LEECH_SEED` loss, which
+    /// precedes its [`BattleEvent::HurtByPoison`] slot
+    /// (`pokeemerald/src/battle_util.c:1509`-`:1523`). Always followed by the
+    /// seeder's [`BattleEvent::LeechSeedHealed`].
+    SappedByLeechSeed {
+        /// Whether the player's battler was drained.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the drain.
+        damage: u32,
+    },
+    /// The seeder's share of a [`BattleEvent::SappedByLeechSeed`]: it regains
+    /// exactly the HP the seeded battler lost (`copyword gBattleMoveDamage,
+    /// gHpDealt`, `data/battle_scripts_1.s:3270`), capped at its maximum HP.
+    LeechSeedHealed {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// HP actually gained, zero for a full-HP seeder.
+        healed: u32,
+    },
+    /// `STRINGID_PKMNSITEMRESTOREDHEALTH`,
+    /// `BattleScript_ItemHealHP_RemoveItem` (`data/battle_scripts_1.s:4356`-
+    /// `:4364`): a living holder at or below half HP regained its item's HP
+    /// in the end-turn item pass and consumed the item
+    /// (`ItemBattleEffects`' `ITEMEFFECT_NORMAL`,
+    /// `pokeemerald/src/battle_util.c:3331`-`:3346`). That pass precedes the
+    /// battler's [`BattleEvent::SappedByLeechSeed`] slot
+    /// (`:1442`-`:1461`).
+    ItemRestoredHealth {
+        /// Whether the player's battler was healed.
+        by_player: bool,
+        /// The item consumed.
+        item: ItemId,
+        /// HP actually gained, capped at the holder's maximum HP.
+        healed: u32,
     },
     /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
     /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
@@ -672,9 +841,19 @@ pub enum BattleEvent {
         /// second buffer (`src/battle_script_commands.c:3381`-`:3397`).
         boosted: bool,
     },
+    /// A level-up move took a free slot without asking the player.
+    ///
+    /// One event per learned move, in the order the level-up walk reached
+    /// them. They follow [`BattleEvent::ExpGained`] and precede any
+    /// [`BattleEvent::MoveLearnPrompt`] the same award opens.
+    MoveLearned {
+        /// The newly learned move.
+        move_id: MoveId,
+    },
     /// Move learning paused experience application and faint resolution.
     ///
-    /// This follows [`BattleEvent::ExpGained`] or a previous move-learning answer
+    /// This follows [`BattleEvent::ExpGained`], a [`BattleEvent::MoveLearned`],
+    /// or a previous move-learning answer
     /// and blocks further turns until the player answers it.
     MoveLearnPrompt {
         /// The move offered to the player.
