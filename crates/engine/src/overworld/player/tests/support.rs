@@ -43,6 +43,7 @@ pub(super) fn flat_runtime(
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let events = MapEvents {
@@ -204,7 +205,7 @@ pub(super) fn object(
         movement_range_y: 0,
         trainer_type: assets::TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script: "0x0",
+        script: None,
         flag,
     }
 }

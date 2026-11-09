@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Test-only seam: exposes BattlePokemon::reconcile_saved_experience, a
+# level-raise without a battle fixture that no production path calls, so
+# downstream crates' tests can level a mon directly. Enable only from
+# [dev-dependencies].
+test-support = []
+
 [lints]
 workspace = true
 

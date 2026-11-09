@@ -39,6 +39,14 @@
 //!
 //! BG0 effects are not composed.
 //!
+//! # Field effects
+//!
+//! The scene owns the tall-grass effects of the player and the object events
+//! ([`grass`]): the phase starts them as either steps onto or is placed on tall
+//! grass, and advances them
+//! once a frame ([`OverworldScene::advance_tall_grass`]); composing only draws
+//! them, as OBJs beside the player and the object events.
+//!
 //! # Border fallback
 //!
 //! Cells outside the current layout and its visible connections repeat the
@@ -71,8 +79,11 @@ pub use engine::overworld::WALK_FRAMES_PER_TILE;
 
 mod avatar;
 pub(crate) mod dialog;
+mod grass;
 mod npc;
 pub(crate) mod npc_scripts;
+mod obj_vram;
+pub(crate) use obj_vram::SheetSprite;
 pub(crate) mod oldale_town_npc_reposition;
 mod sprites;
 mod tileset_anims;
@@ -420,6 +431,9 @@ pub struct OverworldScene {
     blank_tile_index: u16,
     tile_anims: tileset_anims::AnimatedTileset,
     sprites: sprites::SceneSprites,
+    /// The player's and object events' tall-grass effects, simulated by
+    /// [`Self::advance_tall_grass`] and only read by composition.
+    grass: grass::TallGrassEffects,
     /// The events `from_pack` received, fixed for the visit. Their owner is
     /// the one [`MapEventsTable::resolve`] reports for `map_id`; their
     /// contents may differ from the generated table's, as Oldale Town's
@@ -450,7 +464,10 @@ impl OverworldScene {
     /// map has no events. Otherwise returns an error when a tileset symbol is
     /// unsupported, a required pack
     /// entry is missing, or the tile, animation, layout-grid, border, or
-    /// sprite-sheet bytes fail to decode. An unbundled connected map is
+    /// sprite-sheet bytes fail to decode. Object frames are packed per scene,
+    /// only the sheet cells an object event shows, into the combined sheet
+    /// that composing stages drawn frames from, and each object's draw elevation
+    /// comes from its cell in the layout grid. An unbundled connected map is
     /// omitted; present but malformed connection data returns an error.
     /// Metatile definitions and metatile attributes are copied unchecked, so a
     /// truncated or undecodable entry leaves the cells that use it blank
@@ -500,11 +517,11 @@ impl OverworldScene {
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
         let border_bytes = pack.layout_border(&layout_name)?.to_vec();
-        let _ = layout.grid(&grid_bytes)?;
+        let grid = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
         let connections = resolve_connections(pack, header)?;
-        let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events, &grid, event_data)?;
 
         Ok(Self {
             map_id: header.id,
@@ -523,6 +540,7 @@ impl OverworldScene {
             blank_tile_index,
             tile_anims,
             sprites,
+            grass: grass::TallGrassEffects::new(),
             events: *events,
         })
     }
@@ -583,8 +601,18 @@ impl OverworldScene {
         tick: u32,
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
-        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        let player_first_oam_entries = self.sprite_entries(player, event_data);
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
+    }
+
+    /// The depth-ordered OAM entries of the player, the visible object events,
+    /// and the tall-grass effects.
+    pub(crate) fn sprite_entries(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> Vec<SheetSprite> {
+        self.sprites.entries(player, event_data, &self.grass)
     }
 
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
@@ -600,7 +628,9 @@ impl OverworldScene {
         objects: &engine::overworld::object_event::ObjectEventCollection,
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
-        let player_first_oam_entries = self.sprites.live_entries(objects, player, event_data);
+        let player_first_oam_entries =
+            self.sprites
+                .live_entries(objects, player, event_data, &self.grass);
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries, palette)
     }
 
@@ -620,7 +650,7 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         tick: u32,
-        sprite_entries: &[rendering::OamEntry],
+        sprite_entries: &[SheetSprite],
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
         let viewport::FrameViewport {
@@ -674,10 +704,18 @@ impl OverworldScene {
             ),
         ];
 
+        // Upstream copies only each sprite's current frame into OBJ VRAM, so
+        // the ten-bit tile field bounds the frame's drawn sprites, not the
+        // map's resolved sheets (`obj_vram`).
+        let staged = obj_vram::stage(sprite_entries, self.sprites.tiles());
+        debug_assert_eq!(
+            staged.dropped, 0,
+            "a checkpoint frame's sprites fit in OBJ VRAM"
+        );
         let sprites = SpriteLayer::new(
-            sprite_entries,
-            self.sprites.tiles(),
-            self.sprites.tiles(),
+            &staged.entries,
+            &staged.tiles,
+            &staged.tiles,
             self.sprites.palette(),
         )
         .with_hblank_free_interval(true);
@@ -731,9 +769,9 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         event_data: &EventData,
-    ) -> (Vec<rendering::OamEntry>, (u16, u16)) {
+    ) -> (Vec<SheetSprite>, (u16, u16)) {
         let viewport = self.frame_viewport(player);
-        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        let player_first_oam_entries = self.sprite_entries(player, event_data);
         let background_scroll = (viewport.scroll_x, viewport.scroll_y);
         (player_first_oam_entries, background_scroll)
     }

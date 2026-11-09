@@ -569,12 +569,27 @@ fn git_sha(repo_root: &Path) -> Option<String> {
         return None;
     }
     let worktree_dirty_or_unknown = git_output(repo_root, &["status", "--porcelain"])
-        .is_none_or(|status| !status.trim().is_empty());
+        .is_none_or(|status| !status.trim().is_empty())
+        || has_hidden_index_entries(repo_root);
     if worktree_dirty_or_unknown {
         Some(format!("{sha}-dirty"))
     } else {
         Some(sha.to_owned())
     }
+}
+
+/// Whether the index hides tracked files from `git status`, or cannot be read.
+///
+/// Assume-unchanged (lowercase tag in `git ls-files -v`) and skip-worktree
+/// (`S`) entries make `git status --porcelain` blind to edits of tracked files
+/// that Cargo still compiles, so an empty status cannot show such a tree is
+/// clean. The ROM-build checkout verifier rejects the same entries.
+fn has_hidden_index_entries(repo_root: &Path) -> bool {
+    git_output(repo_root, &["ls-files", "-v"]).is_none_or(|listing| {
+        listing
+            .lines()
+            .any(|line| line.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S'))
+    })
 }
 
 /// Git variables that redirect which repository, worktree, index, object

@@ -6,7 +6,9 @@
 
 use engine::event_data::EventData;
 use engine::overworld::MapRuntime;
+use platform::ButtonState;
 
+use crate::flow::battle_finalize::finalize_battle_turn;
 use crate::flow::first_battle;
 use crate::flow::lead_screen::ensure_lead_can_battle;
 
@@ -77,7 +79,7 @@ impl OverworldPhase {
             if guard_fails {
                 continue;
             }
-            return script == TRIGGER_SCRIPT;
+            return script.id() == TRIGGER_SCRIPT;
         }
         false
     }
@@ -94,9 +96,9 @@ impl OverworldPhase {
         self.first_battle_trigger_at(runtime, x, y, retained_elevation)
     }
 
-    /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`);
-    /// only a lead the turn engine refuses (an inadmissible battler, or a saved held item
-    /// whose effect it does not model) leaves it armed, with nothing drawn.
+    /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`),
+    /// and so does this, lead or no lead. A start the turn engine or the battle
+    /// text rejects re-arms it, so a later step can retry with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
         if let Some(Err(error)) = self.lead_battler().map(ensure_lead_can_battle) {
             eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
@@ -107,6 +109,7 @@ impl OverworldPhase {
             "first battle: Route 101 rescue trigger reached -- starting the scripted Zigzagoon \
              battle (issue #231)"
         );
+        let armed_state = self.save1.event_data.var_get(VAR_ROUTE101_STATE).ok();
         if let Err(error) = self
             .save1
             .event_data
@@ -125,6 +128,15 @@ impl OverworldPhase {
         // The start consumes its copy; the lent original returns on rejection.
         match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
+                match self.open_wild_battle_text(&battle) {
+                    Ok(sequence) => self.battle_sequence = sequence,
+                    Err(error) => {
+                        eprintln!("first battle: can't play its text ({error})");
+                        self.restore_lead_battler(lead);
+                        self.rearm_first_battle_trigger(armed_state);
+                        return;
+                    }
+                }
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
@@ -133,18 +145,44 @@ impl OverworldPhase {
             Err(error) => {
                 eprintln!("first battle: can't start ({error:?})");
                 self.restore_lead_battler(lead);
+                self.rearm_first_battle_trigger(armed_state);
             }
+        }
+    }
+
+    /// Puts `VAR_ROUTE101_STATE` back to the value a rejected start found, so the
+    /// coord event fires again on the next completed step.
+    fn rearm_first_battle_trigger(&mut self, armed_state: Option<u16>) {
+        let Some(armed_state) = armed_state else {
+            return;
+        };
+        if let Err(error) = self
+            .save1
+            .event_data
+            .var_set(VAR_ROUTE101_STATE, armed_state)
+        {
+            eprintln!("first battle: couldn't re-arm VAR_ROUTE101_STATE ({error})");
         }
     }
 
     pub(super) fn advance_first_battle_frame(
         &mut self,
         battle: battle::Battle,
+        buttons: ButtonState,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
         let mut returned_lead = None;
-        let outcome =
-            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng);
+        let outcome = if self.battle_sequence.is_some() {
+            let battle = slot.as_mut()?;
+            match self.tick_battle_text(battle, buttons) {
+                None => return slot.map(ActiveBattle::First),
+                Some(turn_failed) => {
+                    finalize_battle_turn(&mut slot, turn_failed, &mut returned_lead)
+                }
+            }
+        } else {
+            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng)
+        };
         if let Some(lead) = returned_lead {
             self.restore_lead_battler(lead);
         }

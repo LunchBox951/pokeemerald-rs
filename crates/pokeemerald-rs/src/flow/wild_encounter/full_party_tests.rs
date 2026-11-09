@@ -1,0 +1,578 @@
+//! The wild handoff and write-back of the whole saved party: every eligible member enters
+//! the battle in its saved slot's order, each one that entered is merged back into its own
+//! slot, and the loss only reaches white-out once the whole party is exhausted
+//! (`SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`;
+//! `CB2_EndWildBattle`, `pokeemerald/src/battle_setup.c:602-616`).
+
+use super::test_support::{
+    held, player_mon, route_101_phase_with_grass, walk_east_and_land, ENCOUNTER_SEED, ROUTE_101,
+};
+use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
+use crate::flow::save_continue_support::dormant_party_member;
+use crate::party;
+use assets::MoveId;
+use battle::{BattlePokemon, Dex};
+use engine::overworld::{Direction, PlayerState};
+use engine::rng::Rng;
+use engine::save::Pokemon;
+use platform::Buttons;
+
+/// `SPECIES_SHUCKLE`: slower at level 2 than the level-2 Wurmple the seeded roll
+/// produces, so the driver's run attempt can fail and the Wurmple's reply faints a 1 HP one.
+const SHUCKLE: u16 = 213;
+/// `SPECIES_TREECKO`: at level 50 it outruns that Wurmple, so its run succeeds.
+const TREECKO: u16 = 277;
+const IS_EGG_BIT: u32 = 1 << 30;
+
+fn base_pound_pp() -> u8 {
+    Dex::new().move_data(MoveId::POUND).unwrap().pp
+}
+
+/// A level-2 Shuckle on its last hit point with one Pound PP spent.
+fn frail_shuckle() -> BattlePokemon {
+    let mut mon = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
+    mon.apply_damage(mon.stats().max_hp - 1);
+    mon.deduct_pp(0).unwrap();
+    mon
+}
+
+/// A healthy level-50 Treecko with `spent` Pound PP used.
+fn healthy_treecko(spent: u8) -> BattlePokemon {
+    let mut mon = player_mon(TREECKO, 50, vec![MoveId::POUND]);
+    for _ in 0..spent {
+        mon.deduct_pp(0).unwrap();
+    }
+    mon
+}
+
+fn fainted(mut mon: BattlePokemon) -> BattlePokemon {
+    mon.apply_damage(mon.stats().max_hp);
+    mon
+}
+
+fn saved(mon: &BattlePokemon) -> Pokemon {
+    party::to_save_pokemon(&Dex::new(), mon)
+}
+
+fn into_egg(mut record: Pokemon) -> Pokemon {
+    let mut substructures = record.box_data.substructures().unwrap();
+    let word = u32::from_le_bytes(substructures.misc[4..8].try_into().unwrap()) | IS_EGG_BIT;
+    substructures.misc[4..8].copy_from_slice(&word.to_le_bytes());
+    record.box_data.set_substructures(&substructures);
+    record
+}
+
+fn decoded(record: &Pokemon) -> BattlePokemon {
+    party::from_save_pokemon(&Dex::new(), record).expect("the record decodes")
+}
+
+/// A Route 101 room with the seeded grass at `(7, 5)` and money 2001, whose saved party
+/// is `records` (count = their number) and whose lead is `lead` backed by `lead_slot`.
+fn phase_with_party(records: &[Pokemon], lead_slot: usize, lead: BattlePokemon) -> OverworldPhase {
+    phase_with_party_on_grass(records, lead_slot, lead, &[(7, 5)])
+}
+
+/// [`phase_with_party`] with the room's tall grass at `grass`.
+fn phase_with_party_on_grass(
+    records: &[Pokemon],
+    lead_slot: usize,
+    lead: BattlePokemon,
+    grass: &[(u16, u16)],
+) -> OverworldPhase {
+    let mut phase =
+        route_101_phase_with_grass(20, 10, PlayerState::new((2, 5), 3, Direction::East), grass);
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    phase.save1.money = 2001;
+    for (slot, record) in records.iter().enumerate() {
+        phase.save1.player_party[slot] = *record;
+    }
+    phase.save1.player_party_count = u8::try_from(records.len()).unwrap();
+    phase.set_backed_lead_for_test(lead_slot, records[lead_slot], lead);
+    phase
+}
+
+fn walk_into_the_battle(phase: &mut OverworldPhase) {
+    walk_east_and_land(phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(phase.is_wild_battle_active(), "the seeded roll fires");
+}
+
+fn finish_the_battle(phase: &mut OverworldPhase) {
+    let mut frames = 0;
+    while phase.is_wild_battle_active() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+}
+
+/// The lead faints with a healthy saved reserve behind it. The
+/// party is not defeated, so the battle goes on with the reserve and nothing whites out.
+#[test]
+fn a_lead_faint_with_a_healthy_reserve_neither_halves_money_nor_warps() {
+    let base_pp = base_pound_pp();
+    let lead = frail_shuckle();
+    let reserve = healthy_treecko(2);
+    let mut phase = phase_with_party(&[saved(&lead), saved(&reserve)], 0, lead);
+    let reserve_experience = reserve.experience();
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 2001, "no white-out halves the money");
+    assert_eq!(
+        phase.player.position(),
+        (7, 5),
+        "and no warp moves the player"
+    );
+    assert_eq!(phase.map_id, ROUTE_101);
+    let first = decoded(&phase.save1.player_party[0]);
+    assert_eq!(
+        first.current_hp(),
+        0,
+        "slot 0 keeps the faint that sent the reserve out"
+    );
+    assert_eq!(first.moves()[0].pp, base_pp - 1, "and its spent PP");
+    let second = decoded(&phase.save1.player_party[1]);
+    assert_eq!(second.current_hp(), second.stats().max_hp);
+    assert_eq!(second.moves()[0].pp, base_pp - 2);
+    assert_eq!(second.experience(), reserve_experience);
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(1),
+        "the field lead is the first usable member"
+    );
+    assert_eq!(
+        phase.lead_for_test().unwrap().personality(),
+        reserve.personality()
+    );
+}
+
+/// Upstream's loss is whole-party exhaustion: the first faint sends the second member out
+/// with the money untouched, and once that one faints too the battle is `PlayerLost` and the
+/// white-out halves the money and heals both stored members.
+///
+/// The second member's run attempt gets its own stream: `RESERVE_RUN_SEED` is one whose
+/// attempt fails (`TryRunFromBattle`'s RNG branch), so the Wurmple's reply faints it.
+#[test]
+fn an_exhausted_party_still_whites_out() {
+    const RESERVE_RUN_SEED: u32 = 1;
+    let base_pp = base_pound_pp();
+    let first = frail_shuckle();
+    let mut second = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
+    second.apply_damage(second.stats().max_hp - 1);
+    let mut phase = phase_with_party(&[saved(&first), saved(&second)], 0, first);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    loop {
+        phase.step(held(Buttons::RIGHT));
+        let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
+            panic!("the first faint must not end the battle");
+        };
+        if wild.battle.player().moves()[0].pp == base_pp {
+            break;
+        }
+    }
+    assert_eq!(
+        phase.save1.money, 2001,
+        "the second member is out, nothing whited out"
+    );
+    phase.rng = Rng::new(RESERVE_RUN_SEED);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 1000);
+    for slot in 0..2 {
+        let member = decoded(&phase.save1.player_party[slot]);
+        assert_eq!(
+            member.current_hp(),
+            member.stats().max_hp,
+            "slot {slot} is healed"
+        );
+    }
+    assert_eq!(decoded(&phase.save1.player_party[0]).moves()[0].pp, base_pp);
+}
+
+/// A member that never leaves the party screen keeps its record byte for byte, however the
+/// codec would normalise it -- like the egg, the undecodable record and the empty slots.
+#[test]
+fn members_that_never_enter_the_battle_keep_their_bytes() {
+    let lead = healthy_treecko(0);
+    let mut unused = saved(&frail_shuckle());
+    let mut substructures = unused.box_data.substructures().unwrap();
+    substructures.attacks[8] = u8::MAX;
+    unused.box_data.set_substructures(&substructures);
+    let egg = into_egg(saved(&healthy_treecko(0)));
+    let undecodable = dormant_party_member(0x5a5a_1234);
+    let records = [saved(&lead), unused, egg, undecodable];
+    let mut phase = phase_with_party(&records, 0, lead);
+    let before: Vec<_> = (1..6)
+        .map(|slot| phase.save1.player_party[slot].to_bytes())
+        .collect();
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    let after: Vec<_> = (1..6)
+        .map(|slot| phase.save1.player_party[slot].to_bytes())
+        .collect();
+    assert_eq!(after, before);
+    assert_eq!(phase.save1.player_party_count, 4);
+    assert_eq!(phase.lead_slot_for_test(), Some(0));
+}
+
+/// The battle's order is the active member first, then the reserves in slot order, so the
+/// write-back follows the position, not the slot index: the active member is slot 1 here and
+/// the reserve that enters is slot 3, with a fainted slot 0 and an egg at slot 2 between.
+#[test]
+fn an_entering_reserve_merges_into_its_own_slot() {
+    let base_pp = base_pound_pp();
+    let first = fainted(frail_shuckle());
+    let lead = frail_shuckle();
+    let egg = into_egg(saved(&healthy_treecko(0)));
+    let reserve = healthy_treecko(1);
+    let records = [saved(&first), saved(&lead), egg, saved(&reserve)];
+    let mut phase = phase_with_party(&records, 1, lead);
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(
+        phase.save1.player_party[0].to_bytes(),
+        records[0].to_bytes()
+    );
+    assert_eq!(
+        phase.save1.player_party[2].to_bytes(),
+        records[2].to_bytes()
+    );
+    let entered_first = decoded(&phase.save1.player_party[1]);
+    assert_eq!(entered_first.current_hp(), 0);
+    let entered_reserve = decoded(&phase.save1.player_party[3]);
+    assert_eq!(entered_reserve.moves()[0].pp, base_pp - 1);
+    assert_eq!(phase.lead_slot_for_test(), Some(3));
+    assert_eq!(phase.save1.money, 2001);
+}
+
+/// A reserve the battle engine cannot play yet (an Intimidate Mightyena) is left out of the roster
+/// rather than refusing the encounter the playable lead can fight, and keeps its bytes.
+#[test]
+fn an_unplayable_reserve_is_left_out_without_refusing_the_battle() {
+    let lead = healthy_treecko(0);
+    let mightyena = player_mon(assets::SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
+    assert!(battle::ensure_participant_admissible(&mightyena).is_err());
+    let records = [saved(&lead), saved(&mightyena)];
+    let mut phase = phase_with_party(&records, 0, lead);
+
+    walk_into_the_battle(&mut phase);
+    let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
+        panic!("the battle starts");
+    };
+    assert_eq!(wild.battle.player_members().count(), 1);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(
+        phase.save1.player_party[1].to_bytes(),
+        records[1].to_bytes()
+    );
+    assert_eq!(phase.save1.money, 2001);
+}
+
+/// A saved member beyond the stored count is still inspected, as `SetBattlePartyIds`
+/// scans all six slots, so a healthy record there is a reserve like any other.
+#[test]
+fn a_reserve_beyond_the_stored_count_enters() {
+    let first = frail_shuckle();
+    let beyond = healthy_treecko(0);
+    let mut phase = phase_with_party(&[saved(&first)], 0, first);
+    phase.save1.player_party[3] = saved(&beyond);
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 2001);
+    assert_eq!(phase.save1.player_party_count, 1);
+    assert_eq!(phase.lead_slot_for_test(), Some(3));
+}
+
+/// Upstream's party HP total (`Cmd_checkteamslost`, `src/battle_script_commands.c:3534-3564`)
+/// still counts a healthy member the roster left out, so the lead's faint is not a defeat:
+/// nothing whites out, and that member becomes the field lead.
+#[test]
+fn a_lead_faint_with_only_an_unplayable_member_left_does_not_white_out() {
+    let lead = frail_shuckle();
+    let mightyena = player_mon(assets::SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
+    let records = [saved(&lead), saved(&mightyena)];
+    let mut phase = phase_with_party(&records, 0, lead);
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 2001);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert_eq!(decoded(&phase.save1.player_party[0]).current_hp(), 0);
+    assert_eq!(
+        phase.save1.player_party[1].to_bytes(),
+        records[1].to_bytes()
+    );
+    assert_eq!(phase.lead_slot_for_test(), Some(1));
+}
+
+/// A reserve whose secure checksum fails is a Bad Egg upstream (`GetBoxMonData`,
+/// `pokeemerald/src/pokemon.c:3742-3747`), which `Cmd_checkteamslost` leaves out of its
+/// HP total, so once the lead faints the party is defeated and whites out.
+#[test]
+fn a_checksum_corrupted_reserve_does_not_prevent_white_out() {
+    let lead = frail_shuckle();
+    let mut bytes = saved(&healthy_treecko(0)).to_bytes();
+    bytes[28] ^= 0xff;
+    let corrupt = Pokemon::from_bytes(bytes);
+    assert!(corrupt.box_data.has_species() && corrupt.hp != 0);
+    assert!(corrupt.box_data.substructures().is_err());
+    let mut phase = phase_with_party(&[saved(&lead), corrupt], 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
+}
+
+/// A checksum-valid reserve whose secure species is `SPECIES_NONE` fails decoding, and
+/// `Cmd_checkteamslost` leaves it out of the HP total since `MON_DATA_SPECIES` reads zero
+/// (`pokeemerald/src/battle_script_commands.c:3534-3564`), whatever the header's stale
+/// `hasSpecies` bit says; the faint of the lead is then a defeat.
+#[test]
+fn a_species_none_reserve_with_a_stale_has_species_does_not_prevent_white_out() {
+    let lead = frail_shuckle();
+    let mut empty = saved(&healthy_treecko(0));
+    let mut substructures = empty.box_data.substructures().unwrap();
+    substructures.growth[..2].copy_from_slice(&0u16.to_le_bytes());
+    empty.box_data.set_substructures(&substructures);
+    assert!(empty.box_data.has_species() && empty.hp != 0);
+    assert!(empty.box_data.substructures().is_ok());
+    assert!(party::from_save_pokemon(&Dex::new(), &empty).is_err());
+    let mut phase = phase_with_party(&[saved(&lead), empty], 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
+}
+
+/// The save owner of [`traded_reserve_award`]'s phase.
+const OWNER_ID: u32 = 0x1234_5678;
+const OWNER_NAME: [u8; 7] = *b"RUSTY\xFF\xFF";
+const OTHER_NAME: [u8; 7] = *b"OTHER\xFF\xFF";
+
+/// The award a level-50 Treecko reserve, saved with `reserve_ot_name` under the owner's
+/// OT id, earns for knocking out the seeded Wurmple after the domestic frail lead faints.
+fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
+    let lead = frail_shuckle().with_original_trainer_id(OWNER_ID);
+    let reserve = healthy_treecko(0).with_original_trainer_id(OWNER_ID);
+    let mut lead_record = saved(&lead);
+    lead_record.box_data.set_ot_name(OWNER_NAME);
+    let mut reserve_record = saved(&reserve);
+    reserve_record.box_data.set_ot_name(reserve_ot_name);
+    let mut phase = phase_with_party(&[lead_record, reserve_record], 0, lead);
+    phase.save2.player_trainer_id = OWNER_ID.to_le_bytes();
+    phase.save2.player_name = *b"RUSTY\xFF\0\0";
+
+    walk_into_the_battle(&mut phase);
+    loop {
+        phase.step(held(Buttons::RIGHT));
+        let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
+            panic!("the lead's faint must not end the battle");
+        };
+        if wild.battle.player().species() == assets::SpeciesId(TREECKO) {
+            break;
+        }
+    }
+    let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_mut() else {
+        unreachable!("checked above");
+    };
+    let traded = wild.battle.player().is_traded_recipient();
+    for _ in 0..20 {
+        let events = wild
+            .battle
+            .take_turn(
+                battle::PlayerAction::UseMove(0),
+                &mut crate::flow::wild_encounter::SharedRng::new(&mut phase.rng),
+            )
+            .expect("turn");
+        if let Some(exp) = events.iter().find_map(|event| match event {
+            battle::BattleEvent::ExpGained { amount, .. } => Some(*amount),
+            _ => None,
+        }) {
+            return (traded, exp);
+        }
+    }
+    panic!("the Wurmple never fainted");
+}
+
+/// A saved reserve is classified against the save owner like the lead (`IsTradedMon`,
+/// `pokeemerald/src/pokemon.c:6602-6626`), so one traded under the owner's id but another
+/// OT name earns `Cmd_getexp`'s 150% award (`src/battle_script_commands.c:3381-3390`)
+/// when it replaces the fainted lead.
+#[test]
+fn a_traded_reserve_that_replaces_the_fainted_lead_earns_the_traded_award() {
+    let (domestic_flagged, domestic) = traded_reserve_award(OWNER_NAME);
+    let (traded_flagged, traded) = traded_reserve_award(OTHER_NAME);
+    assert!(domestic > 0);
+    assert_eq!(traded, domestic * 150 / 100);
+    assert!(!domestic_flagged, "the owner's own reserve is not traded");
+    assert!(
+        traded_flagged,
+        "the other OT's reserve is a traded recipient"
+    );
+}
+
+/// A checksum-valid, healthy reserve whose record does not decode into a battler (here an
+/// interior empty move slot, [`party::PartyError::InteriorEmptyMove`]) still counts toward
+/// `Cmd_checkteamslost`'s HP total, so the lead's faint is not a defeat and nothing whites
+/// out. The port cannot select that member either: [`party::select_active_battler`] skips
+/// it and falls back to slot 0, so the fainted lead is retained, the reserve keeps its
+/// bytes, and the next encounter is refused at battle construction
+/// (`begin_wild_battle`'s `FaintedBattler` drop) rather than played.
+#[test]
+fn an_undecodable_reserve_retains_the_fainted_lead_without_a_white_out() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(odd.box_data.substructures().is_ok() && odd.hp != 0);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&lead), odd];
+    let mut phase = phase_with_party(&records, 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(
+        phase.save1.money, 2001,
+        "no white-out: upstream's HP total is nonzero"
+    );
+    assert_eq!(phase.player.position(), (7, 5));
+    assert_eq!(decoded(&phase.save1.player_party[0]).current_hp(), 0);
+    assert_eq!(
+        phase.save1.player_party[1].to_bytes(),
+        records[1].to_bytes(),
+        "the undecodable reserve keeps its bytes"
+    );
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(0),
+        "the fainted lead is retained: the only other member cannot be selected"
+    );
+}
+
+/// The same undecodable-reserve loss with the lead in slot 1 behind an already-fainted
+/// slot 0: `select_active_battler`'s fallback to slot 0 is no selection, so the retained
+/// lead stays the slot-1 member that fought.
+#[test]
+fn an_undecodable_reserve_retains_a_nonzero_slot_fainted_lead() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&fainted(healthy_treecko(0))), saved(&lead), odd];
+    let mut phase = phase_with_party(&records, 1, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 2001, "no white-out");
+    assert_eq!(decoded(&phase.save1.player_party[1]).current_hp(), 0);
+    assert_eq!(
+        phase.save1.player_party[0].to_bytes(),
+        records[0].to_bytes(),
+        "the fainted slot 0 is untouched"
+    );
+    assert_eq!(
+        phase.lead_slot_for_test(),
+        Some(1),
+        "the fainted slot-1 lead is retained"
+    );
+}
+
+/// After the undecodable-reserve loss the retained lead is fainted, so the shared lead screen
+/// disables the encounter roll: later grass steps draw nothing and every saved record keeps
+/// its bytes.
+#[test]
+fn later_grass_steps_after_an_undecodable_reserve_loss_draw_nothing() {
+    let lead = frail_shuckle();
+    let mut odd = saved(&healthy_treecko(0));
+    let mut substructures = odd.box_data.substructures().unwrap();
+    let pound = substructures.attacks[0..2].to_vec();
+    substructures.attacks[0..2].copy_from_slice(&0u16.to_le_bytes());
+    substructures.attacks[2..4].copy_from_slice(&pound);
+    odd.box_data.set_substructures(&substructures);
+    assert!(matches!(
+        party::from_save_pokemon(&Dex::new(), &odd),
+        Err(party::PartyError::InteriorEmptyMove)
+    ));
+    let records = [saved(&lead), odd];
+    let mut phase = phase_with_party_on_grass(
+        &records,
+        0,
+        lead,
+        &[
+            (7, 5),
+            (8, 5),
+            (9, 5),
+            (10, 5),
+            (11, 5),
+            (12, 5),
+            (13, 5),
+            (14, 5),
+            (15, 5),
+            (16, 5),
+        ],
+    );
+    phase.save1.last_heal_location.map_group = -1;
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+    assert_eq!(decoded(&phase.save1.player_party[0]).current_hp(), 0);
+    let party_after_loss: Vec<_> = phase
+        .save1
+        .player_party
+        .iter()
+        .map(|record| record.to_bytes())
+        .collect();
+    let rng_after_loss = phase.rng.state();
+
+    walk_east_and_land(&mut phase, 9);
+
+    assert_eq!(
+        phase.player.position(),
+        (16, 5),
+        "nine more grass tiles walked, past the encounter immunity"
+    );
+    assert!(!phase.is_wild_battle_active(), "no encounter may start");
+    assert_eq!(phase.rng.state(), rng_after_loss, "no roll draws");
+    let party_now: Vec<_> = phase
+        .save1
+        .player_party
+        .iter()
+        .map(|record| record.to_bytes())
+        .collect();
+    assert_eq!(
+        party_now, party_after_loss,
+        "the saved party keeps its bytes"
+    );
+}

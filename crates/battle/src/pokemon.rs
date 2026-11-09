@@ -2,8 +2,8 @@
 //! move slots.
 //!
 //! [`BattlePokemon`] carries its held item ([`BattlePokemon::held_item`]); a
-//! battle admits it only when the item's hold effect is none
-//! ([`crate::ensure_held_item_playable`]). It carries primary status
+//! battle admits it only when the item's hold effect is none or it is Oran
+//! Berry ([`crate::ensure_held_item_playable`]). It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
 //! see `calc_max_hp`.
@@ -18,9 +18,10 @@ use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type
 
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
-use crate::status1::Status1;
+use crate::status1::{Status1, TOXIC_COUNTER_MAX};
 use crate::volatile::Volatiles;
 
 pub mod evs;
@@ -31,7 +32,9 @@ pub mod pp_bonuses;
 mod tests;
 
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
-pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use learn::{
+    ExperienceAward, LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn,
+};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// Maximum number of moves a Pokémon can know.
@@ -172,7 +175,9 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
+    /// Remaining PP. A battler built in-process holds at most
+    /// [`BattlePokemon::max_pp`]; one adopted from a save may hold more
+    /// ([`BattlePokemon::with_saved_pp`]).
     pub pp: u8,
 }
 
@@ -197,6 +202,27 @@ fn calc_stat(
         / STAT_FORMULA_SCALE;
     nature.modify_stat(stat, scaled_stat + NON_HP_STAT_OFFSET)
 }
+
+/// Current HP after a stat recalculation: `CalculateMonStats`' HP rule
+/// (`src/pokemon.c:2866-2895`) with `BUGFIX` off, so a non-positive result
+/// wraps through the 16-bit HP field rather than clamping to one.
+fn hp_after_recalculation(species: SpeciesId, current_hp: u32, old_max: u32, new_max: u32) -> u32 {
+    if species == SPECIES_SHEDINJA {
+        return if current_hp != 0 || old_max == 0 {
+            SHEDINJA_MAX_HP
+        } else {
+            0
+        };
+    }
+    if current_hp == 0 {
+        return if old_max == 0 { new_max } else { 0 };
+    }
+    let moved = i64::from(current_hp) + i64::from(new_max) - i64::from(old_max);
+    u32::try_from(moved.rem_euclid(HP_FIELD_MODULUS)).unwrap_or(0)
+}
+
+/// The party record's HP field is a `u16` (`struct Pokemon::hp`).
+const HP_FIELD_MODULUS: i64 = 1 << 16;
 
 fn calc_max_hp(
     species: SpeciesId,
@@ -357,29 +383,33 @@ pub struct BattlePokemon {
     base_stats: BaseStats,
     experience: u32,
     stats: Stats,
+    /// The authoritative stat block as upstream stores it in the party
+    /// record: the last `CalculateMonStats` result (or the loaded block),
+    /// never Deoxys's Speed Forme view. Equal to [`Self::stats`] for every
+    /// other species. A save writes this block back and never recomputes it
+    /// (`src/load_save.c:160-178`); only a level-up replaces it.
+    cached_stats: Stats,
     current_hp: u32,
     /// This mon's effort values -- see the [`evs`] module docs for the full
     /// adoption/gain lifecycle and what carrying them does, and does not,
     /// change.
     evs: Evs,
-    /// [`Self::evs`] as of the last crossed level-up -- the set upstream's
-    /// `CalculateMonStats` cached at that event, which the save-time
-    /// recompute reads instead of the live [`Self::evs`]. [`Evs::default`]
-    /// until a level-up happens.
-    ///
-    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
-    evs_at_last_level_up: Evs,
     moves: Vec<MoveSlot>,
     pp_bonuses: PpBonuses,
     stages: StatStages,
     volatiles: Volatiles,
     status1: Status1,
+    /// The battle copy's toxic counter, advanced by
+    /// `ENDTURN_BAD_POISON` (`pokeemerald/src/battle_util.c:1542`-`:1544`).
+    /// [`BattlePokemon::status1`] keeps the party's stored word; this is the
+    /// separate count the battle's `gBattleMons` copy carries. Zero unless
+    /// `status1` is [`Status1::BadPoisoned`], which seeds it.
+    toxic_turns: u8,
     pending_move_learn: Option<PendingMoveLearn>,
 }
 
-// Manual, rather than derived, so `created_at_level` and
-// `evs_at_last_level_up` (their own doc comments) can stay out of it without
-// a wrapper type.
+// Manual, rather than derived, so `created_at_level` (its own doc comment)
+// can stay out of it without a wrapper type.
 impl PartialEq for BattlePokemon {
     fn eq(&self, other: &Self) -> bool {
         let Self {
@@ -397,14 +427,15 @@ impl PartialEq for BattlePokemon {
             base_stats,
             experience,
             stats,
+            cached_stats,
             current_hp,
             evs,
-            evs_at_last_level_up: _,
             moves,
             pp_bonuses,
             stages,
             volatiles,
             status1,
+            toxic_turns,
             pending_move_learn,
         } = self;
         *species == other.species
@@ -420,6 +451,7 @@ impl PartialEq for BattlePokemon {
             && *base_stats == other.base_stats
             && *experience == other.experience
             && *stats == other.stats
+            && *cached_stats == other.cached_stats
             && *current_hp == other.current_hp
             && *evs == other.evs
             && *moves == other.moves
@@ -427,6 +459,7 @@ impl PartialEq for BattlePokemon {
             && *stages == other.stages
             && *volatiles == other.volatiles
             && *status1 == other.status1
+            && *toxic_turns == other.toxic_turns
             && *pending_move_learn == other.pending_move_learn
     }
 }
@@ -508,6 +541,7 @@ impl BattlePokemon {
             nature,
             ivs,
         );
+        let cached_stats = compute_stats(species, base, level, nature, ivs);
         let mut slots = Vec::with_capacity(moves.len());
         for move_id in moves {
             let pp = dex.move_data(move_id)?.pp;
@@ -528,19 +562,19 @@ impl BattlePokemon {
             base_stats: *base,
             experience,
             stats,
+            cached_stats,
             current_hp: stats.max_hp,
             // `CreateBoxMon` zeroes the box before writing the fields it
             // sets, and the EV bytes are not one of them: a freshly built
             // mon has no effort values. A saved one restores its own bytes
             // through [`BattlePokemon::with_evs`].
             evs: Evs::default(),
-            // No level-up has happened yet -- see the field's own doc.
-            evs_at_last_level_up: Evs::default(),
             moves: slots,
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
             volatiles: Volatiles::default(),
             status1: Status1::default(),
+            toxic_turns: 0,
             pending_move_learn: None,
         })
     }
@@ -557,6 +591,23 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
+        Ok(self)
+    }
+
+    /// Adopts a saved record's remaining PP for one move slot exactly as
+    /// stored, even above [`BattlePokemon::max_pp`]; upstream provenance is
+    /// in the `party` module docs ("Move PP"). Spending
+    /// ([`BattlePokemon::deduct_pp`]) counts down from the stored value and
+    /// [`BattlePokemon::heal`] restores the maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty.
+    pub fn with_saved_pp(mut self, index: usize, pp: u8) -> Result<Self, BattleError> {
+        self.moves
+            .get_mut(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?
+            .pp = pp;
         Ok(self)
     }
 
@@ -601,6 +652,12 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// Gender from the species ratio and the personality's low byte.
+    #[must_use]
+    pub const fn gender(&self) -> Gender {
+        Gender::of_personality(self.base_stats.gender_ratio, self.personality)
     }
 
     /// Ability selected by [`BattlePokemon::ability_slot`].
@@ -688,6 +745,12 @@ impl BattlePokemon {
         self
     }
 
+    /// Empties the hand after the item is consumed in battle, mirroring
+    /// `Cmd_removeitem` (`src/battle_script_commands.c:5901`-`:5909`).
+    pub(crate) const fn consume_held_item(&mut self) {
+        self.held_item = ItemId::NONE;
+    }
+
     /// Species types captured at construction.
     #[must_use]
     pub const fn types(&self) -> [Type; 2] {
@@ -698,6 +761,14 @@ impl BattlePokemon {
     #[must_use]
     pub const fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// The authoritative stat block a save writes back: the loaded or last
+    /// recalculated cache, never Deoxys's Speed Forme view
+    /// ([`BattlePokemon::stats`]), which is the only place the two differ.
+    #[must_use]
+    pub const fn cached_stats(&self) -> Stats {
+        self.cached_stats
     }
 
     /// Current HP (`0` means fainted).
@@ -786,16 +857,64 @@ impl BattlePokemon {
         &mut self.volatiles
     }
 
-    /// Current primary status.
+    /// Current primary status, as the party stores it.
+    ///
+    /// For [`Status1::BadPoisoned`] the counter is the stored word's, which a
+    /// save writes back untouched; the count the battle advances each end of
+    /// turn is separate (`ENDTURN_BAD_POISON` emits no status write-back,
+    /// `pokeemerald/src/battle_util.c:1536`-`:1549`), so a residual never
+    /// changes this value.
     #[must_use]
     pub const fn status1(&self) -> Status1 {
         self.status1
     }
 
-    /// Overwrites the primary status. `Asleep { turns: 0 }` is stored as
-    /// [`Status1::Healthy`]: upstream's cleared sleep bits are a healthy battler.
-    pub const fn set_status1(&mut self, status1: Status1) {
+    /// Overwrites the primary status: a whole-status write, which upstream
+    /// emits to the party and applies to the battle copy alike (infliction,
+    /// cure, faint). `Asleep { turns: 0 }` is stored as [`Status1::Healthy`]:
+    /// upstream's cleared sleep bits are a healthy battler. A
+    /// [`Status1::BadPoisoned`] counter seeds the battle's own count; every
+    /// other status zeroes it.
+    ///
+    /// The toxic residual must not call this: it advances only the battle
+    /// copy's count ([`BattlePokemon::advance_toxic_turns`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bad-poison counter exceeds [`TOXIC_COUNTER_MAX`], which no
+    /// four-bit status word can hold.
+    pub fn set_status1(&mut self, status1: Status1) {
         self.status1 = status1.normalised();
+        self.toxic_turns = self.stored_toxic_counter();
+    }
+
+    /// The counter in the stored status word, zero for any other status.
+    fn stored_toxic_counter(&self) -> u8 {
+        match self.status1 {
+            Status1::BadPoisoned { counter } => {
+                assert!(
+                    counter <= TOXIC_COUNTER_MAX,
+                    "a toxic counter of {counter} does not fit STATUS1_TOXIC_COUNTER's four bits"
+                );
+                counter
+            }
+            _ => 0,
+        }
+    }
+
+    /// `ENDTURN_BAD_POISON`'s counter step: raises the battle copy's toxic
+    /// count by one unless it already sits at [`TOXIC_COUNTER_MAX`], and
+    /// returns the count to multiply by
+    /// (`pokeemerald/src/battle_util.c:1542`-`:1544`). Returns `None`, changing
+    /// nothing, for a battler that is not badly poisoned.
+    pub(crate) fn advance_toxic_turns(&mut self) -> Option<u8> {
+        if !self.status1.is_bad_poisoned() {
+            return None;
+        }
+        if self.toxic_turns < TOXIC_COUNTER_MAX {
+            self.toxic_turns += 1;
+        }
+        Some(self.toxic_turns)
     }
 
     /// Resets stat stages and volatile conditions before returning this
@@ -816,9 +935,19 @@ impl BattlePokemon {
     /// explicit [`BattlePokemon::set_status1`] call, right alongside this
     /// method (`crate::battle::execute::Battle::settle_faint`, the
     /// double-faint arm of `crate::battle::execute::pipelines`).
+    ///
+    /// The toxic counter the battle advanced is battle scratch too: it is
+    /// reseeded from the stored status word, which is what a switch-in
+    /// reloads (`Cmd_switchindataupdate` copies the party record whole and
+    /// `SwitchInClearSetData` never writes `status1`,
+    /// `pokeemerald/src/battle_script_commands.c:4606`-`:4657`,
+    /// `pokeemerald/src/battle_main.c:3152`-`:3262`). A stored `0x80` therefore
+    /// re-enters at zero and an imported `0x580` at five; the stored word
+    /// itself is never touched.
     pub fn clear_battle_scratch(&mut self) {
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
+        self.toxic_turns = self.stored_toxic_counter();
     }
 
     /// Applies earned experience one level threshold at a time, capping both
@@ -847,17 +976,61 @@ impl BattlePokemon {
         dex: &Dex,
         amount: u32,
     ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        Ok(self.apply_experience_reporting(dex, amount)?.pending)
+    }
+
+    /// Applies an award exactly like [`BattlePokemon::apply_experience`] and
+    /// also reports the moves a free slot took without asking, in learning
+    /// order, so the caller can announce each one before any prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
+    /// decision is already pending.
+    #[must_use = "the report carries the open move prompt and the moves \
+                  learned without asking"]
+    pub fn apply_experience_reporting(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<ExperienceAward, BattleError> {
         if let Some(pending) = self.pending_move_learn {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
+        let mut learned = Vec::new();
+        self.pending_move_learn = self.advance_experience(dex, amount, &mut learned);
+        Ok(ExperienceAward {
+            pending: self.pending_move_learn,
+            learned,
+        })
     }
 
-    /// Reconciles saved experience without teaching crossed-level moves.
+    /// Adopts a loaded experience total verbatim, without moving the level or
+    /// any stat, and without capping it.
+    ///
+    /// A party record stores level, experience and the stat cache
+    /// independently and load copies all three
+    /// (`src/load_save.c:160-178`), so a total above the level-100 threshold
+    /// survives a re-save unchanged. The cap upstream applies lives in
+    /// `Cmd_getexp`, which [`BattlePokemon::apply_experience`] reproduces, and
+    /// the next award reconciles the level through it.
+    #[must_use]
+    pub const fn with_saved_experience(mut self, total: u32) -> Self {
+        self.experience = total;
+        self
+    }
+
+    /// Raises experience and level without teaching crossed-level moves.
     ///
     /// Experience is clamped between the current value and the level-100
     /// threshold. The level can rise to match it but never decreases.
+    ///
+    /// Test support only (`test-support` feature): no production path calls
+    /// it. Load adopts a saved total verbatim through
+    /// [`BattlePokemon::with_saved_experience`], and an award levels the mon
+    /// through [`BattlePokemon::apply_experience`]; tests use this to level a
+    /// mon without a battle fixture.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn reconcile_saved_experience(&mut self, total: u32) {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
@@ -865,20 +1038,22 @@ impl BattlePokemon {
         self.raise_level_to_experience();
     }
 
-    /// Raises the level (and stats, preserving damage taken) to match the
-    /// current experience total, returning `Some((old_level, new_level))`
-    /// when at least one threshold was crossed. Shared by the in-battle
-    /// award ([`BattlePokemon::apply_experience`], which then teaches the
-    /// crossed learnset moves) and the save decoder
-    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    /// Raises the level to match the current experience total, replaces the
+    /// stat cache from the current EVs, and moves HP by the max-HP delta,
+    /// returning `Some((old_level, new_level))` when at least one threshold
+    /// was crossed. Shared by the in-battle award
+    /// ([`BattlePokemon::apply_experience`], which then teaches the crossed
+    /// learnset moves) and the test-only `reconcile_saved_experience`, which
+    /// must not.
     ///
-    /// The stat recompute is [`compute_stats`] at `0` EVs for max HP and
-    /// every non-Deoxys stat; Deoxys's five Speed Forme stats then take the
-    /// current EVs through [`BattlePokemon::apply_speed_forme_evs`]. See the
-    /// [`evs`] module docs for why the rest of [`BattlePokemon::stats`] must
-    /// stay `0`-EV even here. A crossed level
-    /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
-    /// field's own doc for what reads it and why.
+    /// This is `CalculateMonStats` as `Cmd_getexp` runs it after the KO's EV
+    /// award (`src/pokemon.c:2823-2895`,
+    /// `src/battle_script_commands.c:3420,3465-3478`): the whole cache is
+    /// [`compute_stats_with_evs`] at the *current* EVs, and
+    /// [`hp_after_recalculation`] applies the HP rule against the cache's
+    /// previous maximum. Deoxys's live Speed Forme view is then refreshed
+    /// from the same EVs by [`BattlePokemon::apply_speed_forme_evs`]; the
+    /// stored block stays Normal Forme.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -895,30 +1070,34 @@ impl BattlePokemon {
         }
 
         let old_level = self.level;
-        let old_max_hp = self.stats.max_hp;
+        let old_max_hp = self.cached_stats.max_hp;
         self.level = new_level;
-        self.stats = compute_stats(
+        self.cached_stats = compute_stats_with_evs(
             self.species,
-            &effective_battle_base_stats(self.species, &self.base_stats),
+            &self.base_stats,
             self.level,
             self.nature,
             self.ivs,
+            self.evs,
         );
+        self.stats = self.cached_stats;
         self.apply_speed_forme_evs();
-        self.current_hp = self
-            .current_hp
-            .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
-        self.evs_at_last_level_up = self.evs;
+        self.current_hp = hp_after_recalculation(
+            self.species,
+            self.current_hp,
+            old_max_hp,
+            self.cached_stats.max_hp,
+        );
         Some((old_level, new_level))
     }
 
     /// Feeds Deoxys's current EVs into its five Speed Forme stats.
     ///
     /// Upstream `GetDeoxysStat` reads each stat's EV byte alongside its IV
-    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware even though
-    /// every other species' live block stays `0`-EV. Max HP is untouched:
-    /// `GetDeoxysStat` never reads it, and the save-side HP bookkeeping in
-    /// [`evs`] relies on that `0`-EV floor.
+    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware, while
+    /// every other species' live block is the stored cache. Max HP is
+    /// untouched: `GetDeoxysStat` never reads it. Only the live view changes;
+    /// [`BattlePokemon::cached_stats`] stays the stored Normal Forme block.
     ///
     /// [`BattlePokemon::gain_evs`] does not call this, so EVs earned in a
     /// battle leave that battle's stats alone; each battle constructor calls
@@ -1059,7 +1238,7 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
-        self.status1 = Status1::default();
+        self.set_status1(Status1::default());
         Ok(())
     }
 }
