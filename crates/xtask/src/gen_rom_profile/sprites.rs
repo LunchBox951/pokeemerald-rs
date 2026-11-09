@@ -57,7 +57,7 @@ pub fn locate(
     for id in &ids {
         needles.push(ctx.pack.get(id)?.payload.clone());
     }
-    let hits = ctx.raw.find_all(&needles);
+    let hits = ctx.raw.find_all_uncapped(&needles);
 
     let seed = ids
         .iter()
@@ -321,6 +321,25 @@ mod tests {
                 .find(|p| p.id == TARGET)
                 .expect("target");
             assert_eq!(target.addr, 0x0800_5000);
+        });
+    }
+
+    #[test]
+    fn a_palette_named_by_the_table_after_sixteen_lower_copies_is_still_found() {
+        // Sixteen unreferenced copies fill the ordinary search cap below the
+        // copy the table names.
+        let records = [record(0x0800_2000, 0x1100), record(0x0803_0000, 0x1101)];
+        let mut copies: Vec<usize> = (0..16).map(|copy| 0x5000 + copy * 0x40).collect();
+        copies.push(0x3_0000);
+        let (rom, entries) = fixture(&records, &copies);
+        with_context("sprite-palette-seventeen", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            let target = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == TARGET)
+                .expect("target");
+            assert_eq!(target.addr, 0x0803_0000);
         });
     }
 
