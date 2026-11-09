@@ -319,14 +319,15 @@ fn rollback_takes_back_a_level_under_umask_0177_bound_by_modes() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn a_quarantine_swapped_for_an_unreadable_directory_is_refused_and_its_contents_kept() {
+fn a_quarantine_swapped_for_an_unreadable_directory_is_pinned_then_refused_with_its_contents_kept()
+{
     // Between `mkdirat` and the open the name is swapped for a directory its
     // owner cannot read, so the read-mode open fails and rollback pins it
     // instead. One with group bits is not a quarantine rollback made: it is
     // refused with its mode intact. A private non-empty one is not empty
-    // either: refused, and nothing in it is removed (its owner bits, which the
-    // pin restored before the listing could show it was not empty, are the
-    // accepted residual in the module docs).
+    // either: refused, and nothing in it is removed, but the pin fallback
+    // restored its owner bits to 0700 before the listing could show that
+    // (the accepted residual in the module docs), which proves that path ran.
     use std::os::unix::fs::PermissionsExt as _;
 
     for (kind, mode, group_bits) in [
@@ -359,6 +360,11 @@ fn a_quarantine_swapped_for_an_unreadable_directory_is_refused_and_its_contents_
                 "{kind}: the replacement's mode was changed"
             );
         } else {
+            assert_eq!(
+                fs::metadata(&name).unwrap().permissions().mode() & 0o777,
+                0o700,
+                "{kind}: the pin fallback did not restore the owner bits"
+            );
             assert_eq!(
                 fs::read(name.join("mine")).unwrap(),
                 b"x",
