@@ -3,7 +3,7 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{
     battler, narrator, render, request, scene, upstream_fixture, Fixture, RATTATA, SPECIALS,
@@ -192,6 +192,46 @@ fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         ["Foe RATTATA is\nloafing around!", "TORCHIC used\nEMBER!"]
+    );
+}
+
+#[test]
+fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Disobeyed {
+            message: LoafMessage::Loafing,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::WontObey,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::PretendedNotToNotice,
+        },
+        BattleEvent::DisobedientSelfHit {
+            by_player: true,
+            damage: 3,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "TORCHIC is\nloafing around!",
+            "TORCHIC won't\nobey!",
+            "TORCHIC turned away!",
+            "TORCHIC pretended\nnot to notice!",
+            "TORCHIC won't\nobey!",
+            "It hurt itself in its\nconfusion!",
+            "TORCHIC ignored\norders!",
+            "TORCHIC began to nap!",
+            "TORCHIC\nfell asleep!",
+        ]
     );
 }
 
@@ -392,6 +432,60 @@ fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
             "Wild RATTATA evaded\nthe attack!",
             "TORCHIC evaded\nthe attack!",
         ]
+    );
+}
+
+#[test]
+fn attract_names_the_target_and_the_infatuated_actor_with_its_attractor() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::ATTRACT;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Infatuated {
+                    by_player: true,
+                    move_id,
+                },
+                BattleEvent::InLove { by_player: false },
+                BattleEvent::ImmobilizedByLove {
+                    by_player: false,
+                    move_id,
+                },
+                BattleEvent::ObliviousPreventsAttraction {
+                    by_player: false,
+                    move_id,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA\nfell in love!",
+            "Wild RATTATA is in love\nwith TORCHIC!",
+            "Wild RATTATA is\nimmobilized by love!",
+            "TORCHIC's OBLIVIOUS\nprevents romance!",
+        ]
+    );
+}
+
+/// `BattleScript_CuteCharmActivates` prints `STRINGID_PKMNSXINFATUATEDY` with
+/// the holder as the defender and the infatuated attacker
+/// (`data/battle_scripts_1.s:4193`-`:4197`).
+#[test]
+fn cute_charm_names_its_holder_and_the_attacker_it_infatuated() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("SKITTY", Some(AbilityId::CUTE_CHARM));
+    let mut narrator = Narrator::new(scene);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[BattleEvent::InfatuatedByCuteCharm {
+                by_player: true,
+                move_id: MoveId::TACKLE,
+            }]
+        )),
+        ["Wild SKITTY's CUTE CHARM\ninfatuated TORCHIC!"]
     );
 }
 
