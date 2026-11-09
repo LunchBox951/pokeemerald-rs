@@ -5,6 +5,8 @@ use std::ffi::OsStr;
 use std::fs;
 
 use super::super::import_to_with;
+#[cfg(unix)]
+use super::super::ImportRomError;
 use super::support::{fake_pack, file_names, SourceRom, TempDir};
 
 #[test]
@@ -236,32 +238,34 @@ fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack()
 
 /// The umasks [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// imports under.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
-const OWNER_STRIPPING_UMASKS: &[&str] = &[
-    "0444",
-    "0277",
-    "0477",
-    "0022",
-    #[cfg(not(target_vendor = "apple"))]
-    "0177",
-    #[cfg(not(target_vendor = "apple"))]
-    "0777",
-];
+#[cfg(unix)]
+const OWNER_STRIPPING_UMASKS: &[&str] = &["0444", "0277", "0477", "0022", "0177", "0777"];
 
 /// Set in the child [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// re-runs itself as, holding the umask that child imports under.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
+#[cfg(unix)]
 const NESTED_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_UMASK_CHILD";
+
+/// Set in that child, on Linux and Android, to import with the
+/// `/proc/self/fd` route unavailable.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const NESTED_NO_PROCFS_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_NO_PROCFS_CHILD";
+
+/// Whether a level `mkdirat(0777)` leaves under `mask` is one no inode-bound
+/// route restores or pins on this target; the import then fails closed.
+#[cfg(unix)]
+fn import_refuses_level_mode(mask: u32, no_procfs: bool) -> bool {
+    let left = 0o777 & !mask;
+    if cfg!(target_os = "freebsd") {
+        false
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        no_procfs && left == 0
+    } else if cfg!(target_vendor = "apple") {
+        left & 0o500 == 0
+    } else {
+        left & 0o400 == 0
+    }
+}
 
 /// An import to a destination whose every level is missing leaves each level
 /// it created with the owner's read, write and search, whatever the umask
@@ -273,17 +277,16 @@ const NESTED_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_UMASK_CHILD";
 /// The umask is process-wide, so each case runs alone in a child that reads
 /// its mask from the environment.
 ///
-/// Every mask here leaves the owner's search bit, which the traversal opens
-/// of Apple platforms need to pin a level; `0177` and `0777` take it too and
-/// are tried only where the pin is an `O_PATH` descriptor. Other Unix
-/// systems pin with a read-requiring open and are outside this test, as they
-/// are for the existing-destination test below.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd",
-    target_vendor = "apple"
-))]
+/// Every mask is tried on every Unix target, and on Linux and Android a
+/// second time with the `/proc/self/fd` route unavailable. A level needs the
+/// owner's read or search bit to be pinned (Apple: search; Unix systems that
+/// pin with a read-mode open: read), and a mode with none left has no
+/// inode-bound restore: `0777` on Apple and on Linux and Android without
+/// procfs, `0444`, `0477` and `0777` on those other Unix systems (see
+/// [`import_refuses_level_mode`]). Those imports must fail with the
+/// diagnostic naming the umask and publish nothing, rather than `chmod` a
+/// name; a privileged runner is never refused, so there they publish.
+#[cfg(unix)]
 #[test]
 fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -291,8 +294,22 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
     let name = "import_rom::tests::publishing::\
                 an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask";
     let Some(mask) = std::env::var_os(NESTED_UMASK_CHILD) else {
-        for mask in OWNER_STRIPPING_UMASKS {
-            let output = std::process::Command::new("/bin/sh")
+        let procfs_variants: &[bool] = if cfg!(any(target_os = "linux", target_os = "android")) {
+            &[false, true]
+        } else {
+            &[false]
+        };
+        for (mask, no_procfs) in OWNER_STRIPPING_UMASKS.iter().flat_map(|mask| {
+            procfs_variants
+                .iter()
+                .map(move |no_procfs| (mask, *no_procfs))
+        }) {
+            let mut command = std::process::Command::new("/bin/sh");
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if no_procfs {
+                command.env(NESTED_NO_PROCFS_CHILD, "1");
+            }
+            let output = command
                 .args(["-c", "umask \"$1\" && shift && exec \"$0\" \"$@\""])
                 .arg(std::env::current_exe().unwrap())
                 .arg(mask)
@@ -303,7 +320,7 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
             let stdout = String::from_utf8_lossy(&output.stdout);
             assert!(
                 output.status.success() && stdout.contains("1 passed"),
-                "umask {mask} child failed:\n{stdout}\n{}",
+                "umask {mask} (procfs unavailable: {no_procfs}) child failed:\n{stdout}\n{}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
@@ -321,10 +338,49 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
     let outer = dir.join("one");
     let inner = outer.join("two");
     let pack_path = inner.join("pokeemerald.pack");
-    import_to_with(source.path(), &pack_path, |_rom, _path| {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let no_procfs = std::env::var_os(NESTED_NO_PROCFS_CHILD).is_some();
+    // Only Linux and Android have a procfs route to withhold.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let no_procfs = false;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let _no_procfs = no_procfs.then(super::super::dest::procfs_unavailable::make_unavailable);
+    // Whether mode bits bind this process, asked of the outcome.
+    let probe = dir.join("probe");
+    fs::create_dir(&probe).unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o000)).unwrap();
+    let privileged = fs::read_dir(&probe).is_ok();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::remove_dir(&probe).unwrap();
+
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
-    })
-    .expect("the import creates the nested destination");
+    });
+    if import_refuses_level_mode(mask, no_procfs) && !privileged {
+        let err = outcome.expect_err("a level no inode-bound route restores fails the import");
+        assert!(
+            matches!(err, ImportRomError::CreateDirFailed { .. }),
+            "umask {mask:04o}: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("umask"),
+            "umask {mask:04o}: the diagnostic names the umask: {err}"
+        );
+        assert!(!pack_path.exists(), "nothing is published");
+        // Whatever the failed import left stands closed (the levels, and a
+        // quarantine its rollback could not remove); open it so the fixture
+        // cleans up.
+        let open_up = |path: &std::path::Path| {
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+        };
+        open_up(&outer);
+        open_up(&inner);
+        for entry in fs::read_dir(&dir.path).into_iter().flatten().flatten() {
+            open_up(&entry.path());
+        }
+        return;
+    }
+    outcome.expect("the import creates the nested destination");
 
     // The owner's rwx is added to whatever `mkdirat(0777)` left, and nothing
     // else changes.
