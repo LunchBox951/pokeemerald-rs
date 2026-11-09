@@ -128,42 +128,33 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
     (bound, scratch_frames)
 }
 
-/// A change the interpolation cursor makes to the source frames while moving
-/// to an output frame's position. [`Cursor::advance_frame`] reports each one
-/// in order, so prediction and rendering share a single state machine.
+/// A source-frame change [`Cursor::advance_frame`] reports, in order.
 #[derive(Clone, Copy)]
 enum Transition {
-    /// The cursor crossed a source-frame boundary: `prev` becomes the frame
-    /// after it, which is a fresh load from the source when `next` was still
-    /// pending and the old `next` otherwise.
+    /// A source-frame boundary was crossed. `next_was_pending` tells the
+    /// caller whether `prev` takes a fresh source frame or the old `next`.
     Crossing { next_was_pending: bool },
-    /// A fractional position needs `next` and it was not loaded yet: one more
-    /// source frame is read.
+    /// `next` is needed at a fractional position and was not loaded yet.
     Lookahead,
 }
 
 /// The floating-point interpolation cursor and its pending-lookahead state.
 ///
-/// [`Resampler::fill_chunk`] walks this twice per chunk: a dry run that
-/// counts the source frames to bulk-drain, then the render loop that
-/// consumes them. Both call [`Self::advance_frame`], so the two cannot drift
-/// apart: they run the same `f64` arithmetic in the same order and make the
-/// same crossing and lookahead decisions.
+/// [`Resampler::fill_chunk`] must drain exactly the source frames it then
+/// consumes, so its prediction pass and its render pass both step through
+/// [`Self::advance_frame`]: one implementation cannot drift from itself in
+/// `f64` rounding or decision order.
 #[derive(Clone, Copy)]
 struct Cursor {
     /// Fractional position between `prev` and `next`, in `[0.0, 1.0)` except
-    /// after [`Self::advance_frame`] ran out of crossing budget.
+    /// when [`Self::is_stalled`].
     frac: f64,
-    /// Whether the next output frame should first advance the cursor. `false`
-    /// only for the very first frame ever produced (which sits exactly on the
-    /// primed `prev`); `true` forever after. Advancing *before* each frame —
-    /// rather than after — is what defers the trailing lookahead pull to the
-    /// next callback (see the module docs).
+    /// `false` only before the very first output frame, which sits on the
+    /// primed `prev`. Advancing *before* each frame rather than after is what
+    /// defers the trailing lookahead pull to the next callback (see the
+    /// module docs).
     need_advance: bool,
-    /// Whether `next` is not loaded yet. Set when the cursor sits exactly on
-    /// a source frame (`frac == 0.0`): that output uses only `prev`, so the
-    /// following frame is left in the ring until an output actually blends it
-    /// (see the module docs).
+    /// Whether `next` is not loaded yet (see the module docs).
     next_pending: bool,
 }
 
@@ -176,23 +167,18 @@ impl Cursor {
         }
     }
 
-    /// Whether the last advance left the cursor unresolved at or past `1.0`
-    /// because its crossing budget ran out.
+    /// The crossing budget ran out with `frac` still at or past `1.0`.
     fn is_stalled(&self) -> bool {
         self.frac >= 1.0
     }
 
-    /// Move to the next output frame's position, reporting every source-frame
-    /// change to `on_transition` in order, and return how many boundaries
-    /// were crossed.
+    /// Move to the next output frame's position, reporting each source-frame
+    /// change to `on_transition`; returns the boundaries crossed.
     ///
-    /// At most `crossing_budget` boundaries are crossed. If the budget runs
-    /// out with the cursor still at or past `1.0`, the leftover carries over
-    /// unresolved (see [`Self::is_stalled`]) and no lookahead is requested:
-    /// nothing may read a source frame the caller did not budget for. A
-    /// validly constructed `Resampler` never exhausts its budget (it is
-    /// sized from the scratch the chunk drains into), so this is
-    /// defence in depth.
+    /// `crossing_budget` guards the caller's drained scratch. If it runs out
+    /// with `frac` still at or past `1.0`, the cursor stalls and requests no
+    /// lookahead, so nothing reads a frame the caller did not budget. A
+    /// validly constructed `Resampler` never stalls.
     fn advance_frame(
         &mut self,
         step: f64,
@@ -237,8 +223,6 @@ pub struct Resampler {
     channels: usize,
     /// Source frames advanced per output frame (`source_rate / device_rate`).
     step: f64,
-    /// Interpolation cursor: where the next output frame sits between `prev`
-    /// and `next`, and whether `next` is loaded.
     cursor: Cursor,
     prev: Vec<f32>,
     next: Vec<f32>,
@@ -391,28 +375,17 @@ impl Resampler {
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
 
-        // Source frames this call consumes: 1 to prime `prev` on the very
-        // first call (`next` stays pending), plus one per boundary crossing
-        // that lands on a still-pending `next` (a crossing onto an already
-        // loaded `next` swaps and pulls nothing), plus one for each lookahead
-        // `next` loaded at a nonzero `frac`. The advance runs *before* each
-        // frame (skipped only for the very first frame ever), so the trailing
-        // lookahead pull is deferred to the next callback — see the module
-        // docs. Count them with a dry run over a copy of the cursor that
-        // calls the same `Cursor::advance_frame` the render loop below does,
-        // so the bulk drain matches consumption precisely by construction —
-        // never relying on `floor` agreeing with incremental accumulation at
-        // an exact boundary (a mismatch would drop a source frame or index
-        // past the scratch).
+        // Predict the source frames this call consumes by dry-running a copy
+        // of the cursor through the same `Cursor::advance_frame` the render
+        // loop uses. The bulk drain then matches consumption exactly, never
+        // relying on `floor` agreeing with incremental `f64` accumulation at
+        // an exact boundary.
         //
-        // The crossing budget is what `scratch` can carry: besides the
-        // priming frame, a chunk loads at most one frame per crossing plus
-        // one trailing lookahead, so `scratch` holds `frames - 2` crossings
-        // (`scratch_layout` sizes it as `2 + ceil(bound * step) + 1`). That
-        // is one more than `bound * step` when the cursor rests just under
-        // `1.0` and `bound * step` sits on the cap, which a plain
-        // `MAX_SCRATCH_SOURCE_FRAMES` budget would cut short. A validly
-        // constructed `Resampler` never exhausts it.
+        // The crossing budget is what `scratch` holds beyond the priming
+        // frame and one trailing lookahead. That is one more than
+        // `bound * step` when the cursor rests just under `1.0` and
+        // `bound * step` sits on the cap, which a fixed
+        // `MAX_SCRATCH_SOURCE_FRAMES` budget would cut short.
         let crossing_budget = (self.scratch.len() / self.channels).saturating_sub(2);
         let mut probe = self.cursor;
         let mut crossings = 0usize;
@@ -451,10 +424,8 @@ impl Resampler {
 
         let mut crossed = 0usize;
         for frame in out.chunks_mut(self.channels) {
-            // Advance to this frame's position first, through the very
-            // function the dry run counted with. Its budget is the dry run's
-            // crossing count, so this never reads past what was actually
-            // drained into `scratch`.
+            // The dry run's crossing count is the budget, so this never
+            // reads past what was drained into `scratch`.
             let channels = self.channels;
             let prev = &mut self.prev;
             let next = &mut self.next;
