@@ -102,17 +102,47 @@ fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     .with_private_object_event_rng()
 }
 
-/// [`route_101_trigger_phase`] that retains the checkout pack, so the
-/// conclusion's deferred Birch's Lab warp reads the repository's own extract.
-fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
+/// [`route_101_trigger_phase`] that retains `source`, so the conclusion's
+/// deferred Birch's Lab warp reads the pack that source names.
+fn route_101_trigger_phase_from_source(
+    player: PlayerState,
+    source: crate::pack_source::PackSource,
+) -> OverworldPhase {
     OverworldPhase::for_test_with_source(
         crate::overworld::test_support::synthetic_scene(25, 25),
         ROUTE_101,
         player,
         None,
-        crate::pack_source::PackSource::Repo,
+        source,
     )
     .with_private_object_event_rng()
+}
+
+/// [`route_101_trigger_phase`] that retains the checkout pack, so the
+/// conclusion's deferred Birch's Lab warp reads the repository's own extract.
+fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
+    route_101_trigger_phase_from_source(player, crate::pack_source::PackSource::Repo)
+}
+
+/// [`route_101_trigger_phase`] whose pack source carries a synthetic Birch's
+/// Lab, so the conclusion's warp lands without an extracted pack. The
+/// returned guard owns the scratch pack file.
+fn lab_route_101_trigger_phase(
+    player: PlayerState,
+) -> (
+    OverworldPhase,
+    crate::overworld::test_support::BirchsLabPack,
+) {
+    let lab = crate::overworld::test_support::BirchsLabPack::new();
+    let phase = route_101_trigger_phase_from_source(player, lab.source());
+    (phase, lab)
+}
+
+/// A pack source naming a file that does not exist, so no room can load.
+fn unloadable_pack_source() -> crate::pack_source::PackSource {
+    crate::pack_source::PackSource::Explicit(
+        std::path::Path::new("/nonexistent/pokeemerald-rs-3240/missing.pack").into(),
+    )
 }
 
 fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
@@ -207,7 +237,7 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
         ),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-        let mut phase = route_101_trigger_phase(PlayerState::new(
+        let (mut phase, _lab) = lab_route_101_trigger_phase(PlayerState::new(
             (tx - 1, ty),
             ROUTE_101_TRIGGER_ELEVATION,
             Direction::East,
@@ -228,6 +258,10 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
             phase.first_battle_outcome(),
             Some(expected_outcome),
             "setup: seed {seed} must produce {expected_outcome:?}"
+        );
+        assert_eq!(
+            phase.map_id, BIRCHS_LAB,
+            "setup: the warp to the lab must land, or the writes are rolled back"
         );
         assert_eq!(
             phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
@@ -265,7 +299,7 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
         ),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-        let mut phase = route_101_trigger_phase(PlayerState::new(
+        let (mut phase, _lab) = lab_route_101_trigger_phase(PlayerState::new(
             (tx - 1, ty),
             ROUTE_101_TRIGGER_ELEVATION,
             Direction::East,
@@ -286,6 +320,10 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
             phase.first_battle_outcome(),
             Some(expected_outcome),
             "setup: seed {seed} must produce {expected_outcome:?}"
+        );
+        assert_eq!(
+            phase.map_id, BIRCHS_LAB,
+            "setup: the warp to the lab must land, or the writes are rolled back"
         );
         assert_eq!(
             phase
@@ -504,5 +542,204 @@ fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before
         phase.player.previous_elevation(),
         BIRCHS_LAB_ARRIVAL_ELEVATION,
         "previous elevation equals the current one for a freshly placed player"
+    );
+}
+
+/// An unrelated var the conclusion must never disturb, rolled back or not.
+const VAR_UNRELATED_SENTINEL: u16 = 0x4010;
+
+const UNRELATED_SENTINEL_VALUE: u16 = 9;
+
+/// A `VAR_BIRCH_LAB_STATE` the rollback must restore, distinct from both the
+/// default and the concluded value.
+const BIRCH_LAB_STATE_PRESET: u16 = 7;
+
+/// `VAR_ROUTE101_STATE` while the rescue coord event is armed
+/// (`Route101/scripts.inc:14-17`): the value the conclusion's rollback
+/// leaves so the trigger fires again.
+const ROUTE101_STATE_TRIGGER_READY: u16 = 1;
+
+/// Upstream's `warp` cannot fail (`src/scrcmd.c:740-751`), so a lab that will
+/// not load must not leave the conclusion half applied: the player stays on
+/// Route 101, none of the story vars or hide flags the script writes before
+/// its `warp` survives, and the rescue is re-armed so a later landing on the
+/// trigger tile retries it. The heal is kept (`HealPlayerParty` is idempotent
+/// and no fainted lead may reach the overworld).
+#[test]
+fn a_failed_lab_load_rolls_the_conclusion_back_and_the_rescue_retries() {
+    for (seed, lead, expected_outcome) in [
+        (
+            WINNING_SEED,
+            new_game::provisional_starter(),
+            BattleOutcome::PlayerWon,
+        ),
+        (
+            LOSING_SEED,
+            fragile_treecko_lead(),
+            BattleOutcome::PlayerLost,
+        ),
+    ] {
+        let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+        let lab = crate::overworld::test_support::BirchsLabPack::new();
+        let mut phase = route_101_trigger_phase_from_source(
+            PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+            unloadable_pack_source(),
+        );
+        phase.rng = Rng::new(seed);
+        phase.set_fresh_lead_for_test(lead);
+        phase.save1.money = STARTING_MONEY;
+        let event_data = &mut phase.save1.event_data;
+        event_data
+            .var_set(VAR_STARTER_MON, STARTER_MON_MUDKIP)
+            .unwrap();
+        event_data
+            .var_set(VAR_BIRCH_LAB_STATE, BIRCH_LAB_STATE_PRESET)
+            .unwrap();
+        event_data
+            .var_set(VAR_UNRELATED_SENTINEL, UNRELATED_SENTINEL_VALUE)
+            .unwrap();
+        event_data
+            .flag_set(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH)
+            .unwrap();
+        let max_hp = phase.lead_for_test().unwrap().stats().max_hp;
+
+        play_first_battle_to_conclusion(&mut phase);
+
+        assert_eq!(
+            phase.first_battle_outcome(),
+            Some(expected_outcome),
+            "setup: seed {seed} must produce {expected_outcome:?}"
+        );
+        assert_eq!(
+            phase.map_id, ROUTE_101,
+            "setup: the lab warp must have failed"
+        );
+        assert_eq!(phase.player.position(), (tx, ty), "the player stays put");
+        let data = &phase.save1.event_data;
+        assert_eq!(
+            data.var_get(VAR_ROUTE101_STATE),
+            Ok(ROUTE101_STATE_TRIGGER_READY),
+            "{expected_outcome:?}: neither concluded (3) nor consumed (2): the rescue is re-armed"
+        );
+        assert_eq!(
+            data.var_get(VAR_BIRCH_LAB_STATE),
+            Ok(BIRCH_LAB_STATE_PRESET)
+        );
+        assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_MUDKIP));
+        assert_eq!(
+            data.var_get(VAR_UNRELATED_SENTINEL),
+            Ok(UNRELATED_SENTINEL_VALUE)
+        );
+        for (flag, expected, name) in [
+            (FLAG_HIDE_ROUTE_101_ZIGZAGOON, false, "Zigzagoon"),
+            (
+                FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,
+                false,
+                "Route 101 Birch",
+            ),
+            (
+                FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH,
+                true,
+                "lab Birch",
+            ),
+            (
+                FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG,
+                false,
+                "starters bag",
+            ),
+        ] {
+            assert_eq!(
+                data.flag_get(flag),
+                Ok(expected),
+                "{expected_outcome:?}: the {name} hide flag is back where it was"
+            );
+        }
+        assert_eq!(phase.save1.money, STARTING_MONEY, "no money change");
+        let lead = phase.lead_for_test().expect("the lead is still present");
+        assert!(!lead.is_fainted());
+        assert_eq!(lead.current_hp(), max_hp, "the heal stays committed");
+
+        // Standing on the trigger tile does not restart the fight.
+        for _ in 0..10 {
+            phase.step(platform::ButtonState::default());
+            assert!(
+                !phase.is_first_battle_active(),
+                "no restart without a landing"
+            );
+        }
+
+        // The asset source comes back; stepping off and landing on the trigger
+        // tile again runs the rescue, and this time the handoff completes.
+        phase.pack_source = lab.source();
+        turn_and_walk_one_tile(&mut phase, Buttons::LEFT);
+        turn_and_walk_one_tile(&mut phase, Buttons::RIGHT);
+        assert!(
+            phase.is_first_battle_active(),
+            "{expected_outcome:?}: the re-armed rescue fires again"
+        );
+        let mut frames = 0;
+        while phase.is_first_battle_active() {
+            phase.step(held(Buttons::RIGHT));
+            frames += 1;
+            assert!(frames < 20, "the fixture battles must resolve quickly");
+        }
+        assert_eq!(
+            phase.map_id, BIRCHS_LAB,
+            "the retried handoff lands in the lab"
+        );
+        assert_eq!(phase.player.position(), BIRCHS_LAB_ARRIVAL);
+        let data = &phase.save1.event_data;
+        assert_eq!(
+            data.var_get(VAR_ROUTE101_STATE),
+            Ok(ROUTE101_STATE_CONCLUDED)
+        );
+        assert_eq!(
+            data.var_get(VAR_BIRCH_LAB_STATE),
+            Ok(BIRCH_LAB_STATE_STARTER_GIVEN)
+        );
+        assert_eq!(data.var_get(VAR_STARTER_MON), Ok(STARTER_MON_TREECKO));
+        assert_eq!(
+            data.flag_get(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH),
+            Ok(false)
+        );
+    }
+}
+
+/// With a pack source that cannot load the lab, the rescue must not read
+/// concluded while the player is still on Route 101.
+#[test]
+fn a_failed_lab_load_leaves_the_rescue_unconcluded() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase_from_source(
+        PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        unloadable_pack_source(),
+    );
+    phase.rng = Rng::new(WINNING_SEED);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH)
+        .unwrap();
+
+    play_first_battle_to_conclusion(&mut phase);
+
+    assert_eq!(phase.first_battle_outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(
+        phase.map_id, ROUTE_101,
+        "setup: the lab warp must have failed"
+    );
+    assert_ne!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(ROUTE101_STATE_CONCLUDED),
+        "rescue marked concluded although the player never left Route 101"
+    );
+    assert_eq!(
+        phase
+            .save1
+            .event_data
+            .flag_get(FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE),
+        Ok(false),
+        "Route 101 Birch hidden although the player never left Route 101"
     );
 }
