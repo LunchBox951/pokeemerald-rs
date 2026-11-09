@@ -224,6 +224,154 @@ fn rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits() {
     assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
 }
 
+/// Drops from this thread the capabilities that override ownership and mode
+/// bits, so a root runner is bound by them like an ordinary user and cannot
+/// hide a quarantine its owner cannot read. Answers the sets to put back.
+#[cfg(target_os = "linux")]
+fn bind_thread_by_modes() -> rustix::thread::CapabilitySets {
+    use rustix::thread::CapabilitySet;
+
+    let held = rustix::thread::capabilities(None).unwrap();
+    let mut bound_by_modes = held;
+    bound_by_modes.effective -=
+        CapabilitySet::DAC_OVERRIDE | CapabilitySet::DAC_READ_SEARCH | CapabilitySet::FOWNER;
+    rustix::thread::set_capabilities(None, bound_by_modes).unwrap();
+    held
+}
+
+/// Rolls back a fresh level under the umask `mask`, bound by mode bits like
+/// an ordinary user ([`bind_thread_by_modes`]). `test` is this test's own
+/// path, run alone in a child because the umask is process-wide.
+#[cfg(target_os = "linux")]
+fn assert_rollback_under_umask_bound_by_modes(test: &str, label: &str, mask: u32) {
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(exe)
+            .args([test, "--exact", "--nocapture"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = TempDir::new(label);
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let held = bind_thread_by_modes();
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(mask));
+    super::undo_created_directories(&created);
+    rustix::process::umask(previous);
+    rustix::thread::set_capabilities(None, held).unwrap();
+    assert!(!level.exists(), "the level is taken back");
+    assert!(
+        entry_names(&dir.path).is_empty(),
+        "no quarantine is left: {:?}",
+        entry_names(&dir.path)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rollback_takes_back_a_level_under_umask_0444_bound_by_modes() {
+    assert_rollback_under_umask_bound_by_modes(
+        "import_rom::created_dirs::tests::quarantine::rollback_takes_back_a_level_under_umask_0444_bound_by_modes",
+        "umask-0444",
+        0o444,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rollback_takes_back_a_level_under_umask_0477_bound_by_modes() {
+    assert_rollback_under_umask_bound_by_modes(
+        "import_rom::created_dirs::tests::quarantine::rollback_takes_back_a_level_under_umask_0477_bound_by_modes",
+        "umask-0477",
+        0o477,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rollback_takes_back_a_level_under_umask_0777_bound_by_modes() {
+    // Mode 0000: the owner can neither read, write nor search it.
+    assert_rollback_under_umask_bound_by_modes(
+        "import_rom::created_dirs::tests::quarantine::rollback_takes_back_a_level_under_umask_0777_bound_by_modes",
+        "umask-0777",
+        0o777,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rollback_takes_back_a_level_under_umask_0177_bound_by_modes() {
+    assert_rollback_under_umask_bound_by_modes(
+        "import_rom::created_dirs::tests::quarantine::rollback_takes_back_a_level_under_umask_0177_bound_by_modes",
+        "umask-0177-modes",
+        0o177,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_quarantine_swapped_for_an_unreadable_directory_is_refused_and_its_contents_kept() {
+    // Between `mkdirat` and the open the name is swapped for a directory its
+    // owner cannot read, so the read-mode open fails and rollback pins it
+    // instead. One with group bits is not a quarantine rollback made: it is
+    // refused with its mode intact. A private non-empty one is not empty
+    // either: refused, and nothing in it is removed (its owner bits, which the
+    // pin restored before the listing could show it was not empty, are the
+    // accepted residual in the module docs).
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for (kind, mode, group_bits) in [
+        ("group-0070", 0o070, true),
+        ("non-empty-0300", 0o300, false),
+    ] {
+        let dir = TempDir::new(&format!("swap-unreadable-{kind}"));
+        let level = dir.join("new");
+        let (name, away) = (dir.join(".undo-u"), dir.join("away"));
+        let created = super::create_directories(&level).unwrap();
+        let parent = created[0].parent.as_deref().unwrap();
+        let held = bind_thread_by_modes();
+        let proceeded =
+            super::take_back::take_back_level_via(parent, &created[0], ".undo-u", &mut || {
+                fs::rename(&name, &away).unwrap();
+                fs::create_dir(&name).unwrap();
+                if !group_bits {
+                    fs::write(name.join("mine"), b"x").unwrap();
+                }
+                fs::set_permissions(&name, fs::Permissions::from_mode(mode)).unwrap();
+            });
+        rustix::thread::set_capabilities(None, held).unwrap();
+        assert!(!proceeded, "{kind}: rollback must not proceed");
+        assert!(level.is_dir(), "{kind}: the level is left standing");
+        assert!(name.is_dir(), "{kind}: the replacement was removed");
+        if group_bits {
+            assert_eq!(
+                fs::metadata(&name).unwrap().permissions().mode() & 0o777,
+                mode,
+                "{kind}: the replacement's mode was changed"
+            );
+        } else {
+            assert_eq!(
+                fs::read(name.join("mine")).unwrap(),
+                b"x",
+                "{kind}: the replacement was emptied"
+            );
+        }
+        assert!(
+            away.is_dir(),
+            "{kind}: the original quarantine is untouched"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_quarantine_that_cannot_be_made_reports_the_level_left_standing() {
