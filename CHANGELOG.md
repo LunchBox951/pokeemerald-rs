@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.118.0] - 2026-11-09
 
-- A traded Pokémon above the level your badges allow can now disobey in battle, loafing or hurting itself as in the original game.
+- A traded Pokémon above the level your badges allow can now loaf around or hurt itself in battle instead of using its move. Its other kinds of disobedience are still being prepared.
 
 ## [0.0.117.0] - 2026-11-08
 
