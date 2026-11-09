@@ -357,17 +357,12 @@ pub(super) fn restore_owner_access(file: &File) -> io::Result<()> {
 /// its name, so a swap since the level was verified cannot redirect it; and
 /// only when an owner bit is missing.
 ///
-/// The level must already be held, and the setter then needs more than the
-/// held descriptor on some targets: FreeBSD acts on the `O_PATH` descriptor
-/// itself and reaches every mode; Linux and Android reach a level without
-/// owner search only through its `/proc/self/fd` link, so without procfs
-/// `0177` and `0777` fail here with `EACCES`; every other Unix uses `fchmod`
-/// on the descriptor. Pinning the level can itself be refused by the mode
-/// (Apple's `O_EXEC` open needs owner search, the read-mode open of other
-/// Unix systems needs owner read). `created_dirs` answers both through
-/// `owner_access` where the owner's read bit survives, and fails the create
-/// where it does not (see the `created_dirs` module docs for the umasks);
-/// this function is only the descriptor half of that.
+/// The level must already be held. This is the descriptor half of the
+/// restore: on Linux and Android a level without owner search is reached
+/// only through its `/proc/self/fd` link, so without procfs it fails here
+/// with `EACCES`. `created_dirs` answers that, and a pin the mode refused,
+/// through `owner_access`; which umasks each target covers is the contract
+/// in the `created_dirs` module docs.
 ///
 /// # Errors
 ///
@@ -387,11 +382,9 @@ pub(super) fn restore_directory_owner_access(level: &std::os::fd::OwnedFd) -> io
 /// bit the umasks above leave. With that bit gone too, the descriptor's
 /// `/proc/self/fd` link names the same inode.
 ///
-/// Without procfs a level without owner search (umasks `0177` and `0777`)
-/// is out of this setter's reach and it answers `EACCES`: rustix 1.1 does
-/// not expose `fchmodat2(AT_EMPTY_PATH)`, which would reach the inode
-/// directly. The caller then restores it through `owner_access` if the
-/// owner's read bit survives (`0177`), and fails the create if not (`0777`).
+/// Without procfs a level without owner search answers `EACCES`: rustix 1.1
+/// does not expose `fchmodat2(AT_EMPTY_PATH)`, which would reach the inode
+/// directly. What the caller does then is in the `created_dirs` module docs.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;

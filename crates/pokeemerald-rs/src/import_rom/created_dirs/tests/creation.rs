@@ -408,6 +408,56 @@ fn a_level_without_owner_search_but_with_read_is_restored_without_procfs() {
 
 #[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
 #[test]
+fn a_recovery_open_out_of_descriptors_sheds_a_pin_and_retries() {
+    // The restore of a level without owner search opens it for reading; with
+    // the table full that open answers `EMFILE`, which is the cue to shed a
+    // pin and try again, not an umask failure.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::creation::a_recovery_open_out_of_descriptors_sheds_a_pin_and_retries",
+        );
+        return;
+    }
+    let _no_procfs = super::dest::procfs_unavailable::make_unavailable();
+    let dir = TempDir::new("recovery-open-emfile");
+    if running_privileged(&dir) {
+        eprintln!("RECOVERY-EMFILE: privileged run, not exercised");
+        return;
+    }
+    let levels: Vec<PathBuf> = (0..12)
+        .scan(dir.path.clone(), |parent, index| {
+            *parent = parent.join(format!("l{index}"));
+            Some(parent.clone())
+        })
+        .collect();
+    let mut next = 0;
+    let mut hook = || -> Option<std::io::Error> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&levels[next], fs::Permissions::from_mode(0o600)).unwrap();
+        next += 1;
+        None
+    };
+    let fillers = fill_descriptor_table_leaving(4);
+    let outcome = super::create_directories_with_hooks(
+        levels.last().unwrap(),
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    );
+    drop(fillers);
+    for level in &levels {
+        unlock(level);
+    }
+    let created = outcome
+        .map_err(|(created, source)| format!("failed after {} levels: {source}", created.len()))
+        .expect("descriptor pressure on the recovery open is answered by shedding a pin");
+    assert_eq!(created.len(), levels.len());
+}
+
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+#[test]
 fn a_level_without_owner_search_or_read_fails_closed_without_procfs() {
     use std::os::unix::fs::PermissionsExt as _;
 
