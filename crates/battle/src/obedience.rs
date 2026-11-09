@@ -3,21 +3,24 @@
 //! from `Cmd_attackcanceler`, `src/battle_script_commands.c:944`-`:957`).
 //!
 //! Modelled: the ownership and badge exemptions, the first `Random() & 255`
-//! draw, the second draw that picks the alternate-move branch, the third
-//! draw of the nap/self-hit/loaf branch, the loaf-message draw, and the
-//! self-hit. Refused with [`BattleError::UnportedDisobedience`]: the nap, the
-//! alternate-move branch (slot rejection sampling and target draws), and a
-//! Mew or Deoxys above its limit (upstream's fateful-encounter bypass,
-//! `battle_util.c:3913`-`:3934`, needs record data the engine lacks; refused
-//! before any draw). Unreachable because the engine has no sleep or Uproar
-//! state: the already-asleep Snore/Sleep Talk branch, Rage clearing and the
-//! Uproar part of the nap check.
+//! draw, the second draw that picks the alternate-move branch, that
+//! branch's `CheckMoveLimitations` mask and `Random() % 4` slot sampling,
+//! the alternate move's `GetMoveTarget` draws, the third draw of the
+//! nap/self-hit/loaf branch, the nap, the self-hit and the loaf-message
+//! draw. Refused with [`BattleError::UnportedDisobedience`] before any draw:
+//! a traded Mew or Deoxys above its limit (upstream's fateful-encounter
+//! bypass, `battle_util.c:3913`-`:3934`, needs record data the engine
+//! lacks). Unreachable because the engine has no Rage or Uproar state: Rage
+//! clearing and the Uproar part of the nap check. Not modelled: the
+//! already-asleep Snore/Sleep Talk ignore (`:3968`-`:3972`), moot while
+//! neither move has an effect pipeline (`EFFECT_SNORE`, `EFFECT_SLEEP_TALK`
+//! are unported), so an action selecting one fails as unported anyway.
 
-use assets::{AbilityId, SpeciesId};
+use assets::{AbilityId, MoveTarget, SpeciesId};
 
 use crate::damage::BattleRng;
 use crate::error::BattleError;
-use crate::pokemon::BattlePokemon;
+use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::status1::Status1;
 
 /// Game-text string terminator (`EOS`).
@@ -123,13 +126,67 @@ impl LoafMessage {
 pub(crate) enum Obedience {
     Obeys,
     Loafs(LoafMessage),
+    /// `BattleScript_IgnoresAndUsesRandomMove`: the move in `slot` runs in
+    /// place of the chosen one, with `HITMARKER_OBEYS` already set.
+    UsesInstead {
+        slot: usize,
+    },
+    /// `BattleScript_IgnoresAndFallsAsleep`: the sleep itself is applied by
+    /// the caller, whose `SetMoveEffect` draw follows this gate's draws.
+    Naps,
     HurtsItself,
 }
 
-/// Runs `IsMonDisobedient` for the player's active Pokémon.
+/// `gBitTable[slot]` over `MAX_MON_MOVES` slots; `ALL_MOVES_MASK` is every
+/// bit set.
+const ALL_MOVES_MASK: u8 = 0b1111;
+
+/// `CheckMoveLimitations(battler, gBitTable[chosenSlot], MOVE_LIMITATIONS_ALL)`
+/// (`battle_util.c:1082`-`:1123`) over the limitations the engine has state
+/// for: the chosen slot itself, an empty slot (`MOVE_LIMITATION_ZEROMOVE`)
+/// and a slot with no PP (`MOVE_LIMITATION_PP`). Disable, Torment, Taunt,
+/// Imprison and Encore are unmodelled volatiles and Choice Band is refused
+/// at admission, so none of them can mark a slot here. `chosen_slot` is
+/// `None` for a forced Struggle, which has no slot of its own.
+fn unusable_slots(mon: &BattlePokemon, chosen_slot: Option<usize>) -> u8 {
+    let mut mask = chosen_slot.map_or(0, |slot| 1 << slot);
+    for slot in 0..MAX_MON_MOVES {
+        if mon.moves().get(slot).is_none_or(|known| known.pp == 0) {
+            mask |= 1 << slot;
+        }
+    }
+    mask
+}
+
+/// `GetMoveTarget(move, NO_TARGET_OVERRIDE)` for the player's battler in a
+/// single battle (`battle_util.c:3836`-`:3910`): `MOVE_TARGET_SELECTED`
+/// samples `Random() % gBattlersCount` until the result is not the attacker
+/// (`:3851`-`:3853`), so with two battlers and the player at index 0 every
+/// even draw is rejected. Every other target kind resolves without a draw
+/// in singles, including `MOVE_TARGET_RANDOM` (`:3882`-`:3902`). Follow Me
+/// (`followmeTimer`) is unmodelled and the Lightning Rod redirect (`:3854`-
+/// `:3861`) cannot flip in singles because the lone opponent is the holder.
+pub(crate) fn draw_move_target(target: MoveTarget, rng: &mut impl BattleRng) {
+    if target != MoveTarget::SELECTED {
+        return;
+    }
+    while rng.next_u16() % BATTLERS_IN_SINGLES == PLAYER_BATTLER_INDEX {}
+}
+
+/// `MAX_MON_MOVES` as the modulus of the slot draw.
+const MAX_MON_MOVES_DRAW: u16 = 4;
+/// `gBattlersCount` in a single battle.
+const BATTLERS_IN_SINGLES: u16 = 2;
+/// `gBattlerAttacker` for the player's battler.
+const PLAYER_BATTLER_INDEX: u16 = 0;
+
+/// Runs `IsMonDisobedient` for the player's active Pokémon, whose chosen
+/// action sits in `chosen_slot` (`gCurrMovePos`; `None` for a forced
+/// Struggle).
 pub(crate) fn check(
     player: &PlayerObedience,
     mon: &BattlePokemon,
+    chosen_slot: Option<usize>,
     rng: &mut impl BattleRng,
 ) -> Result<Obedience, BattleError> {
     if !player.is_other_trainer(mon) {
@@ -161,16 +218,31 @@ pub(crate) fn check(
     }
     let second = u32::from(rng.next_u16() & 255);
     if ((level + limit) * second) >> 8 < limit {
-        return Err(BattleError::UnportedDisobedience);
+        // `battle_util.c:3975`-`:3998`: every other slot unusable loafs;
+        // otherwise `MOD(Random(), MAX_MON_MOVES)` is drawn until it lands
+        // on a usable slot, each draw counted.
+        let unusable = unusable_slots(mon, chosen_slot);
+        if unusable == ALL_MOVES_MASK {
+            return Ok(Obedience::Loafs(LoafMessage::from_roll(rng.next_u16())));
+        }
+        let slot = loop {
+            let slot = usize::from(rng.next_u16() % MAX_MON_MOVES_DRAW);
+            if unusable & (1 << slot) == 0 {
+                break slot;
+            }
+        };
+        return Ok(Obedience::UsesInstead { slot });
     }
     let excess = level - limit;
     let third = u32::from(rng.next_u16() & 255);
+    // The Uproar scan (`battle_util.c:4009`-`:4013`) finds nothing: the
+    // engine has no Uproar state, so a nap is never blocked by it.
     if third < excess
         && mon.status1() == Status1::Healthy
         && mon.ability() != INSOMNIA
         && mon.ability() != VITAL_SPIRIT
     {
-        return Err(BattleError::UnportedDisobedience);
+        return Ok(Obedience::Naps);
     }
     // Signed in upstream: a nap blocked by status or ability goes negative
     // and so falls into the self-hit.

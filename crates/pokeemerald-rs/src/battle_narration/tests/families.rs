@@ -215,6 +215,8 @@ fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
             by_player: true,
             damage: 3,
         },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
     ];
 
     assert_eq!(
@@ -226,6 +228,9 @@ fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
             "TORCHIC pretended\nnot to notice!",
             "TORCHIC won't\nobey!",
             "It hurt itself in its\nconfusion!",
+            "TORCHIC ignored\norders!",
+            "TORCHIC began to nap!",
+            "TORCHIC\nfell asleep!",
         ]
     );
 }

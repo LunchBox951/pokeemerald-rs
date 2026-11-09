@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.118.0] - 2026-11-09
 
-- A traded Pokémon above the level your badges allow can now loaf around or hurt itself in battle instead of using its move. Its other kinds of disobedience are still being prepared.
+- A traded Pokémon above the level your badges allow can now disobey in battle as in the original game: it may loaf around, ignore your order and use one of its other moves instead, begin to nap and fall asleep, or hurt itself. Obedience for a traded Mew or Deoxys is still being prepared.
 
 ## [0.0.117.0] - 2026-11-08
 

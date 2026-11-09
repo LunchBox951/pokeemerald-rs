@@ -142,6 +142,17 @@ pub enum BattleEvent {
         /// The loaf text drawn.
         message: crate::obedience::LoafMessage,
     },
+    /// A traded Pokémon above its obedience limit ignored the order and is
+    /// about to use another of its moves instead (`src/battle_util.c:3985`-
+    /// `:3997`; `BattleScript_IgnoresAndUsesRandomMove`). The
+    /// [`BattleEvent::UsedMove`] that follows names that move, whose PP is
+    /// spent in place of the chosen move's.
+    IgnoredOrders,
+    /// A traded Pokémon above its obedience limit ignored the order and fell
+    /// asleep for the ordinary two-to-five turn duration
+    /// (`src/battle_util.c:4004`-`:4016`; `BattleScript_IgnoresAndFallsAsleep`).
+    /// No PP is spent.
+    DisobedientNap,
     /// A disobedient player Pokémon hurt itself instead of acting
     /// (`src/battle_util.c:4020`-`:4027`). No PP is spent.
     DisobedientSelfHit {

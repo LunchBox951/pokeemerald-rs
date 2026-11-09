@@ -6,9 +6,14 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleError, BattleEvent, Dex, LoafMessage, PlayerAction, PlayerObedience};
+use battle::battle::BattlerSide;
+use battle::{
+    Battle, BattleError, BattleEvent, Dex, LoafMessage, PlayerAction, PlayerObedience, Status1,
+};
 
 const TACKLE: MoveId = MoveId::TACKLE;
+/// A second ordinary hit for the alternate-move branch to land on.
+const SCRATCH: MoveId = MoveId::SCRATCH;
 /// `SPECIES_GASTLY`: base Speed 80, so it outruns the Zigzagoon below and
 /// acts first, putting the obedience draws ahead of the enemy's.
 const GASTLY: u16 = 92;
@@ -27,15 +32,37 @@ fn no_badges() -> PlayerObedience {
 struct Run {
     events: Vec<BattleEvent>,
     draws: usize,
-    player_pp: u8,
+    /// PP left in each of the player's slots after the turn.
+    player_pps: Vec<u8>,
+    player_status: Status1,
+    enemy_last_hitter: Option<BattlerSide>,
+}
+
+impl Run {
+    /// PP left in the player's first slot.
+    fn player_pp(&self) -> u8 {
+        self.player_pps[0]
+    }
 }
 
 /// A level-`level` Gastly owned by `ot_id` against a level-5 Zigzagoon;
 /// `script` begins with the two turn-number draws and the enemy's
 /// selection, then feeds the actions in speed order, padded with zeros.
 fn run(level: u8, ot_id: u32, obedience: Option<PlayerObedience>, gate_draws: &[u16]) -> Run {
+    run_with(vec![TACKLE], 0, level, ot_id, obedience, gate_draws)
+}
+
+/// [`run`] with the player's known `moves`, choosing `action_slot`.
+fn run_with(
+    moves: Vec<MoveId>,
+    action_slot: usize,
+    level: u8,
+    ot_id: u32,
+    obedience: Option<PlayerObedience>,
+    gate_draws: &[u16],
+) -> Run {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, GASTLY, level, vec![TACKLE]).with_original_trainer_id(ot_id);
+    let player = max_iv_mon(&dex, GASTLY, level, moves).with_original_trainer_id(ot_id);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
     let mut values = vec![0, 0, 0];
     values.extend_from_slice(gate_draws);
@@ -46,12 +73,14 @@ fn run(level: u8, ot_id: u32, obedience: Option<PlayerObedience>, gate_draws: &[
         battle = battle.with_player_obedience(obedience);
     }
     let events = battle
-        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .take_turn(PlayerAction::UseMove(action_slot), &mut rng)
         .unwrap();
     Run {
         events,
         draws: rng.draws(),
-        player_pp: battle.player().moves()[0].pp,
+        player_pps: battle.player().moves().iter().map(|slot| slot.pp).collect(),
+        player_status: battle.player().status1(),
+        enemy_last_hitter: battle.battler_state(BattlerSide::Enemy).last_hitter(),
     }
 }
 
@@ -116,7 +145,7 @@ fn a_traded_pokemon_above_the_limit_draws_once_then_obeys_on_a_low_roll() {
     let traded = run(20, OTHER_ID, Some(no_badges()), &[0, 0]);
     assert_eq!(traded.draws, base.draws + 1);
     assert_eq!(traded.events, base.events);
-    assert_eq!(traded.player_pp, base.player_pp);
+    assert_eq!(traded.player_pp(), base.player_pp());
 }
 
 #[test]
@@ -131,8 +160,8 @@ fn a_loafing_pokemon_keeps_its_pp_and_draws_four_times() {
         }
     );
     assert_eq!(
-        traded.player_pp,
-        base.player_pp + 1,
+        traded.player_pp(),
+        base.player_pp() + 1,
         "PP of the cancelled action is kept"
     );
     // Three setup draws, four gate draws (obey, branch, nap/self-hit, loaf
@@ -142,19 +171,138 @@ fn a_loafing_pokemon_keeps_its_pp_and_draws_four_times() {
 }
 
 #[test]
-fn an_unmodelled_disobedient_outcome_is_refused_not_approximated() {
+fn a_loafing_action_records_its_attacker_as_the_targets_last_hitter() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, GASTLY, 20, vec![TACKLE]).with_original_trainer_id(OTHER_ID);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
-    // A=255 disobeys; B=0 selects the alternate-move branch.
-    let mut rng = SequenceRng::new(vec![0, 0, 0, 255, 0]);
+    let mut values = vec![0, 0, 0, 255, 255, 255, 1];
+    values.extend([0; 32]);
+    let mut rng = SequenceRng::new(values);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
         .unwrap()
         .with_player_obedience(no_badges());
-    let error = battle
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
-    assert_eq!(error.error(), BattleError::UnportedDisobedience);
+        .unwrap();
+    assert!(matches!(events[0], BattleEvent::Disobeyed { .. }));
+    let state = battle.battler_state(BattlerSide::Enemy);
+    assert_eq!(
+        state.last_hitter(),
+        Some(BattlerSide::Player),
+        "`moveendto MOVEEND_NEXT_TARGET` runs MOVEEND_UPDATE_LAST_MOVES"
+    );
+}
+
+/// The alternate-move branch (`battle_util.c:3975`-`:3998`) with another
+/// usable slot: the drawn move runs as the action and spends its own PP.
+#[test]
+fn a_disobedient_pokemon_uses_another_move_and_spends_that_moves_pp() {
+    // The ungated battler choosing Scratch directly, fed the same script
+    // the alternate move will see.
+    let base = run_with(vec![TACKLE, SCRATCH], 1, 20, PLAYER_ID, None, &[]);
+    // A=255 disobeys; B=0 selects the alternate-move branch. Slot draws
+    // (% 4): 0 is the chosen Tackle and is rejected, 1 is Scratch. Target
+    // draws (% 2): 0 is the attacker itself and is rejected, 1 is the foe.
+    let traded = run_with(
+        vec![TACKLE, SCRATCH],
+        0,
+        20,
+        OTHER_ID,
+        Some(no_badges()),
+        &[255, 0, 0, 1, 0, 1],
+    );
+    assert_eq!(traded.events[0], BattleEvent::IgnoredOrders);
+    assert_eq!(
+        traded.events[1],
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: SCRATCH,
+        }
+    );
+    assert_eq!(traded.events[1..], base.events[..]);
+    assert_eq!(
+        traded.draws,
+        base.draws + 2 + 2 + 2,
+        "two gate, two slot, two target draws"
+    );
+    assert_eq!(
+        traded.player_pps[0], base.player_pps[0],
+        "the chosen Tackle keeps its PP"
+    );
+    assert_eq!(
+        traded.player_pps[1], base.player_pps[1],
+        "Scratch's PP is spent"
+    );
+    assert_eq!(traded.enemy_last_hitter, base.enemy_last_hitter);
+}
+
+/// The alternate-move branch when every other slot is unusable
+/// (`battle_util.c:3978`-`:3984`): a lone known move loafs after one
+/// message draw, with no slot or target draws.
+#[test]
+fn a_disobedient_pokemon_with_no_other_usable_move_loafs_instead() {
+    let base = baseline(20, &[]);
+    // A=255 disobeys; B=0 selects the alternate-move branch; the loaf roll 2
+    // is "turned away".
+    let traded = run(20, OTHER_ID, Some(no_badges()), &[255, 0, 2]);
+    assert_eq!(
+        traded.events[0],
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        }
+    );
+    assert_eq!(traded.player_pp(), base.player_pp() + 1);
+    // Three setup, three gate draws (obey, branch, loaf text), the enemy's
+    // four.
+    assert_eq!(traded.draws, 3 + 3 + 4);
+    assert_eq!(traded.enemy_last_hitter, Some(BattlerSide::Player));
+}
+
+/// A depleted second slot is `MOVE_LIMITATION_PP` and never drawn
+/// (`battle_util.c:1100`-`:1101`).
+#[test]
+fn a_depleted_slot_is_not_an_alternate_move() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, GASTLY, 20, vec![TACKLE, SCRATCH])
+        .with_original_trainer_id(OTHER_ID)
+        .with_saved_pp(1, 0)
+        .unwrap();
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+    // A=255, B=0, loaf roll 3: "pretended not to notice".
+    let mut values = vec![0, 0, 0, 255, 0, 3];
+    values.extend([0; 32]);
+    let mut rng = SequenceRng::new(values);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .unwrap()
+        .with_player_obedience(no_badges());
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        events[0],
+        BattleEvent::Disobeyed {
+            message: LoafMessage::PretendedNotToNotice,
+        }
+    );
+    assert_eq!(rng.draws(), 3 + 3 + 4);
+}
+
+/// The nap (`battle_util.c:4004`-`:4016`; `BattleScript_IgnoresAndFallsAsleep`):
+/// the sleep lands with `SetMoveEffect`'s own duration draw and the chosen
+/// move keeps its PP.
+#[test]
+fn a_napping_pokemon_falls_asleep_for_the_drawn_duration_and_keeps_its_pp() {
+    let base = baseline(20, &[]);
+    // A=255, B=255 disobey into the nap/self-hit branch; C=9 is below the
+    // excess 10 on a healthy Gastly (Levitate), so it naps. The duration
+    // draw 1 gives (1 & 3) + 2 = 3 turns.
+    let traded = run(20, OTHER_ID, Some(no_badges()), &[255, 255, 9, 1]);
+    assert_eq!(traded.events[0], BattleEvent::DisobedientNap);
+    assert_eq!(traded.player_status, Status1::Asleep { turns: 3 });
+    assert_eq!(traded.player_pp(), base.player_pp() + 1);
+    // Three setup, three gate draws, the duration draw, the enemy's four.
+    assert_eq!(traded.draws, 3 + 3 + 1 + 4);
+    assert_eq!(traded.enemy_last_hitter, Some(BattlerSide::Player));
 }
 
 #[test]
@@ -170,7 +318,7 @@ fn a_self_hit_keeps_pp_and_draws_one_variance_roll() {
             ..
         }
     ));
-    assert_eq!(traded.player_pp, base.player_pp + 1);
+    assert_eq!(traded.player_pp(), base.player_pp() + 1);
     // Three setup, three gate, one variance draw, the enemy's four.
     assert_eq!(traded.draws, 3 + 3 + 1 + 4);
 }

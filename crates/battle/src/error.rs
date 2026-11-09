@@ -64,11 +64,11 @@ pub enum BattleError {
     /// reported by the pre-turn and constructor screens before any draw.
     UnportedAbilityInteraction(AbilityId),
 
-    /// A traded Pokémon above its obedience limit would disobey in a way the
-    /// engine does not model. A nap or a random alternate move is reported
-    /// after the obedience draws were consumed; a traded Mew or Deoxys is
-    /// reported before the first obedience draw, because upstream's
-    /// fateful-encounter check needs record data the port does not carry.
+    /// A traded Mew or Deoxys above its obedience limit, reported before the
+    /// first obedience draw: upstream's fateful-encounter check
+    /// (`IsBattlerModernFatefulEncounter`, `src/battle_util.c:3913`-`:3934`)
+    /// needs record data the port does not carry. Every other disobedience
+    /// outcome is modelled.
     UnportedDisobedience,
 
     /// A participant holds an item whose in-battle effect no pipeline models,

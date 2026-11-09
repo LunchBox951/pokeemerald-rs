@@ -25,7 +25,8 @@ use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
     bad_poison_residual_damage, burn_residual_damage, draw_freeze_canceller, draws_full_paralysis,
-    draws_shed_skin_cure, poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
+    draws_shed_skin_cure, poison_residual_damage, tick_sleep, try_inflict_sleep, FreezeCanceller,
+    SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
@@ -134,6 +135,18 @@ pub struct Battle {
     /// The player's identity and badge limit; `None` skips the obedience
     /// gate (every Pokémon obeys).
     player_obedience: Option<crate::obedience::PlayerObedience>,
+}
+
+/// How `Cmd_attackcanceler`'s tail left one action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    /// The action ended at the abort or the gate; nothing more runs.
+    Ended,
+    /// The action was announced and its PP spent; it executes.
+    Proceed,
+    /// A disobedient battler runs the move in `slot` instead
+    /// (`DISOBEDIENCE_OTHER` with `gCalledMove` set).
+    UsesInstead { slot: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -1663,6 +1676,27 @@ impl Battle {
         if thaws_with_move {
             self.thaw_with_move(player_is_attacker, move_id, events);
         }
+        self.admit_and_execute(player_is_attacker, move_id, slot, false, rng, events)
+    }
+
+    /// The rest of `Cmd_attackcanceler` once the status cancellers are past:
+    /// the Soundproof block, the no-PP abort, the obedience gate, the
+    /// announcement, `ppreduce` and execution. `obeys` is
+    /// `HITMARKER_OBEYS`: set when a disobedient battler's alternate move
+    /// re-enters here through `jumptocalledmove`
+    /// (`BattleScript_IgnoresAndUsesRandomMove`, `data/battle_scripts_1.s:4227`-
+    /// `:4230`), whose fresh `attackcanceler` reruns the block and the abort
+    /// for the alternate move but skips the gate
+    /// (`battle_script_commands.c:944`).
+    fn admit_and_execute(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        obeys: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
         // test (`battle_script_commands.c:932-939`); the blocked script's
@@ -1686,10 +1720,20 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
-        if !self.spend_pp_or_abort(player_is_attacker, move_id, slot, pp_cost, rng, events)? {
-            return Ok(());
+        match self.spend_pp_or_abort(player_is_attacker, move_id, slot, obeys, rng, events)? {
+            Admission::Ended => Ok(()),
+            Admission::Proceed => self.execute_move(player_is_attacker, move_id, rng, events),
+            Admission::UsesInstead { slot } => {
+                // `jumptocalledmove FALSE` replaces both `gChosenMove` and
+                // `gCurrentMove` (`battle_script_commands.c:5743`-`:5751`),
+                // and `IsMonDisobedient` already moved `gCurrMovePos` to the
+                // drawn slot (`battle_util.c:3989`-`:3993`), so the move-end
+                // records and `ppreduce` see the alternate move.
+                let alternate = self.player.moves()[slot].move_id;
+                self.last_move_used = alternate;
+                self.admit_and_execute(player_is_attacker, alternate, Some(slot), true, rng, events)
+            }
         }
-        self.execute_move(player_is_attacker, move_id, rng, events)
     }
 
     /// `CANCELER_FROZEN` follows sleep and precedes confusion and paralysis
@@ -1846,23 +1890,25 @@ impl Battle {
     }
 
     /// The no-PP abort, `IsMonDisobedient`, the move announcement and
-    /// `ppreduce` for a chosen action; `false` means the action ended at the
-    /// abort or the gate.
+    /// `ppreduce` for a chosen action.
     ///
     /// A locked attempt skips the abort, the gate and the PP spend
     /// (`Cmd_attackcanceler`, `battle_script_commands.c:934`-`:945`;
     /// `data/battle_scripts_1.s:1599`-`:1600`), so only a series' first
     /// attempt is screened and spends PP. A slotless action (a forced
     /// Struggle) has nothing to abort or spend but still faces the gate.
+    /// `obeys` (`HITMARKER_OBEYS`) skips the gate for a disobedient
+    /// battler's alternate move.
     fn spend_pp_or_abort(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
         slot: Option<usize>,
-        pp_cost: u8,
+        obeys: bool,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) -> Result<bool, BattleError> {
+    ) -> Result<Admission, BattleError> {
+        let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         let locked = self
             .battler_state(BattlerSide::from_is_player(player_is_attacker))
             .locked_move()
@@ -1884,18 +1930,21 @@ impl Battle {
                         move_id,
                     });
                     self.record_cancelled_move(player_is_attacker, move_id)?;
-                    return Ok(false);
+                    return Ok(Admission::Ended);
                 }
             }
-            if !self.passes_obedience_gate(player_is_attacker, move_id, rng, events)? {
-                return Ok(false);
+            if !obeys {
+                match self.run_obedience_gate(player_is_attacker, move_id, slot, rng, events)? {
+                    Admission::Proceed => {}
+                    other => return Ok(other),
+                }
             }
         }
         Self::announce_move(player_is_attacker, move_id, events);
         if let Some(slot) = slot.filter(|_| !locked) {
             self.spend_move_pp(player_is_attacker, slot, pp_cost)?;
         }
-        Ok(true)
+        Ok(Admission::Proceed)
     }
 
     /// `Cmd_ppreduce` for one slot: spends `pp_cost`, nothing from an empty
@@ -1919,32 +1968,60 @@ impl Battle {
 
     /// `IsMonDisobedient` runs after the no-PP abort and before
     /// `ppreduce` (`battle_script_commands.c:944`-`:957`), so a refused
-    /// action spends no PP. A loafing action jumps straight to
-    /// `MOVEEND_NEXT_TARGET`, past `MOVEEND_UPDATE_LAST_MOVES`
-    /// (`data/battle_scripts_1.s:4232`-`:4242`), so it records no move;
-    /// the self-hit rejoins `BattleScript_MoveEnd` like confusion's.
-    ///
-    /// Returns whether the action goes on to spend PP and execute.
-    fn passes_obedience_gate(
+    /// action spends no PP. A loaf and a nap end through `moveendto
+    /// MOVEEND_NEXT_TARGET` (`data/battle_scripts_1.s:4232`-`:4250`), whose
+    /// `MOVEEND_UPDATE_LAST_MOVES` still names the attacker as its target's
+    /// last hitter and records `MOVE_UNAVAILABLE` because `HITMARKER_OBEYS`
+    /// is unset (`battle_script_commands.c:4405`-`:4417`); the self-hit
+    /// rejoins `BattleScript_MoveEnd` like confusion's. The nap is
+    /// `setmoveeffect MOVE_EFFECT_SLEEP | MOVE_EFFECT_AFFECTS_USER` then
+    /// `seteffectprimary` (`:4247`-`:4248`): `SetMoveEffect`'s guards
+    /// already held at the gate, so the sleep lands with the ordinary
+    /// `(Random() & 3) + 2` duration draw and cancels the sleeper's
+    /// multi-turn move (`battle_script_commands.c:2296`, `:2480`-`:2481`).
+    /// The alternate move prints `STRINGID_PKMNIGNOREDORDERS` and then runs
+    /// as the action (`BattleScript_IgnoresAndUsesRandomMove`, `:4227`-
+    /// `:4230`).
+    fn run_obedience_gate(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
+        slot: Option<usize>,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) -> Result<bool, BattleError> {
+    ) -> Result<Admission, BattleError> {
         let Some(obedience) = self.player_obedience.filter(|_| player_is_attacker) else {
-            return Ok(true);
+            return Ok(Admission::Proceed);
         };
-        match crate::obedience::check(&obedience, &self.player, rng)? {
-            crate::obedience::Obedience::Obeys => Ok(true),
+        match crate::obedience::check(&obedience, &self.player, slot, rng)? {
+            crate::obedience::Obedience::Obeys => Ok(Admission::Proceed),
             crate::obedience::Obedience::Loafs(message) => {
                 events.push(BattleEvent::Disobeyed { message });
-                Ok(false)
+                self.record_cancelled_move(true, move_id)?;
+                Ok(Admission::Ended)
+            }
+            crate::obedience::Obedience::UsesInstead { slot } => {
+                let alternate = self.player.moves()[slot].move_id;
+                crate::obedience::draw_move_target(self.dex.move_data(alternate)?.target, rng);
+                events.push(BattleEvent::IgnoredOrders);
+                Ok(Admission::UsesInstead { slot })
+            }
+            crate::obedience::Obedience::Naps => {
+                let Some(asleep) =
+                    try_inflict_sleep(self.player.status1(), self.player.ability(), rng)
+                else {
+                    unreachable!("the nap draw already required a healthy, non-Insomnia, non-Vital Spirit sleeper");
+                };
+                self.player.set_status1(asleep);
+                self.cancel_multi_turn_moves(true);
+                events.push(BattleEvent::DisobedientNap);
+                self.record_cancelled_move(true, move_id)?;
+                Ok(Admission::Ended)
             }
             crate::obedience::Obedience::HurtsItself => {
                 self.apply_self_hit(true, true, move_id, rng, events)?;
                 self.record_confusion_self_hit(true);
-                Ok(false)
+                Ok(Admission::Ended)
             }
         }
     }
