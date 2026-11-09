@@ -641,3 +641,44 @@ fn a_carried_effect_outside_the_entered_maps_retained_strip_is_dropped() {
     std::fs::remove_file(path).expect("scratch pack");
     assert_eq!((retained, dropped), (1, 0));
 }
+
+/// The carried effect is redrawn on the departed tile after the scene rebind:
+/// a shift one tile too far still reads as tall grass inside the backup band,
+/// so the count and image checks alone cannot catch it.
+#[test]
+fn a_carried_effect_is_drawn_on_the_departed_tile_after_the_rebind() {
+    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    phase.step(held(Buttons::UP));
+    idle(&mut phase, 15);
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, OLDALE_TOWN);
+    let entries = grass_entries(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    let [entry] = entries[..] else {
+        panic!("one effect")
+    };
+    // The departed tile is one metatile south of the player's entered tile,
+    // seen by a camera that has moved one pixel north: (112, 73).
+    assert_eq!(phase.player.position(), (LANDING_X, 19));
+    assert_eq!((entry.x(), entry.y()), (112, 73));
+}
+
+/// The carried effect ends on the same frame as an uncrossed one: spawned on
+/// frame 1, it is last live on frame 51 and gone on frame 52.
+#[test]
+fn a_carried_effect_ends_on_frame_52() {
+    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    phase.step(held(Buttons::UP)); // frame 1: spawn
+    idle(&mut phase, 15); // frames 2-16
+    phase.step(held(Buttons::UP)); // frame 17: crossing
+    assert_eq!(phase.map_id, OLDALE_TOWN);
+    let mut counts = Vec::new();
+    for _frame in 18..=52 {
+        phase.step(held(Buttons::UP));
+        counts.push(phase.scene.tall_grass_effect_count());
+    }
+    std::fs::remove_file(path).expect("scratch pack");
+    let last_live = counts.iter().rposition(|&c| c == 1).map(|i| i + 18);
+    assert_eq!(last_live, Some(51), "counts {counts:?}");
+    assert_eq!(*counts.last().unwrap(), 0);
+}
