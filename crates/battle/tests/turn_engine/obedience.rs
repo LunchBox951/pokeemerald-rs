@@ -496,3 +496,123 @@ fn an_admissible_alternate_move_still_runs() {
     let full_pp = max_iv_mon(&Dex::new(), GASTLY, 20, vec![MoveId::FLAME_WHEEL]).moves()[0].pp;
     assert_eq!(battle.player().moves()[1].pp, full_pp - 1);
 }
+
+/// Per-turn results of [`locked_rollout_turns`].
+struct LockedRun {
+    turns: Vec<Vec<BattleEvent>>,
+    /// Draws consumed by each turn.
+    turn_draws: Vec<usize>,
+    /// PP in each slot after each turn.
+    pps: Vec<Vec<u8>>,
+}
+
+/// A traded level-20 Gastly with Quick Attack and Rollout (Speed 43)
+/// against a level-30 Zigzagoon (Speed 50) whose Tackle cannot touch it,
+/// choosing `chosen_slot` for two turns: the Zigzagoon outruns a
+/// priority-0 move but not Quick Attack's +1. `turn_one_gate` feeds the
+/// player's first-turn obedience draws.
+fn locked_rollout_turns(
+    chosen_slot: usize,
+    obedience: Option<PlayerObedience>,
+    turn_one_gate: &[u16],
+) -> LockedRun {
+    let dex = Dex::new();
+    let player = max_iv_mon(
+        &dex,
+        GASTLY,
+        20,
+        vec![MoveId::QUICK_ATTACK, MoveId::ROLLOUT],
+    )
+    .with_original_trainer_id(OTHER_ID);
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 30, vec![TACKLE]);
+    assert!(enemy.speed_for_turn_order() > player.speed_for_turn_order());
+    let mut values = vec![0, 0, 0];
+    values.extend_from_slice(turn_one_gate);
+    values.extend([0; 64]);
+    let mut rng = SequenceRng::new(values);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    if let Some(obedience) = obedience {
+        battle = battle.with_player_obedience(obedience);
+    }
+    let mut run = LockedRun {
+        turns: Vec::new(),
+        turn_draws: Vec::new(),
+        pps: Vec::new(),
+    };
+    for _ in 0..2 {
+        let before = rng.draws();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(chosen_slot), &mut rng)
+            .unwrap();
+        run.turns.push(events);
+        run.turn_draws.push(rng.draws() - before);
+        run.pps
+            .push(battle.player().moves().iter().map(|slot| slot.pp).collect());
+    }
+    assert_eq!(
+        battle.battler_state(BattlerSide::Player).locked_move(),
+        Some(MoveId::ROLLOUT)
+    );
+    run
+}
+
+fn first_user(events: &[BattleEvent]) -> bool {
+    events
+        .iter()
+        .find_map(|event| match event {
+            BattleEvent::UsedMove { by_player, .. } => Some(*by_player),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// `IsMonDisobedient` moves only `gCurrMovePos`/`gChosenMovePos` to the
+/// drawn slot (`battle_util.c:3989`-`:3993`); the battler's
+/// `chosenMovePositions` entry keeps the selected slot, a locked battler
+/// skips selection (`battle_main.c:4160`-`:4165`), and `GetWhoStrikesFirst`
+/// reads the move in that entry (`battle_main.c:4702`, `:4714`). So a
+/// Rollout drawn in place of Quick Attack keeps Quick Attack's +1 on its
+/// locked turns. The continuation skips the gate
+/// (`battle_script_commands.c:944`) and `ppreduce`
+/// (`data/battle_scripts_1.s:1599`), so only the first turn spends PP,
+/// from Rollout's slot.
+#[test]
+fn a_disobedient_rollout_keeps_the_selected_slots_priority_while_locked() {
+    // A=255 disobeys; B=0 picks the alternate branch; slot draws 0 (Quick
+    // Attack, rejected) then 1; target draws 0 (the attacker) then 1.
+    let traded = locked_rollout_turns(0, Some(no_badges()), &[255, 0, 0, 1, 0, 1]);
+    assert_eq!(traded.turns[0][0], BattleEvent::IgnoredOrders);
+    assert_eq!(
+        traded.turns[0][1],
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: MoveId::ROLLOUT,
+        }
+    );
+    assert_eq!(
+        traded.turns[1][0],
+        BattleEvent::UsedMove {
+            by_player: true,
+            move_id: MoveId::ROLLOUT,
+        },
+        "the locked Rollout still moves first on Quick Attack's slot"
+    );
+    // Quick Attack has 30 PP and Rollout 20.
+    assert_eq!(traded.pps[0], vec![30, 19], "turn one spends Rollout's PP");
+    assert_eq!(traded.pps[1], traded.pps[0], "the continuation spends none");
+
+    // Rollout chosen directly is priority 0, so the faster foe moves first
+    // on both turns.
+    let direct = locked_rollout_turns(1, Some(no_badges()), &[]);
+    assert!(!first_user(&direct.turns[0]));
+    assert!(!first_user(&direct.turns[1]));
+    // The locked turn draws no obedience roll: the gated battler's second
+    // turn draws exactly what an ungated one's does.
+    let ungated = locked_rollout_turns(1, None, &[]);
+    assert_eq!(direct.turn_draws[1], ungated.turn_draws[1]);
+    assert_eq!(
+        direct.turn_draws[0],
+        ungated.turn_draws[0] + 1,
+        "one gate draw"
+    );
+}
