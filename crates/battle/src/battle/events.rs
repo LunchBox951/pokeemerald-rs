@@ -135,6 +135,32 @@ pub enum BattleEvent {
         /// HP removed from that battler, capped at its HP before the hit.
         damage: u32,
     },
+    /// A traded Pokémon above its obedience limit ignored the order and
+    /// loafed (`IsMonDisobedient`, `src/battle_util.c:4030`-`:4035`). No PP
+    /// is spent.
+    Disobeyed {
+        /// The loaf text drawn.
+        message: crate::obedience::LoafMessage,
+    },
+    /// A traded Pokémon above its obedience limit ignored the order and is
+    /// about to use another of its moves instead (`src/battle_util.c:3985`-
+    /// `:3997`; `BattleScript_IgnoresAndUsesRandomMove`). The
+    /// [`BattleEvent::UsedMove`] that follows names that move, whose PP is
+    /// spent in place of the chosen move's.
+    IgnoredOrders,
+    /// A traded Pokémon above its obedience limit ignored the order and fell
+    /// asleep for the ordinary two-to-five turn duration
+    /// (`src/battle_util.c:4004`-`:4016`; `BattleScript_IgnoresAndFallsAsleep`).
+    /// No PP is spent.
+    DisobedientNap,
+    /// A disobedient player Pokémon hurt itself instead of acting
+    /// (`src/battle_util.c:4020`-`:4027`). No PP is spent.
+    DisobedientSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
