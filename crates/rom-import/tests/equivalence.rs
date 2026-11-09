@@ -51,7 +51,9 @@ use std::path::{Path, PathBuf};
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
 use assets::{AssetPack, CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
-use rom_import::{FIELD_MESSAGE_PACK_ID, TRAINER_DEFEAT_SPEECH_PACK_ID};
+use rom_import::{
+    FIELD_MESSAGE_PACK_ID, TRAINER_CLASS_NAME_PACK_ID, TRAINER_DEFEAT_SPEECH_PACK_ID,
+};
 
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
@@ -76,6 +78,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "field-message/",
     "trainer-defeat-speech/",
+    "trainer-class-name/",
     "battle-anim/",
     "bag/",
     "starter-chooser/",
@@ -356,6 +359,84 @@ const TRAINER_DEFEAT_SPEECHES: [&[u8]; 14] = [
     ],
 ];
 
+#[test]
+fn the_class_name_pin_spells_the_upstream_names_through_the_charmap() {
+    let table = expected_trainer_class_name_table();
+    // Header, 66 records of 6 bytes, and 674 bytes of streams.
+    assert_eq!(table.len(), 8 + 66 * 6 + 674);
+    let rival = [
+        0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+    ];
+    assert_eq!(class_name_stream("{PKMN} TRAINER"), rival);
+    assert_eq!(
+        class_name_stream("COOLTRAINER"),
+        [0xBD, 0xC9, 0xC9, 0xC6, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF]
+    );
+    assert_eq!(
+        class_name_stream("HIKER"),
+        [0xC2, 0xC3, 0xC5, 0xBF, 0xCC, 0xFF]
+    );
+    assert_eq!(class_name_stream("POKéFAN")[3], 0x1B);
+    assert_eq!(class_name_stream("SWIMMER♂")[7..], [0xB5, 0xFF]);
+    assert_eq!(class_name_stream("SWIMMER♀")[7..], [0xB6, 0xFF]);
+    // Twelve glyphs and the `EOS` fill the 13-byte row exactly.
+    assert_eq!(class_name_stream("PARASOL LADY").len(), 13);
+    for index in [0, 1, 50, 65] {
+        assert_eq!(class_name_stream(TRAINER_CLASS_NAMES[index]), rival);
+    }
+    assert_eq!(TRAINER_CLASS_NAMES[5], TRAINER_CLASS_NAMES[48]);
+    assert_eq!(TRAINER_CLASS_NAMES[18], TRAINER_CLASS_NAMES[19]);
+    assert!(TRAINER_CLASS_NAMES
+        .iter()
+        .all(|name| class_name_stream(name).len() <= 13));
+}
+
+/// A pack holding just the class-name entry with `payload`, or none.
+fn class_name_pack(payload: Option<Vec<u8>>) -> (Vec<u8>, BTreeMap<String, DirectoryEntry>) {
+    let mut writer = pack_format::PackWriter::new();
+    if let Some(payload) = payload {
+        writer.push(pack_format::raw_entry(
+            TRAINER_CLASS_NAME_PACK_ID.to_owned(),
+            payload,
+        ));
+    }
+    let bytes = writer.finish().expect("a valid pack");
+    let entries = index(&bytes, "the fixture pack");
+    (bytes, entries)
+}
+
+#[test]
+fn the_class_name_pin_catches_an_absent_corrupt_or_identically_wrong_entry() {
+    let good = expected_trainer_class_name_table();
+    let (good_bytes, good_index) = class_name_pack(Some(good.clone()));
+    let (none_bytes, none_index) = class_name_pack(None);
+    let mut wrong = good.clone();
+    // A class name both backends could drop together: the last glyph of record 66.
+    let last = wrong.len() - 2;
+    wrong[last] ^= 0x01;
+    let (wrong_bytes, wrong_index) = class_name_pack(Some(wrong));
+
+    assert!(
+        trainer_class_name_differences((&good_bytes, &good_index), (&good_bytes, &good_index))
+            .is_empty()
+    );
+    let one_absent =
+        trainer_class_name_differences((&none_bytes, &none_index), (&good_bytes, &good_index));
+    assert_eq!(one_absent.len(), 1, "{one_absent:?}");
+    assert!(one_absent[0].contains("the ROM backend wrote no such entry"));
+    let both_absent =
+        trainer_class_name_differences((&none_bytes, &none_index), (&none_bytes, &none_index));
+    assert_eq!(both_absent.len(), 2, "{both_absent:?}");
+    let one_corrupt =
+        trainer_class_name_differences((&good_bytes, &good_index), (&wrong_bytes, &wrong_index));
+    assert_eq!(one_corrupt.len(), 1, "{one_corrupt:?}");
+    assert!(one_corrupt[0].contains("the checkout pack"));
+    // Equal packs are not enough: both wrong the same way still fails twice.
+    let both_wrong =
+        trainer_class_name_differences((&wrong_bytes, &wrong_index), (&wrong_bytes, &wrong_index));
+    assert_eq!(both_wrong.len(), 2, "{both_wrong:?}");
+}
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -480,6 +561,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
     ));
 
     differences.extend(trainer_defeat_speech_differences(
+        (&rom_bytes, &imported),
+        (&checkout_bytes, &checkout),
+    ));
+
+    differences.extend(trainer_class_name_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
     ));
@@ -995,6 +1081,156 @@ fn field_message_differences(
         if bytes[entry.offset..entry.offset + entry.length] != FIELD_MESSAGE_TABLE {
             differences.push(format!(
                 "{FIELD_MESSAGE_PACK_ID}: {what} wrote a payload other than gText_PkmnFainted_FldPsn"
+            ));
+        }
+    }
+    differences
+}
+
+/// Each `gTrainerClassNames` row as both backends must write it, in
+/// `TrainerClass` index order, spelled from `src/data/text/trainer_class_names.h`.
+/// `{PKMN}` is the two glyph tokens `PK` and `MN`; `é`, `♂`, and `♀` are glyphs of
+/// their own. The four `{PKMN} TRAINER` classes, the two `COOLTRAINER`s, and the
+/// two `TUBER`s are separate records with equal names.
+const TRAINER_CLASS_NAMES: [&str; 66] = [
+    "{PKMN} TRAINER",
+    "{PKMN} TRAINER",
+    "HIKER",
+    "TEAM AQUA",
+    "{PKMN} BREEDER",
+    "COOLTRAINER",
+    "BIRD KEEPER",
+    "COLLECTOR",
+    "SWIMMER♂",
+    "TEAM MAGMA",
+    "EXPERT",
+    "AQUA ADMIN",
+    "BLACK BELT",
+    "AQUA LEADER",
+    "HEX MANIAC",
+    "AROMA LADY",
+    "RUIN MANIAC",
+    "INTERVIEWER",
+    "TUBER",
+    "TUBER",
+    "LADY",
+    "BEAUTY",
+    "RICH BOY",
+    "POKéMANIAC",
+    "GUITARIST",
+    "KINDLER",
+    "CAMPER",
+    "PICNICKER",
+    "BUG MANIAC",
+    "PSYCHIC",
+    "GENTLEMAN",
+    "ELITE FOUR",
+    "LEADER",
+    "SCHOOL KID",
+    "SR. AND JR.",
+    "WINSTRATE",
+    "POKéFAN",
+    "YOUNGSTER",
+    "CHAMPION",
+    "FISHERMAN",
+    "TRIATHLETE",
+    "DRAGON TAMER",
+    "NINJA BOY",
+    "BATTLE GIRL",
+    "PARASOL LADY",
+    "SWIMMER♀",
+    "TWINS",
+    "SAILOR",
+    "COOLTRAINER",
+    "MAGMA ADMIN",
+    "{PKMN} TRAINER",
+    "BUG CATCHER",
+    "{PKMN} RANGER",
+    "MAGMA LEADER",
+    "LASS",
+    "YOUNG COUPLE",
+    "OLD COUPLE",
+    "SIS AND BRO",
+    "SALON MAIDEN",
+    "DOME ACE",
+    "PALACE MAVEN",
+    "ARENA TYCOON",
+    "FACTORY HEAD",
+    "PIKE QUEEN",
+    "PYRAMID KING",
+    "{PKMN} TRAINER",
+];
+
+/// A class name through the charmap, spelled here so no code under test
+/// vouches for it: space is `00`, `.` is `AD`, `A`..`Z` start at `BB`, `a`..`z`
+/// at `D5`, `é` is `1B`, `♂` is `B5`, `♀` is `B6`, `{PKMN}` is `53 54`, and the
+/// string ends in `EOS` (`FF`).
+fn class_name_stream(name: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut rest = name;
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("{PKMN}") {
+            out.extend_from_slice(&[0x53, 0x54]);
+            rest = after;
+            continue;
+        }
+        out.push(match c {
+            ' ' => 0x00,
+            '.' => 0xAD,
+            'é' => 0x1B,
+            '♂' => 0xB5,
+            '♀' => 0xB6,
+            'A'..='Z' => 0xBB + u8::try_from(u32::from(c) - u32::from('A')).expect("a letter"),
+            'a'..='z' => 0xD5 + u8::try_from(u32::from(c) - u32::from('a')).expect("a letter"),
+            other => panic!("`{other}` has no spelling in the class-name pin"),
+        });
+        rest = &rest[c.len_utf8()..];
+    }
+    out.push(0xFF);
+    out
+}
+
+/// The `trainer-class-name/table` payload both backends must write: the
+/// header, then one record per class in index order. Built here from
+/// [`TRAINER_CLASS_NAMES`] rather than by the schema encoder, so an encoder
+/// both backends share cannot vouch for itself.
+fn expected_trainer_class_name_table() -> Vec<u8> {
+    let count = u16::try_from(TRAINER_CLASS_NAMES.len()).expect("sixty-six records");
+    let mut table = b"TCLN".to_vec();
+    table.extend_from_slice(&1u16.to_le_bytes());
+    table.extend_from_slice(&count.to_le_bytes());
+    for (id, name) in (0u16..).zip(TRAINER_CLASS_NAMES) {
+        table.extend_from_slice(&id.to_le_bytes());
+        let stream = class_name_stream(name);
+        let len = u32::try_from(stream.len()).expect("a stream fits in u32");
+        table.extend_from_slice(&len.to_le_bytes());
+        table.extend_from_slice(&stream);
+    }
+    table
+}
+
+/// The `trainer-class-name/table` pin applied to each backend's pack, given as
+/// `(bytes, index)` pairs: named by id and bytes so a class both backends
+/// drop, merge, reorder, or misencode together still fails.
+fn trainer_class_name_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+) -> Vec<String> {
+    let expected = expected_trainer_class_name_table();
+    let mut differences = Vec::new();
+    for (what, (bytes, entries)) in [
+        ("the ROM backend", imported),
+        ("the checkout pack", checkout),
+    ] {
+        let Some(entry) = entries.get(TRAINER_CLASS_NAME_PACK_ID) else {
+            differences.push(format!(
+                "{TRAINER_CLASS_NAME_PACK_ID}: {what} wrote no such entry"
+            ));
+            continue;
+        };
+        if bytes[entry.offset..entry.offset + entry.length] != expected[..] {
+            differences.push(format!(
+                "{TRAINER_CLASS_NAME_PACK_ID}: {what} wrote a payload other than the sixty-six trainer class names"
             ));
         }
     }

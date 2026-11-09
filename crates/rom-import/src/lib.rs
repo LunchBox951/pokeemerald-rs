@@ -64,7 +64,8 @@
 //!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
 //!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to
 //!   PCM), and the Route 103 trainers' defeat speeches
-//!   (`trainer-defeat-speech/table`). A domain that has a ROM struct behind
+//!   (`trainer-defeat-speech/table`) and the trainer class display names
+//!   (`trainer-class-name/table`, one fixed-width array). A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
@@ -122,6 +123,10 @@ pub use domains::battle_messages::{
 };
 pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
 pub use domains::song::decode_song_payload;
+pub use domains::trainer_class_names::{
+    decode_trainer_class_name_payload, PACK_ID as TRAINER_CLASS_NAME_PACK_ID,
+    TABLE_BYTES as TRAINER_CLASS_NAME_TABLE_BYTES,
+};
 pub use domains::trainer_defeat_speeches::{
     decode_trainer_defeat_speech_payload, witness_head as trainer_defeat_speech_witness_head,
     COMMAND_LEN as TRAINER_BATTLE_COMMAND_LEN,

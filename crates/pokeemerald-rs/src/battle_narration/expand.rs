@@ -165,7 +165,7 @@ impl<N: NarrationNames> Expander<'_, N> {
                 self.battler_ability(context.scripting, "scripting battler")
             }
             selector::EFF_ABILITY => self.battler_ability(context.effect, "effect battler"),
-            selector::TRAINER1_CLASS => text_tokens(&self.trainer()?.class),
+            selector::TRAINER1_CLASS => Ok(self.trainer()?.class.clone()),
             selector::TRAINER1_NAME => text_tokens(&self.trainer()?.name),
             selector::PLAYER_NAME => text_tokens(&context.player_name),
             selector::TRAINER1_LOSE_TEXT => Ok(self.trainer()?.lose_text.clone()),

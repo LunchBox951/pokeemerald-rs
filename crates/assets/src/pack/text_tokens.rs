@@ -24,27 +24,34 @@ pub(super) fn validate_string(stream: &[u8]) -> Result<(), &'static str> {
     if u32::try_from(stream.len()).is_err() {
         return Err("stream is longer than the wire format can store");
     }
+    if string_len(stream)? == stream.len() {
+        Ok(())
+    } else {
+        Err("bytes follow the terminator")
+    }
+}
+
+/// The length of the token string at the start of `bytes`, `EOS` included.
+///
+/// Walks token boundaries like [`validate_string`] but accepts bytes after the
+/// terminator, so a fixed-width ROM row can be split into its string and its
+/// padding.
+pub(super) fn string_len(bytes: &[u8]) -> Result<usize, &'static str> {
     let mut i = 0;
-    while let Some(&byte) = stream.get(i) {
+    while let Some(&byte) = bytes.get(i) {
         i += match byte {
-            EOS => {
-                return if i + 1 == stream.len() {
-                    Ok(())
-                } else {
-                    Err("bytes follow the terminator")
-                };
-            }
+            EOS => return Ok(i + 1),
             // Placeholder, dynamic, keypad-icon, and extra-symbol leads take one byte.
             0xFD | 0xF7 | 0xF8 | 0xF9 => {
-                if i + 1 >= stream.len() {
+                if i + 1 >= bytes.len() {
                     return Err("incomplete control sequence");
                 }
                 2
             }
             0xFC => {
-                let sub = *stream.get(i + 1).ok_or("incomplete control sequence")?;
+                let sub = *bytes.get(i + 1).ok_or("incomplete control sequence")?;
                 let args = ext_ctrl_args(sub).ok_or("unknown extended control")?;
-                if i + 2 + args > stream.len() {
+                if i + 2 + args > bytes.len() {
                     return Err("incomplete control sequence");
                 }
                 2 + args

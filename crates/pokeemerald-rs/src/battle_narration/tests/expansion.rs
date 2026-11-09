@@ -3,9 +3,9 @@
 
 use assets::items::ItemId;
 use assets::MoveId;
-use engine::text::Token;
+use engine::text::{Symbol, Token};
 
-use super::fixtures::{bare_context, render, request, Fixture, RATTATA};
+use super::fixtures::{bare_context, render, request, rival_class, text_tokens, Fixture, RATTATA};
 use crate::battle_narration::{
     expand, AssetNames, BattleBuffer, BattleKind, Battler, BufferOp, NarrationError, Side,
     StatusName, TemplateId,
@@ -194,6 +194,75 @@ fn a_defeat_text_ends_with_a_wait_for_input() {
     let tokens = expand(&fixture.table(), &AssetNames, &request).unwrap();
 
     assert_eq!(render(&tokens), "Good battle!{CTRL:0x09}");
+}
+
+/// A trainer-battle scene whose opponent carries `class`.
+fn scene_with_class(class: Vec<Token>) -> crate::battle_narration::Scene {
+    let mut scene = super::fixtures::scene(BattleKind::Trainer);
+    scene.trainer.as_mut().unwrap().class = class;
+    scene
+}
+
+fn class_and_name(class: Vec<Token>) -> Vec<Token> {
+    let fixture = Fixture::new(&[(20, "{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!")], &[]);
+    let narrator = crate::battle_narration::Narrator::new(scene_with_class(class));
+    let mut request = narrator.introduction();
+    request.template = TemplateId::Table(20);
+    expand(&fixture.table(), &AssetNames, &request).unwrap()
+}
+
+#[test]
+fn an_ordinary_trainer_class_expands_to_the_same_text_as_before() {
+    let tokens = class_and_name(text_tokens("YOUNGSTER"));
+
+    assert_eq!(render(&tokens), "YOUNGSTER BEN!");
+    assert_eq!(tokens[0], Token::Char('Y'));
+    assert!(!tokens.iter().any(|t| matches!(t, Token::Symbol(_))));
+}
+
+#[test]
+fn the_rival_class_keeps_its_glyph_tokens_through_expansion() {
+    let tokens = class_and_name(rival_class());
+
+    // `{PKMN}` is the `PK` and `MN` glyph tiles, not the letters `PKMN`.
+    assert_eq!(
+        tokens[..4],
+        [
+            Token::Symbol(Symbol::Pk),
+            Token::Symbol(Symbol::Mn),
+            Token::Char(' '),
+            Token::Char('T')
+        ]
+    );
+    assert_eq!(render(&tokens), "{PK}{MN} TRAINER BEN!");
+    // The name and punctuation after the class survive, and the class holds
+    // no terminator of its own.
+    assert_eq!(tokens.iter().filter(|t| **t == Token::End).count(), 1);
+    assert_eq!(tokens.last(), Some(&Token::End));
+}
+
+#[test]
+fn the_expanded_class_is_a_snapshot_of_the_scene() {
+    let class = rival_class();
+    let expected = class.clone();
+    let tokens = class_and_name(class);
+
+    assert_eq!(tokens[..expected.len()], expected[..]);
+}
+
+#[test]
+fn a_template_reading_the_class_without_a_trainer_fails() {
+    let fixture = Fixture::new(&[(20, "{B_TRAINER1_CLASS}")], &[]);
+    let context = bare_context(BattleKind::Trainer);
+
+    assert!(matches!(
+        expand(
+            &fixture.table(),
+            &AssetNames,
+            &request(TemplateId::Table(20), context)
+        ),
+        Err(NarrationError::MissingContext("trainer"))
+    ));
 }
 
 #[test]

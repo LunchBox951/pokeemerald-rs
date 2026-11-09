@@ -276,7 +276,7 @@ fn a_trainer_battle_prints_the_challenge_the_defeat_speech_and_the_prize_before_
     )
     .unwrap();
     let trainer = Trainer {
-        class: "YOUNGSTER".to_owned(),
+        class: super::fixtures::text_tokens("YOUNGSTER"),
         name: "CALVIN".to_owned(),
         lose_text: calvin_defeat_speech(),
     };

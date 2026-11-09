@@ -10,7 +10,9 @@ use super::plan::{
     OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine, Resolution, StarterChooserPlan,
     TileAnimPlan, TilesetPlan,
 };
-use super::plan::{TrainerBattlerPlan, TrainerDefeatSpeechPlan, TrainerFrontPlan};
+use super::plan::{
+    TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
+};
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
 ///
@@ -138,6 +140,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
     trainer_defeat_speech_roots(&mut out, &plan.trainer_defeat_speeches);
+    trainer_class_name_roots(&mut out, &plan.trainer_class_names);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -498,6 +501,14 @@ fn trainer_defeat_speech_roots(out: &mut String, speeches: &TrainerDefeatSpeechP
     let _ = writeln!(out, "    ],");
 }
 
+fn trainer_class_name_roots(out: &mut String, names: &TrainerClassNamePlan) {
+    let _ = writeln!(
+        out,
+        "    trainer_class_names: Some({}),",
+        gba_ptr_expression(names.addr)
+    );
+}
+
 fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
     let _ = writeln!(out, "    field_messages: &[");
     for message in &messages.messages {
@@ -726,6 +737,19 @@ mod tests {
     }
 
     #[test]
+    fn the_trainer_class_name_root_renders_as_one_present_address() {
+        use super::trainer_class_name_roots;
+        use crate::gen_rom_profile::plan::TrainerClassNamePlan;
+
+        let mut out = String::new();
+        trainer_class_name_roots(&mut out, &TrainerClassNamePlan { addr: 0x083C_4E10 });
+        assert_eq!(
+            out,
+            "    trainer_class_names: Some(GbaPtr::at(0x083C_4E10)),\n"
+        );
+    }
+
+    #[test]
     fn battle_message_roots_render_one_address_per_line() {
         use super::battle_message_roots;
         use crate::gen_rom_profile::plan::{BattleMessagePlan, SpecialMessagePlan};
@@ -927,7 +951,7 @@ mod bag_field_tests {
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan,
         StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
-        TrainerDefeatSpeechPlan, TrainerFrontPlan,
+        TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1311,6 +1335,7 @@ mod bag_field_tests {
             },
             field_messages: FieldMessagePlan { messages: vec![] },
             trainer_defeat_speeches: TrainerDefeatSpeechPlan { speeches: vec![] },
+            trainer_class_names: TrainerClassNamePlan { addr: 0x0800_0000 },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],
