@@ -49,8 +49,10 @@ const STEP_LANDING_FRAMES: usize = 1;
 const FIRST_BATTLE_TEXT_PERIOD_FRAMES: usize = 16;
 /// The frames after the trigger landing that the fight takes with that input:
 /// the opening, the turns and their holds, and the experience award, up to the
-/// frame before the battle slot empties.
-const FIRST_BATTLE_TEXT_FRAMES: usize = 820;
+/// frame before the battle slot empties. The fight's rolls follow the field
+/// `Random()` stream, which the walk's random-facing NPCs advance, so this count
+/// is measured against that stream and moves with it.
+const FIRST_BATTLE_TEXT_FRAMES: usize = 964;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
 const FINAL_RELEASE_FRAMES: usize = 1;
 
@@ -263,12 +265,12 @@ mod tests {
     /// (`super::STEP_LANDING_FRAMES`): the bedroom stair warp, the front
     /// door's arrow warp, and the Route 101 rescue trigger.
     const EXPECTED_STEP_LANDING_FRAMES: usize = 3;
-    const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 820;
+    const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 964;
     const EXPECTED_BATTLE_CONCLUSION_FRAMES: usize = 1;
     const EXPECTED_FINAL_RELEASE_FRAMES: usize = 1;
     const EXPECTED_B_CONFIRM_COUNT: usize = 2;
     /// The trigger landing frame, then the fight's text frames.
-    const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 1 + 820;
+    const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 1 + 964;
 
     #[test]
     fn script_has_the_expected_route_and_state_shape() {
