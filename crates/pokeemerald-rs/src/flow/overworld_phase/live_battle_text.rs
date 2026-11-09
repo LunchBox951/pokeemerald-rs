@@ -59,6 +59,18 @@ impl OverworldPhase {
     /// lead's nickname and ability as `BufferStringBattle` copies them, and
     /// the opponent named after its species (`CreateMon` gives a wild mon its
     /// species name as nickname).
+    ///
+    /// Upstream prints the saved name bytes as they are
+    /// (`pokeemerald/src/battle_message.c:2299-2306, 2594-2598, 2735-2740`).
+    /// This port holds names as text, so a name it cannot decode is reported as
+    /// [`NarrationError::Text`] rather than swapped for the species name or
+    /// printed empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NarrationError::Text`] when the lead's nickname or the
+    /// player's name does not decode, and [`NarrationError::UnknownName`] when
+    /// a species has no name.
     fn wild_scene(&self, battle: &Battle) -> Result<Scene, NarrationError> {
         let player = battle.player();
         let species_name = |species| {
@@ -69,15 +81,19 @@ impl OverworldPhase {
         let nickname = self
             .lead
             .as_ref()
-            .and_then(|lead| decode_to_string(&lead.record().box_data.nickname()).ok())
+            .map(|lead| decode_to_string(&lead.record().box_data.nickname()))
+            .transpose()
+            .map_err(NarrationError::Text)?
             .filter(|name| !name.is_empty());
         let player_name = match nickname {
             Some(name) => name,
             None => species_name(player.species())?,
         };
+        let trainer_name =
+            decode_to_string(&self.save2.player_name).map_err(NarrationError::Text)?;
         Ok(Scene {
             kind: BattleKind::Wild,
-            player_name: decode_to_string(&self.save2.player_name).unwrap_or_default(),
+            player_name: trainer_name,
             player: Battler {
                 name: player_name,
                 ability: Some(player.ability()),
@@ -119,5 +135,94 @@ impl OverworldPhase {
         if let Some(sequence) = &self.battle_sequence {
             sequence.draw(framebuffer);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assets::MapId;
+    use battle::Battle;
+    use engine::overworld::{Direction, PlayerState};
+    use engine::rng::Rng;
+    use engine::save::BOX_NICKNAME_LEN;
+    use engine::text::{encode_str, TextError, PLACEHOLDER_BEGIN};
+
+    use super::{BattleText, NarrationError, OverworldPhase};
+    use crate::new_game;
+
+    /// A phase whose lead is the starter, filed with `nickname` as its saved
+    /// nickname, and the battle it leads into.
+    fn phase_and_battle(nickname: [u8; BOX_NICKNAME_LEN]) -> (OverworldPhase, Battle) {
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::test_support::synthetic_scene(25, 25),
+            MapId("MAP_ROUTE101"),
+            PlayerState::new((5, 5), 3, Direction::East),
+            None,
+        );
+        phase.battle_text = BattleText::Played;
+        let lead = new_game::provisional_starter();
+        let mut record = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+        record.box_data.set_nickname(nickname);
+        phase.set_backed_lead_for_test(0, record, lead.clone());
+        let battle = crate::flow::first_battle::start_first_battle(lead, 0, &mut Rng::new(4242))
+            .expect("the starter can start the first battle");
+        (phase, battle)
+    }
+
+    fn nickname_field(text: &str) -> [u8; BOX_NICKNAME_LEN] {
+        let encoded = encode_str(text).expect("the test nickname encodes");
+        let mut field = [engine::text::EOS; BOX_NICKNAME_LEN];
+        field[..encoded.len() - 1].copy_from_slice(&encoded[..encoded.len() - 1]);
+        field
+    }
+
+    /// Ten glyphs end in a lone `PLACEHOLDER_BEGIN`, a control code that
+    /// takes an argument byte the field has no room for.
+    fn undecodable_nickname() -> [u8; BOX_NICKNAME_LEN] {
+        let mut field = nickname_field("MUDKIPABC");
+        field[BOX_NICKNAME_LEN - 1] = PLACEHOLDER_BEGIN;
+        field
+    }
+
+    /// `name` with a lone `PLACEHOLDER_BEGIN` in its last byte and no
+    /// terminator before it: a control code with no room for its argument.
+    fn undecodable_player_name<const N: usize>(mut name: [u8; N]) -> [u8; N] {
+        name.fill(0);
+        name[N - 1] = PLACEHOLDER_BEGIN;
+        name
+    }
+
+    #[test]
+    fn the_scene_names_the_player_and_the_lead_from_the_save() {
+        let (mut phase, battle) = phase_and_battle(nickname_field("MUDKIP"));
+        let encoded = encode_str("RUSTY").expect("the test name encodes");
+        phase.save2.player_name = [engine::text::EOS; 8];
+        phase.save2.player_name[..encoded.len()].copy_from_slice(&encoded);
+        let scene = phase.wild_scene(&battle).expect("both names decode");
+        assert_eq!(scene.player_name, "RUSTY");
+        assert_eq!(scene.player.name, "MUDKIP");
+    }
+
+    #[test]
+    fn a_nickname_that_will_not_decode_is_reported_not_swapped_for_the_species_name() {
+        let (phase, battle) = phase_and_battle(undecodable_nickname());
+        assert_eq!(
+            phase.wild_scene(&battle),
+            Err(NarrationError::Text(TextError::Truncated(
+                PLACEHOLDER_BEGIN
+            )))
+        );
+    }
+
+    #[test]
+    fn a_player_name_that_will_not_decode_is_reported_not_printed_empty() {
+        let (mut phase, battle) = phase_and_battle(nickname_field("MUDKIP"));
+        phase.save2.player_name = undecodable_player_name(phase.save2.player_name);
+        assert_eq!(
+            phase.wild_scene(&battle),
+            Err(NarrationError::Text(TextError::Truncated(
+                PLACEHOLDER_BEGIN
+            )))
+        );
     }
 }
