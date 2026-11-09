@@ -3,6 +3,7 @@
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
 use crate::ability::{burn_halves_damage, huge_power_attack};
+use crate::attract::is_attract_effect;
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -16,26 +17,32 @@ use crate::error::BattleError;
 use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
+use crate::leech_seed::{is_leech_seed_effect, resolve_leech_seed_move, LeechSeedOutcome};
 use crate::multi_hit::is_multi_hit_effect;
 use crate::paralyze::{
     is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection, ParalyzeOutcome,
     SynchronizeReflectionOutcome,
 };
+use crate::rollout::is_rollout_effect;
 use crate::secondary::{
     poison_point_can_land, resolve_synchronize_poison_reflection, SecondaryApplication,
     SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
-    is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat, StatChangeDirection,
-    StatChangeOutcome,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, stage_of, ChangedStat,
+    StatChangeDirection, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod attract;
+mod burn;
+mod cute_charm;
 mod effect_spore;
 mod pipelines;
+mod rollout;
 use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
@@ -55,6 +62,7 @@ fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
         matches!(
             event,
             BattleEvent::Missed { .. }
+                | BattleEvent::LeechSeedEvaded { .. }
                 | BattleEvent::NoEffect { .. }
                 | BattleEvent::LevitateBlocked { .. }
                 | BattleEvent::WonderGuardBlocked { .. }
@@ -85,6 +93,9 @@ pub(super) enum MovePipeline {
     DefenseCurl,
     Paralyze,
     Confuse,
+    LeechSeed,
+    Rollout,
+    Attract,
     OrdinaryHit,
 }
 
@@ -128,6 +139,12 @@ impl MovePipeline {
             (Self::Paralyze, crate::paralyze::ensure_resolvable)
         } else if is_confuse_effect(effect) {
             (Self::Confuse, crate::confuse::ensure_resolvable)
+        } else if is_leech_seed_effect(effect) {
+            (Self::LeechSeed, crate::leech_seed::ensure_resolvable)
+        } else if is_rollout_effect(effect) {
+            (Self::Rollout, crate::rollout::ensure_resolvable)
+        } else if is_attract_effect(effect) {
+            (Self::Attract, crate::attract::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -190,6 +207,14 @@ impl Battle {
         self.record_move_end(attacker_is_player, move_id, LastLandedMove::Unavailable)
     }
 
+    /// `CancelMultiTurnMoves` for one battler (`src/battle_util.c:877`-
+    /// `:887`): the single place every cancellation releases the battler's
+    /// multi-turn lock through.
+    pub(super) fn cancel_multi_turn_moves(&mut self, battler_is_player: bool) {
+        self.battler_states[BattlerSide::from_is_player(battler_is_player).index()]
+            .cancel_multi_turn_moves();
+    }
+
     /// Confusion's self-hit ends the action with the attacker as its own
     /// target (`battle_util.c:2169`-`:2177`).
     pub(super) fn record_confusion_self_hit(&mut self, attacker_is_player: bool) {
@@ -219,6 +244,7 @@ impl Battle {
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
@@ -435,6 +461,15 @@ impl Battle {
             MovePipeline::Confuse => {
                 self.execute_confuse_move(attacker_is_player, move_id, rng, events)
             }
+            MovePipeline::LeechSeed => {
+                self.execute_leech_seed_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Rollout => {
+                self.execute_rollout_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Attract => {
+                self.execute_attract_move(attacker_is_player, move_id, rng, events)
+            }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
             }
@@ -556,6 +591,7 @@ impl Battle {
                     self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
                 }
                 self.settle_faint(!attacker_is_player, events);
+                self.defrost_target_of_fire_move(attacker_is_player, move_id, hp_lost, events)?;
                 // See `BattleEvent::PoisonedBySynchronize`'s docs for why the
                 // reflection runs here, after the target's own faint check.
                 if poisoned_synchronize_holder {
@@ -623,23 +659,41 @@ impl Battle {
                 }
             }
             SecondaryApplication::SpeedDown => {
-                self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Speed,
+                    events,
+                );
+            }
+            SecondaryApplication::AccuracyDown => {
+                self.apply_secondary_stat_drop(
+                    attacker_is_player,
+                    move_id,
+                    ChangedStat::Accuracy,
+                    events,
+                );
+            }
+            SecondaryApplication::Burn => {
+                self.apply_secondary_burn(attacker_is_player, move_id, events);
             }
         }
         poisoned_synchronize_holder
     }
 
-    /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
-    /// target that survived the hit. `SetMoveEffect` leads with an `hp == 0`
-    /// guard (`battle_script_commands.c:2261`-`:2264`), and a target already at
-    /// the minimum stage is left alone with no message because
-    /// `ChangeStatBuffs` runs with `flags == 0` (`:7056`-`:7059`,
-    /// `:7094`-`:7095`). Clear Body, White Smoke and Shield Dust never reach
-    /// this point ([`crate::secondary::spend_effect_chance_draw`]).
-    fn apply_secondary_speed_drop(
+    /// `MOVE_EFFECT_SPD_MINUS_1` and `MOVE_EFFECT_ACC_MINUS_1` as secondary
+    /// effects: one `stat` stage off a target that survived the hit.
+    /// `SetMoveEffect` leads with an `hp == 0` guard
+    /// (`battle_script_commands.c:2261`-`:2264`), and a target already at the
+    /// minimum stage is left alone with no message because `ChangeStatBuffs`
+    /// runs with `flags == 0` (`:7056`-`:7059`, `:7094`-`:7095`). Clear Body,
+    /// White Smoke and Shield Dust, and Keen Eye for Accuracy, never reach this
+    /// point ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_stat_drop(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
+        stat: ChangedStat,
         events: &mut Vec<BattleEvent>,
     ) {
         let defender = if attacker_is_player {
@@ -647,16 +701,16 @@ impl Battle {
         } else {
             &mut self.player
         };
-        let current_stage = defender.stages().speed;
+        let current_stage = stage_of(defender, stat);
         if defender.is_fainted() || current_stage == StatStage::MIN {
             return;
         }
         let new_stage = current_stage.saturating_add(-1);
-        set_stage(defender, ChangedStat::Speed, new_stage);
+        set_stage(defender, stat, new_stage);
         events.push(BattleEvent::StatFell {
             by_player: attacker_is_player,
             move_id,
-            stat: ChangedStat::Speed,
+            stat,
             new_stage,
             magnitude: 1,
         });
@@ -803,6 +857,7 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
+        self.clear_infatuation_from(BattlerSide::from_is_player(fainted_is_player));
         // `FaintClearSetData` resets the battler's history, Perish Song
         // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
@@ -1015,6 +1070,54 @@ impl Battle {
         Ok(())
     }
 
+    /// `BattleScript_EffectLeechSeed`'s `setseeded` (`Cmd_setseeded`,
+    /// `src/battle_script_commands.c:6718`-`:6738`). An accuracy miss and an
+    /// already-seeded target both report [`BattleEvent::LeechSeedEvaded`]
+    /// (their shared `B_MSG_LEECH_SEED_MISS`, which names the target rather
+    /// than the attacker's generic miss), and a Grass-type target reports
+    /// [`BattleEvent::NoEffect`] (`B_MSG_LEECH_SEED_FAIL`).
+    fn execute_leech_seed_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            resolve_leech_seed_move(&self.dex, move_id, attacker, defender, rng)?
+        };
+        match outcome {
+            LeechSeedOutcome::Miss | LeechSeedOutcome::AlreadySeeded => {
+                events.push(BattleEvent::LeechSeedEvaded {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            LeechSeedOutcome::GrassImmune => {
+                events.push(BattleEvent::NoEffect {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            LeechSeedOutcome::Applied => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                defender
+                    .volatiles_mut()
+                    .set_seeded_by(BattlerSide::from_is_player(attacker_is_player));
+                events.push(BattleEvent::Seeded {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Reflects a Synchronize holder's freshly-applied paralysis back onto
     /// the original attacker, re-entering `SetMoveEffect` for
     /// `MOVE_EFFECT_AFFECTS_USER` (`src/battle_util.c:2971`-`:2984`).
@@ -1143,10 +1246,13 @@ mod pipeline_agreement_tests {
         (&[156], MovePipeline::DefenseCurl),
         (&[67], MovePipeline::Paralyze),
         (&[49], MovePipeline::Confuse),
+        (&[84], MovePipeline::LeechSeed),
+        (&[117], MovePipeline::Rollout),
+        (&[120], MovePipeline::Attract),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
-                131, 141, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
+                110, 125, 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1177,7 +1283,10 @@ mod pipeline_agreement_tests {
                     || crate::flag_move::ensure_resolvable(dex, move_id).is_ok()
                     || crate::defense_curl::ensure_resolvable(dex, move_id).is_ok()
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::attract::ensure_resolvable(dex, move_id).is_ok();
                 if accepted {
                     Ok(())
                 } else {
@@ -1273,8 +1382,9 @@ mod absorbing_ability_tests {
         sp_defense: 31,
     };
 
-    /// No executable Fire move exists, so the executor's Flash Fire arm is
-    /// driven directly with the outcome `damage_core` reports for Ember.
+    /// Drives the executor's Flash Fire arm directly with the outcome
+    /// `damage_core` reports for Ember; `tests/turn_engine/thaw_hit.rs` covers
+    /// the same arm through Flame Wheel on a real `Battle`.
     #[test]
     fn a_flash_fire_outcome_latches_the_defender_and_reports_the_boost_once() {
         let dex = Dex::new();

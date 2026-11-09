@@ -9,11 +9,12 @@
 use pack_format::{EntryKind, PackWriter};
 
 use super::{font, write, SHEET_BYTES};
+use crate::domains::image;
 use crate::error::ImportError;
 use crate::fixture::RomFixture;
 use crate::reader::{GbaPtr, ROM_BASE};
 use crate::rom::Rom;
-use crate::roots::{FontRoot, Roots};
+use crate::roots::{Encoding, FontRoot, ImageRoot, Roots};
 
 /// Where the fixture plants the sheet.
 const SHEET: usize = 0x1000;
@@ -146,5 +147,76 @@ fn a_sheet_past_the_image_is_truncated() {
         ..FONT
     };
     let err = font(&rom.reader(), &root).unwrap_err();
+    assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
+}
+
+/// Where the fixture plants the keypad-icon sheet.
+const ICONS: usize = 0x2000;
+
+static ICON_SHEET: ImageRoot = ImageRoot {
+    id: "font/keypad_icons",
+    addr: GbaPtr::at(ROM_BASE + 0x2000),
+    encoding: Encoding::Raw,
+    rom_bit_depth: 4,
+    pack_bit_depth: 4,
+    width: 128,
+    height: 32,
+    metatile_width: 1,
+    metatile_height: 1,
+    tile_count: 64,
+};
+
+static ICON_SHEETS: [ImageRoot; 1] = [ICON_SHEET];
+
+/// A 64-tile sheet that is zero except for tile 17 (column 1, row 1), whose
+/// first row is the nibbles 1, 2 in the low-nibble-first order and whose last
+/// row is the nibble 3 in its second pixel.
+fn marked_icons() -> Vec<u8> {
+    let mut tiles = vec![0u8; 64 * 32];
+    tiles[17 * 32] = 0x21;
+    tiles[17 * 32 + 28] = 0x30;
+    tiles
+}
+
+#[test]
+fn the_keypad_sheet_is_read_as_row_major_four_bit_tiles() {
+    let bytes = RomFixture::new()
+        .emerald_header()
+        .write(ICONS, &marked_icons())
+        .finish();
+    let rom = Rom::from_bytes(bytes).expect("the fixture header is valid");
+    let mut writer = PackWriter::new();
+    let roots = Roots {
+        font_images: &ICON_SHEETS,
+        ..Roots::NONE
+    };
+    write(&rom, &roots, &mut writer).expect("a well-formed sheet");
+    assert_eq!(writer.len(), 1);
+
+    let entry = image(&rom.reader(), &ICON_SHEET).expect("a well-formed root");
+    assert_eq!(
+        entry.kind,
+        EntryKind::Image {
+            width: 128,
+            height: 32,
+            bit_depth: 4,
+        }
+    );
+    let at = |x: usize, y: usize| entry.payload[y * 128 + x];
+    // Tile 17 sits at pixel (8, 8): the low nibble is the left pixel.
+    assert_eq!(at(8, 8), 1);
+    assert_eq!(at(9, 8), 2);
+    assert_eq!(at(8 + 1, 8 + 7), 3);
+    assert_eq!(entry.payload.iter().filter(|&&p| p != 0).count(), 3);
+}
+
+#[test]
+fn a_keypad_sheet_past_the_image_is_truncated() {
+    let rom = rom();
+    let root = ImageRoot {
+        addr: GbaPtr::at(ROM_BASE + 0x00FF_FFF0),
+        ..ICON_SHEET
+    };
+    let err = image(&rom.reader(), &root).unwrap_err();
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
 }

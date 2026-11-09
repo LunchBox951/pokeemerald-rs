@@ -414,6 +414,14 @@ impl PlayerState {
         self.forced_input_tile_center
     }
 
+    /// Ends the keypad's moving streak after a step upstream drives as held
+    /// movement, which leaves `runningState` at `NOT_MOVING`
+    /// (`field_player_avatar.c:353-379`), so a held direction that differs from
+    /// the facing turns first (`CheckMovementInputNotOnBike`, `:587-595`).
+    pub const fn end_movement_streak(&mut self) {
+        self.movement_streak_active = false;
+    }
+
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
@@ -473,6 +481,16 @@ impl PlayerState {
     #[must_use]
     pub const fn run_pose_held(&self) -> bool {
         matches!(self.rest_pose, RestPose::RunPaused)
+    }
+
+    /// Returns whether the avatar carries `PLAYER_AVATAR_FLAG_DASH`: a held-B run was dispatched
+    /// and no later keypad poll has cleared it (`PlayerStep`'s `npc_clear_strange_bits`,
+    /// `field_player_avatar.c:384-391`, runs once the run's held action has finished, and
+    /// `MovePlayerAvatarUsingKeypadInput` sets it again for a continuing run, `:658-663`).
+    /// That is the run's crossing in flight, plus the finished run's held pose until the next poll.
+    #[must_use]
+    pub const fn dashing(&self) -> bool {
+        (self.in_transit() && self.transit_running()) || self.run_pose_held()
     }
 
     /// Drops a finished run's held neutral pose, as a field lock does

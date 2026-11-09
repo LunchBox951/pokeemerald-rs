@@ -259,9 +259,12 @@ pub struct TextWindowRoots {
     pub window_palettes: GbaPtr,
 }
 
-/// Interface palettes the no-save menus need.
+/// Interface art: the text printer's down-arrow sheet and the palettes the
+/// no-save menus need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceRoots {
+    /// Every `interface/image/*` sheet.
+    pub images: &'static [ImageRoot],
     /// Every `interface/palette/*` bank.
     pub palettes: &'static [PaletteRoot],
 }
@@ -584,6 +587,26 @@ pub struct NamingScreenRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
+/// The party menu's graphics (`graphics/party_menu`).
+///
+/// The fixed 14 `party-menu/` pack records the checkout extractor emits: the
+/// background, Poké Ball, and held-item sheets (`image`), their palettes, and
+/// eight maps (`raw`): the background screen, five slot panels, and two
+/// buttons. The background sheet, palette and screen and the Poké Ball sheet
+/// and palette are LZ77 streams (`src/graphics.c:1111-1117`); the slot maps,
+/// buttons, and held-item sheet and palette are raw (`src/data/party_menu.h`).
+/// The background sheet is stored as its first 62 tiles, which the pack
+/// publishes as an 8x496 strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartyMenuRoots {
+    /// Every `party-menu/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `party-menu/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `party-menu/raw/*` map.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -697,9 +720,11 @@ pub struct Roots {
     pub layouts: &'static [MapLayoutRoot],
     /// The five Latin glyph sheets.
     pub fonts: &'static [FontRoot],
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: &'static [ImageRoot],
     /// Text-window frames and palettes.
     pub text_window: TextWindowRoots,
-    /// Interface palettes.
+    /// Interface images and palettes.
     pub interface: InterfaceRoots,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioRoots,
@@ -721,6 +746,8 @@ pub struct Roots {
     pub battle_interface: BattleInterfaceRoots,
     /// The naming screen's sheets, palettes, and tilemaps.
     pub naming_screen: NamingScreenRoots,
+    /// The party menu's sheets, palettes, and maps.
+    pub party_menu: PartyMenuRoots,
     /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
@@ -752,12 +779,16 @@ impl Roots {
         },
         layouts: &[],
         fonts: &[],
+        font_images: &[],
         text_window: TextWindowRoots {
             images: &[],
             palettes: &[],
             window_palettes: GbaPtr::AT_BASE,
         },
-        interface: InterfaceRoots { palettes: &[] },
+        interface: InterfaceRoots {
+            images: &[],
+            palettes: &[],
+        },
         audio: AudioRoots {
             song_table: GbaPtr::AT_BASE,
             songs: &[],
@@ -776,6 +807,7 @@ impl Roots {
         evolution_scene: EvolutionSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
         naming_screen: NamingScreenRoots::NONE,
+        party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
@@ -796,13 +828,16 @@ impl Roots {
             })
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
+            .chain(self.font_images.iter())
             .chain(self.text_window.images.iter())
+            .chain(self.interface.images.iter())
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
             .chain(self.evolution_scene.images.iter())
             .chain(self.battle_interface.images.iter())
             .chain(self.naming_screen.images.iter())
+            .chain(self.party_menu.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -841,6 +876,7 @@ impl Roots {
             .chain(self.evolution_scene.palettes.iter())
             .chain(self.battle_interface.palettes.iter())
             .chain(self.naming_screen.palettes.iter())
+            .chain(self.party_menu.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -927,6 +963,15 @@ impl BattleInterfaceRoots {
 
 impl NamingScreenRoots {
     /// No naming-screen roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl PartyMenuRoots {
+    /// No party-menu roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
         images: &[],
         palettes: &[],

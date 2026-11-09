@@ -15,11 +15,13 @@ mod field_message;
 mod layout;
 mod naming_screen;
 mod opening_scene;
+mod party_menu;
 mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;
+mod text_printer;
 mod trainer_battler;
 mod trainer_pic;
 

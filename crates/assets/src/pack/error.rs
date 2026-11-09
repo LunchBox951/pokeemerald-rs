@@ -153,6 +153,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A party-menu graphics entry differs from the upstream graphic's shape.
+    MalformedPartyMenuAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battle-effect sprite entry differs from the upstream graphic's shape.
     MalformedBattleEffectAsset {
         /// Asset id.
@@ -169,6 +176,13 @@ pub enum PackError {
     },
     /// An ordinary-bag entry differs from the upstream graphic's shape.
     MalformedBagAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The text printer's down-arrow sheet differs from the upstream graphic's shape.
+    MalformedTextPrinterAsset {
         /// Asset id.
         id: String,
         /// What differs from the expected shape.
@@ -351,6 +365,9 @@ impl fmt::Display for PackError {
             Self::MalformedBattleInterfaceAsset { id, detail } => {
                 write!(f, "asset pack: battle interface entry `{id}` {detail}")
             }
+            Self::MalformedPartyMenuAsset { id, detail } => {
+                write!(f, "asset pack: party-menu entry `{id}` {detail}")
+            }
             Self::MalformedBattleEffectAsset { id, detail } => {
                 write!(f, "asset pack: battle-effect entry `{id}` {detail}")
             }
@@ -359,6 +376,9 @@ impl fmt::Display for PackError {
             }
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
+            }
+            Self::MalformedTextPrinterAsset { id, detail } => {
+                write!(f, "asset pack: text-printer entry `{id}` {detail}")
             }
             Self::AudioDecode { id, source } => {
                 write!(
@@ -441,9 +461,11 @@ impl std::error::Error for PackError {
             | Self::MalformedEvolutionSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
+            | Self::MalformedPartyMenuAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
-            | Self::MalformedBagAsset { .. } => None,
+            | Self::MalformedBagAsset { .. }
+            | Self::MalformedTextPrinterAsset { .. } => None,
         }
     }
 }

@@ -708,6 +708,13 @@ mod tests {
             (SpeciesId::BRELOOM, SLOT_1),
             (SpeciesId::SLAKOTH, SLOT_0),
             (SpeciesId::SLAKING, SLOT_1),
+            // Miguel's Skitty carries Cute Charm in both slots, which the
+            // turn engine now models (`ABILITY_CUTE_CHARM`,
+            // `battle_util.c:2851`-`:2870`).
+            (SpeciesId::SKITTY, SLOT_0),
+            (SpeciesId::SKITTY, SLOT_1),
+            (SpeciesId::DELCATTY, SLOT_0),
+            (SpeciesId::CLEFAIRY, SLOT_0),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,
@@ -788,9 +795,9 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            screen(&[member(ItemId::NONE), member(ItemId::SITRUS_BERRY)]),
             Err(crate::error::BattleError::UnsupportedHeldItem(
-                ItemId::ORAN_BERRY
+                ItemId::SITRUS_BERRY
             ))
         );
     }
