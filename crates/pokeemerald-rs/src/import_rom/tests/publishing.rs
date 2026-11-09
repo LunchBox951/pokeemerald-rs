@@ -4,7 +4,9 @@
 use std::ffi::OsStr;
 use std::fs;
 
-use super::super::{import_to_with, ImportRomError};
+use super::super::import_to_with;
+#[cfg(unix)]
+use super::super::ImportRomError;
 use super::support::{fake_pack, file_names, SourceRom, TempDir};
 
 #[test]
@@ -336,7 +338,11 @@ fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask(
     let outer = dir.join("one");
     let inner = outer.join("two");
     let pack_path = inner.join("pokeemerald.pack");
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let no_procfs = std::env::var_os(NESTED_NO_PROCFS_CHILD).is_some();
+    // Only Linux and Android have a procfs route to withhold.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let no_procfs = false;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let _no_procfs = no_procfs.then(super::super::dest::procfs_unavailable::make_unavailable);
     // Whether mode bits bind this process, asked of the outcome.
