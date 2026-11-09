@@ -5,23 +5,30 @@ use super::*;
 #[test]
 fn order_by_depth_breaks_a_subpriority_tie_by_lower_screen_y() {
     let at = |y: u8, bank: u8| {
-        OamEntry::new(
-            120,
-            y,
+        SheetSprite::new(
+            OamEntry::new(
+                120,
+                y,
+                0,
+                bank,
+                rendering::BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Vertical,
+                2,
+                2,
+                true,
+            ),
             0,
-            bank,
-            rendering::BitDepth::Bpp4,
-            false,
-            false,
-            rendering::ObjShape::Vertical,
-            2,
-            2,
-            true,
         )
     };
     let player = at(64, 0);
     let npc = at(70, 1);
-    assert_eq!(subpriority(player, 3), subpriority(npc, 3), "tie premise");
+    assert_eq!(
+        subpriority(player.oam(), 3),
+        subpriority(npc.oam(), 3),
+        "tie premise"
+    );
     let ordered = order_by_depth(&[(player, 3), (npc, 3)]);
     assert_eq!(
         ordered[0].palette_bank(),
@@ -34,18 +41,21 @@ fn order_by_depth_breaks_a_subpriority_tie_by_lower_screen_y() {
 #[test]
 fn order_by_depth_keeps_transparent_higher_priority_entry_from_raising_player() {
     let at = |tile: u16, priority: u8| {
-        OamEntry::new(
-            120,
-            64,
+        SheetSprite::new(
+            OamEntry::new(
+                120,
+                64,
+                tile,
+                0,
+                rendering::BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Square,
+                0,
+                priority,
+                true,
+            ),
             tile,
-            0,
-            rendering::BitDepth::Bpp4,
-            false,
-            false,
-            rendering::ObjShape::Square,
-            0,
-            priority,
-            true,
         )
     };
     // Tile 0 is opaque (index 1); tile 1 is fully transparent.
@@ -57,7 +67,10 @@ fn order_by_depth_keeps_transparent_higher_priority_entry_from_raising_player() 
     let palette = rendering::Palette::new(colors);
     let player = at(0, 2);
     let npc = at(1, 1);
-    let ordered = order_by_depth(&[(player, 3), (npc, 4)]);
+    let ordered: Vec<rendering::OamEntry> = order_by_depth(&[(player, 3), (npc, 4)])
+        .into_iter()
+        .map(SheetSprite::oam)
+        .collect();
     let pixel = rendering::SpriteLayer::new(&ordered, &tiles, &tiles, &palette)
         .resolve_pixel(122, 66)
         .expect("player texel is opaque");

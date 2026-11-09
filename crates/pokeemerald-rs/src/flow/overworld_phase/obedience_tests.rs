@@ -8,6 +8,7 @@ use engine::overworld::wild_encounter::WildEncounter;
 use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 
+use super::wild_battle::WildBattle;
 use super::{ActiveBattle, OverworldPhase};
 
 const WURMPLE: assets::SpeciesId = assets::SpeciesId(290);
@@ -42,7 +43,7 @@ fn a_wild_battle_carries_the_players_identity_and_no_badges() {
         level: 2,
         slot: 0,
     }));
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the wild battle must start");
     };
     assert_eq!(battle.player_obedience(), Some(&want));
@@ -60,7 +61,7 @@ fn badge_flags_change_the_carried_limit() {
         level: 2,
         slot: 0,
     }));
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the wild battle must start");
     };
     assert_eq!(battle.player_obedience(), Some(&want));

@@ -100,6 +100,31 @@ fn an_old_build_save_back_at_the_same_position_leaves_the_pair_untrusted() {
     );
 }
 
+/// An upstream-origin image -- `active` and `isPlayer` set, coordinates
+/// matching `pos`, no marker, no port stamp (its `initialCoords` hold
+/// upstream's own spawn coordinates) -- keeps its `(0, 4)` pair through a
+/// load: only a marked record is held to the counter stamp.
+#[test]
+fn a_pristine_upstream_image_is_adopted_without_a_generation_stamp() {
+    let mut store = SaveStore::new();
+    let block1 = sample_block1();
+    store.save(&block1, &sample_block2());
+    let base = &mut store.base_block1;
+    let slot = 0xA30;
+    base[slot..slot + 0x24].fill(0);
+    base[slot] = 0x01; // active:1
+    base[slot + 0x02] = 0x01; // isPlayer:1
+    base[slot + 0x0B] = 0x40; // current 0, previous 4
+    base[slot + 0x0C..slot + 0x10].copy_from_slice(&[0x05, 0x00, 0x07, 0x00]);
+    // `currentCoords` = `pos` + `MAP_OFFSET` (7): (17, -13).
+    base[slot + 0x10..slot + 0x14].copy_from_slice(&[17, 0, 0xF3, 0xFF]);
+
+    write_without_a_generation_stamp(&mut store, block1.pos);
+    let event = store.load().block1.player_object_event;
+    assert!(event.active, "an unmarked record carries no stamp to check");
+    assert_eq!((event.current_elevation, event.previous_elevation), (0, 4));
+}
+
 #[test]
 fn save_then_load_round_trips_identical_state() {
     let mut store = SaveStore::new();

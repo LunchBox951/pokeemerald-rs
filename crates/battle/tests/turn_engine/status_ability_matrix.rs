@@ -1,5 +1,5 @@
-//! This Status1-only matrix pins the Limber (paralysis), Immunity (poison), and
-//! Water Veil (burn) admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
+//! This Status1-only matrix pins the Limber (paralysis), Immunity (poison),
+//! Water Veil (burn), and Magma Armor (freeze) admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
 //! refused, as its move-end cure is unmodelled; `participant_admission.rs`
 //! covers that volatile. Every other ability here is admitted, whether
 //! modelled or deferred.
@@ -14,11 +14,15 @@ use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
 
-const STATUSES: [Status1; 4] = [
+const STATUSES: [Status1; 8] = [
     Status1::Healthy,
     Status1::Paralysed,
     Status1::Poisoned,
+    Status1::BadPoisoned { counter: 0 },
+    Status1::BadPoisoned { counter: 5 },
+    Status1::BadPoisoned { counter: 15 },
     Status1::Burned,
+    Status1::Frozen,
 ];
 
 /// Columns: name, species, saved ability slot, expected ability, and the one
@@ -87,7 +91,7 @@ const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
         SpeciesId::SLUGMA,
         0,
         AbilityId::MAGMA_ARMOR,
-        None,
+        Some(Status1::Frozen),
     ),
     (
         "flash fire",
@@ -122,9 +126,14 @@ fn opponent() -> BattlePokemon {
 }
 
 #[test]
-fn the_status1_matrix_refuses_exactly_the_limber_immunity_and_water_veil_cures() {
+fn the_status1_matrix_refuses_exactly_the_limber_immunity_water_veil_and_magma_armor_cures() {
     for (name, species, slot, ability, refused) in MATRIX {
         for status in STATUSES {
+            // Immunity's cure covers bad poison too, so it refuses every
+            // counter beside its one listed status (`battle_util.c:2878`-`:2883`).
+            let refuses = refused == Some(status)
+                || (ability == AbilityId::IMMUNITY
+                    && matches!(status, Status1::BadPoisoned { .. }));
             let mon = holder(species, slot, status);
             assert_eq!(mon.ability(), ability, "{name} fixture ability");
             let mon_speed = mon.speed_for_turn_order();
@@ -136,13 +145,13 @@ fn the_status1_matrix_refuses_exactly_the_limber_immunity_and_water_veil_cures()
             );
             // A refusal draws nothing, so its script is oversupplied on
             // purpose; an admission draws only the seed.
-            let mut rng = SequenceRng::new(if refused == Some(status) {
+            let mut rng = SequenceRng::new(if refuses {
                 vec![0, 0]
             } else {
                 admission_script(false)
             });
             let result = Battle::new(Dex::new(), mon, enemy, false, &mut rng);
-            if refused == Some(status) {
+            if refuses {
                 assert!(
                     matches!(
                         result,
@@ -165,7 +174,14 @@ fn guts_and_marvel_scale_read_each_representable_status() {
     use battle::damage::MoveCategory::Physical;
     // Both abilities scale the raw stat by 150% with integer truncation
     // (`pokemon.c:3211-3214`).
-    for status in [Status1::Paralysed, Status1::Poisoned, Status1::Burned] {
+    for status in [
+        Status1::Paralysed,
+        Status1::Poisoned,
+        Status1::BadPoisoned { counter: 0 },
+        Status1::BadPoisoned { counter: 15 },
+        Status1::Burned,
+        Status1::Frozen,
+    ] {
         let healthy_guts = holder(SpeciesId::RATTATA, 1, Status1::Healthy);
         let sick_guts = holder(SpeciesId::RATTATA, 1, status);
         let base = healthy_guts.attacking_stat(Physical).0;

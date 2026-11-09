@@ -1,8 +1,7 @@
 use std::ops::Range;
 
 use super::super::{
-    from_save_pokemon, hp_hidden_by_load, merge_into_save_pokemon, to_save_pokemon, unpack_ivs,
-    LoadedLead, MAIL_NONE,
+    from_save_pokemon, merge_into_save_pokemon, to_save_pokemon, unpack_ivs, LoadedLead, MAIL_NONE,
 };
 use super::common::{
     retained_evs, stored_record_with_retained_fields, treecko_fixture, EXPECTED_ATTACK_PP_OFFSET,
@@ -107,23 +106,18 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
             stored.special_attack,
             stored.special_defense,
         ],
-        "the EV-trained stat block is the save's, not the 0-EV block this \
-         port recomputes"
-    );
-    assert_ne!(
-        merged.max_hp,
-        u16::try_from(loaded.battler().stats().max_hp).unwrap(),
-        "fixture sanity: recomputing the block really would have moved it"
+        "the EV-trained stat block is the save's, adopted and written back \
+         rather than recomputed"
     );
     assert_eq!(
-        merged.hp,
-        u16::try_from(loaded.battler().current_hp()).unwrap(),
-        "current HP is battle state, so it is the battler's either way"
+        loaded.battler().cached_stats().max_hp,
+        u32::from(stored.max_hp),
+        "the battler carries the saved block, not a zero-EV rebuild of it"
     );
-    assert!(
-        merged.hp <= merged.max_hp,
-        "and cannot contradict a retained maximum: the model's own maximum \
-         is the 0-EV one, and EVs only add"
+    assert_eq!(
+        (merged.hp, merged.max_hp),
+        (22, 38),
+        "the saved 31 HP less 9 damage, against the saved maximum"
     );
 }
 
@@ -138,6 +132,7 @@ fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
     const STATUS1_NONE: u32 = 0;
     const STATUS1_POISON: u32 = 8;
     const STATUS1_BURN: u32 = 16;
+    const STATUS1_FREEZE: u32 = 32;
     const STATUS1_PARALYSIS: u32 = 64;
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();
@@ -145,7 +140,11 @@ fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
     for (in_battle_status, expected_word) in [
         (battle::Status1::Poisoned, STATUS1_POISON),
         (battle::Status1::Burned, STATUS1_BURN),
+        (battle::Status1::Frozen, STATUS1_FREEZE),
         (battle::Status1::Paralysed, STATUS1_PARALYSIS),
+        (battle::Status1::BadPoisoned { counter: 0 }, 0x80),
+        (battle::Status1::BadPoisoned { counter: 5 }, 0x580),
+        (battle::Status1::BadPoisoned { counter: 15 }, 0xF80),
         (battle::Status1::Asleep { turns: 3 }, 3),
         (battle::Status1::Asleep { turns: 0 }, STATUS1_NONE),
         (battle::Status1::Healthy, STATUS1_NONE),
@@ -222,12 +221,21 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
     let stored = stored_record_with_retained_fields();
     let mut loaded =
         LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("the fixture must decode");
-    assert_ne!(
-        stored.max_hp,
-        u16::try_from(loaded.battler().stats().max_hp).unwrap(),
-        "fixture sanity: the stored block carries an EV contribution the \
-         model cannot rebuild, so a re-derived block would differ"
+    let zero_ev = battle::compute_stats_with_evs(
+        loaded.battler().species(),
+        dex.species(loaded.battler().species()).unwrap(),
+        loaded.battler().level(),
+        loaded.battler().nature(),
+        loaded.battler().ivs(),
+        battle::Evs::default(),
     );
+    assert_ne!(
+        u32::from(stored.max_hp),
+        zero_ev.max_hp,
+        "fixture sanity: the stored block differs from a rebuilt one, so \
+         adopting it verbatim is what keeps the bytes"
+    );
+    assert_eq!(loaded.battler().stats().max_hp, u32::from(stored.max_hp));
 
     let merged = loaded.merge_and_save(&dex);
 
@@ -249,6 +257,130 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
     let mut reloaded = LoadedLead::load(&dex, std::slice::from_ref(&merged))
         .expect("the re-saved record must decode");
     assert_eq!(reloaded.merge_and_save(&dex).to_bytes(), stored.to_bytes());
+}
+
+/// An untouched frozen lead (`STATUS1_FREEZE`, `0x20`) re-saves as the same
+/// 100 bytes; a thaw changes the status word and nothing else.
+#[test]
+fn a_frozen_record_re_saves_byte_for_byte_and_a_thaw_writes_only_a_zero_word() {
+    let dex = Dex::new();
+    let mut stored = stored_record_with_retained_fields();
+    stored.status = 0x20;
+    let mut loaded =
+        LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("a frozen record decodes");
+    assert_eq!(loaded.battler().status1(), battle::Status1::Frozen);
+
+    assert_eq!(loaded.merge_and_save(&dex).to_bytes(), stored.to_bytes());
+
+    loaded.battler_mut().set_status1(battle::Status1::Healthy);
+    let thawed = loaded.merge_and_save(&dex);
+    let mut expected = stored;
+    expected.status = 0;
+    assert_eq!(thawed.status, 0);
+    assert_eq!(
+        thawed.to_bytes(),
+        expected.to_bytes(),
+        "a thaw changes the status word and no other byte"
+    );
+}
+
+/// An untouched badly poisoned lead re-saves as the same 100 bytes for every
+/// counter; a cure changes the status word and nothing else.
+#[test]
+fn a_bad_poison_record_re_saves_byte_for_byte_and_a_cure_writes_only_a_zero_word() {
+    let dex = Dex::new();
+    for counter in 0u32..=15 {
+        let mut stored = stored_record_with_retained_fields();
+        stored.status = 0x80 | counter << 8;
+        let mut loaded = LoadedLead::load(&dex, std::slice::from_ref(&stored))
+            .expect("a badly poisoned record decodes");
+
+        let first = loaded.merge_and_save(&dex);
+        assert_eq!(first.to_bytes(), stored.to_bytes(), "counter {counter}");
+        assert_eq!(loaded.merge_and_save(&dex).to_bytes(), first.to_bytes());
+
+        loaded.battler_mut().set_status1(battle::Status1::Healthy);
+        let cured = loaded.merge_and_save(&dex);
+        let mut expected = stored;
+        expected.status = 0;
+        assert_eq!(
+            cured.to_bytes(),
+            expected.to_bytes(),
+            "a cure must not resurrect the retained toxic word"
+        );
+    }
+}
+
+/// Zeroes for construction's seed, the turn's start and selection draws and
+/// the lead's one hit (accuracy, crit, roll, secondary). A draw past the
+/// script panics rather than looping on a constant.
+struct Script(std::vec::IntoIter<u16>);
+
+impl battle::BattleRng for Script {
+    fn next_u16(&mut self) -> u16 {
+        self.0.next().expect("the script covers every draw")
+    }
+}
+
+/// The toxic residual advances the battle's own counter and writes nothing
+/// back (`pokeemerald/src/battle_util.c:1536-1549`), so a lead that lived
+/// through badly poisoned turns saves the party's stored word: `0x580` stays
+/// `0x580`, not `0x680`, and the HP the residual took still reaches the save.
+#[test]
+fn a_bad_poison_lead_that_took_residual_ticks_saves_its_stored_word() {
+    use battle::{Battle, PlayerAction};
+
+    let dex = Dex::new();
+    for (word, first_tick_counter) in [(0x80u32, 1u32), (0x580, 6)] {
+        let mut stored = to_save_pokemon(&dex, &treecko_fixture());
+        stored.status = word;
+        let mut loaded = LoadedLead::load(&dex, std::slice::from_ref(&stored))
+            .expect("a badly poisoned record decodes");
+        let hp_before = loaded.battler().current_hp();
+        let max_hp = loaded.battler().stats().max_hp;
+
+        let enemy = battle::BattlePokemon::new(
+            &dex,
+            assets::SpeciesId::ZIGZAGOON,
+            50,
+            Ivs {
+                hp: 0,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            0,
+            vec![assets::MoveId::SPLASH],
+        )
+        .unwrap();
+        let mut rng = Script(vec![0; 12].into_iter());
+        let mut battle =
+            Battle::new(Dex::new(), loaded.take_battler(), enemy, false, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        let lost = events
+            .iter()
+            .find_map(|event| match event {
+                battle::BattleEvent::HurtByPoison {
+                    by_player: true,
+                    damage,
+                } => Some(*damage),
+                _ => None,
+            })
+            .expect("the toxic tick fired");
+        assert_eq!(lost, (max_hp / 16).max(1) * first_tick_counter);
+        let mut after = battle.player().clone();
+        after.clear_battle_scratch();
+        loaded.restore_battler(after);
+
+        let saved = loaded.merge_and_save(&dex);
+
+        assert_eq!(saved.status, word, "the residual never reaches the word");
+        assert_eq!(u32::from(saved.hp), hp_before - lost);
+    }
 }
 
 #[test]
@@ -289,36 +421,23 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
             evs,
         )
     };
-    let old_floor = recompute(stored.level, battle::Evs::default()).max_hp;
-    let gap_old = u32::from(stored.max_hp) - old_floor;
-    let gap_new = u32::from(merged.max_hp) - loaded.battler().stats().max_hp;
-    let rebased_offset =
-        u16::try_from(gap_new - gap_old).expect("the fixture's EVs keep this well under u16::MAX");
     assert_eq!(
-        merged.hp,
-        u16::try_from(loaded.battler().current_hp()).unwrap() + rebased_offset,
-        "the level-up moved the EV-aware gap, so the saved HP carries that \
-         movement even though nothing was clamped at load"
+        (merged.hp, merged.max_hp),
+        (23, 41),
+        "31 + (41 - 38) - 11: the max-HP delta against the saved cache, then \
+         the damage"
     );
     assert_ne!(merged.hp, stored.hp, "fixture sanity: the damage is real");
 
-    // The recomputed block is EV-aware -- fed the fixture's own retained EV
-    // bytes through `CalculateMonStats`'s formula, not the battler's `0`-EV
-    // `loaded.battler().stats()` cache: only this save-time recompute is EV-aware, the
-    // live cache stays `0`-EV for the whole battle.
+    // The level-up replaced the cache from the record's own EVs
+    // (`CalculateMonStats`); the save writes that block back.
     let expected = recompute(loaded.battler().level(), retained_evs());
     assert_eq!(
         merged.max_hp,
         u16::try_from(expected.max_hp).unwrap(),
-        "a level-up moved what the cached block is a function of, so the \
-         block is recomputed from the record's retained EV bytes"
+        "a level-up replaced the cache from the record's retained EV bytes"
     );
-    assert_ne!(
-        merged.max_hp,
-        u16::try_from(loaded.battler().stats().max_hp).unwrap(),
-        "fixture sanity: the retained hp EV (252) really does raise the \
-         saved block above the battler's own 0-EV cache"
-    );
+    assert_eq!(loaded.battler().cached_stats(), expected);
     assert_ne!(
         merged.max_hp, stored.max_hp,
         "fixture sanity: the retained block would have been the level-12 one"
@@ -357,12 +476,11 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
          unchanged -- nothing in this session called `gain_evs`"
     );
 
-    let mut expected_reloaded = loaded.battler().clone();
-    expected_reloaded.heal_hp(u32::from(rebased_offset));
     let reloaded = from_save_pokemon(&dex, &merged).expect("the merge must decode again");
     assert_eq!(
-        reloaded, expected_reloaded,
-        "and back out as the same battler, plus the rebased offset's point"
+        reloaded,
+        *loaded.battler(),
+        "and back out as the same battler"
     );
 }
 
@@ -386,7 +504,7 @@ fn a_slot_holding_a_different_pokemon_is_rebuilt_rather_than_overlaid() {
     .unwrap()
     .with_original_trainer_id(lead.original_trainer_id());
     assert_eq!(
-        merge_into_save_pokemon(&dex, &swapped_personality, &stored, &mut 0),
+        merge_into_save_pokemon(&dex, &swapped_personality, &stored),
         to_save_pokemon(&dex, &swapped_personality),
         "a different personality is a different mon"
     );
@@ -395,7 +513,7 @@ fn a_slot_holding_a_different_pokemon_is_rebuilt_rather_than_overlaid() {
         .clone()
         .with_original_trainer_id(DIFFERENT_ORIGINAL_TRAINER_ID);
     assert_eq!(
-        merge_into_save_pokemon(&dex, &traded_away, &stored, &mut 0),
+        merge_into_save_pokemon(&dex, &traded_away, &stored),
         to_save_pokemon(&dex, &traded_away),
         "so is a different original trainer -- it is half the XOR key"
     );
@@ -412,7 +530,7 @@ fn an_empty_slot_is_built_from_scratch() {
         "fixture sanity: the identity gate alone would let this through, so \
          the species check is what decides"
     );
-    let built = merge_into_save_pokemon(&dex, &mon, &empty, &mut 0);
+    let built = merge_into_save_pokemon(&dex, &mon, &empty);
     assert_eq!(built, to_save_pokemon(&dex, &mon));
     assert_eq!(built.mail, MAIL_NONE, "an empty slot has no mail to keep");
 }
@@ -434,12 +552,7 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     let lead = from_save_pokemon(&dex, &stored)
         .expect("the fixture must decode")
         .with_ability_slot(1);
-    let merged = merge_into_save_pokemon(
-        &dex,
-        &lead,
-        &stored,
-        &mut hp_hidden_by_load(&dex, &stored, &lead),
-    );
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
 
     let merged_word = u32::from_le_bytes(
         merged.box_data.substructures().unwrap().misc[EXPECTED_MISC_IV_WORD]
@@ -465,12 +578,39 @@ fn merge_into_save_pokemon_heals_a_stale_clear_has_species_bit() {
     let mut stale = to_save_pokemon(&dex, &mon);
     stale.box_data.set_has_species(false);
 
-    let mut offset = hp_hidden_by_load(&dex, &stale, &mon);
-    let merged = merge_into_save_pokemon(&dex, &mon, &stale, &mut offset);
+    let merged = merge_into_save_pokemon(&dex, &mon, &stale);
 
     assert!(
         merged.box_data.has_species(),
         "a merge over a stale record must set hasSpecies, or the slot stays \
          checksum-valid but empty to Emerald-compatible readers"
     );
+}
+
+/// `LoadPlayerParty`/`SavePlayerParty` copy the record (`load_save.c:160-178`),
+/// so an experience word above the level-100 threshold survives an untouched
+/// Continue then SAVE; only `Cmd_getexp` caps it.
+#[test]
+fn an_experience_word_above_the_level_100_threshold_round_trips_untouched() {
+    let dex = Dex::new();
+    let mut stored = stored_record_with_retained_fields();
+    let growth_rate = dex.species(TREECKO).unwrap().growth_rate;
+    let level_100 = assets::experience_for_level(growth_rate, 100).unwrap();
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.growth[EXPECTED_GROWTH_EXPERIENCE]
+        .copy_from_slice(&(level_100 + 1).to_le_bytes());
+    stored.box_data.set_substructures(&substructures);
+    stored.level = 100;
+    let mut loaded =
+        LoadedLead::load(&dex, std::slice::from_ref(&stored)).expect("the fixture must decode");
+    assert_eq!(loaded.battler().experience(), level_100 + 1);
+
+    let merged = loaded.merge_and_save(&dex);
+
+    let word = merged.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_EXPERIENCE]
+        .try_into()
+        .map(u32::from_le_bytes)
+        .unwrap();
+    assert_eq!(word, level_100 + 1, "the raw experience word is preserved");
+    assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
