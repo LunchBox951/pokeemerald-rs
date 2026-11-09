@@ -27,10 +27,11 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// refused here instead of failing at the missing entry.
 /// Version 13 added the `font/keypad_icons` image, so an older pack is refused
 /// here instead of failing at the missing entry.
-/// Version 14 added the `trainer-defeat-speech/table` and
-/// `trainer-class-name/table` raw payloads, so an older pack is refused here
-/// instead of failing at the missing entry.
-pub const FORMAT_VERSION: u32 = 14;
+/// Version 14 added the `trainer-defeat-speech/table` raw payload, so an older
+/// pack is refused here instead of failing at the missing entry.
+/// Version 15 added the `trainer-class-name/table` raw payload, so an older
+/// pack is refused here instead of failing at the missing entry.
+pub const FORMAT_VERSION: u32 = 15;
 
 /// The pack's location, relative to the repository root: a top-level,
 /// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
@@ -113,7 +114,7 @@ mod tests {
     #[test]
     fn magic_and_version_are_the_published_values() {
         assert_eq!(&MAGIC, b"PKMRPACK");
-        assert_eq!(FORMAT_VERSION, 14);
+        assert_eq!(FORMAT_VERSION, 15);
     }
 
     #[test]

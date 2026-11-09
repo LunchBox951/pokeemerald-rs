@@ -354,9 +354,13 @@ fn accessor_valid_missing_wrong_kind_and_malformed() {
     ));
 }
 
+/// A pack stamped with the version before the class table landed (#3229's
+/// extractor writes version 14 without `trainer-class-name/table`) is refused
+/// at load as stale, not accepted and failed at lookup.
 #[test]
-fn a_pack_from_before_the_table_format_is_refused_on_load() {
-    const PREVIOUS_FORMAT_VERSION: u32 = 13;
+fn a_pack_from_before_the_class_table_is_refused_on_load() {
+    const PREVIOUS_FORMAT_VERSION: u32 = 14;
+    assert_ne!(pack_format::FORMAT_VERSION, PREVIOUS_FORMAT_VERSION);
     let path = write_synthetic_pack("trainer-class-name-previous-version");
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[8..12].copy_from_slice(&PREVIOUS_FORMAT_VERSION.to_le_bytes());
