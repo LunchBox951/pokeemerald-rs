@@ -83,3 +83,10 @@ battle = { path = "../battle", features = ["test-support"] }
 # dev-dependency entry: `title`'s tile round-trip test, which proves
 # `title::pack_tile_bytes` is the exact inverse of
 # `pack_format::image_entry_from_tiles`, reaches it through that.
+
+# rustix's `thread` feature, for tests only: `import_rom`'s rollback tests
+# fail a created level's owner-access restore for real by unsharing the
+# test thread's descriptor table and dropping its DAC capabilities. Adds no
+# crate; production builds keep the features above.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1.1", default-features = false, features = ["thread"] }

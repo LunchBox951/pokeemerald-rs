@@ -99,6 +99,7 @@ fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_101_trigger_phase`] that retains the checkout pack, so the
@@ -111,6 +112,7 @@ fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
