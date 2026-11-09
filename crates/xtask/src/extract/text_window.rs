@@ -387,6 +387,110 @@ mod tests {
         }
     }
 
+    /// Whether the pack at `bytes` holds an entry whose directory id is
+    /// exactly `id`, of the kind the text-window extractor publishes for it.
+    fn check_pack_entry(bytes: &[u8], id: &str) -> Result<(), String> {
+        let entries = pack_format::parse_directory(bytes)
+            .map_err(|e| format!("pack does not parse: {e:?}"))?;
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| format!("missing pack entry id `{id}`"))?;
+        let kind_matches = match id.strip_prefix("text-window/image/") {
+            Some(stem) => {
+                let expected = expected_dimensions(stem);
+                matches!(
+                    entry.kind,
+                    pack_format::EntryKind::Image { width, height, .. }
+                        if width == expected.width && height == expected.height
+                )
+            }
+            None => matches!(
+                entry.kind,
+                pack_format::EntryKind::Palette { color_count }
+                    if usize::from(color_count) == COLORS_PER_GBA_PALETTE_BANK
+            ),
+        };
+        if kind_matches {
+            Ok(())
+        } else {
+            Err(format!(
+                "pack entry `{id}` has the wrong kind: {:?}",
+                entry.kind
+            ))
+        }
+    }
+
+    fn text_window_pack(entries: Vec<pack_format::PackEntry>) -> Vec<u8> {
+        let mut writer = pack_format::PackWriter::new();
+        for entry in entries {
+            writer.push(entry);
+        }
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn inventory_check_rejects_a_pack_holding_only_a_longer_id() {
+        let bytes = text_window_pack(vec![pack_format::raw_entry(
+            "text-window/image/10".to_owned(),
+            vec![0],
+        )]);
+        let err = check_pack_entry(&bytes, "text-window/image/1").unwrap_err();
+        assert!(err.contains("text-window/image/1`"), "{err}");
+    }
+
+    #[test]
+    fn inventory_check_rejects_an_id_that_only_appears_in_a_payload() {
+        let bytes = text_window_pack(vec![pack_format::raw_entry(
+            "text-window/other".to_owned(),
+            b"text-window/image/1".to_vec(),
+        )]);
+        assert!(check_pack_entry(&bytes, "text-window/image/1").is_err());
+    }
+
+    #[test]
+    fn inventory_check_rejects_an_entry_of_the_wrong_kind() {
+        let bytes = text_window_pack(vec![
+            pack_format::raw_entry("text-window/image/1".to_owned(), vec![0]),
+            pack_format::palette_entry("text-window/palette/1".to_owned(), &[0; 8]).unwrap(),
+        ]);
+        let err = check_pack_entry(&bytes, "text-window/image/1").unwrap_err();
+        assert!(err.contains("kind"), "{err}");
+        let err = check_pack_entry(&bytes, "text-window/palette/1").unwrap_err();
+        assert!(err.contains("kind"), "{err}");
+    }
+
+    #[test]
+    fn inventory_check_accepts_entries_of_the_published_kind() {
+        let (width, height) = (24, 24);
+        let bytes = text_window_pack(vec![
+            pack_format::image_entry(
+                "text-window/image/1".to_owned(),
+                width,
+                height,
+                4,
+                vec![0; 24 * 24],
+            )
+            .unwrap(),
+            pack_format::image_entry(
+                "text-window/image/message_box".to_owned(),
+                56,
+                16,
+                4,
+                vec![0; 56 * 16],
+            )
+            .unwrap(),
+            pack_format::palette_entry("text-window/palette/1".to_owned(), &[0; 16]).unwrap(),
+        ]);
+        for id in [
+            "text-window/image/1",
+            "text-window/image/message_box",
+            "text-window/palette/1",
+        ] {
+            check_pack_entry(&bytes, id).unwrap();
+        }
+    }
+
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn text_window_frames_are_extracted() {
@@ -407,12 +511,9 @@ mod tests {
         }
 
         for id in expected_ids {
-            assert!(
-                bytes
-                    .windows(id.len())
-                    .any(|window| window == id.as_bytes()),
-                "missing pack entry id `{id}`"
-            );
+            if let Err(problem) = check_pack_entry(&bytes, &id) {
+                panic!("{problem}");
+            }
         }
         let _ = std::fs::remove_file(report.output_path);
     }
