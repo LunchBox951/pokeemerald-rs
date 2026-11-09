@@ -29036,7 +29036,7 @@
           "status": "stubbed"
         },
         "BattleStringExpandPlaceholders": {
-          "reason": "battle_message.c:2312-:2764. Modelled for a single wild or trainer battle: the three buffers and string-variable copies, player and opponent nicknames, attacker, target, effect, active, and scripting battlers with the Foe or Wild prefix, current and original move (with the type-move fallback), last item and ability, battler abilities, trainer class, name, and defeat text (followed by the wait-for-input control), player name, and the Ally and Foe prefix selectors. A replacement is copied without being expanded again. Link, multi, double, frontier, Trainer Hill, e-Reader, secret-base, and partner selectors are refused with an error rather than printed empty.",
+          "reason": "battle_message.c:2312-:2764. Modelled for a single wild or trainer battle: the three buffers and string-variable copies, player and opponent nicknames, attacker, target, effect, active, and scripting battlers with the Foe or Wild prefix, current and original move (with the type-move fallback), last item and ability, battler abilities, trainer class, name, and defeat text (followed by the wait-for-input control), player name, and the Ally and Foe prefix selectors. A replacement is copied without being expanded again. Link, multi, double, frontier, Trainer Hill, e-Reader, secret-base, and partner selectors are refused with an error rather than printed empty. B_TXT_TRAINER1_CLASS expands the class as tokens (Trainer.class is a Vec<Token>), so the glyph tokens of a class name such as the rival's {PKMN} TRAINER survive to the printer; no consumer converts the class through a String.",
           "rust_target": "crates/pokeemerald-rs/src/battle_narration/expand.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -31112,7 +31112,10 @@
     "src/data/text/trainer_class_names.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gTrainerClassNames, the whole file (src/data/text/trainer_class_names.h:1-68, the file's only table): all 66 trainer class display names, one record per TRAINER_CLASS_* index 0x00-0x41 (include/constants/trainers.h:288-353), including the two unused PKMN_TRAINER classes. Extracted as raw charmap streams in the `trainer-class-name/table` pack entry (crates/xtask/src/extract/trainer_class_names.rs from the checkout, crates/rom-import/src/domains/trainer_class_names.rs from the ROM, byte-identical per crates/rom-import/tests/equivalence.rs against a hand-spelled expectation) and read by class through assets::TrainerClassNameTable via AssetPack::trainer_class_names. Glyph tokens stay charmap bytes: {PKMN} is the PK and MN glyph bytes 53 54, so TRAINER_CLASS_RIVAL decodes to those two glyph tokens followed by \" TRAINER\", and the e-acute and the male and female signs keep their own bytes. Classes sharing a display name keep separate records (the four {PKMN} TRAINER classes, the two COOLTRAINERs, the two TUBERs). The ROM table is the fixed-width array it is upstream (66 rows of 13 bytes: name, EOS, zero padding): the importer reads exactly the 858 bytes at the profile's one root, splits each row at its first token-boundary EOS, and refuses a row with no terminator or nonzero padding; the source extractor refuses a changed row width, a class added, dropped or renumbered in trainers.h, a name over 13 encoded bytes, and any preprocessor conditional in the table. battle_narration carries Trainer.class as tokens so the glyphs reach the printer (see src/battle_message.c#BattleStringExpandPlaceholders). NOT done: no overworld or battle-setup code selects a class name from a TrainerData yet, so no live battle prints one.",
+      "rust_target": "crates/assets/src/trainers.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/tilesets/graphics.h": {
       "category": "code.header",

@@ -1,5 +1,5 @@
-//! Typed trainer identities, encounter metadata, battle parties, and
-//! script-context defeat speeches.
+//! Typed trainer identities, encounter metadata, battle parties,
+//! script-context defeat speeches, and trainer class display names.
 
 use crate::error::AssetError;
 use crate::items::ItemId;
@@ -112,6 +112,11 @@ define_identity_constants! {
 impl TrainerClass {
     /// The number of trainer classes.
     pub const COUNT: u8 = 66;
+
+    /// Every class identity in index order, `0..`[`Self::COUNT`].
+    pub fn all() -> impl Iterator<Item = Self> {
+        (0..Self::COUNT).map(Self)
+    }
 
     /// Returns the numeric class identity.
     #[must_use]
@@ -23232,6 +23237,37 @@ impl<'a> TrainerDefeatSpeechTable<'a> {
     #[must_use]
     pub fn speech(&self, context: TrainerDefeatSpeechContext) -> &'a [u8] {
         self.streams[usize::from(context.id())]
+    }
+}
+
+/// The number of rows in `gTrainerClassNames`: one per [`TrainerClass`].
+pub const TRAINER_CLASS_NAME_COUNT: usize = 66;
+
+/// The width of one `gTrainerClassNames` row (`[13]`): the encoded name, its
+/// `EOS`, and zero padding.
+pub const TRAINER_CLASS_NAME_ROW_BYTES: usize = 13;
+
+/// The display name of every [`TrainerClass`], as charmap token streams
+/// borrowing the pack (`gTrainerClassNames`,
+/// `src/data/text/trainer_class_names.h`).
+///
+/// Streams end in `EOS` and keep glyph tokens such as `{PKMN}` as their
+/// charmap bytes, so the rival's name is the `PK` and `MN` glyphs followed by
+/// ` TRAINER`, not ordinary text. Classes that share a display name
+/// (`COOLTRAINER`, `TUBER`, and the `{PKMN} TRAINER` classes) keep separate
+/// records. `AssetPack::trainer_class_names` builds and validates the table;
+/// the pack module owns its encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrainerClassNameTable<'a> {
+    pub(crate) streams: [&'a [u8]; TRAINER_CLASS_NAME_COUNT],
+}
+
+impl<'a> TrainerClassNameTable<'a> {
+    /// The token stream of `class`, `EOS` included; `None` for a class
+    /// identity outside the table (`TrainerClass(66)` and above).
+    #[must_use]
+    pub fn name(&self, class: TrainerClass) -> Option<&'a [u8]> {
+        self.streams.get(usize::from(class.0)).copied()
     }
 }
 

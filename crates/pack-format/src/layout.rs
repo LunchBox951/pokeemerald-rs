@@ -27,8 +27,9 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// refused here instead of failing at the missing entry.
 /// Version 13 added the `font/keypad_icons` image, so an older pack is refused
 /// here instead of failing at the missing entry.
-/// Version 14 added the `trainer-defeat-speech/table` raw payload, so an older
-/// pack is refused here instead of failing at the missing entry.
+/// Version 14 added the `trainer-defeat-speech/table` and
+/// `trainer-class-name/table` raw payloads, so an older pack is refused here
+/// instead of failing at the missing entry.
 pub const FORMAT_VERSION: u32 = 14;
 
 /// The pack's location, relative to the repository root: a top-level,

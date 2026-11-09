@@ -461,6 +461,13 @@ pub struct TrainerDefeatSpeechPlan {
     pub speeches: Vec<TrainerDefeatSpeechRootPlan>,
 }
 
+/// The trainer class-name table's root, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerClassNamePlan {
+    /// The GBA bus address of `gTrainerClassNames`, 66 rows of 13 bytes.
+    pub addr: u32,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -686,6 +693,8 @@ pub struct ProfilePlan {
     pub field_messages: FieldMessagePlan,
     /// The trainer defeat-speech table.
     pub trainer_defeat_speeches: TrainerDefeatSpeechPlan,
+    /// The trainer class display-name table.
+    pub trainer_class_names: TrainerClassNamePlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
