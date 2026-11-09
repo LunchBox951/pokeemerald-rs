@@ -17,15 +17,15 @@ use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
-const NEEDS_PACK: &str = "needs a local pack: run `cargo xtask extract` first";
+pub(super) const NEEDS_PACK: &str = "needs a local pack: run `cargo xtask extract` first";
 /// The first Route 101 rescue coord event (`Route101/map.json`, elevation 3).
 const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 /// `VAR_ROUTE101_STATE` (`include/constants/vars.h`): 1 arms the rescue, 2 marks it consumed.
 const VAR_ROUTE101_STATE: u16 = 0x4060;
-const TREECKO: SpeciesId = SpeciesId(277);
-const FAST_TEXT_SPEED: u8 = 2;
-const IDLE_FRAMES: usize = 300;
-const FRAME_LIMIT: usize = 6_000;
+pub(super) const TREECKO: SpeciesId = SpeciesId(277);
+pub(super) const FAST_TEXT_SPEED: u8 = 2;
+pub(super) const IDLE_FRAMES: usize = 300;
+pub(super) const FRAME_LIMIT: usize = 6_000;
 /// The visible glyphs of "TREECKO used\nGROWL!". At the fastest text speed
 /// each takes one printer tick.
 const GROWL_ANNOUNCEMENT_GLYPHS: usize = 18;
@@ -33,9 +33,9 @@ const GROWL_ANNOUNCEMENT_GLYPHS: usize = 18;
 /// Growl fights below ends a stat or miss message with `waitmessage
 /// B_WAIT_TIME_LONG` (`data/battle_scripts_1.s:556-560`, `:273-281`) before the
 /// next turn.
-const WAIT_TIME_LONG: usize = 64;
+pub(super) const WAIT_TIME_LONG: usize = 64;
 
-fn treecko(level: u8, moves: Vec<MoveId>) -> BattlePokemon {
+pub(super) fn treecko(level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     let ivs = Ivs {
         hp: MAX_IV,
         attack: MAX_IV,
@@ -70,7 +70,7 @@ fn phase_in_battle(lead: BattlePokemon) -> OverworldPhase {
 
 /// A fresh A press on every sixteenth frame, so each prompt is answered soon
 /// and the held button speeds up at most one frame in sixteen.
-fn tapping(frame: usize) -> ButtonState {
+pub(super) fn tapping(frame: usize) -> ButtonState {
     if frame.is_multiple_of(16) {
         pressed(Buttons::A)
     } else {
@@ -85,7 +85,7 @@ fn engine_outcome(phase: &OverworldPhase) -> Option<BattleOutcome> {
     }
 }
 
-fn composed_pixels(phase: &OverworldPhase) -> Vec<u32> {
+pub(super) fn composed_pixels(phase: &OverworldPhase) -> Vec<u32> {
     phase.compose_frame().to_vec()
 }
 

@@ -9,6 +9,7 @@ use engine::overworld::MapRuntime;
 use platform::ButtonState;
 
 use crate::flow::battle_finalize::finalize_battle_turn;
+use crate::flow::battle_sequence::TurnPolicy;
 use crate::flow::first_battle;
 use crate::flow::lead_screen::ensure_lead_can_battle;
 
@@ -128,7 +129,7 @@ impl OverworldPhase {
         // The start consumes its copy; the lent original returns on rejection.
         match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
-                match self.open_wild_battle_text(&battle) {
+                match self.open_wild_battle_text(&battle, TurnPolicy::FirstUsableMove, &[], false) {
                     Ok(sequence) => self.battle_sequence = sequence,
                     Err(error) => {
                         eprintln!("first battle: can't play its text ({error})");
