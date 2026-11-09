@@ -31770,7 +31770,7 @@
           "status": "stubbed"
         },
         "UpdateGrassFieldEffectSubpriority": {
-          "reason": "field_effect_helpers.c:1662-1690. TallGrassEffect::subpriority is SetObjectSubpriorityByElevation (npc::subpriority_from_bottom) plus the overlap rule against the player's and every bound object-event sprite's depth, with upstream's strict bounds and first-match break. Not modelled: object events whose graphics the scene does not bind (they draw no sprite here); an object whose graphic is not 16x32 is compared with 16x32 bounds from its parent's top-left rather than with its own centre and height.",
+          "reason": "field_effect_helpers.c:1662-1690. TallGrassEffect::subpriority is SetObjectSubpriorityByElevation (npc::subpriority_from_bottom) plus the overlap rule against the player's and every bound object-event sprite's depth, with upstream's strict bounds and first-match break. Each linked sprite carries its graphic's width and height (DepthObject, filled from npc::DepthSprite, whose size is the binding's .width/.height), so its centre is left + (width >> 1) and its centre row top + (height >> 1), as centerToCornerVecX/Y = -(width >> 1)/-(height >> 1) (event_object_movement.c:1461-1462); a 16x16 object sharing the effect's top-left keeps the effect's own subpriority, as upstream's 'var > yhi' is then 80 > 80. Not modelled: object events whose graphics the scene does not bind (they draw no sprite here).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
           "spec": "S-5",
           "status": "stubbed"

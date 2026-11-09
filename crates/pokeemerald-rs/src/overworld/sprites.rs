@@ -212,6 +212,8 @@ impl SceneSprites {
                 .map(|sprite| DepthObject {
                     left: i32::from(sprite.left()),
                     top: signed_screen_y(sprite.top()),
+                    width: i32::from(sprite.width()),
+                    height: i32::from(sprite.height()),
                     subpriority: sprite.parent_subpriority(),
                 })
                 .collect();

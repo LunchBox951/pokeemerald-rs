@@ -223,13 +223,19 @@ struct TallGrassEffect {
 
 /// An object sprite an effect's depth is compared against
 /// (`UpdateGrassFieldEffectSubpriority`, `field_effect_helpers.c:1662-1690`),
-/// with 16x32 bounds from its parent's top-left whatever its graphic's size.
+/// with the size of its graphic, from which upstream takes the linked sprite's
+/// `centerToCornerVecX`/`Y` (`-(width >> 1)`, `-(height >> 1)`,
+/// `event_object_movement.c:1461-1462`).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DepthObject {
     /// Screen x of the object's left edge.
     pub(super) left: i32,
     /// Screen y of the object's top edge.
     pub(super) top: i32,
+    /// The graphic's width in pixels.
+    pub(super) width: i32,
+    /// The graphic's height in pixels.
+    pub(super) height: i32,
     pub(super) subpriority: u16,
 }
 
@@ -434,13 +440,21 @@ impl TallGrassEffect {
             0
         };
         let own = npc::subpriority_from_bottom(top + FRAME_PX, self.elevation, bias);
-        let half = FRAME_PX / 2;
+        // The effect is a 16x16 sprite, so its `sprite->x`/`y` sit 8 in
+        // from its top-left and `centerToCornerVec` is -8 on both axes.
+        // For the linked sprite, `x`/`y` are its centre: `lyhi` is its top,
+        // `var` its centre row, and `yhi = ylo + centerToCornerVecY` the
+        // effect's bottom less half the object's height. Since `yhi < ylo`,
+        // `lyhi < yhi || lyhi < ylo` reduces to `lyhi < ylo`.
+        let bottom = top + FRAME_PX;
         let overlapping = objects.iter().find(|object| {
-            let object_centre = object.left + half;
-            left < object_centre
-                && left + FRAME_PX > object_centre
-                && object.top < top + FRAME_PX
-                && object.top + FRAME_PX > top
+            let object_half = object.height >> 1;
+            let object_centre_x = object.left + (object.width >> 1);
+            let object_centre_y = object.top + object_half;
+            left < object_centre_x
+                && left + FRAME_PX > object_centre_x
+                && object.top < bottom
+                && object_centre_y > bottom - object_half
                 && own <= object.subpriority
         });
         overlapping.map_or(own, |object| object.subpriority + 2)

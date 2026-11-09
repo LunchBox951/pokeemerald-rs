@@ -120,22 +120,29 @@ pub(in crate::overworld) struct DepthSprite {
     parent_y: u8,
     /// The parent's subpriority.
     pub(super) subpriority: u16,
+    /// The parent's frame size in pixels (`graphicsInfo->width`/`->height`),
+    /// from which upstream derives `centerToCornerVecX`/`Y`.
+    width: u16,
+    height: u16,
 }
 
 impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
     pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
-        Self::with_subpriority(
-            entry,
-            subpriority_from_bottom(
-                i32::from(entry.y()) + 32,
-                elevation,
-                OBJECT_EVENT_SUBPRIORITY,
-            ),
-        )
+        Self {
+            height: 32,
+            ..Self::with_subpriority(
+                entry,
+                subpriority_from_bottom(
+                    i32::from(entry.y()) + 32,
+                    elevation,
+                    OBJECT_EVENT_SUBPRIORITY,
+                ),
+            )
+        }
     }
 
-    /// A single-OBJ sprite whose subpriority is already known, such as a
+    /// A single-OBJ 16x16 sprite whose subpriority is already known, such as a
     /// field effect's, which competes beside the object events.
     pub(in crate::overworld) fn with_subpriority(entry: SheetSprite, subpriority: u16) -> Self {
         Self {
@@ -143,6 +150,8 @@ impl DepthSprite {
             parent_y: entry.y(),
             subpriority,
             entries: vec![entry],
+            width: 16,
+            height: 16,
         }
     }
 
@@ -160,6 +169,16 @@ impl DepthSprite {
     /// The parent's subpriority.
     pub(in crate::overworld) const fn parent_subpriority(&self) -> u16 {
         self.subpriority
+    }
+
+    /// The parent's frame width in pixels.
+    pub(in crate::overworld) const fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// The parent's frame height in pixels.
+    pub(in crate::overworld) const fn height(&self) -> u16 {
+        self.height
     }
 }
 
@@ -322,6 +341,8 @@ pub(in crate::overworld) fn elevated_oam_entries(
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),
+                width: binding.width,
+                height: binding.height,
             })
         })
         .collect()
