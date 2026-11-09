@@ -166,13 +166,19 @@ impl ObjectEventCollection {
     ///
     /// Upstream reloads the entered map's templates but leaves the active objects in place
     /// (`LoadMapFromCameraTransition`, `overworld.c:784-825`); the camera update that follows
-    /// shifts each into the entered map's coordinates and removes those outside the view
-    /// (`UpdateObjectEventCoordsForCameraUpdate`, `RemoveObjectEventIfOutsideView`,
-    /// `event_object_movement.c:1699-1713,2167-2189`). Here every active entry is shifted by
-    /// `shift` (departed to entered tile coordinates) in its current, previous, template, and
-    /// initial tiles, and kept only if `context` still finds it in view; an entry the departed
-    /// visit never admitted, or already retired, has no object upstream and is dropped. Each keeps
-    /// its template, its sprite slot and its movement state.
+    /// shifts each into the entered map's coordinates, spawns the templates the view reaches, then
+    /// removes the objects outside it (`UpdateObjectEventCoordsForCameraUpdate`,
+    /// `TrySpawnObjectEvents`, `RemoveObjectEventIfOutsideView`,
+    /// `event_object_movement.c:1677-1713,2167-2189,2217-2222`). Here every active entry is
+    /// shifted by `shift` (departed to entered tile coordinates) in its current, previous,
+    /// template, and initial tiles; an entry the departed visit never admitted, or already
+    /// retired, has no object upstream and is dropped. Each keeps its template, its sprite slot and
+    /// its movement state, and still runs its callback on the crossing frame.
+    ///
+    /// The spawn and the removal are the scheduler's: the departed collection's last reconciled
+    /// player tile is shifted along, so the next [`Self::run_frame`] sees a camera move, runs the
+    /// callbacks, then admits before it removes, and an outgoing object still holds its sprite
+    /// slot while a newcomer takes one.
     ///
     /// The entered map's `templates` follow in declaration order, unadmitted: the scheduler admits
     /// one only when the view and its hide flag allow, as at any map load, so a crossing never
@@ -187,7 +193,6 @@ impl ObjectEventCollection {
         entered: MapId,
         templates: &'static [ObjectEvent],
         shift: (i32, i32),
-        context: &FrameContext<'_>,
     ) -> Self {
         let mut carried: Vec<LiveObjectEvent> = self
             .entries
@@ -196,11 +201,9 @@ impl ObjectEventCollection {
             .map(|entry| {
                 let mut entry = *entry;
                 entry.translate(shift);
-                entry.remove_if_outside_view(context);
                 entry.carried_from.get_or_insert(departed);
                 entry
             })
-            .filter(LiveObjectEvent::is_active)
             .collect();
         let mut entries = Vec::with_capacity(templates.len() + carried.len());
         for template in templates {
@@ -224,7 +227,9 @@ impl ObjectEventCollection {
         entries.extend(carried);
         Self {
             entries,
-            reconciled_at: None,
+            reconciled_at: self
+                .reconciled_at
+                .map(|(x, y)| (x.saturating_add(shift.0), y.saturating_add(shift.1))),
         }
     }
 
@@ -536,24 +541,25 @@ mod tests {
             template(local_id, x, y, MovementType::FaceDown, NEVER_HIDDEN)
         }
 
-        /// `from` carried into `ENTERED` over `templates`, with the player at `player`.
+        /// `from` carried into `ENTERED` over `templates`.
         fn cross(
             from: &ObjectEventCollection,
             templates: Vec<ObjectEvent>,
-            player: TilePos,
         ) -> ObjectEventCollection {
-            from.carry_across_connection(
-                DEPARTED,
-                ENTERED,
-                leaked(templates),
-                SHIFT,
+            from.carry_across_connection(DEPARTED, ENTERED, leaked(templates), SHIFT)
+        }
+
+        /// One overworld frame with the player at `player`.
+        fn frame(collection: &mut ObjectEventCollection, player: TilePos) {
+            collection.run_frame(
                 &FrameContext {
                     player_position: player,
                     event_data: &EventData::new(),
                     frozen: false,
                     player_dashing: false,
                 },
-            )
+                &mut ScriptedRng::exhausted(),
+            );
         }
 
         fn slot_of(entry: &LiveObjectEvent) -> Option<usize> {
@@ -584,7 +590,7 @@ mod tests {
             assert_eq!(before.state().previous_position(), (5, 5));
             assert_eq!(initial_of(&before), (5, 5));
 
-            let carried = cross(&rig.collection, vec![], (5, 24));
+            let carried = cross(&rig.collection, vec![]);
 
             let entry = carried
                 .find(Some(DEPARTED), 4)
@@ -618,7 +624,7 @@ mod tests {
             rig.tick(1);
             let before = *rig.collection.get(4).unwrap();
 
-            let _ = cross(&rig.collection, vec![fixed(4, 0, 0)], (5, 24));
+            let _ = cross(&rig.collection, vec![fixed(4, 0, 0)]);
 
             let after = rig.collection.get(4).unwrap();
             assert_eq!(after.state(), before.state());
@@ -634,7 +640,12 @@ mod tests {
             rig.tick(1);
             assert!(rig.collection.iter().all(LiveObjectEvent::is_active));
 
-            let carried = cross(&rig.collection, vec![], (5, 24));
+            let mut carried = cross(&rig.collection, vec![]);
+            assert!(
+                carried.find(Some(DEPARTED), 2).is_some(),
+                "the crossing itself removes nothing: the scheduler does, on the camera move"
+            );
+            frame(&mut carried, (5, 24));
 
             assert!(
                 carried.find(Some(DEPARTED), 1).is_some(),
@@ -659,13 +670,15 @@ mod tests {
             }
             // Entered coordinates: current (5, 36) is twelve rows below a player at (5, 24), but
             // the initial tile (5, 33) is nine rows below.
-            let carried = cross(&rig.collection, vec![], (5, 24));
+            let mut carried = cross(&rig.collection, vec![]);
+            frame(&mut carried, (5, 24));
             let entry = carried
                 .find(Some(DEPARTED), 1)
                 .expect("the initial tile is in view");
             assert_eq!(entry.state().position(), (5, 36));
 
-            let carried = cross(&rig.collection, vec![], (5, 22));
+            let mut carried = cross(&rig.collection, vec![]);
+            frame(&mut carried, (5, 22));
             assert!(carried.find(Some(DEPARTED), 1).is_none(), "both tiles out");
         }
 
@@ -691,7 +704,7 @@ mod tests {
                 1
             );
 
-            let carried = cross(&rig.collection, vec![], (5, 24));
+            let carried = cross(&rig.collection, vec![]);
 
             assert_eq!(
                 carried
@@ -708,11 +721,7 @@ mod tests {
             let mut rig = Rig::new(vec![fixed(1, 5, 6)], (5, 5));
             rig.tick(1);
 
-            let mut carried = cross(
-                &rig.collection,
-                vec![fixed(1, 5, 25), fixed(2, 5, 26)],
-                (5, 24),
-            );
+            let mut carried = cross(&rig.collection, vec![fixed(1, 5, 25), fixed(2, 5, 26)]);
 
             let order: Vec<_> = carried
                 .iter()
@@ -739,16 +748,8 @@ mod tests {
                 (5, 26)
             );
 
-            // The scheduler admits them on its first frame, behind the survivor's slot.
-            carried.run_frame(
-                &FrameContext {
-                    player_position: (5, 24),
-                    event_data: &EventData::new(),
-                    frozen: false,
-                    player_dashing: false,
-                },
-                &mut ScriptedRng::exhausted(),
-            );
+            // The scheduler admits them on the camera move's frame, behind the survivor's slot.
+            frame(&mut carried, (5, 24));
             assert!(carried.iter().all(LiveObjectEvent::is_active));
             let slots: Vec<_> = carried.iter().map(slot_of).collect();
             assert_eq!(slots, vec![Some(1), Some(2), Some(0)]);
@@ -758,18 +759,7 @@ mod tests {
         fn a_carried_entry_removed_later_is_gone_and_never_respawns() {
             let mut rig = Rig::new(vec![fixed(1, 5, 6)], (5, 5));
             rig.tick(1);
-            let mut carried = cross(&rig.collection, vec![fixed(2, 5, 25)], (5, 24));
-            let frame = |collection: &mut ObjectEventCollection, player| {
-                collection.run_frame(
-                    &FrameContext {
-                        player_position: player,
-                        event_data: &EventData::new(),
-                        frozen: false,
-                        player_dashing: false,
-                    },
-                    &mut ScriptedRng::exhausted(),
-                );
-            };
+            let mut carried = cross(&rig.collection, vec![fixed(2, 5, 25)]);
             frame(&mut carried, (5, 24));
             assert_eq!(carried.iter().count(), 2);
 
@@ -802,30 +792,11 @@ mod tests {
                 .state_mut()
                 .walk(Direction::East);
 
-            let away = rig.collection.carry_across_connection(
-                DEPARTED,
-                ENTERED,
-                leaked(vec![]),
-                SHIFT,
-                &FrameContext {
-                    player_position: (5, 24),
-                    event_data: &EventData::new(),
-                    frozen: false,
-                    player_dashing: false,
-                },
-            );
-            let back = away.carry_across_connection(
-                ENTERED,
-                DEPARTED,
-                templates,
-                (-SHIFT.0, -SHIFT.1),
-                &FrameContext {
-                    player_position: (5, 4),
-                    event_data: &EventData::new(),
-                    frozen: false,
-                    player_dashing: false,
-                },
-            );
+            let away =
+                rig.collection
+                    .carry_across_connection(DEPARTED, ENTERED, leaked(vec![]), SHIFT);
+            let back =
+                away.carry_across_connection(ENTERED, DEPARTED, templates, (-SHIFT.0, -SHIFT.1));
 
             assert_eq!(
                 back.iter().count(),
@@ -848,19 +819,9 @@ mod tests {
         fn a_second_crossing_keeps_naming_the_first_departed_map() {
             let mut rig = Rig::new(vec![fixed(1, 5, 6)], (5, 5));
             rig.tick(1);
-            let once = cross(&rig.collection, vec![fixed(1, 0, 0)], (5, 24));
-            let twice = once.carry_across_connection(
-                ENTERED,
-                MapId("MAP_THIRD"),
-                leaked(vec![]),
-                SHIFT,
-                &FrameContext {
-                    player_position: (5, 44),
-                    event_data: &EventData::new(),
-                    frozen: false,
-                    player_dashing: false,
-                },
-            );
+            let once = cross(&rig.collection, vec![fixed(1, 0, 0)]);
+            let twice =
+                once.carry_across_connection(ENTERED, MapId("MAP_THIRD"), leaked(vec![]), SHIFT);
             assert_eq!(
                 twice
                     .iter()
@@ -868,6 +829,32 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec![Some(DEPARTED)],
                 "the unadmitted ENTERED entry was dropped; the survivor is still the first map's"
+            );
+        }
+
+        #[test]
+        fn a_newcomer_admitted_on_the_crossing_frame_does_not_take_an_outgoing_objects_slot() {
+            // Upstream's crossing frame runs every live callback, then the camera update spawns
+            // (`TrySpawnObjectEvents`) before it removes (`RemoveObjectEventsOutsideView`,
+            // `event_object_movement.c:2217-2222`): the outgoing object still holds slot 0 when
+            // the newcomer is spawned, so the newcomer takes slot 2.
+            let mut rig = Rig::new(vec![fixed(1, 5, 14), fixed(2, 5, 13)], (5, 5));
+            rig.tick(1);
+            assert_eq!(slot_of(rig.collection.get(1).unwrap()), Some(0));
+            assert_eq!(slot_of(rig.collection.get(2).unwrap()), Some(1));
+
+            let mut carried = cross(&rig.collection, vec![fixed(3, 5, 25)]);
+            frame(&mut carried, (5, 24));
+
+            assert!(
+                carried.find(Some(DEPARTED), 1).is_none(),
+                "outgoing removed"
+            );
+            assert_eq!(slot_of(carried.find(Some(DEPARTED), 2).unwrap()), Some(1));
+            assert_eq!(
+                slot_of(carried.get(3).unwrap()),
+                Some(2),
+                "the newcomer is spawned while the outgoing object still holds slot 0"
             );
         }
     }

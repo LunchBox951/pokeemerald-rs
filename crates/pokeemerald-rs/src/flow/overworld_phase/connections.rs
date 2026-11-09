@@ -8,7 +8,7 @@
 //! map-script effect.
 
 use assets::MapHeaderTable;
-use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
 };
@@ -198,23 +198,28 @@ impl OverworldPhase {
         overworld::OverworldScene,
         ObjectEventCollection,
     )> {
-        let (event_data, scene) = self.stage_scene(map)?;
+        let (event_data, scene) = self.stage_scene(map, &[])?;
         let object_events = seed_object_events(&scene);
         Some((event_data, scene, object_events))
     }
 
     /// [`Self::stage_transition`] without the live object events, for the crossing, whose
     /// collection carries the departed visit's entries rather than starting over.
+    ///
+    /// `carried` are the templates of the live objects the scene keeps; it binds their
+    /// sprites beside its own events'.
     fn stage_scene(
         &self,
         map: assets::MapId,
+        carried: &[&'static assets::ObjectEvent],
     ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
-        let scene = overworld::load_room_from_source(
+        let scene = overworld::load_room_carrying_from_source(
             &self.pack_source,
             map,
             self.save2.player_gender.into(),
             &event_data,
+            carried,
         )
         .ok()?;
         Some((event_data, scene))
@@ -496,7 +501,15 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, mut scene)) = self.stage_scene(to_map) else {
+        // The scene binds the sprites of every object it keeps, which its own events' need not
+        // cover.
+        let carried: Vec<&'static assets::ObjectEvent> = self
+            .object_events
+            .iter()
+            .filter(|entry| entry.is_active())
+            .map(engine::overworld::object_event::LiveObjectEvent::template)
+            .collect();
+        let Some((transitioned_event_data, mut scene)) = self.stage_scene(to_map, &carried) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -509,21 +522,16 @@ impl OverworldPhase {
         // map's coordinates (`field_effect_helpers.c:325-330`).
         scene.carry_tall_grass_from(&self.scene, shift);
         // The departed visit's active objects stay live, shifted into the entered map's
-        // coordinates and dropped only if outside its view (`LoadMapFromCameraTransition` leaves
-        // them in place; `UpdateObjectEventsForCameraUpdate`, `event_object_movement.c:2217-2222`).
-        // The entered map's templates enter unadmitted, for the scheduler's first frame to admit.
-        // Built whole before anything is assigned, so a refused rebind above touched nothing.
+        // coordinates (`LoadMapFromCameraTransition` leaves them in place). The entered map's
+        // templates enter unadmitted, and the next frame's camera update spawns before it
+        // removes, as `UpdateObjectEventsForCameraUpdate` does
+        // (`event_object_movement.c:2217-2222`). Built whole before anything is assigned, so a
+        // refused rebind above touched nothing.
         let object_events = self.object_events.carry_across_connection(
             self.map_id,
             to_map,
             scene.map_events().object_events,
             shift,
-            &FrameContext {
-                player_position: self.player.position(),
-                event_data: &transitioned_event_data,
-                frozen: false,
-                player_dashing: false,
-            },
         );
         self.scene = scene;
         self.object_events = object_events;

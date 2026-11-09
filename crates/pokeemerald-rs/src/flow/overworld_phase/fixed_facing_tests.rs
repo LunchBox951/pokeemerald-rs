@@ -287,7 +287,10 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // one pack and two sibling transitions; splitting would re-set-up the pack
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pack and two sibling transitions; splitting would re-set-up the pack"
+)]
 fn a_warp_reseeds_unadmitted_authored_facing_and_a_crossing_keeps_the_live_visit() {
     use crate::pack_source::PackSource;
 

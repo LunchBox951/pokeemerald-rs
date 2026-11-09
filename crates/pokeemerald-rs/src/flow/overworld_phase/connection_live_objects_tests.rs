@@ -20,7 +20,7 @@ const SHIFT: (i32, i32) = (0, 20);
 fn npc(local_id: u8, x: i16, y: i16) -> ObjectEvent {
     ObjectEvent {
         local_id,
-        graphics_id: "OBJ_EVENT_GFX_MOM",
+        graphics_id: "OBJ_EVENT_GFX_YOUNGSTER",
         x,
         y,
         elevation: 3,
@@ -311,5 +311,49 @@ fn an_interaction_with_a_carried_npc_turns_it_and_not_the_entered_maps_namesake(
     assert_eq!(
         phase.object_events.get(1).unwrap().state().facing(),
         namesake_facing
+    );
+}
+
+/// A carried Route 101 youngster, a sheet Oldale's templates never name, is bound by the entered
+/// scene and drawn: the crossing must not turn a visible NPC into a solid, invisible one.
+#[test]
+fn a_carried_npc_whose_sheet_the_entered_map_lacks_is_still_drawn() {
+    let mut youngster = npc(1, 15, 3);
+    youngster.flag = "FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE";
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![youngster]);
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    let entry = entry_of(&phase, &templates[0]);
+    assert!(entry.is_active(), "carried and active");
+    assert!(tile_is_in_view(
+        entry.state().position(),
+        phase.player.position()
+    ));
+
+    let shown = phase.scene.compose_live(
+        &phase.player,
+        &phase.save1.event_data,
+        phase.tick,
+        &phase.object_events,
+        rendering::PaletteStage::default(),
+    );
+    let mut hidden_data = phase.save1.event_data.clone();
+    hidden_data
+        .flag_set(assets::object_event_flags::resolve(templates[0].flag).unwrap())
+        .unwrap();
+    let hidden = phase.scene.compose_live(
+        &phase.player,
+        &hidden_data,
+        phase.tick,
+        &phase.object_events,
+        rendering::PaletteStage::default(),
+    );
+    assert!(
+        shown.pixels() != hidden.pixels(),
+        "the carried NPC contributes pixels to the frame"
+    );
+    assert!(
+        phase.scene.binds_sprite("OBJ_EVENT_GFX_YOUNGSTER"),
+        "the entered scene binds the carried NPC's sheet"
     );
 }

@@ -546,13 +546,8 @@ fn a_carried_object_is_selected_with_the_map_it_was_carried_from() {
                 OBJECT_SCRIPT,
             )]));
             departed.run_frame(&context, &mut ScriptedRng::exhausted());
-            let live = departed.carry_across_connection(
-                DEPARTED,
-                MapId("MAP_TEST"),
-                entered,
-                (0, 0),
-                &context,
-            );
+            let live =
+                departed.carry_across_connection(DEPARTED, MapId("MAP_TEST"), entered, (0, 0));
             let bound = (*runtime).with_object_events(&live);
 
             assert_eq!(
