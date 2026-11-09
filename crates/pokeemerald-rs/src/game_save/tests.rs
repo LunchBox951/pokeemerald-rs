@@ -1511,3 +1511,67 @@ fn a_lower_counter_restores_only_when_something_explains_it() {
     assert!(damage_explains_fallback(SaveFileStatus::Empty, 0, 10));
     assert!(!damage_explains_fallback(SaveFileStatus::NoFlash, 0, 10));
 }
+
+/// An intact, unrelated save at the exactly antipodal counter is unordered
+/// against the session (neither is ahead in serial-number arithmetic), so it
+/// is refused rather than overwritten, as an equal or older counter is.
+#[test]
+fn an_antipodal_counter_unrelated_replacement_is_refused_rather_than_overwritten() {
+    const SESSION_COUNTER: u32 = 1;
+    const ANTIPODAL_COUNTER: u32 = SESSION_COUNTER.wrapping_add(1 << 31);
+    let temp = TempSave::new("antipodal-counter-replacement");
+    let (block1, block2) = replacement_blocks();
+    write_full_generation(
+        &temp,
+        SESSION_COUNTER,
+        &block1,
+        &block2,
+        SESSION_STORAGE_FILL,
+    );
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+    assert_eq!(slot.session_counter, Some(SESSION_COUNTER));
+
+    write_full_generation(
+        &temp,
+        ANTIPODAL_COUNTER,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Ok);
+    let replacement = std::fs::read(&temp.path).unwrap();
+
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+}
+
+/// The unordered half-range boundary in the pure reconcile: only an identical
+/// base keeps; nothing else, not even a lost donor (which needs the session's
+/// own equal-counter head), makes it safe to write over.
+#[test]
+fn an_antipodal_counter_keeps_only_an_identical_base() {
+    use super::{reconcile_base, BaseReconcile};
+    let (session, antipodal) = (1_u32, 1_u32.wrapping_add(1 << 31));
+    for (disk, session) in [(antipodal, session), (session, antipodal)] {
+        assert_eq!(
+            reconcile_base(disk, session, true, false, false),
+            BaseReconcile::Keep
+        );
+        assert_eq!(
+            reconcile_base(disk, session, false, true, false),
+            BaseReconcile::Refuse
+        );
+        assert_eq!(
+            reconcile_base(disk, session, false, false, false),
+            BaseReconcile::Refuse
+        );
+        assert_eq!(
+            reconcile_base(disk, session, false, false, true),
+            BaseReconcile::Refuse
+        );
+    }
+}
