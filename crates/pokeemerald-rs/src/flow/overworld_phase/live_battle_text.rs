@@ -7,6 +7,8 @@
 //! driver is replaced by [`OverworldPhase::tick_battle_text`] until the
 //! sequencer reports the battle over.
 
+use std::rc::Rc;
+
 use battle::Battle;
 use engine::text::decode_to_string;
 use platform::ButtonState;
@@ -36,7 +38,10 @@ impl OverworldPhase {
     /// The text sequencer for `battle`, a wild battle against the lead on
     /// loan, or `None` when this test phase's battles skip their text.
     ///
-    /// The pack is read once per battle from the phase's [`Self::pack_source`].
+    /// The pack is read from the phase's [`Self::pack_source`] by the first
+    /// battle and shared by the later ones ([`Self::loaded_battle_pack`]); a pack
+    /// that fails to load, or to supply the text, refuses the battle and is
+    /// not kept, so the next battle reads it afresh.
     ///
     /// # Errors
     ///
@@ -51,8 +56,22 @@ impl OverworldPhase {
             return Ok(None);
         }
         let scene = self.wild_scene(battle)?;
-        let pack = self.pack_source.load()?;
-        BattleSequence::begin(pack, self.save2.options_text_speed, scene).map(Some)
+        let pack = self.loaded_battle_pack()?;
+        let sequence =
+            BattleSequence::begin(Rc::clone(&pack), self.save2.options_text_speed, scene);
+        if sequence.is_err() {
+            self.battle_pack.take();
+        }
+        sequence.map(Some)
+    }
+
+    fn loaded_battle_pack(&self) -> Result<Rc<assets::pack::AssetPack>, assets::pack::PackError> {
+        if let Some(pack) = &*self.battle_pack.borrow() {
+            return Ok(Rc::clone(pack));
+        }
+        let pack = Rc::new(self.pack_source.load()?);
+        *self.battle_pack.borrow_mut() = Some(Rc::clone(&pack));
+        Ok(pack)
     }
 
     /// The narrator's opening scene for a wild battle: the player's name, the

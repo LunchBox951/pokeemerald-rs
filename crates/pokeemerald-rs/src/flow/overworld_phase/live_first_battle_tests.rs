@@ -305,3 +305,122 @@ fn a_rejected_battle_text_setup_leaves_the_rescue_armed() {
         "the rescue must stay armed after a setup rejection"
     );
 }
+
+/// The pack is read once for a session's battles: a later battle, started
+/// through the production rescue trigger, reuses the loaded pack instead of
+/// reading the whole file again.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_later_battle_reuses_the_loaded_pack_instead_of_rereading_it() {
+    let mut phase = phase_in_battle(new_game::provisional_starter());
+    let loads_after_first = crate::pack_source::pack_loads_on_this_thread();
+    assert!(loads_after_first > 0, "the first battle read the pack");
+
+    for battle_number in 2..=3 {
+        // End the battle without a result, arm the rescue again and walk onto
+        // its trigger tile once more.
+        phase.active_battle = None;
+        phase.battle_sequence = None;
+        phase
+            .save1
+            .event_data
+            .var_set(VAR_ROUTE101_STATE, 1)
+            .expect("the rescue state is settable");
+        phase.set_fresh_lead_for_test(new_game::provisional_starter());
+        let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+        phase.player = PlayerState::new((tx - 1, ty), 3, Direction::East);
+        walk_one_tile_east(&mut phase);
+
+        assert!(
+            phase.is_first_battle_active() && phase.battle_sequence.is_some(),
+            "battle {battle_number} plays its text"
+        );
+        assert_eq!(
+            crate::pack_source::pack_loads_on_this_thread(),
+            loads_after_first,
+            "battle {battle_number} must not re-read the pack"
+        );
+    }
+}
+
+/// A pack that cannot be loaded is not remembered as a failure: each battle
+/// retries the load and is refused while the pack stays missing.
+#[test]
+fn a_missing_pack_refuses_every_battle_and_is_retried_each_time() {
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch-verify-pack").into_boxed_path());
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((0, 0), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Test(missing),
+    );
+    phase.battle_text = BattleText::Played;
+    phase.rng = Rng::new(4242);
+    let loads_before = crate::pack_source::pack_loads_on_this_thread();
+
+    for attempt in 1..=2 {
+        let battle = crate::flow::first_battle::start_first_battle(
+            new_game::provisional_starter(),
+            0,
+            &mut phase.rng,
+        )
+        .expect("a fresh lead starts the battle");
+        assert!(
+            phase.open_wild_battle_text(&battle).is_err(),
+            "attempt {attempt} is refused"
+        );
+        assert_eq!(
+            crate::pack_source::pack_loads_on_this_thread() - loads_before,
+            attempt,
+            "attempt {attempt} tried the load"
+        );
+    }
+}
+
+/// A pack that loads but cannot start a battle's text is dropped, not kept:
+/// the next battle reads the pack afresh, so a repaired pack is picked up.
+#[test]
+fn a_loaded_pack_that_refuses_the_battle_is_reread_by_the_next_one() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-3182-empty-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let empty = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack serializes");
+    crate::pack_test_support::write_scratch_exclusive(&path, empty);
+    assets::pack::AssetPack::load(&path).expect("the entryless pack itself loads");
+    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((0, 0), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Test(leaked),
+    );
+    phase.battle_text = BattleText::Played;
+    phase.rng = Rng::new(4242);
+    let loads_before = crate::pack_source::pack_loads_on_this_thread();
+
+    for attempt in 1..=2 {
+        let battle = crate::flow::first_battle::start_first_battle(
+            new_game::provisional_starter(),
+            0,
+            &mut phase.rng,
+        )
+        .expect("a fresh lead starts the battle");
+        assert!(
+            phase.open_wild_battle_text(&battle).is_err(),
+            "attempt {attempt}: an entryless pack cannot begin the battle text"
+        );
+        assert_eq!(
+            crate::pack_source::pack_loads_on_this_thread() - loads_before,
+            attempt,
+            "attempt {attempt}: a pack that refused the battle must be re-read, not reused"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}

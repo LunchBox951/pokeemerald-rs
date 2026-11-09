@@ -21,6 +21,7 @@
 //! once, and at most one stage change follows it.
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use assets::pack::AssetPack;
 use battle::{Battle, BattleEvent};
@@ -137,7 +138,7 @@ enum Stage {
 /// Plays one battle's text and gates its turns on it.
 #[derive(Debug)]
 pub(super) struct BattleSequence {
-    pack: AssetPack,
+    pack: Rc<AssetPack>,
     layer: BattleMessageLayer<assets::fonts::OwnedFontGlyphSheet>,
     narrator: Narrator,
     stage: Stage,
@@ -219,7 +220,7 @@ impl BattleSequence {
     /// Returns [`SequenceError`] when the pack lacks the battle text or an
     /// opening print does not expand.
     pub(super) fn begin(
-        pack: AssetPack,
+        pack: Rc<AssetPack>,
         raw_text_speed: u8,
         scene: Scene,
     ) -> Result<Self, SequenceError> {
