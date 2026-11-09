@@ -35,8 +35,10 @@
 //! crosses and kept with it; the tile must lie inside the entered map's backup
 //! band (`viewport::within_backup_map_band`) or the effect is dropped. An
 //! object-owned effect is not carried: its owner is a slot of the departed
-//! map's object collection, which the crossing replaces, so the owner cannot be
-//! found and the effect retires as in an ordinary owner removal.
+//! map's object collection, and the entered collection lists the entered map's
+//! templates first, so the slot no longer names the same owner and the effect
+//! retires as in an ordinary owner removal. An object carried across gets the
+//! entered scene's own spawn-time pass.
 //!
 //! Not modelled: the long grass effect, and the camera's saved-view cells that
 //! upstream also copies into the entered map's backup grid

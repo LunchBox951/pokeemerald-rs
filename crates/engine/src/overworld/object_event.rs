@@ -347,6 +347,25 @@ impl ObjectEventState {
         self.facing = initial_facing_direction(self.template_movement_type);
     }
 
+    /// Shifts the current, previous, and template-snapshot tiles by `shift`, as
+    /// `UpdateObjectEventCoordsForCameraUpdate` moves a live object into the coordinates a
+    /// camera update puts its map in (`event_object_movement.c:2167-2189`). Elevation, facing,
+    /// and movement are kept.
+    pub const fn translate(&mut self, (dx, dy): (i32, i32)) {
+        self.position = (
+            self.position.0.saturating_add(dx),
+            self.position.1.saturating_add(dy),
+        );
+        self.previous_position = (
+            self.previous_position.0.saturating_add(dx),
+            self.previous_position.1.saturating_add(dy),
+        );
+        self.template_position = (
+            self.template_position.0.saturating_add(dx),
+            self.template_position.1.saturating_add(dy),
+        );
+    }
+
     /// Changes the current movement type.
     pub const fn set_movement_type(&mut self, movement_type: MovementType) {
         self.movement_type = movement_type;

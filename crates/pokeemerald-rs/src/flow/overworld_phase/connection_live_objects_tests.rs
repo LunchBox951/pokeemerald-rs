@@ -1,0 +1,315 @@
+//! A seamless connection crossing keeps the departed visit's in-view live object events and
+//! shifts them into the entered map's coordinates (`UpdateObjectEventCoordsForCameraUpdate`,
+//! `RemoveObjectEventIfOutsideView`, `src/event_object_movement.c:1699-1713,2167-2189`), instead
+//! of replacing the whole collection with the entered map's fresh templates.
+
+use super::tall_grass_tests::{
+    route_101_phase_crossing_into_oldale, LANDING_X, OLDALE_TOWN, ROUTE_101,
+};
+use super::test_support::*;
+use super::OverworldPhase;
+use assets::{MovementType, ObjectEvent, TrainerType};
+use engine::overworld::object_event::tile_is_in_view;
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
+use engine::overworld::Direction;
+use platform::{ButtonState, Buttons};
+
+/// Oldale's south edge is 20 tiles below Route 101's north edge in the entered map's coordinates.
+const SHIFT: (i32, i32) = (0, 20);
+
+fn npc(local_id: u8, x: i16, y: i16) -> ObjectEvent {
+    ObjectEvent {
+        local_id,
+        graphics_id: "OBJ_EVENT_GFX_MOM",
+        x,
+        y,
+        elevation: 3,
+        movement_type: MovementType::FaceDown,
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: Some(assets::ScriptRef::new("SomeScript")),
+        flag: "0",
+    }
+}
+
+fn idle(phase: &mut OverworldPhase, frames: usize) {
+    for _ in 0..frames {
+        phase.step(ButtonState::new());
+    }
+}
+
+/// A phase at rest on Route 101's north edge whose live collection holds `npcs`, each admitted.
+fn route_101_with_live_npcs(
+    npcs: Vec<ObjectEvent>,
+) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let templates: &'static [ObjectEvent] = Box::leak(npcs.into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    idle(&mut phase, 1);
+    assert_eq!(phase.map_id, ROUTE_101);
+    assert_eq!(phase.player.position(), (LANDING_X, 0));
+    for template in templates {
+        assert!(
+            entry_of(&phase, template).is_active(),
+            "fixture precondition: the departed visit's {} is admitted",
+            template.local_id
+        );
+    }
+    (phase, templates, path)
+}
+
+/// The live entry seeded from exactly `template`.
+fn entry_of<'p>(phase: &'p OverworldPhase, template: &'static ObjectEvent) -> &'p LiveObjectEvent {
+    phase
+        .object_events
+        .iter()
+        .find(|entry| std::ptr::eq(entry.template(), template))
+        .expect("the entry is retained")
+}
+
+fn has_entry(phase: &OverworldPhase, template: &'static ObjectEvent) -> bool {
+    phase
+        .object_events
+        .iter()
+        .any(|entry| std::ptr::eq(entry.template(), template))
+}
+
+fn cross_north(phase: &mut OverworldPhase) {
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, OLDALE_TOWN, "the crossing rebound the scene");
+}
+
+/// The issue's failure: the crossing replaced the collection with Oldale's fresh templates, so a
+/// Route 101 NPC still in view vanished instead of being shifted into Oldale's coordinates.
+#[test]
+fn a_crossing_keeps_an_in_view_npc_at_its_translated_tile() {
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert!(
+        has_entry(&phase, &templates[0]),
+        "the in-view Route 101 NPC survives the crossing"
+    );
+    let entry = entry_of(&phase, &templates[0]);
+    assert!(entry.is_active());
+    assert_eq!(
+        entry.state().position(),
+        (13 + SHIFT.0, 4 + SHIFT.1),
+        "its current tile is expressed in Oldale's coordinates"
+    );
+    assert_eq!(entry.carried_from(), Some(ROUTE_101));
+}
+
+/// `UpdateObjectEventCoordsForCameraUpdate` shifts current, initial, and previous coordinates
+/// alike (`event_object_movement.c:2167-2189`).
+#[test]
+fn a_survivor_keeps_its_previous_tile_translated_with_its_current_one() {
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    phase
+        .object_events
+        .find_mut(None, 9)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::South);
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    let state = entry_of(&phase, &templates[0]).state();
+    assert_eq!(state.position(), (13, 25));
+    assert_eq!(state.previous_position(), (13, 24));
+    assert_eq!(state.template_position(), (13, 24));
+    assert_eq!(state.facing(), Direction::South);
+}
+
+/// The step that crosses also moves the player one tile north, which carries the nine-row-deep
+/// south edge of the spawn window past an NPC standing on it (`RemoveObjectEventIfOutsideView`,
+/// `event_object_movement.c:1699-1713`).
+#[test]
+fn a_crossing_removes_an_npc_the_entered_view_no_longer_reaches() {
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(8, 13, 8), npc(9, 13, 9)]);
+    cross_north(&mut phase);
+    idle(&mut phase, 20);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(phase.player.position(), (LANDING_X, 19));
+    assert!(
+        has_entry(&phase, &templates[0]),
+        "nine rows below the entered player is still in view"
+    );
+    assert!(
+        !has_entry(&phase, &templates[1]),
+        "ten rows below the entered player is outside the view and is removed"
+    );
+}
+
+/// An entry the departed visit never admitted has no upstream object to carry.
+#[test]
+fn an_npc_the_departed_visit_never_admitted_is_not_carried() {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 15)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    idle(&mut phase, 1);
+    assert!(
+        !entry_of(&phase, &templates[0]).is_active(),
+        "outside the window"
+    );
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert!(!has_entry(&phase, &templates[0]));
+}
+
+/// A failed rebind returns before anything is assigned, so the departed collection is the one the
+/// next frame sees.
+#[test]
+fn a_refused_crossing_leaves_the_departed_collection_untouched() {
+    let (mut phase, templates, path) =
+        route_101_with_live_npcs(vec![npc(9, 13, 4), npc(10, 13, 6)]);
+    phase
+        .object_events
+        .find_mut(None, 10)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    let before: Vec<_> = phase
+        .object_events
+        .iter()
+        .map(|entry| (*entry.state(), entry.is_active(), entry.carried_from()))
+        .collect();
+    phase.pack_source = crate::pack_source::PackSource::Explicit(
+        std::path::Path::new("/nonexistent/issue-2669-refused-crossing.pack").into(),
+    );
+
+    assert!(!phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), SHIFT));
+    std::fs::remove_file(path).expect("scratch pack");
+
+    assert_eq!(phase.map_id, ROUTE_101);
+    let after: Vec<_> = phase
+        .object_events
+        .iter()
+        .map(|entry| (*entry.state(), entry.is_active(), entry.carried_from()))
+        .collect();
+    assert_eq!(after, before);
+    assert!(templates.iter().all(|template| has_entry(&phase, template)));
+}
+
+/// The entered map's own templates are neither carried nor admitted by the crossing; the
+/// scheduler admits those the view reaches once it runs.
+#[test]
+fn a_crossing_admits_none_of_the_entered_maps_own_events() {
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    // The crossing step's own frame also runs the scheduler, so rebind by hand to look at the
+    // collection the crossing itself builds.
+    phase.player = engine::overworld::PlayerState::new((LANDING_X, 19), 3, Direction::North);
+    assert!(phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), SHIFT));
+    std::fs::remove_file(path).expect("scratch pack");
+
+    let entered = phase.scene.map_events().object_events;
+    assert!(!entered.is_empty(), "Oldale declares object events");
+    let own = |entry: &&LiveObjectEvent| {
+        entered
+            .iter()
+            .any(|template| std::ptr::eq(entry.template(), template))
+    };
+    assert_eq!(
+        phase.object_events.iter().filter(own).count(),
+        entered.len()
+    );
+    for entry in phase.object_events.iter().filter(own) {
+        assert_eq!(entry.carried_from(), None);
+        assert!(!entry.is_active(), "{}", entry.template().local_id);
+    }
+    assert_eq!(
+        phase
+            .object_events
+            .iter()
+            .filter(|entry| entry.carried_from().is_some())
+            .map(|entry| std::ptr::eq(entry.template(), &raw const templates[0]))
+            .collect::<Vec<_>>(),
+        vec![true],
+        "the only carried entry is the Route 101 NPC"
+    );
+
+    // The scheduler's first frame admits exactly the events the view reaches.
+    idle(&mut phase, 1);
+    let expected: Vec<u8> = entered
+        .iter()
+        .filter(|event| {
+            tile_is_in_view(
+                (i32::from(event.x), i32::from(event.y)),
+                phase.player.position(),
+            ) && engine::overworld::object_event::object_event_is_visible(
+                event,
+                &phase.save1.event_data,
+            )
+        })
+        .map(|event| event.local_id)
+        .collect();
+    assert!(
+        !expected.is_empty(),
+        "fixture: the view reaches Oldale's events"
+    );
+    let admitted: Vec<u8> = phase
+        .object_events
+        .iter()
+        .filter(own)
+        .filter(|entry| entry.is_active())
+        .map(|entry| entry.template().local_id)
+        .collect();
+    assert_eq!(admitted, expected);
+}
+
+/// A press at a carried NPC addresses that NPC, though the entered map declares the same local id.
+#[test]
+fn an_interaction_with_a_carried_npc_turns_it_and_not_the_entered_maps_namesake() {
+    const MOM_SCRIPT: &str = "PlayersHouse_1F_EventScript_Mom";
+    let mut mom = npc(1, 13, 1);
+    mom.script = Some(assets::ScriptRef::new(MOM_SCRIPT));
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![mom]);
+    cross_north(&mut phase);
+    idle(&mut phase, 20);
+    std::fs::remove_file(path).expect("scratch pack");
+    // It steps up beside the player, who turns to it.
+    phase
+        .object_events
+        .find_mut(Some(ROUTE_101), 1)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::North);
+    phase.player.face(Direction::South);
+    let namesake = phase.object_events.get(1).unwrap();
+    assert_eq!(
+        namesake.carried_from(),
+        None,
+        "fixture: Oldale declares local id 1"
+    );
+    let namesake_facing = namesake.state().facing();
+    assert_ne!(
+        namesake_facing,
+        Direction::North,
+        "fixture: the turn is observable"
+    );
+
+    let runtime = phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events);
+    let outcome = phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime);
+    let Some(super::interaction::InteractionOutcome::Dialog(script)) = outcome else {
+        panic!("the A press on the carried NPC opens its dialog, got {outcome:?}");
+    };
+    phase.start_script_dialog(script);
+
+    let carried = entry_of(&phase, &templates[0]);
+    assert_eq!(carried.state().position(), (13, 20));
+    assert_eq!(
+        carried.state().facing(),
+        Direction::North,
+        "the carried NPC faces the player, who faces south"
+    );
+    assert_eq!(
+        phase.object_events.get(1).unwrap().state().facing(),
+        namesake_facing
+    );
+}

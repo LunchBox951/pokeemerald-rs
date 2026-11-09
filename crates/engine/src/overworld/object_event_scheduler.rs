@@ -122,6 +122,10 @@ impl ObjectEventCollection {
         for entry in &mut self.entries {
             entry.remove_if_outside_view(context);
         }
+        // A removed carried entry has no template left to respawn from: it ceases to exist.
+        self.entries.retain(|entry| {
+            entry.carried_from.is_none() || entry.lifecycle != Lifecycle::Despawned
+        });
     }
 
     /// The lowest slot no active entry holds: the first index at which the sorted held slots
@@ -171,7 +175,7 @@ impl LiveObjectEvent {
         };
     }
 
-    fn remove_if_outside_view(&mut self, context: &FrameContext<'_>) {
+    pub(super) fn remove_if_outside_view(&mut self, context: &FrameContext<'_>) {
         let Lifecycle::Active { initial, .. } = self.lifecycle else {
             return;
         };

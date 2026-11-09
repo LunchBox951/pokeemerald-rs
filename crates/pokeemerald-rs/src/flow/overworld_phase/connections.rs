@@ -8,7 +8,7 @@
 //! map-script effect.
 
 use assets::MapHeaderTable;
-use engine::overworld::object_event::ObjectEventCollection;
+use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
 };
@@ -198,6 +198,17 @@ impl OverworldPhase {
         overworld::OverworldScene,
         ObjectEventCollection,
     )> {
+        let (event_data, scene) = self.stage_scene(map)?;
+        let object_events = seed_object_events(&scene);
+        Some((event_data, scene, object_events))
+    }
+
+    /// [`Self::stage_transition`] without the live object events, for the crossing, whose
+    /// collection carries the departed visit's entries rather than starting over.
+    fn stage_scene(
+        &self,
+        map: assets::MapId,
+    ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
         let scene = overworld::load_room_from_source(
             &self.pack_source,
@@ -206,8 +217,7 @@ impl OverworldPhase {
             &event_data,
         )
         .ok()?;
-        let object_events = seed_object_events(&scene);
-        Some((event_data, scene, object_events))
+        Some((event_data, scene))
     }
 
     /// Executes a resolved [`engine::overworld::WarpTrigger::Resolved`]
@@ -469,7 +479,10 @@ impl OverworldPhase {
     /// the pre-step stance. Returns `true` on a completed rebind.
     ///
     /// `shift` is the departed-to-entered tile translation the player's own
-    /// step went through; the player's live tall-grass effects follow it.
+    /// step went through; the player's live tall-grass effects and the live
+    /// object events still in view follow it
+    /// ([`ObjectEventCollection::carry_across_connection`]). Unlike a warp, no
+    /// freshly seeded collection replaces the departed one.
     pub(super) fn cross_connection(
         &mut self,
         to_map: assets::MapId,
@@ -483,9 +496,7 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, mut scene, object_events)) =
-            self.stage_transition(to_map)
-        else {
+        let Some((transitioned_event_data, mut scene)) = self.stage_scene(to_map) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -497,6 +508,23 @@ impl OverworldPhase {
         // The player's still-live rustle follows the camera into the entered
         // map's coordinates (`field_effect_helpers.c:325-330`).
         scene.carry_tall_grass_from(&self.scene, shift);
+        // The departed visit's active objects stay live, shifted into the entered map's
+        // coordinates and dropped only if outside its view (`LoadMapFromCameraTransition` leaves
+        // them in place; `UpdateObjectEventsForCameraUpdate`, `event_object_movement.c:2217-2222`).
+        // The entered map's templates enter unadmitted, for the scheduler's first frame to admit.
+        // Built whole before anything is assigned, so a refused rebind above touched nothing.
+        let object_events = self.object_events.carry_across_connection(
+            self.map_id,
+            to_map,
+            scene.map_events().object_events,
+            shift,
+            &FrameContext {
+                player_position: self.player.position(),
+                event_data: &transitioned_event_data,
+                frozen: false,
+                player_dashing: false,
+            },
+        );
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;
