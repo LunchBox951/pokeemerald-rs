@@ -58,8 +58,8 @@ impl OverworldPhase {
         }
     }
 
-    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead, or one
-    /// holding an item with a battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
+    /// Gates the encounter roll, since `Battle::new` refuses a fainted or inadmissible lead, or one
+    /// holding an item with an unimplemented battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
         let refusal = self
             .lead_battler()
@@ -274,9 +274,9 @@ impl OverworldPhase {
     /// rejected start may have drawn while building the opponent.
     ///
     /// A lead that is fainted because the whole saved party is unusable is
-    /// not screened here; [`battle::Battle::new`] refuses it with
-    /// `FaintedBattler`, which this method logs and drops like any other
-    /// rejection. A party with a usable member never reaches this state,
+    /// refused by the shared lead screen ([`ensure_lead_can_battle`]) with
+    /// `FaintedBattler` before the opponent is built, so the refusal draws
+    /// nothing. A party with a usable member never reaches this state,
     /// because [`crate::party::select_active_battler`] picks that member as
     /// lead (`SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
     pub(super) fn begin_wild_battle(

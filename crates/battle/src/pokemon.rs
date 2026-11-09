@@ -32,7 +32,9 @@ pub mod pp_bonuses;
 mod tests;
 
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
-pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use learn::{
+    ExperienceAward, LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn,
+};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// Maximum number of moves a Pokémon can know.
@@ -173,7 +175,9 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
+    /// Remaining PP. A battler built in-process holds at most
+    /// [`BattlePokemon::max_pp`]; one adopted from a save may hold more
+    /// ([`BattlePokemon::with_saved_pp`]).
     pub pp: u8,
 }
 
@@ -590,6 +594,23 @@ impl BattlePokemon {
         Ok(self)
     }
 
+    /// Adopts a saved record's remaining PP for one move slot exactly as
+    /// stored, even above [`BattlePokemon::max_pp`]; upstream provenance is
+    /// in the `party` module docs ("Move PP"). Spending
+    /// ([`BattlePokemon::deduct_pp`]) counts down from the stored value and
+    /// [`BattlePokemon::heal`] restores the maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty.
+    pub fn with_saved_pp(mut self, index: usize, pp: u8) -> Result<Self, BattleError> {
+        self.moves
+            .get_mut(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?
+            .pp = pp;
+        Ok(self)
+    }
+
     /// Species identifier.
     #[must_use]
     pub const fn species(&self) -> SpeciesId {
@@ -955,11 +976,33 @@ impl BattlePokemon {
         dex: &Dex,
         amount: u32,
     ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        Ok(self.apply_experience_reporting(dex, amount)?.pending)
+    }
+
+    /// Applies an award exactly like [`BattlePokemon::apply_experience`] and
+    /// also reports the moves a free slot took without asking, in learning
+    /// order, so the caller can announce each one before any prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
+    /// decision is already pending.
+    #[must_use = "the report carries the open move prompt and the moves \
+                  learned without asking"]
+    pub fn apply_experience_reporting(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<ExperienceAward, BattleError> {
         if let Some(pending) = self.pending_move_learn {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
+        let mut learned = Vec::new();
+        self.pending_move_learn = self.advance_experience(dex, amount, &mut learned);
+        Ok(ExperienceAward {
+            pending: self.pending_move_learn,
+            learned,
+        })
     }
 
     /// Adopts a loaded experience total verbatim, without moving the level or

@@ -129,6 +129,7 @@ fn effect(elevation: u8, on_first_command: bool) -> TallGrassEffect {
         animation: Animation::fresh(),
         owner_moved: false,
         on_first_command,
+        strip_behavior: None,
     }
 }
 

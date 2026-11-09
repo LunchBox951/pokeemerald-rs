@@ -32,10 +32,12 @@
 //!
 //! # Lead-health eligibility
 //!
-//! Encounter eligibility needs no lead-health gate. Wild losses white out in their terminal
-//! frame, the scripted first-battle conclusion heals the lead after every outcome, and save
-//! loading heals the single-member Route 101 rescue state that can otherwise contain a
-//! fainted lead.
+//! Wild losses white out in their terminal frame, the scripted first-battle conclusion heals
+//! the lead after every outcome, and save loading heals the single-member Route 101 rescue
+//! state that can otherwise contain a fainted lead. A fainted lead that survives anyway (an
+//! imported save, or an undecodable reserve that keeps the party's HP total nonzero) is
+//! refused by the shared lead screen (`lead_screen::ensure_lead_can_battle`), which disables
+//! the encounter roll before any draw.
 
 use battle::{
     Battle, BattleError, BattleEvent, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
