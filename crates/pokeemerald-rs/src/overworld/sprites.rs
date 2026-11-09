@@ -175,6 +175,7 @@ impl SceneSprites {
             player_position: player.position(),
             event_data,
             frozen: true,
+            player_dashing: false,
         });
         self.live_entries(&objects, player, event_data, grass)
     }

@@ -27,8 +27,20 @@
 //! The sheet and palette are optional pack content: a pack without them draws
 //! no effect ([`load_resources`]).
 //!
-//! Not modelled: the long grass effect, and an effect's carry-over across a
-//! map-edge connection (`field_effect_helpers.c:325-330`).
+//! A player-owned effect survives a map-edge connection crossing, translated into
+//! the entered map's coordinates with its animation and moved-away state kept
+//! (`field_effect_helpers.c:325-330`): [`OverworldScene::carry_tall_grass_from`].
+//! The entered scene keeps no tileset attributes for its connected layouts, so
+//! the departed tile's behaviour is read from the departed scene as the effect
+//! crosses and kept with it; the tile must lie inside the entered map's backup
+//! band (`viewport::within_backup_map_band`) or the effect is dropped. An
+//! object-owned effect is not carried: its owner is a slot of the departed
+//! map's object collection, which the crossing replaces, so the owner cannot be
+//! found and the effect retires as in an ordinary owner removal.
+//!
+//! Not modelled: the long grass effect, and the camera's saved-view cells that
+//! upstream also copies into the entered map's backup grid
+//! (`fieldmap.c:473,617`).
 
 use assets::pack::{AssetPack, PaletteRef};
 use assets::{ImageRef, PackError};
@@ -202,6 +214,9 @@ struct TallGrassEffect {
     /// Whether this frame's callback saw the first command, which adds
     /// [`FIRST_COMMAND_SUBPRIORITY`].
     on_first_command: bool,
+    /// The behaviour of a tile outside the active grid, which only a carried
+    /// effect can stand on: the connection strip's cell, read when it crossed.
+    strip_behavior: Option<u8>,
 }
 
 /// An object sprite an effect's depth is compared against
@@ -305,6 +320,7 @@ impl TallGrassEffects {
             animation,
             owner_moved: false,
             on_first_command: false,
+            strip_behavior: None,
         });
     }
 
@@ -324,7 +340,9 @@ impl TallGrassEffects {
             let Some((current, previous)) = owner_tiles(effect.owner) else {
                 return false;
             };
-            let tall_grass = behavior_at(effect.tile).is_some_and(is_tall_grass);
+            let tall_grass = behavior_at(effect.tile)
+                .or(effect.strip_behavior)
+                .is_some_and(is_tall_grass);
             if !tall_grass || (effect.owner_moved && effect.animation.ended) {
                 return false;
             }
@@ -536,6 +554,48 @@ impl OverworldScene {
                 self.grass.spawn_step(Owner::Object(slot), tile, elevation);
             }
         }
+    }
+
+    /// Carries the player's live effects of `departed` into this just-loaded
+    /// scene after a seamless connection crossing (`UpdateTallGrassFieldEffect`,
+    /// `field_effect_helpers.c:325-330`). `shift` translates the departed map's
+    /// tile coordinates into this map's. An effect whose translated tile falls
+    /// outside this map's backup band is dropped, as is every object-owned
+    /// effect (see the module docs). Animation, moved-away state, elevation, and
+    /// depth state are kept; the scene's own placement and admission passes are
+    /// left to run.
+    pub(crate) fn carry_tall_grass_from(&mut self, departed: &Self, shift: (i32, i32)) {
+        if !self.sprites.draws_tall_grass() {
+            return;
+        }
+        let runtime = departed.runtime();
+        let (width, height) = (self.layout.width, self.layout.height);
+        let carried: Vec<TallGrassEffect> = departed
+            .grass
+            .effects
+            .iter()
+            .filter(|effect| effect.owner == Owner::Player)
+            .filter_map(|effect| {
+                let tile = (effect.tile.0 + shift.0, effect.tile.1 + shift.1);
+                if !viewport::within_backup_map_band(
+                    width,
+                    height,
+                    i64::from(tile.0),
+                    i64::from(tile.1),
+                ) {
+                    return None;
+                }
+                let behavior = runtime
+                    .metatile_behavior(effect.tile.0, effect.tile.1)
+                    .or(effect.strip_behavior);
+                Some(TallGrassEffect {
+                    tile,
+                    strip_behavior: behavior,
+                    ..*effect
+                })
+            })
+            .collect();
+        self.grass.effects.extend(carried);
     }
 
     /// Destroys every effect and readies every object event's spawn-time pass

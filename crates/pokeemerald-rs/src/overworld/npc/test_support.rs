@@ -50,6 +50,7 @@ pub(super) fn admitted_with(
             player_position: (i32::from(first.x), i32::from(first.y)),
             event_data,
             frozen: true,
+            player_dashing: false,
         });
     }
     objects

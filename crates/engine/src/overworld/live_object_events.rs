@@ -481,6 +481,7 @@ mod tests {
             player_position: (2, 2),
             event_data: &crate::event_data::EventData::new(),
             frozen: true,
+            player_dashing: false,
         };
         collection.admit_for_map_load(&context);
         assert_eq!(
