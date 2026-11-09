@@ -12781,38 +12781,38 @@
     "graphics/birch_speech": {
       "artifacts": {
         "bg0.pal": {
-          "reason": "Birch speech background palette bank 0 (16 colours), published as opening-scene/palette/bg0 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 0 is loaded at background palette slot 0 (main_menu.c:250-253,1280). Byte-identical to bg1.pal, so ROM import pairs the two copies in address order.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch speech background palette bank 0 (16 colours), published as opening-scene/palette/bg0 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 0 is loaded at background palette slot 0 (main_menu.c:250-253,1280). Byte-identical to bg1.pal, so ROM import pairs the two copies in address order. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg1.pal": {
-          "reason": "Birch speech background palette bank 1 (16 colours), published as opening-scene/palette/bg1 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 1 is loaded at background palette slot 1 (main_menu.c:250-253,1280). Byte-identical to bg0.pal, so ROM import pairs the two copies in address order.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch speech background palette bank 1 (16 colours), published as opening-scene/palette/bg1 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 1 is loaded at background palette slot 1 (main_menu.c:250-253,1280). Byte-identical to bg0.pal, so ROM import pairs the two copies in address order. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg2.pal": {
-          "reason": "Birch speech gradient palette (16 colours), published as opening-scene/palette/bg2 and read through BirchSpeechHandle::gradient_palette; upstream sBirchSpeechBgGradientPal colours 8-15 are loaded over background colours 1-8 (main_menu.c:257,1281). The partial load is not ported; the whole bank is published.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch speech gradient palette (16 colours), published as opening-scene/palette/bg2 and read through BirchSpeechHandle::gradient_palette; upstream sBirchSpeechBgGradientPal colours 8-15 are loaded over background colours 1-8 (main_menu.c:257,1281). The partial load is not ported; the whole bank is published. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "birch.png": {
-          "reason": "Birch's new-game sprite, 64x64 4bpp, published as opening-scene/image/birch with the PNG's own 16-colour PLTE as opening-scene/palette/birch and read through BirchSpeechHandle::birch; upstream sNewGameBirch_Gfx is .4bpp (uncompressed) and sNewGameBirch_Pal is the PNG's .gbapal, shown through a 64x64 sprite template (field_effect.c:245-247,328-359,909-913). Sprite creation and animation are not ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch's new-game sprite, 64x64 4bpp, published as opening-scene/image/birch with the PNG's own 16-colour PLTE as opening-scene/palette/birch and read through BirchSpeechHandle::birch; upstream sNewGameBirch_Gfx is .4bpp (uncompressed) and sNewGameBirch_Pal is the PNG's .gbapal, shown through a 64x64 sprite template (field_effect.c:245-247,328-359,909-913). Sprite creation and animation are not ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "map.bin": {
-          "reason": "Birch speech background tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/birch_speech_map and read through BirchSpeechHandle::background_tilemap; upstream sBirchSpeechBgMap is .lz, decompressed to screen block 7 (main_menu.c:256,1279). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch speech background tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/birch_speech_map and read through BirchSpeechHandle::background_tilemap; upstream sBirchSpeechBgMap is .lz, decompressed to screen block 7 (main_menu.c:256,1279). ROM import reads it as an LZ77 blob. No scene rendering is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "shadow.png": {
-          "reason": "Birch speech shadow and platform tile sheet, 128x24 4bpp, published as pack id opening-scene/image/shadow and read through AssetPack::birch_speech (BirchSpeechHandle::shadow); upstream loads it as sBirchSpeechShadowGfx (.4bpp.lz) into VRAM (main_menu.c:255,1278). ROM import reads it as an LZ77 root. No scene rendering is ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Birch speech shadow and platform tile sheet, 128x24 4bpp, published as pack id opening-scene/image/shadow and read through AssetPack::birch_speech (BirchSpeechHandle::shadow); upstream loads it as sBirchSpeechShadowGfx (.4bpp.lz) into VRAM (main_menu.c:255,1278). ROM import reads it as an LZ77 root. No scene rendering is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -12879,32 +12879,32 @@
     "graphics/evolution_scene": {
       "artifacts": {
         "bg.png": {
-          "reason": "Evolution-scene animated background tile sheet, 128x112 4-bit grayscale PNG decoded through gbagfx's sample inversion into 224 tiles of palette indices, published as evolution-scene/image/bg and read through AssetPack::evolution_scene (EvolutionSceneHandle::background); upstream sBgAnim_Gfx is .4bpp.lz, decompressed into background tile memory by StartBgAnimation (evolution_scene.c:71,1608). ROM import reads it as an LZ77 image root and the ignored equivalence test checks it equal to the checkout extraction. Background scrolling, palette animation, and the scene's timing are not ported.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution-scene animated background tile sheet, 128x112 4-bit grayscale PNG decoded through gbagfx's sample inversion into 224 tiles of palette indices, published as evolution-scene/image/bg and read through AssetPack::evolution_scene (EvolutionSceneHandle::background); upstream sBgAnim_Gfx is .4bpp.lz, decompressed into background tile memory by StartBgAnimation (evolution_scene.c:71,1608). ROM import reads it as an LZ77 image root and the ignored equivalence test checks it equal to the checkout extraction. Background scrolling, palette animation, and the scene's timing are not ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg_anim.pal": {
-          "reason": "Evolution-scene animation colour table, 32 colours, published as evolution-scene/palette/bg_anim and read through EvolutionSceneHandle::animation_palette; upstream sBgAnim_Pal is a raw .gbapal that InitMovingBgPalette indexes through sBgAnim_PalIndexes to build the cycling background banks (evolution_scene.c:78,1581-1592). The index table and the palette cycling are not ported.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution-scene animation colour table, 32 colours, published as evolution-scene/palette/bg_anim and read through EvolutionSceneHandle::animation_palette; upstream sBgAnim_Pal is a raw .gbapal that InitMovingBgPalette indexes through sBgAnim_PalIndexes to build the cycling background banks (evolution_scene.c:78,1581-1592). The index table and the palette cycling are not ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg_anim_intro.pal": {
-          "reason": "Evolution-scene intro palette, all 256 colours the JASC file lists, published as evolution-scene/palette/bg_anim_intro and read through EvolutionSceneHandle::intro_palette; upstream sBgAnim_Intro_Pal is a raw .gbapal of which StartBgAnimation loads only the first 16 colours at background palette 10 (evolution_scene.c:74,1606). The partial load is not ported; the whole file is published.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution-scene intro palette, all 256 colours the JASC file lists, published as evolution-scene/palette/bg_anim_intro and read through EvolutionSceneHandle::intro_palette; upstream sBgAnim_Intro_Pal is a raw .gbapal of which StartBgAnimation loads only the first 16 colours at background palette 10 (evolution_scene.c:74,1606). The partial load is not ported; the whole file is published. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg_inner.bin": {
-          "reason": "Evolution-scene inner background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_inner and read through EvolutionSceneHandle::inner_tilemap; upstream sBgAnim_Inner_Tilemap is .lz, copied to the inner background layer by StartBgAnimation (evolution_scene.c:72,1609). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution-scene inner background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_inner and read through EvolutionSceneHandle::inner_tilemap; upstream sBgAnim_Inner_Tilemap is .lz, copied to the inner background layer by StartBgAnimation (evolution_scene.c:72,1609). ROM import reads it as an LZ77 blob. No scene rendering is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "bg_outer.bin": {
-          "reason": "Evolution-scene outer background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_outer and read through EvolutionSceneHandle::outer_tilemap; upstream sBgAnim_Outer_Tilemap is .lz, copied to the outer background layer by StartBgAnimation (evolution_scene.c:73,1610). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution-scene outer background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_outer and read through EvolutionSceneHandle::outer_tilemap; upstream sBgAnim_Outer_Tilemap is .lz, copied to the outer background layer by StartBgAnimation (evolution_scene.c:73,1610). ROM import reads it as an LZ77 blob. No scene rendering is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -16817,8 +16817,8 @@
     "graphics/misc": {
       "artifacts": {
         "evo_sparkle.png": {
-          "reason": "Evolution sparkle sprite, 8x8 4-bit indexed PNG published as evolution-scene/image/evo_sparkle with the PNG's own 16-colour PLTE as evolution-scene/palette/evo_sparkle, read through EvolutionSceneHandle::sparkle; upstream sEvoSparkle_Gfx is .4bpp.lz and sEvoSparkle_Pal is the PNG's .gbapal, loaded by LoadEvoSparkleSpriteAndPal (evolution_graphics.c:41-42,283-286). ROM import reads the image as an LZ77 root and the palette as a raw run. Sparkle sprite creation, the sparkle movement tasks, and the unused_*.pal files are not ported.",
-          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "reason": "Evolution sparkle sprite, 8x8 4-bit indexed PNG published as evolution-scene/image/evo_sparkle with the PNG's own 16-colour PLTE as evolution-scene/palette/evo_sparkle, read through EvolutionSceneHandle::sparkle; upstream sEvoSparkle_Gfx is .4bpp.lz and sEvoSparkle_Pal is the PNG's .gbapal, loaded by LoadEvoSparkleSpriteAndPal (evolution_graphics.c:41-42,283-286). ROM import reads the image as an LZ77 root and the palette as a raw run. Sparkle sprite creation, the sparkle movement tasks, and the unused_*.pal files are not ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/evolution_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -18556,14 +18556,14 @@
     "graphics/pokemon/lotad": {
       "artifacts": {
         "front.png": {
-          "reason": "Lotad's still front picture, 64x64 4bpp, published as opening-scene/image/lotad and read through BirchSpeechHandle::lotad; upstream gMonStillFrontPic_Lotad is .4bpp.lz (src/data/graphics/pokemon.h:1888). Birch's speech draws Lotad through CreateMonPicSprite_Affine (main_menu.c:1873-1876), which loads the animation sheet's first frame (anim_front.png); that frame is pixel-identical to front.png, so the still picture stands for it. Lotad's other pictures and sheets are not published; no general species lookup is ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Lotad's still front picture, 64x64 4bpp, published as opening-scene/image/lotad and read through BirchSpeechHandle::lotad; upstream gMonStillFrontPic_Lotad is .4bpp.lz (src/data/graphics/pokemon.h:1888). Birch's speech draws Lotad through CreateMonPicSprite_Affine (main_menu.c:1873-1876), which loads the animation sheet's first frame (anim_front.png); that frame is pixel-identical to front.png, so the still picture stands for it. Lotad's other pictures and sheets are not published; no general species lookup is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Lotad's normal palette (16 colours), published as opening-scene/palette/lotad and paired with its front picture in BirchSpeechHandle::lotad; upstream gMonPalette_Lotad is .gbapal.lz (src/data/graphics/pokemon.h:1889), the one compressed palette ROM import reads as an LZ77 palette root. The shiny palette is not published.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Lotad's normal palette (16 colours), published as opening-scene/palette/lotad and paired with its front picture in BirchSpeechHandle::lotad; upstream gMonPalette_Lotad is .gbapal.lz (src/data/graphics/pokemon.h:1889), the one compressed palette ROM import reads as an LZ77 palette root. The shiny palette is not published. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -20918,52 +20918,52 @@
     "graphics/wallclock": {
       "artifacts": {
         "clock.png": {
-          "reason": "Wall-clock face tile sheet, 128x64 4bpp, published as opening-scene/image/wall_clock and read through WallClockHandle::screen; upstream gWallClock_Gfx is .4bpp.lz decompressed to VRAM (graphics.c:1352; wallclock.c:647). No clock rendering is ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Wall-clock face tile sheet, 128x64 4bpp, published as opening-scene/image/wall_clock and read through WallClockHandle::screen; upstream gWallClock_Gfx is .4bpp.lz decompressed to VRAM (graphics.c:1352; wallclock.c:647). No clock rendering is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "clock_start.bin": {
-          "reason": "Clock-setting screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_start and read through WallClockHandle::start_tilemap; upstream gWallClockStart_Tilemap is .lz decompressed to screen block 7 (graphics.c:1353; wallclock.c:692).",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Clock-setting screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_start and read through WallClockHandle::start_tilemap; upstream gWallClockStart_Tilemap is .lz decompressed to screen block 7 (graphics.c:1353; wallclock.c:692). Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "clock_view.bin": {
-          "reason": "Clock-viewing screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_view and read through WallClockHandle::view_tilemap; upstream gWallClockView_Tilemap is .lz decompressed to screen block 7 (graphics.c:1354; wallclock.c:736).",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Clock-viewing screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_view and read through WallClockHandle::view_tilemap; upstream gWallClockView_Tilemap is .lz decompressed to screen block 7 (graphics.c:1354; wallclock.c:736). Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "female.pal": {
-          "reason": "Wall-clock female palette bank (16 colours), published as opening-scene/palette/clock_female and read through WallClockHandle::female_palette; upstream gWallClockFemale_Pal colours the screen and the hand sprite (graphics.c:1351; wallclock.c:140-149,649-652).",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Wall-clock female palette bank (16 colours), published as opening-scene/palette/clock_female and read through WallClockHandle::female_palette; upstream gWallClockFemale_Pal colours the screen and the hand sprite (graphics.c:1351; wallclock.c:140-149,649-652). Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "hand.png": {
-          "reason": "Wall-clock hand sprite sheet, 64x144 4-bit grayscale, published as opening-scene/image/clock_hand (gbagfx inverts each sample into the palette index, which the extractor reproduces) and read through WallClockHandle::hand; upstream sHand_Gfx is .4bpp.lz loaded as sprite sheet sSpriteSheet_ClockHand (wallclock.c:74,132-135,669). No hand animation is ported.",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Wall-clock hand sprite sheet, 64x144 4-bit grayscale, published as opening-scene/image/clock_hand (gbagfx inverts each sample into the palette index, which the extractor reproduces) and read through WallClockHandle::hand; upstream sHand_Gfx is .4bpp.lz loaded as sprite sheet sSpriteSheet_ClockHand (wallclock.c:74,132-135,669). No hand animation is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "male.pal": {
-          "reason": "Wall-clock male palette bank (16 colours), published as opening-scene/palette/clock_male and read through WallClockHandle::male_palette; upstream gWallClockMale_Pal colours the screen and the hand sprite (graphics.c:1350; wallclock.c:140-149,649-652).",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Wall-clock male palette bank (16 colours), published as opening-scene/palette/clock_male and read through WallClockHandle::male_palette; upstream gWallClockMale_Pal colours the screen and the hand sprite (graphics.c:1350; wallclock.c:140-149,649-652). Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "text_prompt.pal": {
-          "reason": "Wall-clock prompt palette (4 colours), published as opening-scene/palette/clock_text_prompt and read through WallClockHandle::text_prompt_palette; upstream sTextPrompt_Pal is loaded at background palette 12 for the Cancel and Confirm labels (wallclock.c:75,655).",
-          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "reason": "Wall-clock prompt palette (4 colours), published as opening-scene/palette/clock_text_prompt and read through WallClockHandle::text_prompt_palette; upstream sTextPrompt_Pal is loaded at background palette 12 for the Cancel and Confirm labels (wallclock.c:75,655). Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+          "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
           "spec": "S-4",
           "status": "ported"
         }
       },
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete wall-clock graphics directory extracted: the face sheet, the grayscale hand sheet, the male, female, and prompt palettes, and both screen tilemaps, published under opening-scene/ and read through AssetPack::wall_clock (WallClockHandle) from checkout extraction and ROM import alike. No clock rendering, hand animation, or time input is ported.",
-      "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+      "reason": "Complete wall-clock graphics directory extracted: the face sheet, the grayscale hand sheet, the male, female, and prompt palettes, and both screen tilemaps, published under opening-scene/ and read through AssetPack::wall_clock (WallClockHandle) from checkout extraction and ROM import alike. No clock rendering, hand animation, or time input is ported. Validation and pack-entry construction are shared in scene_pipeline.rs; crates/xtask/src/extract/opening_scene.rs still owns this artifact's manifest entry, decoder, size, and error variant.",
+      "rust_target": "crates/xtask/src/extract/scene_pipeline.rs",
       "spec": "S-4",
       "status": "ported"
     },

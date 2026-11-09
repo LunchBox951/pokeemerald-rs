@@ -133,6 +133,7 @@ pub(crate) mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod publish;
+mod scene_pipeline;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;

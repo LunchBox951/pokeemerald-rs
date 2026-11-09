@@ -4,54 +4,22 @@
 //! (`src/data/graphics/pokemon.h:1888-1889`), and the wall-clock sheets,
 //! palettes, and tilemaps (`src/wallclock.c:74-75`, `src/graphics.c:1350-1354`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use pack_format::{PackEntry, PackWriter};
+use pack_format::PackWriter;
 
-use super::{
-    build_image_entry, build_palette_entry, jasc_pal, png, read_file, read_text, ExtractError,
+use super::scene_pipeline::{
+    self, ImageSource, PaletteFile, PaletteSource, SceneRules, TilemapSource,
 };
+use super::{png, ExtractError};
 
-/// The PNG bit depth every scene sheet carries and the typed accessors require.
-const BIT_DEPTH: u8 = 4;
 /// A 4-bit sample selects from a 16-colour bank.
 const BANK_COLORS: usize = 16;
 /// A 32x20 screen of two-byte tilemap entries.
 const SCREEN_TILEMAP_BYTES: usize = 32 * 20 * 2;
 
-/// A 4-bit sheet, relative to the checkout's `graphics/`.
-///
-/// `hand.png` is 4-bit grayscale, which `gbagfx` inverts into palette indices.
-#[derive(Clone, Copy, Debug)]
-struct ImageSource {
-    png: &'static str,
-    id: &'static str,
-    width: u32,
-    height: u32,
-}
-
-/// Where a 16-colour (or shorter) bank comes from.
-#[derive(Clone, Copy, Debug)]
-enum PaletteFile {
-    /// A JASC `.pal` file.
-    Jasc(&'static str),
-    /// The `PLTE` chunk of the PNG `gbagfx` takes the in-game palette from.
-    PngPlte(&'static str),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PaletteSource {
-    file: PaletteFile,
-    id: &'static str,
-    colors: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct TilemapSource {
-    path: &'static str,
-    id: &'static str,
-}
-
+/// Every sheet is 4-bit, relative to the checkout's `graphics/`. `hand.png` is
+/// 4-bit grayscale, which `gbagfx` inverts into palette indices.
 const IMAGES: [ImageSource; 5] = [
     ImageSource {
         png: "birch_speech/shadow.png",
@@ -143,6 +111,13 @@ const TILEMAPS: [TilemapSource; 3] = [
     },
 ];
 
+/// What separates this scene's pipeline from the other's.
+const RULES: SceneRules = SceneRules {
+    decode_image: png::decode_truncating_palette,
+    tilemap_bytes: SCREEN_TILEMAP_BYTES,
+    mismatch,
+};
+
 /// Every pack id [`extract_opening_scene`] emits, images first, then
 /// palettes, then tilemaps. The profile generator reads this as its fixed
 /// inventory so extraction and generation cannot drift apart.
@@ -165,13 +140,13 @@ pub(super) fn extract_opening_scene(
     let graphics = upstream.join("graphics");
     let mut entries = Vec::with_capacity(IMAGES.len() + PALETTES.len() + TILEMAPS.len());
     for image in IMAGES {
-        entries.push(image_entry(&graphics, image)?);
+        entries.push(scene_pipeline::image_entry(RULES, &graphics, image)?);
     }
     for palette in PALETTES {
-        entries.push(palette_entry(&graphics, palette)?);
+        entries.push(scene_pipeline::palette_entry(RULES, &graphics, palette)?);
     }
     for tilemap in TILEMAPS {
-        entries.push(tilemap_entry(upstream, tilemap)?);
+        entries.push(scene_pipeline::tilemap_entry(RULES, upstream, tilemap)?);
     }
     for entry in entries {
         writer.push(entry);
@@ -179,72 +154,8 @@ pub(super) fn extract_opening_scene(
     Ok(())
 }
 
-fn image_entry(graphics: &Path, source: ImageSource) -> Result<PackEntry, ExtractError> {
-    let path = graphics.join(source.png);
-    let image = png::decode_truncating_palette(&read_file(&path)?)
-        .map_err(|e| ExtractError::Png(path.clone(), e))?;
-    if image.width != source.width || image.height != source.height {
-        return Err(mismatch(
-            &path,
-            format!(
-                "is {}x{}: expected {}x{}",
-                image.width, image.height, source.width, source.height
-            ),
-        ));
-    }
-    if image.bit_depth != BIT_DEPTH {
-        return Err(mismatch(
-            &path,
-            format!("is {}-bit: expected {BIT_DEPTH}-bit", image.bit_depth),
-        ));
-    }
-    build_image_entry(&path, source.id.to_owned(), image)
-}
-
-fn palette_entry(graphics: &Path, source: PaletteSource) -> Result<PackEntry, ExtractError> {
-    let (path, colors) = match source.file {
-        PaletteFile::Jasc(name) => {
-            let path = graphics.join(name);
-            let colors = jasc_pal::parse(&read_text(&path)?)
-                .map_err(|e| ExtractError::Pal(path.clone(), e))?;
-            (path, colors)
-        }
-        PaletteFile::PngPlte(name) => {
-            let path = graphics.join(name);
-            let colors = png::decode_palette(&read_file(&path)?)
-                .map_err(|e| ExtractError::Png(path.clone(), e))?;
-            (path, colors)
-        }
-    };
-    if colors.len() != source.colors {
-        return Err(mismatch(
-            &path,
-            format!("has {} colours: expected {}", colors.len(), source.colors),
-        ));
-    }
-    build_palette_entry(&path, &colors, source.id.to_owned())
-}
-
-fn tilemap_entry(upstream: &Path, source: TilemapSource) -> Result<PackEntry, ExtractError> {
-    let path = upstream.join(source.path);
-    let payload = read_file(&path)?;
-    if payload.len() != SCREEN_TILEMAP_BYTES {
-        return Err(mismatch(
-            &path,
-            format!(
-                "is {} bytes: expected {SCREEN_TILEMAP_BYTES}",
-                payload.len()
-            ),
-        ));
-    }
-    Ok(pack_format::raw_entry(source.id.to_owned(), payload))
-}
-
-fn mismatch(path: &Path, detail: String) -> ExtractError {
-    ExtractError::OpeningSceneAssetMismatch {
-        path: path.to_path_buf(),
-        detail,
-    }
+fn mismatch(path: PathBuf, detail: String) -> ExtractError {
+    ExtractError::OpeningSceneAssetMismatch { path, detail }
 }
 
 #[cfg(test)]
