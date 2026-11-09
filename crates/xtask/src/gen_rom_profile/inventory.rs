@@ -83,6 +83,12 @@ pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileErro
     pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the trainer defeat-speech table is present.
+pub fn require_trainer_defeat_speeches(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID)
+        .map(|_| ())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
 pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
@@ -327,6 +333,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_field_messages(pack)?;
+    require_trainer_defeat_speeches(pack)?;
     require_interface_images(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;

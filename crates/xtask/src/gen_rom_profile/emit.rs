@@ -10,7 +10,7 @@ use super::plan::{
     OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine, Resolution, StarterChooserPlan,
     TileAnimPlan, TilesetPlan,
 };
-use super::plan::{TrainerBattlerPlan, TrainerFrontPlan};
+use super::plan::{TrainerBattlerPlan, TrainerDefeatSpeechPlan, TrainerFrontPlan};
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
 ///
@@ -78,7 +78,7 @@ use crate::roots::{{
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
     PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    TrainerDefeatSpeechRoot, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -137,6 +137,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
+    trainer_defeat_speech_roots(&mut out, &plan.trainer_defeat_speeches);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -478,6 +479,23 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     }
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
+}
+
+fn trainer_defeat_speech_roots(out: &mut String, speeches: &TrainerDefeatSpeechPlan) {
+    let _ = writeln!(out, "    trainer_defeat_speeches: &[");
+    for speech in &speeches.speeches {
+        let script = speech.script.map_or_else(
+            || "None".to_owned(),
+            |script| format!("Some({})", gba_ptr_expression(script)),
+        );
+        let _ = writeln!(
+            out,
+            "        TrainerDefeatSpeechRoot {{ symbol: {:?}, addr: {}, script: {script} }},",
+            speech.symbol,
+            gba_ptr_expression(speech.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
 }
 
 fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
@@ -908,7 +926,8 @@ mod bag_field_tests {
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
+        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
+        TrainerDefeatSpeechPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1291,6 +1310,7 @@ mod bag_field_tests {
                 specials: vec![],
             },
             field_messages: FieldMessagePlan { messages: vec![] },
+            trainer_defeat_speeches: TrainerDefeatSpeechPlan { speeches: vec![] },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],

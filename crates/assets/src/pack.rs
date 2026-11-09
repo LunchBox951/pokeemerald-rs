@@ -26,6 +26,7 @@ mod starter_chooser;
 mod text_printer;
 mod text_tokens;
 mod trainer_battler;
+mod trainer_defeat_speech;
 mod trainer_pic;
 
 use std::path::{Path, PathBuf};
@@ -62,6 +63,7 @@ pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 pub use text_printer::TextPrinterDownArrow;
+pub use trainer_defeat_speech::TrainerDefeatSpeechError;
 
 pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;

@@ -10,6 +10,7 @@ use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
     opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    trainer_defeat_speeches,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
@@ -44,6 +45,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
             rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
+            rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
@@ -109,6 +111,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else if domain == "field_messages" {
             field_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "trainer_defeat_speeches" {
+            trainer_defeat_speeches::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -306,6 +310,17 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
 fn a_pack_missing_the_field_message_table_is_refused() {
     let id = rom_import::FIELD_MESSAGE_PACK_ID;
     assert_refused("no-field-message-table", without(id), id, "field_messages");
+}
+
+#[test]
+fn a_pack_missing_the_trainer_defeat_speech_table_is_refused() {
+    let id = rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID;
+    assert_refused(
+        "no-trainer-defeat-speech-table",
+        without(id),
+        id,
+        "trainer_defeat_speeches",
+    );
 }
 
 #[test]

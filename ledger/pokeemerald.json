@@ -12023,6 +12023,14 @@
       "status": "pending"
     },
     "data/text/trainers.inc": {
+      "artifacts": {
+        "Route103_DefeatSpeeches": {
+          "reason": "The fourteen Route 103 trainer defeat speeches, typed by battle-script context rather than by trainer id: data/text/trainers.inc Route103_Text_{Daisy,Amy,Liv,AmyRematch,LivRematch,Andrew,Miguel,MiguelRematch,Pete,Isabelle,Rhett,Marcos}Defeated (lines 76-240) and the script-local Route103_Text_MayDefeated and Route103_Text_BrendanDefeated (data/maps/Route103/scripts.inc:302-304,328-329, one text per rival gender shared by that gender's three trainerbattle_no_intro starters at lines 62-87). Amy, Liv and their two rematches stay four records although all four trainerbattle commands (scripts.inc:208,221,226,239) name TRAINER_AMY_AND_LIV_1. Extracted as raw charmap streams in the `trainer-defeat-speech/table` pack entry (crates/xtask/src/extract/trainer_defeat_speech.rs from the checkout, crates/rom-import/src/domains/trainer_defeat_speeches.rs from the ROM, byte-identical per crates/rom-import/tests/equivalence.rs) and read through assets::TrainerDefeatSpeechTable/TrainerDefeatSpeechContext via AssetPack::trainer_defeat_speeches, with {PLAYER} and {KUN} kept as the FD 01 and FD 05 control sequences for the consumer to expand. Isabelle's seven-byte text recurs verbatim at three string starts in the ROM, so the ROM profile locates it through the trainerbattle command that names it (the importer re-checks that command). NOT extracted: every other label in data/text/trainers.inc -- the intro, post-battle, not-enough-Pokemon and match-call registration text of these trainers, and all text of every other trainer, route and gym; no engine consumer reads the table yet, so no defeat speech is displayed.",
+          "rust_target": "crates/assets/src/trainers.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "data.text",
       "kind": "file",
       "spec_owner": "S-5",
