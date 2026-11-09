@@ -221,6 +221,11 @@ pub(crate) struct OverworldPhase {
     /// landing-tile collision from. Never consulted by anything else;
     /// warps keep their own per-transition loads.
     connection_pack: OnceCell<assets::pack::AssetPack>,
+    /// The one pack every battle of this phase plays its text from
+    /// ([`live_battle_text`]), loaded on the first battle and shared by each
+    /// later one rather than read again. Holds at most that one pack; a battle
+    /// that cannot start from it drops it so the next battle reads afresh.
+    battle_pack: std::cell::RefCell<Option<std::rc::Rc<assets::pack::AssetPack>>>,
     /// Where every pack load this phase performs after construction
     /// reads from: [`Self::load`]/[`Self::continue_saved_game`]'s own
     /// `source` argument, retained for every later warp, connection
@@ -630,6 +635,7 @@ impl OverworldPhase {
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
+            battle_pack: std::cell::RefCell::new(None),
             pack_source: crate::pack_source::PackSource::Runtime,
             // Seeded exactly as `Self::new` seeds a new game's stream: a
             // continue never reaches the naming screen, upstream's only
@@ -793,6 +799,7 @@ impl OverworldPhase {
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
+            battle_pack: std::cell::RefCell::new(None),
             pack_source,
             rng,
             wild: WildEncounterState::new(),
