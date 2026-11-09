@@ -493,4 +493,20 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn the_importer_accepts_the_plan_the_locator_emits_at_the_bound() {
+        let (rom, entries) = fixture(&terminated_table(127), &[0x3000]);
+        with_context("sprite-palette-bound-import", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            let reader = rom_import::RomReader::new(ctx.rom);
+            let table = rom_import::GbaPtr::new(plan.palette_table).expect("a ROM address");
+            let named = rom_import::sprite_palette_table(&reader, table)
+                .expect("the importer reads the located table");
+            for palette in &plan.palettes {
+                let addr = rom_import::GbaPtr::new(palette.addr).expect("a ROM address");
+                assert!(named.contains(&addr), "{} not named", palette.id);
+            }
+        });
+    }
 }
