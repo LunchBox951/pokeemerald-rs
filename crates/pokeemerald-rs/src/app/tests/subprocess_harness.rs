@@ -401,12 +401,39 @@ fn aside_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
     }
 }
 
+/// Moves the pack at `path` to a free aside name and returns that name, leaving `path` vacant.
+/// The aside name is claimed exclusively first (`create_new`, so an occupied name, including a
+/// symlink, is skipped, never overwritten) and the pack is then renamed over that claim. The
+/// rename moves the entry even while the guard's creating handle is open (std opens with
+/// `FILE_SHARE_DELETE` on Windows), so the vacated name is free at once rather than
+/// delete-pending as it would be after an unlink. The returned name is the test's own to remove.
+#[cfg(any(unix, windows))]
+fn move_pack_aside(path: &std::path::Path) -> std::path::PathBuf {
+    let aside = (0..64)
+        .find_map(|attempt| {
+            let aside = aside_candidate(path, attempt);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&aside)
+            {
+                Ok(_) => Some(aside),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => panic!("the aside name must be claimable: {error}"),
+            }
+        })
+        .expect("a free aside name must exist");
+    if let Err(error) = std::fs::rename(path, &aside) {
+        drop(std::fs::remove_file(&aside));
+        panic!("the original must move aside: {error}");
+    }
+    aside
+}
+
 /// Swaps the pack at `path` for a different file and returns the name the original stays
-/// reachable under. Both names are claimed exclusively: the original is hard-linked to the first
-/// free aside name (an occupied name, including a symlink, is skipped, never overwritten), and
-/// the replacement is created with `create_new` once the pack name is vacated, so a planted
-/// symlink there fails the test instead of being written through. Everything it returns or
-/// leaves behind is the test's own to remove.
+/// reachable under (see [`move_pack_aside`]). The replacement is created with `create_new` once
+/// the pack name is vacated, so a planted symlink there fails the test instead of being written
+/// through. Everything it returns or leaves behind is the test's own to remove.
 #[cfg(any(unix, windows))]
 fn displace_pack_with_replacement(
     path: &std::path::Path,
@@ -414,19 +441,7 @@ fn displace_pack_with_replacement(
 ) -> std::path::PathBuf {
     use std::io::Write as _;
 
-    let aside = (0..64)
-        .find_map(|attempt| {
-            let aside = aside_candidate(path, attempt);
-            match std::fs::hard_link(path, &aside) {
-                Ok(()) => Some(aside),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
-                Err(error) => {
-                    panic!("the original must be kept reachable beside the pack: {error}")
-                }
-            }
-        })
-        .expect("a free aside name must exist");
-    std::fs::remove_file(path).expect("the original name must vacate");
+    let aside = move_pack_aside(path);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -542,4 +557,29 @@ fn scratch_pack_guard_removes_only_the_file_it_created_on_windows() {
     drop(std::fs::remove_file(&aside));
     assert_eq!(outcome, ScratchRemoval::Replaced);
     assert_eq!(survived.ok().as_deref(), Some(&b"replacement"[..]));
+}
+
+/// A symlink to the displaced original, planted at the pack's pathname, is a different entry: the
+/// guard must report it as a replacement and leave it in place rather than follow it to a match.
+#[cfg(unix)]
+#[test]
+fn scratch_pack_guard_spares_a_symlink_to_its_displaced_original() {
+    let pack = write_empty_scratch_pack("guard-symlink-to-original");
+    let path = pack.path().to_path_buf();
+    let aside = move_pack_aside(&path);
+    std::os::unix::fs::symlink(&aside, &path).expect("the vacated name must take the symlink");
+
+    let outcome = pack.remove_if_owned();
+    let still_symlink = std::fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink());
+    let aside_exists = aside.is_file();
+    drop(std::fs::remove_file(&path));
+    drop(std::fs::remove_file(&aside));
+    drop(pack);
+    assert_eq!(outcome, ScratchRemoval::Replaced);
+    assert_eq!(
+        still_symlink.ok(),
+        Some(true),
+        "the planted symlink must be left intact"
+    );
+    assert!(aside_exists, "the displaced original must survive");
 }
