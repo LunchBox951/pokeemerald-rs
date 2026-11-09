@@ -391,11 +391,62 @@ fn scratch_pack_replacement_staging_does_not_write_through_a_planted_symlink() {
     );
 }
 
+/// The `attempt`th candidate name for the pack's displaced original beside `pack`.
+#[cfg(any(unix, windows))]
+fn aside_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
+    if attempt == 0 {
+        pack.with_extension("aside")
+    } else {
+        pack.with_extension(format!("aside-{attempt}"))
+    }
+}
+
+/// Swaps the pack at `path` for a different file and returns the name the original stays
+/// reachable under. Both names are claimed exclusively: the original is hard-linked to the first
+/// free aside name (an occupied name, including a symlink, is skipped, never overwritten), and
+/// the replacement is created with `create_new` once the pack name is vacated, so a planted
+/// symlink there fails the test instead of being written through. Everything it returns or
+/// leaves behind is the test's own to remove.
+#[cfg(any(unix, windows))]
+fn displace_pack_with_replacement(
+    path: &std::path::Path,
+    replacement: &[u8],
+) -> std::path::PathBuf {
+    use std::io::Write as _;
+
+    let aside = (0..64)
+        .find_map(|attempt| {
+            let aside = aside_candidate(path, attempt);
+            match std::fs::hard_link(path, &aside) {
+                Ok(()) => Some(aside),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => {
+                    panic!("the original must be kept reachable beside the pack: {error}")
+                }
+            }
+        })
+        .expect("a free aside name must exist");
+    std::fs::remove_file(path).expect("the original name must vacate");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("the vacated pack name must be exclusively creatable")
+        .write_all(replacement)
+        .expect("the replacement must be writable");
+    aside
+}
+
 /// The guard unlinks the file it created, but never an entry that replaced it, and says so
 /// rather than staying silent. Exercises the cleanup directly, without a child process.
 #[cfg(unix)]
 #[test]
 fn scratch_pack_guard_removes_only_the_file_it_created() {
+    guard_removes_only_the_file_it_created();
+}
+
+#[cfg(unix)]
+fn guard_removes_only_the_file_it_created() {
     let label = "guard-identity";
     let own = write_empty_scratch_pack(label);
     let own_path = own.path().to_path_buf();
@@ -405,9 +456,7 @@ fn scratch_pack_guard_removes_only_the_file_it_created() {
 
     let pack = write_empty_scratch_pack(label);
     let path = pack.path().to_path_buf();
-    let aside = path.with_extension("aside");
-    std::fs::rename(&path, &aside).unwrap();
-    std::fs::write(&path, b"replacement").unwrap();
+    let aside = displace_pack_with_replacement(&path, b"replacement");
     let outcome = pack.remove_if_owned();
     let survived = std::fs::read(&path);
     drop(pack);
@@ -417,4 +466,80 @@ fn scratch_pack_guard_removes_only_the_file_it_created() {
     assert_eq!(outcome, ScratchRemoval::Replaced);
     assert_eq!(survived.ok().as_deref(), Some(&b"replacement"[..]));
     assert_eq!(survived_drop.ok().as_deref(), Some(&b"replacement"[..]));
+}
+
+/// The guard regression must not overwrite or delete a pre-existing file at its predictable
+/// first aside name, nor write through a symlink planted at the next one.
+#[cfg(unix)]
+#[test]
+fn scratch_pack_guard_test_spares_preexisting_aside_names() {
+    use std::io::Write as _;
+
+    let pack_name = scratch_pack_candidate("guard-identity", 0);
+    let aside = aside_candidate(&pack_name, 0);
+    let planted = aside_candidate(&pack_name, 1);
+    let victim = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-aside-victim-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    for (name, contents) in [(&aside, &b"precious"[..]), (&victim, &b"victim"[..])] {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(name)
+            .expect("the name must be free to plant")
+            .write_all(contents)
+            .expect("the planted file must be writable");
+    }
+    if let Err(error) = std::os::unix::fs::symlink(&victim, &planted) {
+        drop(std::fs::remove_file(&aside));
+        drop(std::fs::remove_file(&victim));
+        panic!("the second aside name must be free to plant the symlink: {error}");
+    }
+
+    let outcome = std::panic::catch_unwind(guard_removes_only_the_file_it_created);
+    let aside_contents = std::fs::read(&aside);
+    let victim_contents = std::fs::read(&victim);
+    drop(std::fs::remove_file(&aside));
+    drop(std::fs::remove_file(&planted));
+    drop(std::fs::remove_file(&victim));
+    outcome.expect("the guard regression must pass around planted names");
+    assert_eq!(
+        aside_contents.ok().as_deref(),
+        Some(&b"precious"[..]),
+        "the guard regression clobbered a file it never created"
+    );
+    assert_eq!(
+        victim_contents.ok().as_deref(),
+        Some(&b"victim"[..]),
+        "the guard regression wrote through a planted symlink"
+    );
+}
+
+/// Windows: the guard deletes the pack it created while its own creating handle is still open,
+/// and spares an entry that replaced it.
+#[cfg(windows)]
+#[test]
+fn scratch_pack_guard_removes_only_the_file_it_created_on_windows() {
+    let label = "guard-identity-windows";
+    let own = write_empty_scratch_pack(label);
+    let own_path = own.path().to_path_buf();
+    assert_eq!(own.remove_if_owned(), ScratchRemoval::Removed);
+    drop(own);
+    assert!(
+        !own_path.exists(),
+        "the created pack must be gone once the guard drops"
+    );
+
+    let pack = write_empty_scratch_pack(label);
+    let path = pack.path().to_path_buf();
+    let aside = displace_pack_with_replacement(&path, b"replacement");
+    let outcome = pack.remove_if_owned();
+    drop(pack);
+    let survived = std::fs::read(&path);
+    drop(std::fs::remove_file(&path));
+    drop(std::fs::remove_file(&aside));
+    assert_eq!(outcome, ScratchRemoval::Replaced);
+    assert_eq!(survived.ok().as_deref(), Some(&b"replacement"[..]));
 }
