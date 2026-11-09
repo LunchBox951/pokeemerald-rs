@@ -23,7 +23,8 @@
 //! A quarantine that cannot be opened after `mkdirat` is left standing, since
 //! nothing proves the name still denotes it. On a filesystem out of space,
 //! quota or inodes the quarantine's `mkdirat` fails and the created levels
-//! are left standing.
+//! are left standing, except a level without the owner's write bit, which
+//! never needs a quarantine (see [`super::restore`]).
 
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, BorrowedFd};

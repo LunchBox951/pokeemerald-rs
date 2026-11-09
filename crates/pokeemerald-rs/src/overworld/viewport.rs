@@ -126,7 +126,7 @@ const BACKUP_MAP_MAX_PAST_SOUTH: i32 = MAP_OFFSET_H - 1 - MAP_OFFSET;
 ///
 /// Its odd width reaches one cell farther east than its even height reaches
 /// south (`InitMapLayoutData`, `pokeemerald/src/fieldmap.c`).
-fn within_backup_map_band(width: u16, height: u16, x: i64, y: i64) -> bool {
+pub(super) fn within_backup_map_band(width: u16, height: u16, x: i64, y: i64) -> bool {
     (i64::from(BACKUP_MAP_MIN)..=i64::from(width) + i64::from(BACKUP_MAP_MAX_PAST_EAST))
         .contains(&x)
         && (i64::from(BACKUP_MAP_MIN)..=i64::from(height) + i64::from(BACKUP_MAP_MAX_PAST_SOUTH))
