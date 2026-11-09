@@ -369,7 +369,7 @@ const PLAYER_WHITE_OUT_2: TemplateId = TemplateId::Table(32);
 
 /// A lead faint that leaves only a healthy, unplayable member out of the roster
 /// is no defeat (`complete_wild_battle`), so the text must not say the player
-/// is out of usable POKéMON or whited out
+/// is out of usable POKEMON or whited out
 /// (`BattleScript_LocalBattleLost`, `data/battle_scripts_1.s:2945-2955`, runs
 /// only for a `B_OUTCOME_LOST` that `Cmd_checkteamslost` reports once the whole
 /// party's HP is zero, `src/battle_script_commands.c:3534-3564`).
