@@ -219,10 +219,8 @@ fn plant_all(
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 Err(e) => {
-                    // A plant that created the entry and then failed (to
-                    // populate it, say) leaves it behind: a name that was
-                    // free before and is taken now is the guard's, so record
-                    // it for the cleanup the panic unwinds through.
+                    // A name free before the plant and taken after it is the
+                    // guard's even though the plant failed; record it for cleanup.
                     if absent
                         && e.kind() != io::ErrorKind::AlreadyExists
                         && std::fs::symlink_metadata(path).is_ok()
@@ -358,8 +356,7 @@ mod tests {
         }
     }
 
-    /// Stands in for a fixture reverted to a predictable path: it reuses
-    /// the first `OwnedDir` candidate name, deleting and rewriting it.
+    /// A fixture that writes to `OwnedDir` candidate 0 without claiming it.
     fn fixture_reusing_candidate_zero() {
         let dir = std::env::temp_dir().join(format!("{PREFIX}-{}-0", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -368,15 +365,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// A concurrent run of the same fixture holds candidate 0 while the guard
-    /// plants. The guard must wait for it and still plant candidate 0, so the
-    /// reverted fixture's reuse of that name is caught.
-    ///
-    /// The sibling releases the name only when the guard reports that planting
-    /// found it held, so the guard has always met the occupied name before the
-    /// name frees, whatever the schedule. A guard that skipped occupied names
-    /// never reports, and the fixture then runs against a name the guard does
-    /// not own.
+    /// The guard must wait out a sibling holding candidate 0 and still plant
+    /// it. The sibling frees the name only after the guard reports meeting it
+    /// held, so the outcome does not depend on scheduling.
     #[test]
     #[should_panic(expected = "disturbed populated directories")]
     fn guard_catches_a_fixture_that_reuses_candidate_zero_while_a_sibling_held_it_at_planting() {
