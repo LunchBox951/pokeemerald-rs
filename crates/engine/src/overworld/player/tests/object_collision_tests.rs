@@ -320,6 +320,7 @@ fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
 fn moved_east_runtime(settled: bool) -> MapRuntime<'static> {
     let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
     let mut collection = ObjectEventCollection::from_templates(objects);
+    collection.admit_all_for_test();
     let state = collection.get_mut(1).unwrap().state_mut();
     state.walk(Direction::East);
     if settled {

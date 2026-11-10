@@ -343,7 +343,8 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );
-        let objects = ObjectEventCollection::from_templates(templates);
+        let mut objects = ObjectEventCollection::from_templates(templates);
+        objects.admit_all_for_test();
         let live = *objects.get(trainer.local_id).unwrap();
         trainer_can_see_player(&live, &objects, runtime, player, event_data)
     }
@@ -668,6 +669,7 @@ mod tests {
         let runtime = runtime_over(&hdr, &events, 20, 20, cell(0, 0, 3));
         let templates: &'static [ObjectEvent] = Box::leak(templates.into_boxed_slice());
         let mut objects = ObjectEventCollection::from_templates(templates);
+        objects.admit_all_for_test();
         edit(objects.get_mut(local_id).unwrap().state_mut());
         let live = *objects.get(1).unwrap();
         trainer_can_see_player(&live, &objects, &runtime, player, &EventData::new())

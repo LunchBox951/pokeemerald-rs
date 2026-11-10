@@ -133,8 +133,11 @@ impl ObjectEventCollection {
         })
     }
 
-    /// Iterates entries that hold `(x, y, elevation)` for collision, by their *live* current
-    /// or previous tile, in declaration order.
+    /// Iterates admitted entries that hold `(x, y, elevation)` for collision, by their *live*
+    /// current or previous tile, in declaration order.
+    ///
+    /// An unadmitted or despawned entry is skipped: upstream's scan visits only `active` objects
+    /// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4730-4733`).
     ///
     /// A walker holds the tile it is leaving until its step settles, so this is wider than
     /// [`Self::object_events_at`], which identifies the object standing on a tile by its current
@@ -148,9 +151,25 @@ impl ObjectEventCollection {
     ) -> impl Iterator<Item = &LiveObjectEvent> {
         self.entries.iter().filter(move |entry| {
             let state = &entry.state;
-            (state.position() == (x, y) || state.previous_position() == (x, y))
+            entry.is_active()
+                && (state.position() == (x, y) || state.previous_position() == (x, y))
                 && elevations_compatible(state.elevation(), elevation)
         })
+    }
+
+    /// Marks every entry admitted without running the scheduler, for tests that build a
+    /// collection by hand and then place its objects.
+    #[cfg(test)]
+    pub(crate) fn admit_all_for_test(&mut self) {
+        for entry in &mut self.entries {
+            entry.lifecycle = Lifecycle::Active {
+                sprite_slot: 0,
+                initial: entry.state.template_position(),
+                type_func_id: 0,
+                delay: 0,
+                scheduled: entry.state.movement_type(),
+            };
+        }
     }
 
     /// Iterates every entry in declaration order, the order upstream's

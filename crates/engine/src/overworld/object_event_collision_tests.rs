@@ -415,6 +415,7 @@ fn a_runtime_blocks_on_the_tile_a_walker_is_leaving_but_identifies_only_the_tile
         ObjectEventCollection::from_templates(crate::overworld::object_event_harness::leaked(
             vec![template(1, 20, 20, MovementType::FaceDown, NEVER_HIDDEN)],
         ));
+    collection.admit_all_for_test();
     collection
         .get_mut(1)
         .unwrap()
@@ -524,5 +525,29 @@ fn a_hidden_object_blocks_nothing_and_an_unbound_runtime_scans_authored_tiles() 
             &data
         )),
         Some(2)
+    );
+}
+
+#[test]
+fn adjudicator_an_unadmitted_object_blocks_no_player_step() {
+    let flag = assets::object_event_flags::resolve(HIDDEN_FLAG).unwrap();
+    let mut rig = Rig::new(
+        vec![template(1, 19, 20, MovementType::FaceDown, HIDDEN_FLAG)],
+        PLAYER_HOME,
+    );
+    rig.event_data.flag_set(flag).unwrap();
+    rig.tick(1);
+    rig.event_data.flag_clear(flag).unwrap();
+    rig.tick(1);
+    assert!(
+        !rig.collection.get(1).unwrap().is_active(),
+        "the camera has not moved, so the unhidden object is still unadmitted"
+    );
+    let runtime = rig.terrain.runtime().with_object_events(&rig.collection);
+    assert_eq!(
+        blocking_object_event_at(&runtime, 19, 20, FLOOR_ELEVATION, &rig.event_data)
+            .map(|event| event.local_id),
+        None,
+        "upstream has no active object on (19, 20) to collide with"
     );
 }
