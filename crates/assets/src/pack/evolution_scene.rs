@@ -18,7 +18,6 @@ const INNER_TILEMAP_ID: &str = "evolution-scene/raw/bg_inner";
 const OUTER_TILEMAP_ID: &str = "evolution-scene/raw/bg_outer";
 
 const BIT_DEPTH: u8 = 4;
-const PALETTE_ENTRY_BYTES: usize = 2;
 /// The intro palette file lists all 256 colours of an 8-bit palette, although
 /// the scene copies only its first bank to the screen.
 const INTRO_COLORS: u16 = 256;
@@ -100,21 +99,14 @@ impl AssetPack {
         )
     }
 
-    fn evolution_palette(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
-        let palette = self.palette(id)?;
-        if palette.color_count != colors
-            || palette.raw.len() != usize::from(colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(PackError::MalformedEvolutionSceneAsset {
-                id: id.to_owned(),
-                detail: format!(
-                    "declares {} colours in {} bytes: expected {colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            });
-        }
-        Ok(palette)
+    pub(super) fn evolution_palette(
+        &self,
+        id: &str,
+        colors: u16,
+    ) -> Result<PaletteRef<'_>, PackError> {
+        self.sized_palette(id, colors, |id, detail| {
+            PackError::MalformedEvolutionSceneAsset { id, detail }
+        })
     }
 
     fn evolution_tilemap(&self, id: &str) -> Result<&[u8], PackError> {

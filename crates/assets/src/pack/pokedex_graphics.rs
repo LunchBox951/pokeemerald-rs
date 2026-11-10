@@ -12,7 +12,6 @@ const RAW_PREFIX: &str = "pokedex-graphics/raw";
 
 const TEXT_TILEMAP_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
 const AFFINE_TILEMAP_ENTRY_BYTES: usize = std::mem::size_of::<u8>();
-const PALETTE_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
 const COLORS_PER_4BPP_BANK: u16 = 1 << 4;
 const FULL_PALETTE_COLORS: u16 = 1 << 8;
 const REGION_MAP_AFFINE_TILEMAP_SIDE_ENTRIES: usize = 64;
@@ -195,21 +194,14 @@ impl AssetPack {
         self.pokedex_palette_entry(&format!("{FILE_PALETTE_PREFIX}/{name}"), colors)
     }
 
-    fn pokedex_palette_entry(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
-        let palette = self.palette(id)?;
-        if palette.color_count != colors
-            || palette.raw.len() != usize::from(colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(PackError::MalformedPokedexGraphic {
-                id: id.to_owned(),
-                detail: format!(
-                    "declares {} colours in {} bytes: expected {colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            });
-        }
-        Ok(palette)
+    pub(super) fn pokedex_palette_entry(
+        &self,
+        id: &str,
+        colors: u16,
+    ) -> Result<PaletteRef<'_>, PackError> {
+        self.sized_palette(id, colors, |id, detail| {
+            PackError::MalformedPokedexGraphic { id, detail }
+        })
     }
 
     fn pokedex_raw(&self, name: &str, expected_len: usize) -> Result<&[u8], PackError> {

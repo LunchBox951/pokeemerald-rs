@@ -30,7 +30,6 @@ const CLOCK_VIEW_MAP_ID: &str = "opening-scene/raw/clock_view";
 const BIT_DEPTH: u8 = 4;
 const BANK_COLORS: u16 = 16;
 const TEXT_PROMPT_COLORS: u16 = 4;
-const PALETTE_ENTRY_BYTES: usize = 2;
 /// A 32x20 screen of two-byte tilemap entries.
 const SCREEN_TILEMAP_BYTES: usize = 32 * 20 * 2;
 
@@ -179,21 +178,10 @@ impl AssetPack {
         )
     }
 
-    fn scene_palette(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
-        let palette = self.palette(id)?;
-        if palette.color_count != colors
-            || palette.raw.len() != usize::from(colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(PackError::MalformedOpeningSceneAsset {
-                id: id.to_owned(),
-                detail: format!(
-                    "declares {} colours in {} bytes: expected {colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            });
-        }
-        Ok(palette)
+    pub(super) fn scene_palette(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
+        self.sized_palette(id, colors, |id, detail| {
+            PackError::MalformedOpeningSceneAsset { id, detail }
+        })
     }
 
     fn scene_tilemap(&self, id: &str) -> Result<&[u8], PackError> {
