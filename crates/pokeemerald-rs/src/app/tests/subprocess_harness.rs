@@ -278,11 +278,9 @@ fn staged_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf 
     }
 }
 
-/// Replaces the pack at `path` with a different file holding the same bytes (so a child still
-/// loads a valid entryless pack) and returns the name the original stays reachable under. The
-/// replacement is staged under an exclusively created name -- an occupied name, including a
-/// symlink, is skipped, never followed or truncated -- and swapped in with one rename, so the
-/// pathname never lacks a pack. Everything it returns or leaves behind is the test's own to remove.
+/// Replaces the pack at `path` with a different file holding the same bytes, so a child still
+/// loads a valid entryless pack, and returns the name the original stays reachable under. One
+/// rename does the swap, so the pathname never lacks a pack.
 #[cfg(unix)]
 fn replace_pack_with_lookalike(path: &std::path::Path) -> std::path::PathBuf {
     use std::io::Write as _;
@@ -402,11 +400,9 @@ fn aside_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
 }
 
 /// Moves the pack at `path` to a free aside name and returns that name, leaving `path` vacant.
-/// The aside name is claimed exclusively first (`create_new`, so an occupied name, including a
-/// symlink, is skipped, never overwritten) and the pack is then renamed over that claim. The
-/// rename moves the entry even while the guard's creating handle is open (std opens with
-/// `FILE_SHARE_DELETE` on Windows), so the vacated name is free at once rather than
-/// delete-pending as it would be after an unlink. The returned name is the test's own to remove.
+/// Renaming rather than unlinking matters on Windows: std opens with `FILE_SHARE_DELETE`, so the
+/// rename succeeds while the guard's creating handle is open and the vacated name is free at
+/// once instead of delete-pending.
 #[cfg(any(unix, windows))]
 fn move_pack_aside(path: &std::path::Path) -> std::path::PathBuf {
     let aside = (0..64)
@@ -431,9 +427,7 @@ fn move_pack_aside(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Swaps the pack at `path` for a different file and returns the name the original stays
-/// reachable under (see [`move_pack_aside`]). The replacement is created with `create_new` once
-/// the pack name is vacated, so a planted symlink there fails the test instead of being written
-/// through. Everything it returns or leaves behind is the test's own to remove.
+/// reachable under (see [`move_pack_aside`]).
 #[cfg(any(unix, windows))]
 fn displace_pack_with_replacement(
     path: &std::path::Path,
