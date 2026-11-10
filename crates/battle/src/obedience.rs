@@ -7,10 +7,12 @@
 //! branch's `CheckMoveLimitations` mask and `Random() % 4` slot sampling,
 //! the alternate move's `GetMoveTarget` draws, the third draw of the
 //! nap/self-hit/loaf branch, the nap, the self-hit and the loaf-message
-//! draw. Refused with [`BattleError::UnportedDisobedience`] before any draw:
-//! a traded Mew or Deoxys above its limit (upstream's fateful-encounter
-//! bypass, `battle_util.c:3913`-`:3934`, needs record data the engine
-//! lacks). Unreachable because the engine has no Rage or Uproar state: Rage
+//! draw. A Mew or Deoxys without the fateful-encounter bit
+//! ([`BattlePokemon::is_modern_fateful_encounter`], upstream's
+//! `IsBattlerModernFatefulEncounter`, `battle_util.c:3913`-`:3921`) skips the
+//! ownership and badge exemptions and runs every draw with a limit of zero
+//! (`:3934`-`:3955`), so it always ends in the nap, self-hit or loaf of the
+//! third draw. Unreachable because the engine has no Rage or Uproar state: Rage
 //! clearing and the Uproar part of the nap check. Not modelled: the
 //! already-asleep Snore/Sleep Talk ignore (`:3968`-`:3972`), moot while
 //! neither move has an effect pipeline (`EFFECT_SNORE`, `EFFECT_SLEEP_TALK`
@@ -19,7 +21,6 @@
 use assets::{AbilityId, MoveTarget, SpeciesId};
 
 use crate::damage::BattleRng;
-use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::status1::Status1;
 
@@ -176,6 +177,13 @@ const BATTLERS_IN_SINGLES: u16 = 2;
 /// `gBattlerAttacker` for the player's battler.
 const PLAYER_BATTLER_INDEX: u16 = 0;
 
+/// Upstream's `IsBattlerModernFatefulEncounter` for the player's battler
+/// (`battle_util.c:3913`-`:3921`): every species but Mew and Deoxys counts as
+/// fateful, those two only with the stored bit.
+fn is_fateful_encounter(mon: &BattlePokemon) -> bool {
+    !matches!(mon.species(), MEW | DEOXYS) || mon.is_modern_fateful_encounter()
+}
+
 /// Runs `IsMonDisobedient` for the player's active Pokémon, whose chosen
 /// action sits in `chosen_slot` (`gCurrMovePos`; `None` for a forced
 /// Struggle).
@@ -184,40 +192,37 @@ pub(crate) fn check(
     mon: &BattlePokemon,
     chosen_slot: Option<usize>,
     rng: &mut impl BattleRng,
-) -> Result<Obedience, BattleError> {
-    if !player.is_other_trainer(mon) {
-        return Ok(Obedience::Obeys);
-    }
-    let Some(limit) = player.limit else {
-        return Ok(Obedience::Obeys);
+) -> Obedience {
+    // Only a fateful battler reaches the ownership and badge exemptions and
+    // the badge limit (`battle_util.c:3934`-`:3955`). A Mew or Deoxys without
+    // the bit skips them all and runs the draws with a limit of zero: `calc <
+    // 0` can then never obey and never take the alternate-move branch, so it
+    // always ends in the nap, self-hit or loaf of the third draw.
+    let limit = if is_fateful_encounter(mon) {
+        if !player.is_other_trainer(mon) {
+            return Obedience::Obeys;
+        }
+        let Some(limit) = player.limit else {
+            return Obedience::Obeys;
+        };
+        u32::from(limit)
+    } else {
+        0
     };
     let level = u32::from(mon.level());
-    let limit = u32::from(limit);
     if level <= limit {
-        return Ok(Obedience::Obeys);
-    }
-    // Upstream tests the Mew/Deoxys guard first (`battle_util.c:3913-3934`):
-    // a traded one above the limit disobeys unless it carries the modern
-    // fateful-encounter bit, which skips every exemption above. This port
-    // keeps the guard after the ownership, badge and level exemptions on
-    // purpose and does not model the bit. Every legitimate upstream source of
-    // a Mew or Deoxys sets it (`seteventmon` -> `CreateEventMon`,
-    // `pokemon.c:2633-2639`) and trades refuse one without it
-    // (`trade.c:1577-1582`), so a guard-first order with no bit to read would
-    // refuse every legitimately caught Mew. A domestic Mew therefore obeys.
-    if matches!(mon.species(), MEW | DEOXYS) {
-        return Err(BattleError::UnportedDisobedience);
+        return Obedience::Obeys;
     }
     let first = u32::from(rng.next_u16() & 255);
     if ((level + limit) * first) >> 8 < limit {
-        return Ok(Obedience::Obeys);
+        return Obedience::Obeys;
     }
     let second = u32::from(rng.next_u16() & 255);
     if ((level + limit) * second) >> 8 < limit {
         // `battle_util.c:3975`-`:3998`.
         let unusable = unusable_slots(mon, chosen_slot);
         if unusable == ALL_MOVES_MASK {
-            return Ok(Obedience::Loafs(LoafMessage::from_roll(rng.next_u16())));
+            return Obedience::Loafs(LoafMessage::from_roll(rng.next_u16()));
         }
         let slot = loop {
             let slot = usize::from(rng.next_u16() % MAX_MON_MOVES_DRAW);
@@ -225,7 +230,7 @@ pub(crate) fn check(
                 break slot;
             }
         };
-        return Ok(Obedience::UsesInstead { slot });
+        return Obedience::UsesInstead { slot };
     }
     let excess = level - limit;
     let third = u32::from(rng.next_u16() & 255);
@@ -236,12 +241,12 @@ pub(crate) fn check(
         && mon.ability() != INSOMNIA
         && mon.ability() != VITAL_SPIRIT
     {
-        return Ok(Obedience::Naps);
+        return Obedience::Naps;
     }
     // Signed in upstream: a nap blocked by status or ability goes negative
     // and so falls into the self-hit.
     if i64::from(third) - i64::from(excess) < i64::from(excess) {
-        return Ok(Obedience::HurtsItself);
+        return Obedience::HurtsItself;
     }
-    Ok(Obedience::Loafs(LoafMessage::from_roll(rng.next_u16())))
+    Obedience::Loafs(LoafMessage::from_roll(rng.next_u16()))
 }
