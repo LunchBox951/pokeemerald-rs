@@ -503,6 +503,67 @@ fn the_small_ball_is_rejected_when_one_colour_differs_from_the_ball() {
 }
 
 #[test]
+fn a_small_ball_with_the_shared_palette_but_wrong_shape_or_depth_is_rejected_on_shape() {
+    let upstream = scratch_dir("small-ball-shape");
+    let dir = source_dir(&upstream);
+    let (stem, w, h, depth, colors, _) = shape("pokeball_small");
+    let sheet = SHEETS.iter().find(|s| s.stem == stem).unwrap();
+    let ball = ball_colors();
+    let file = format!("{stem}.png");
+    let other_depth = if depth == 8 { 4 } else { 8 };
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "other depth",
+            png(
+                "pokeball",
+                &vec![1; (w * h) as usize],
+                w,
+                h,
+                other_depth,
+                colors,
+            ),
+            "-bit: expected",
+        ),
+        (
+            "taller",
+            png(
+                "pokeball",
+                &vec![1; (w * (h + 8)) as usize],
+                w,
+                h + 8,
+                depth,
+                colors,
+            ),
+            "expected 16x96",
+        ),
+        (
+            "wider",
+            png(
+                "pokeball",
+                &vec![1; ((w + 8) * h) as usize],
+                w + 8,
+                h,
+                depth,
+                colors,
+            ),
+            "expected 16x96",
+        ),
+    ];
+    for (name, bytes, want) in cases {
+        write(&upstream, &file, bytes);
+        let mut writer = PackWriter::new();
+        match extract_sheet(&dir, sheet, &ball, &mut writer).unwrap_err() {
+            ExtractError::PartyMenuAssetMismatch { detail, .. } => {
+                assert!(detail.contains(want), "{name}: {detail}");
+            }
+            other => panic!("{name}: {other}"),
+        }
+        assert_eq!(writer.len(), 0, "{name}");
+    }
+    std::fs::remove_dir_all(upstream).unwrap();
+}
+
+#[test]
 fn maps_of_the_wrong_length_are_rejected() {
     let upstream = scratch_dir("map-length");
     let dir = source_dir(&upstream);
