@@ -81,36 +81,104 @@ impl BerryFlavors {
 }
 
 /// One canonical `struct Berry` row (`pokeemerald/include/global.berry.h:7-23`).
+///
+/// Rows are only obtainable from [`BerryTable`]: the fields are private so a
+/// caller cannot build or edit a row whose `item` falls outside
+/// `ITEM_CHERI_BERRY..=ITEM_ENIGMA_BERRY`, which [`Self::berry_type`] relies on.
+///
+/// ```compile_fail
+/// use assets::berries::BerryTable;
+/// use assets::items::ItemId;
+///
+/// let mut row = *BerryTable::new().by_type(1);
+/// row.item = ItemId::NONE; // private field
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BerryData {
-    /// The berry's bag item (`FIRST_BERRY_INDEX + row`).
-    pub item: ItemId,
-    /// Display name, at most six characters (`BERRY_NAME_LENGTH`), without the
-    /// ` BERRY` suffix.
-    pub name: &'static str,
-    /// How firm the berry is.
-    pub firmness: BerryFirmness,
-    /// Size in millimeters (`.size`, as shown on the berry tag screen).
-    pub size: u16,
-    /// Largest number of berries one tree can yield.
-    pub max_yield: u8,
-    /// Smallest number of berries one tree yields.
-    pub min_yield: u8,
-    /// First description line, in charmap notation.
-    pub description1: &'static str,
-    /// Second description line, in charmap notation.
-    pub description2: &'static str,
-    /// Hours each growth stage lasts (`.stageDuration`; upstream's
-    /// `GetStageDurationByBerryType` multiplies it by 60 to get minutes,
-    /// `pokeemerald/src/berry.c:1250-1253`).
-    pub stage_duration_hours: u8,
-    /// The five flavor values.
-    pub flavors: BerryFlavors,
-    /// Smoothness, used when blending.
-    pub smoothness: u8,
+    item: ItemId,
+    name: &'static str,
+    firmness: BerryFirmness,
+    size: u16,
+    max_yield: u8,
+    min_yield: u8,
+    description1: &'static str,
+    description2: &'static str,
+    stage_duration_hours: u8,
+    flavors: BerryFlavors,
+    smoothness: u8,
 }
 
 impl BerryData {
+    /// Returns the berry's bag item (`FIRST_BERRY_INDEX` + row).
+    #[must_use]
+    pub const fn item(&self) -> ItemId {
+        self.item
+    }
+
+    /// Returns the display name, at most six characters (`BERRY_NAME_LENGTH`),
+    /// without the ` BERRY` suffix.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Returns how firm the berry is.
+    #[must_use]
+    pub const fn firmness(&self) -> BerryFirmness {
+        self.firmness
+    }
+
+    /// Returns the size in millimeters (`.size`, as shown on the berry tag
+    /// screen).
+    #[must_use]
+    pub const fn size(&self) -> u16 {
+        self.size
+    }
+
+    /// Returns the largest number of berries one tree can yield.
+    #[must_use]
+    pub const fn max_yield(&self) -> u8 {
+        self.max_yield
+    }
+
+    /// Returns the smallest number of berries one tree yields.
+    #[must_use]
+    pub const fn min_yield(&self) -> u8 {
+        self.min_yield
+    }
+
+    /// Returns the first description line, in charmap notation.
+    #[must_use]
+    pub const fn description1(&self) -> &'static str {
+        self.description1
+    }
+
+    /// Returns the second description line, in charmap notation.
+    #[must_use]
+    pub const fn description2(&self) -> &'static str {
+        self.description2
+    }
+
+    /// Returns the hours each growth stage lasts (`.stageDuration`; upstream's
+    /// `GetStageDurationByBerryType` multiplies it by 60 to get minutes,
+    /// `pokeemerald/src/berry.c:1250-1253`).
+    #[must_use]
+    pub const fn stage_duration_hours(&self) -> u8 {
+        self.stage_duration_hours
+    }
+
+    /// Returns the five flavor values.
+    #[must_use]
+    pub const fn flavors(&self) -> BerryFlavors {
+        self.flavors
+    }
+
+    /// Returns the smoothness, used when blending.
+    #[must_use]
+    pub const fn smoothness(&self) -> u8 {
+        self.smoothness
+    }
+
     /// Returns the berry type: the `ITEM_TO_BERRY` index, one-based.
     #[must_use]
     pub const fn berry_type(&self) -> u8 {
@@ -389,16 +457,16 @@ mod tests {
         assert_eq!(BERRIES_COUNT, 43);
         for (index, (row, expected)) in BERRIES.iter().zip(EXPECTED).enumerate() {
             let (name, firmness, size, max, min, d1, d2, hours, flavors, smooth) = expected;
-            assert_eq!(row.name, name, "row {index} name");
-            assert_eq!(row.firmness, firmness, "{name} firmness");
-            assert_eq!(row.size, size, "{name} size");
-            assert_eq!(row.max_yield, max, "{name} max yield");
-            assert_eq!(row.min_yield, min, "{name} min yield");
-            assert_eq!(row.description1, d1, "{name} description1");
-            assert_eq!(row.description2, d2, "{name} description2");
-            assert_eq!(row.stage_duration_hours, hours, "{name} stage duration");
-            assert_eq!(row.flavors.as_array(), flavors, "{name} flavors");
-            assert_eq!(row.smoothness, smooth, "{name} smoothness");
+            assert_eq!(row.name(), name, "row {index} name");
+            assert_eq!(row.firmness(), firmness, "{name} firmness");
+            assert_eq!(row.size(), size, "{name} size");
+            assert_eq!(row.max_yield(), max, "{name} max yield");
+            assert_eq!(row.min_yield(), min, "{name} min yield");
+            assert_eq!(row.description1(), d1, "{name} description1");
+            assert_eq!(row.description2(), d2, "{name} description2");
+            assert_eq!(row.stage_duration_hours(), hours, "{name} stage duration");
+            assert_eq!(row.flavors().as_array(), flavors, "{name} flavors");
+            assert_eq!(row.smoothness(), smooth, "{name} smoothness");
         }
     }
 
@@ -410,21 +478,21 @@ mod tests {
         assert_eq!(FIRST_BERRY_ITEM, ItemId(133));
         assert_eq!(LAST_BERRY_ITEM, ItemId(175));
         let first = table.get(ItemId::CHERI_BERRY).expect("Cheri is a berry");
-        assert_eq!((first.name, first.berry_type()), ("CHERI", 1));
-        assert_eq!(first.item, ItemId(133));
+        assert_eq!((first.name(), first.berry_type()), ("CHERI", 1));
+        assert_eq!(first.item(), ItemId(133));
         let last = table.get(ItemId::ENIGMA_BERRY).expect("Enigma is a berry");
-        assert_eq!((last.name, last.berry_type()), ("ENIGMA", 43));
-        assert_eq!(last.item, ItemId(175));
+        assert_eq!((last.name(), last.berry_type()), ("ENIGMA", 43));
+        assert_eq!(last.item(), ItemId(175));
         // Item-relative indexing: each row's item is FIRST + its position.
         for (index, row) in table.iter().enumerate() {
-            assert_eq!(usize::from(row.item.index()), 133 + index);
+            assert_eq!(usize::from(row.item().index()), 133 + index);
             assert_eq!(usize::from(row.berry_type()), index + 1);
-            assert_eq!(table.get(row.item), Some(row));
+            assert_eq!(table.get(row.item()), Some(row));
         }
         // Spot-check the mid-table mapping against the upstream item ids.
-        assert_eq!(table.get(ItemId(142)).map(|b| b.name), Some("SITRUS"));
-        assert_eq!(table.get(ItemId(153)).map(|b| b.name), Some("POMEG"));
-        assert_eq!(table.get(ItemId(174)).map(|b| b.name), Some("STARF"));
+        assert_eq!(table.get(ItemId(142)).map(BerryData::name), Some("SITRUS"));
+        assert_eq!(table.get(ItemId(153)).map(BerryData::name), Some("POMEG"));
+        assert_eq!(table.get(ItemId(174)).map(BerryData::name), Some("STARF"));
     }
 
     #[test]
@@ -471,7 +539,7 @@ mod tests {
         for berry_type in 1..=43u8 {
             let row = table.by_type(berry_type);
             assert_eq!(row.berry_type(), berry_type);
-            assert_eq!(table.name_by_type(berry_type), row.name);
+            assert_eq!(table.name_by_type(berry_type), row.name());
         }
         assert_eq!(table.name_by_type(0), "CHERI");
     }
@@ -480,8 +548,8 @@ mod tests {
     fn names_fit_upstream_berry_name_length() {
         // BERRY_NAME_LENGTH is 6 (pokeemerald/include/global.berry.h:4).
         for row in BerryTable::new().iter() {
-            assert!((1..=6).contains(&row.name.len()), "{}", row.name);
-            assert!(row.name.is_ascii());
+            assert!((1..=6).contains(&row.name().len()), "{}", row.name());
+            assert!(row.name().is_ascii());
         }
     }
 
@@ -506,7 +574,10 @@ mod tests {
             (ItemId::RAWST_BERRY, [0, 0, 0, 10, 0]),
             (ItemId::ASPEAR_BERRY, [0, 0, 0, 0, 10]),
         ] {
-            assert_eq!(table.get(item).expect("berry").flavors.as_array(), expected);
+            assert_eq!(
+                table.get(item).expect("berry").flavors().as_array(),
+                expected
+            );
         }
     }
 
@@ -514,10 +585,10 @@ mod tests {
     fn stage_duration_is_hours_and_converts_to_minutes() {
         let table = BerryTable::new();
         let cheri = table.get(ItemId::CHERI_BERRY).expect("berry");
-        assert_eq!(cheri.stage_duration_hours, 3);
+        assert_eq!(cheri.stage_duration_hours(), 3);
         assert_eq!(cheri.stage_duration_minutes(), 180);
         let enigma = table.get(ItemId::ENIGMA_BERRY).expect("berry");
-        assert_eq!(enigma.stage_duration_hours, 24);
+        assert_eq!(enigma.stage_duration_hours(), 24);
         assert_eq!(enigma.stage_duration_minutes(), 1440);
         // Leppa 4, Lum 12, Sitrus 6 hours (pokeemerald/src/berry.c:216,270,288).
         let hours = |item| table.get(item).expect("berry").stage_duration_hours;
@@ -529,13 +600,13 @@ mod tests {
     #[test]
     fn yield_bounds_are_ordered_and_pinned() {
         for row in BerryTable::new().iter() {
-            assert!(row.min_yield >= 1, "{}", row.name);
-            assert!(row.min_yield <= row.max_yield, "{}", row.name);
+            assert!(row.min_yield() >= 1, "{}", row.name());
+            assert!(row.min_yield() <= row.max_yield(), "{}", row.name());
         }
         let table = BerryTable::new();
         let yields = |item| {
             let row = table.get(item).expect("berry");
-            (row.min_yield, row.max_yield)
+            (row.min_yield(), row.max_yield())
         };
         assert_eq!(yields(ItemId::CHERI_BERRY), (2, 3));
         assert_eq!(yields(ItemId::ENIGMA_BERRY), (1, 2));
@@ -547,21 +618,21 @@ mod tests {
     fn canonical_enigma_row_is_the_default_not_a_save_override() {
         let enigma: &BerryData = &BERRIES[BERRIES_COUNT - 1];
         // pokeemerald/src/berry.c:873-889.
-        assert_eq!(enigma.item, ItemId::ENIGMA_BERRY);
-        assert_eq!(enigma.name, "ENIGMA");
-        assert_eq!(enigma.firmness, BerryFirmness::Unknown);
-        assert_eq!(enigma.firmness.id(), 0);
-        assert_eq!(enigma.size, 0);
-        assert_eq!((enigma.max_yield, enigma.min_yield), (2, 1));
-        assert_eq!(enigma.description1, "A completely enigmatic BERRY.");
-        assert_eq!(enigma.description2, "Appears to have the power of stars.");
-        assert_eq!(enigma.stage_duration_hours, 24);
-        assert_eq!(enigma.flavors.as_array(), [40; 5]);
-        assert_eq!(enigma.smoothness, 40);
+        assert_eq!(enigma.item(), ItemId::ENIGMA_BERRY);
+        assert_eq!(enigma.name(), "ENIGMA");
+        assert_eq!(enigma.firmness(), BerryFirmness::Unknown);
+        assert_eq!(enigma.firmness().id(), 0);
+        assert_eq!(enigma.size(), 0);
+        assert_eq!((enigma.max_yield(), enigma.min_yield()), (2, 1));
+        assert_eq!(enigma.description1(), "A completely enigmatic BERRY.");
+        assert_eq!(enigma.description2(), "Appears to have the power of stars.");
+        assert_eq!(enigma.stage_duration_hours(), 24);
+        assert_eq!(enigma.flavors().as_array(), [40; 5]);
+        assert_eq!(enigma.smoothness(), 40);
         // Only the Enigma Berry carries the unknown firmness.
         let unknown = BerryTable::new()
             .iter()
-            .filter(|row| row.firmness == BerryFirmness::Unknown)
+            .filter(|row| row.firmness() == BerryFirmness::Unknown)
             .count();
         assert_eq!(unknown, 1);
     }
