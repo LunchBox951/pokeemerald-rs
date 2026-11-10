@@ -717,6 +717,75 @@ fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
     );
 }
 
+#[test]
+fn min_letter_spacing_gap_clear_erases_an_earlier_glyph_inside_the_gap() {
+    // An earlier opaque 'A' at column 8 is overlapped by the gap that a later
+    // 'A' at column 0 clears up to the minimum of 12 (`text.c:1146-1156`), so
+    // only the gap's replay of the pre-glyph background can erase the seeded
+    // pixels; column 13 lies past the gap and keeps the seeded glyph.
+    const SKIP_TO_COLUMN: u8 = 0x12;
+    const MINIMUM: u8 = 12;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: SKIP_TO_COLUMN,
+            args: vec![8],
+        },
+        Token::Char('A'),
+        Token::ExtCtrl {
+            sub: SKIP_TO_COLUMN,
+            args: vec![0],
+        },
+        Token::ExtCtrl {
+            sub: 0x14,
+            args: vec![MINIMUM],
+        },
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    for _ in 0..8 {
+        if scene
+            .ops
+            .iter()
+            .any(|op| matches!(op, WindowOp::ClearSpan(_)))
+        {
+            break;
+        }
+        scene.tick(NO_INPUT);
+    }
+    assert!(
+        scene
+            .ops
+            .iter()
+            .any(|op| matches!(op, WindowOp::ClearSpan(_))),
+        "the second glyph queues its gap span"
+    );
+
+    let fb = scene.compose();
+    let probe = |x: i32| {
+        let (x, y) = box_pixel((STANDARD_PRINTER_ORIGIN.0 + x, STANDARD_PRINTER_ORIGIN.1 + 8));
+        fb.pixel(x, y)
+    };
+    assert_eq!(
+        probe(13),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the seeded glyph past the gap stays"
+    );
+    assert_eq!(
+        probe(9),
+        Some(SOLID_FRAME_COLOR),
+        "the seeded glyph inside the gap is erased"
+    );
+}
+
 const _: () = assert!(GLYPH_COUNT == EXPECTED_GLYPH_COUNT);
 
 fn font_entry(fill_palette_index: u8) -> PackEntry {

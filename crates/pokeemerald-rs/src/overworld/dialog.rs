@@ -1019,6 +1019,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn min_letter_spacing_gap_clear_erases_an_earlier_glyph_inside_the_gap() {
+        // An earlier opaque 'A' at column 8 is overlapped by the gap that a
+        // later 'A' at column 0 clears up to the minimum of 12
+        // (`text.c:1146-1156`), so only the gap's replay of the pre-glyph
+        // background can erase the seeded pixels; column 13 lies past the gap
+        // and keeps the seeded glyph.
+        const SKIP_TO_COLUMN: u8 = 0x12;
+        const MINIMUM: u8 = 12;
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![8],
+            },
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![0],
+            },
+            Token::ExtCtrl {
+                sub: 0x14,
+                args: vec![MINIMUM],
+            },
+            Token::Char('A'),
+            Token::End,
+        ]);
+
+        for _ in 0..8 {
+            if dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_)))
+            {
+                break;
+            }
+            dialog.tick(NO_INPUT);
+        }
+        assert!(
+            dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_))),
+            "the second glyph queues its gap span"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+        let probe = |x: i32| {
+            let (x, y) = box_pixel((
+                textbox::STANDARD_PRINTER_ORIGIN.0 + x,
+                textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+            ));
+            fb.pixel(x, y)
+        };
+        assert_eq!(
+            probe(13),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the seeded glyph past the gap stays"
+        );
+        assert_eq!(
+            probe(9),
+            Some(FRAME_INTERIOR_COLOR),
+            "the seeded glyph inside the gap is erased"
+        );
+    }
+
     /// The smallest pack [`NpcDialog::from_pack_at_speed`] accepts: the
     /// standard message box frame and the normal font sheet. Mirrors
     /// `crate::start_menu::pack_fixture::synthetic_start_menu_pack_bytes`'s own
