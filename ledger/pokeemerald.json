@@ -30624,7 +30624,10 @@
     "src/data/pokemon/tutor_learnsets.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gTutorMoves and sTutorLearnsets extracted to the 30 ordered tutor slots (TutorSlot, TUTOR_MOVE_* order from include/constants/party_menu.h) and a u32-per-species compatibility mask table (TutorLearnsets), keyed by SpeciesId; the 25 SPECIES_OLD_UNOWN_* ids upstream leaves unlisted are zero masks. Mirrors GetTutorMove/CanLearnTutorMove (party_menu.c:2061-2071); tutor NPCs, menus, payment, and the move-teaching runtime are not modelled here",
+      "rust_target": "crates/assets/src/tutor_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon_graphics/back_pic_coordinates.h": {
       "category": "code.header",
