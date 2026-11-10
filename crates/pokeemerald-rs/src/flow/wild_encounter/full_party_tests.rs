@@ -377,6 +377,10 @@ fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
     let mut phase = phase_with_party(&[lead_record, reserve_record], 0, lead);
     phase.save2.player_trainer_id = OWNER_ID.to_le_bytes();
     phase.save2.player_name = *b"RUSTY\xFF\0\0";
+    // The eighth badge (`FLAG_BADGE08_GET`) exempts the level-50 reserve from the
+    // obedience gate a traded name would otherwise trip (`IsMonDisobedient`,
+    // `pokeemerald/src/battle_util.c:3944-3945`); the award, not obedience, is under test.
+    phase.save1.event_data.flag_set(0x86E).unwrap();
 
     walk_into_the_battle(&mut phase);
     loop {
