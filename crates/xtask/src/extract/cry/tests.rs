@@ -464,10 +464,10 @@ fn checkout_cries_cover_the_388_entry_closure() {
 
     let mut writer = PackWriter::new();
     extract_cries(&upstream, &mut writer).unwrap();
-    let path = std::env::temp_dir().join(format!("cry-checkout-{}.pack", std::process::id()));
+    let owned = crate::extract::owned_fixture::OwnedDir::create("cry-checkout").unwrap();
+    let path = owned.path().join("real-checkout.pack");
     std::fs::write(&path, writer.finish().unwrap()).unwrap();
     let pack = AssetPack::load(&path).unwrap();
-    let _ = std::fs::remove_file(&path);
 
     let table = pack.cry_table().unwrap();
     let sample_entries = pack
@@ -500,4 +500,25 @@ fn checkout_cries_cover_the_388_entry_closure() {
             expected_payload(&source)
         );
     }
+}
+
+#[test]
+#[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+fn real_checkout_test_leaves_an_unrelated_file_at_the_old_pack_name_alone() {
+    let old_name = std::env::temp_dir().join(format!("cry-checkout-{}.pack", std::process::id()));
+    // Exclusive creation: an occupied name (a user's file, a leftover, a symlink)
+    // fails the test before anything at it is truncated, replaced or removed.
+    {
+        use std::io::Write as _;
+        let mut sentinel = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&old_name)
+            .expect("the old pack name is occupied; leave it alone and clear it by hand");
+        sentinel.write_all(b"unrelated user data").unwrap();
+    }
+    checkout_cries_cover_the_388_entry_closure();
+    let survived = std::fs::read(&old_name).ok();
+    let _ = std::fs::remove_file(&old_name);
+    assert_eq!(survived.as_deref(), Some(&b"unrelated user data"[..]));
 }

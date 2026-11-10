@@ -265,10 +265,11 @@ fn sources_that_are_not_png_are_rejected() {
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-opening-scene-{}.pack",
-        std::process::id()
-    ));
+    let owned = crate::extract::owned_fixture::OwnedDir::create(
+        "pokeemerald-rs-extract-test-opening-scene",
+    )
+    .unwrap();
+    let path = owned.path().join("real-checkout.pack");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let graphics = repo_root().join("pokeemerald/graphics");
@@ -306,5 +307,28 @@ fn opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles() {
         pack.palette("opening-scene/palette/missing"),
         Err(PackError::UnknownAsset(_))
     ));
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+#[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+fn real_checkout_test_leaves_an_unrelated_file_at_the_old_pack_name_alone() {
+    let old_name = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-extract-test-opening-scene-{}.pack",
+        std::process::id()
+    ));
+    // Exclusive creation: an occupied name (a user's file, a leftover, a symlink)
+    // fails the test before anything at it is truncated, replaced or removed.
+    {
+        use std::io::Write as _;
+        let mut sentinel = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&old_name)
+            .expect("the old pack name is occupied; leave it alone and clear it by hand");
+        sentinel.write_all(b"unrelated user data").unwrap();
+    }
+    opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles();
+    let survived = std::fs::read(&old_name).ok();
+    let _ = std::fs::remove_file(&old_name);
+    assert_eq!(survived.as_deref(), Some(&b"unrelated user data"[..]));
 }

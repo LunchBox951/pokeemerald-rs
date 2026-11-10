@@ -679,10 +679,11 @@ fn error_messages_name_the_file_line_and_detail() {
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn the_real_checkout_yields_every_inventory_pair() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-battle-effect-{}.pack",
-        std::process::id()
-    ));
+    let owned = crate::extract::owned_fixture::OwnedDir::create(
+        "pokeemerald-rs-extract-test-battle-effect",
+    )
+    .unwrap();
+    let path = owned.path().join("real-checkout.pack");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let catalog = pack.battle_animation_catalog().unwrap();
@@ -743,5 +744,28 @@ fn the_real_checkout_yields_every_inventory_pair() {
 
     // `MusicNotes2` keeps its five banks.
     assert_eq!(art(206).palette.color_count, 80);
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+#[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+fn real_checkout_test_leaves_an_unrelated_file_at_the_old_pack_name_alone() {
+    let old_name = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-extract-test-battle-effect-{}.pack",
+        std::process::id()
+    ));
+    // Exclusive creation: an occupied name (a user's file, a leftover, a symlink)
+    // fails the test before anything at it is truncated, replaced or removed.
+    {
+        use std::io::Write as _;
+        let mut sentinel = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&old_name)
+            .expect("the old pack name is occupied; leave it alone and clear it by hand");
+        sentinel.write_all(b"unrelated user data").unwrap();
+    }
+    the_real_checkout_yields_every_inventory_pair();
+    let survived = std::fs::read(&old_name).ok();
+    let _ = std::fs::remove_file(&old_name);
+    assert_eq!(survived.as_deref(), Some(&b"unrelated user data"[..]));
 }
