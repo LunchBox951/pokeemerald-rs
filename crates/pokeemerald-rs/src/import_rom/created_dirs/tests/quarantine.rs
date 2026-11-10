@@ -497,35 +497,22 @@ fn the_other_device_directory_is_never_on_the_fixture_roots_device() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_candidate_on_the_fixture_roots_device_is_passed_over() {
-    use std::os::unix::fs::MetadataExt as _;
-    // /dev/shm as the base, with candidates listing the base itself and a
-    // directory beside it first: both share its device and must be skipped
-    // for the first one that does not, wherever that is on this machine.
-    let shm = std::path::Path::new("/dev/shm");
-    let Ok(shm_meta) = fs::metadata(shm) else {
-        eprintln!("skipping: no /dev/shm");
-        return;
-    };
+    // The base, a directory inside it, and a missing path all share the
+    // base's device or have none: none is elsewhere, so nothing is made. This
+    // is the `TMPDIR=/dev/shm` case, where every candidate on the same
+    // filesystem as the fixture root must be passed over.
     let temp = TempDir::new("candidate-skipping");
+    let inside = temp.join("inside");
+    fs::create_dir(&inside).unwrap();
     let candidates = [
-        shm.to_path_buf(),
-        std::path::PathBuf::from("/nonexistent-pokeemerald-rs"),
         temp.path.clone(),
+        inside.clone(),
+        std::path::PathBuf::from("/nonexistent-pokeemerald-rs"),
     ];
-    let found = other_device_dir_among(shm, "candidate-skipping", &candidates);
-    if fs::metadata(&temp.path).unwrap().dev() == shm_meta.dev() {
-        // `TMPDIR=/dev/shm`: nothing in the list is elsewhere.
-        assert!(found.is_none());
-    } else {
-        let found = found.expect("the temp dir is on another device");
-        assert!(found.path.starts_with(&temp.path), "{:?}", found.path);
-    }
-    assert!(
-        entry_names(shm)
-            .iter()
-            .all(|name| !name.starts_with("pokeemerald-rs-other-device-candidate-skipping")),
-        "a directory was made on the base's own device"
-    );
+    let found = other_device_dir_among(&temp.path, "candidate-skipping", &candidates);
+    assert!(found.is_none(), "{:?}", found.map(|dir| dir.path.clone()));
+    assert_eq!(entry_names(&temp.path), ["inside"]);
+    assert!(entry_names(&inside).is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -533,19 +520,43 @@ fn a_candidate_on_the_fixture_roots_device_is_passed_over() {
 fn a_relative_candidate_is_handed_back_as_an_absolute_path() {
     use std::os::unix::fs::MetadataExt as _;
     // A fixture symlinks to the directory it gets, so a relative candidate
-    // (a relative `CARGO_TARGET_DIR`) must come back absolute. The working
-    // directory is the relative candidate; /dev/shm the base it must differ
-    // from, which is the one pair every machine with both can name.
-    let shm = std::path::Path::new("/dev/shm");
-    let cwd = std::env::current_dir().unwrap();
-    let (Ok(shm_meta), Ok(cwd_meta)) = (fs::metadata(shm), fs::metadata(&cwd)) else {
+    // (a relative `CARGO_TARGET_DIR`) must come back absolute. The candidate
+    // is the test's own writable directory, reached from the working
+    // directory by climbing to the root, and the base is a filesystem that
+    // differs from it (/proc is on no disk filesystem, /dev/shm usually not
+    // the temp dir's).
+    let temp = TempDir::new("relative-candidate");
+    let temp_dev = fs::metadata(&temp.path).unwrap().dev();
+    let Some(base) = ["/dev/shm", "/proc"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .find(|base| fs::metadata(base).is_ok_and(|meta| meta.dev() != temp_dev))
+    else {
+        eprintln!("skipping: no base directory off the temp dir's filesystem");
         return;
     };
-    if shm_meta.dev() == cwd_meta.dev() {
-        return;
+    let cwd = std::env::current_dir().unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for _ in cwd.components().skip(1) {
+        relative.push("..");
     }
-    let found = other_device_dir_among(shm, "relative-candidate", &[".".into()])
-        .expect("the working directory is on another device than /dev/shm");
+    relative.push(temp.path.strip_prefix("/").unwrap());
+    assert!(relative.is_relative());
+    assert_eq!(
+        fs::canonicalize(&relative).unwrap(),
+        fs::canonicalize(&temp.path).unwrap()
+    );
+
+    let found = other_device_dir_among(base, "relative-candidate", &[relative])
+        .expect("the temp dir is on another device than the base");
+
     assert!(found.path.is_absolute(), "{:?}", found.path);
-    assert!(found.path.starts_with(&cwd), "{:?}", found.path);
+    assert!(found.path.is_dir());
+    assert!(
+        fs::canonicalize(&found.path)
+            .unwrap()
+            .starts_with(fs::canonicalize(&temp.path).unwrap()),
+        "{:?}",
+        found.path
+    );
 }
