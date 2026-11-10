@@ -5,6 +5,7 @@ use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::{extract_to, repo_root, upstream_present};
 use super::{extract_map, extract_party_menu, extract_sheet, pack_ids, PARTY_MENU_DIRECTORY};
 use super::{MAPS, SHEETS};
+use crate::extract::owned_fixture::OwnedDir;
 use crate::extract::{read_file, ExtractError};
 use pack_format::{DirectoryEntry, EntryKind, PackWriter};
 
@@ -475,10 +476,8 @@ fn extraction_is_deterministic() {
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn the_real_checkout_yields_the_whole_family() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-party-menu-{}.pack",
-        std::process::id()
-    ));
+    let owned = OwnedDir::create("pokeemerald-rs-extract-test-party-menu").unwrap();
+    let path = owned.path().join("real-checkout.pack");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = std::fs::read(&path).unwrap();
     let entries = pack_format::parse_directory(&pack).unwrap();
@@ -561,5 +560,28 @@ fn the_real_checkout_yields_the_whole_family() {
         assert_eq!(source.len(), len, "{stem}");
         assert_eq!(payload(&pack, entry), source.as_slice(), "{stem}");
     }
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+#[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+fn real_checkout_test_leaves_an_unrelated_file_at_the_old_pack_name_alone() {
+    let old_name = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-extract-test-party-menu-{}.pack",
+        std::process::id()
+    ));
+    // Exclusive creation: an occupied name (a user's file, a leftover, a symlink)
+    // fails the test before anything at it is truncated, replaced or removed.
+    {
+        use std::io::Write as _;
+        let mut sentinel = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&old_name)
+            .expect("the old pack name is occupied; leave it alone and clear it by hand");
+        sentinel.write_all(b"unrelated user data").unwrap();
+    }
+    the_real_checkout_yields_the_whole_family();
+    let survived = std::fs::read(&old_name).ok();
+    let _ = std::fs::remove_file(&old_name);
+    assert_eq!(survived.as_deref(), Some(&b"unrelated user data"[..]));
 }
