@@ -9,7 +9,8 @@
 //! |---|---|---|
 //! | `bg.png` sheet, palette | `gPartyMenuBg_Gfx`/`_Pal`, `src/graphics.c:1111-1112` | LZ77; sheet cut with `-num_tiles 62` |
 //! | `bg.bin` | `gPartyMenuBg_Tilemap`, `src/graphics.c:1113` | LZ77, 32x32 `u16` entries |
-//! | `pokeball.png` sheet, palette | `gPartyMenuPokeball_Gfx`/`_Pal`, `src/graphics.c:1114-1115` | LZ77, whole 32 tiles |
+//! | `pokeball.png` sheet, palette | `gPartyMenuPokeball_Gfx` (`:1115`), `gPartyMenuPokeball_Pal` (`:1117`), `src/graphics.c` | LZ77, whole 32 tiles |
+//! | `pokeball_small.png` sheet | `gPartyMenuPokeballSmall_Gfx`, `src/graphics.c:1116` | LZ77, whole 24 tiles |
 //! | `slot_*.bin` | `sSlotTilemap_*`, `INCBIN_U8`, `src/data/party_menu.h:565-569` | raw `u8` tile indices |
 //! | `confirm_button.bin`, `cancel_button.bin` | `INCBIN_U32`, `src/data/party_menu.h:109-110` | raw 7x2 `u16` entries |
 //! | `hold_icons.png` sheet, palette | `sHeldItemGfx`/`sHeldItemPalette`, `src/data/party_menu.h:801-802` | raw `.4bpp`/`.gbapal` |
@@ -21,17 +22,19 @@
 //! banks (`src/party_menu.c:737-750`). The sheet and palette of the Poké Ball
 //! and held-item icons come from the PNG's own `PLTE`.
 //!
-//! `pokeball_small.png` (`gPartyMenuPokeballSmall_Gfx`, `src/graphics.c:1116`)
-//! is outside this manifest. Upstream marks it `//unused`, but
+//! `pokeball_small.png` is marked `//unused` upstream, but
 //! `sSpriteSheet_MenuPokeballSmall` (`src/data/party_menu.h:981-984`) loads it
 //! (`src/party_menu.c:4180`) for the Confirm and Cancel ball sprites drawn when
-//! `chooseHalf` is set (`src/party_menu.c:1108-1110`), so a later slice must add
-//! it. This extractor never opens it.
+//! `chooseHalf` is set (`src/party_menu.c:1108-1110`). Its sprite template uses
+//! the Poké Ball palette tag (`src/data/party_menu.h:990`), so the pack holds
+//! no palette for it: the extractor requires its `PLTE` to equal
+//! `pokeball.png`'s and publishes the image alone.
 //!
 //! Ids are `party-menu/{image,palette,raw}/<stem>`.
 
 use std::path::Path;
 
+use super::jasc_pal;
 use super::naming_screen::keep_leading_tiles;
 use super::{build_image_entry, build_palette_entry, png, push_raw_bytes};
 use super::{read_file, ExtractError};
@@ -45,6 +48,16 @@ const BANK_COLORS: usize = 16;
 const BANK_INDEX_MASK: u8 = 0x0F;
 const BANK_BIT_DEPTH: u8 = 4;
 
+/// Where a sheet's palette comes from.
+#[derive(Clone, Copy)]
+enum PaletteSource {
+    /// The sheet publishes the palette its PNG embeds, of this many colours.
+    Own { colors: usize },
+    /// The sheet draws with the palette of `SHEETS[with]`, listed earlier: its
+    /// PNG must embed the same colours and the pack holds no palette for it.
+    Shared { with: usize },
+}
+
 /// A sheet and the palette its PNG embeds.
 struct Sheet {
     stem: &'static str,
@@ -52,32 +65,50 @@ struct Sheet {
     source: (u32, u32, u8),
     /// The tiles `-num_tiles` keeps, in tile order; `None` keeps the whole sheet.
     kept_tiles: Option<u32>,
-    palette_colors: usize,
+    palette: PaletteSource,
 }
 
-const SHEETS: [Sheet; 3] = [
+const SHEETS: [Sheet; 4] = [
     // `gPartyMenuBg_Gfx`: 64 tiles built with `-num_tiles 62`; eleven banks.
     Sheet {
         stem: "bg",
         source: (64, 64, 8),
         kept_tiles: Some(62),
-        palette_colors: 11 * BANK_COLORS,
+        palette: PaletteSource::Own {
+            colors: 11 * BANK_COLORS,
+        },
     },
     // `gPartyMenuPokeball_Gfx`: 32 tiles.
     Sheet {
         stem: "pokeball",
         source: (32, 64, BANK_BIT_DEPTH),
         kept_tiles: None,
-        palette_colors: BANK_COLORS,
+        palette: PaletteSource::Own {
+            colors: BANK_COLORS,
+        },
     },
     // `sHeldItemGfx`: 2 tiles.
     Sheet {
         stem: "hold_icons",
         source: (8, 16, BANK_BIT_DEPTH),
         kept_tiles: None,
-        palette_colors: BANK_COLORS,
+        palette: PaletteSource::Own {
+            colors: BANK_COLORS,
+        },
+    },
+    // `gPartyMenuPokeballSmall_Gfx`: 24 tiles, drawn with `gPartyMenuPokeball_Pal`.
+    Sheet {
+        stem: "pokeball_small",
+        source: (16, 96, BANK_BIT_DEPTH),
+        kept_tiles: None,
+        palette: PaletteSource::Shared {
+            with: POKEBALL_SHEET,
+        },
     },
 ];
+
+/// `pokeball` in [`SHEETS`].
+const POKEBALL_SHEET: usize = 1;
 
 /// Raw tilemaps as `(file stem, byte length)`: the 32x32 background screen,
 /// the five `u8` slot grids (10x7, 10x7, 18x3, 18x3, 18x3), and the two 7x2
@@ -100,6 +131,7 @@ pub(crate) fn pack_ids() -> Vec<String> {
         .map(|sheet| format!("party-menu/image/{}", sheet.stem));
     let palettes = SHEETS
         .iter()
+        .filter(|sheet| matches!(sheet.palette, PaletteSource::Own { .. }))
         .map(|sheet| format!("party-menu/palette/{}", sheet.stem));
     let maps = MAPS
         .iter()
@@ -114,8 +146,14 @@ pub(super) fn extract_party_menu(
 ) -> Result<(), ExtractError> {
     let queued_before = writer.len();
     let dir = upstream.join(PARTY_MENU_DIRECTORY);
+    let mut decoded: Vec<Vec<jasc_pal::Rgb888>> = Vec::with_capacity(SHEETS.len());
     for sheet in &SHEETS {
-        extract_sheet(&dir, sheet, writer)?;
+        let shared = match sheet.palette {
+            PaletteSource::Own { .. } => &[],
+            PaletteSource::Shared { with } => decoded[with].as_slice(),
+        };
+        let colors = extract_sheet(&dir, sheet, shared, writer)?;
+        decoded.push(colors);
     }
     for (stem, len) in MAPS {
         extract_map(&dir, stem, len, &mut read_file, writer)?;
@@ -124,7 +162,15 @@ pub(super) fn extract_party_menu(
     Ok(())
 }
 
-fn extract_sheet(dir: &Path, sheet: &Sheet, writer: &mut PackWriter) -> Result<(), ExtractError> {
+/// Queues `sheet`'s image, and its palette unless it shares one, and returns
+/// the colours its PNG embeds. `shared` is the palette a
+/// [`PaletteSource::Shared`] sheet must match; other sheets ignore it.
+fn extract_sheet(
+    dir: &Path,
+    sheet: &Sheet,
+    shared: &[jasc_pal::Rgb888],
+    writer: &mut PackWriter,
+) -> Result<Vec<jasc_pal::Rgb888>, ExtractError> {
     let path = dir.join(format!("{}.png", sheet.stem));
     let bytes = read_file(&path)?;
     let mut image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
@@ -154,27 +200,38 @@ fn extract_sheet(dir: &Path, sheet: &Sheet, writer: &mut PackWriter) -> Result<(
         keep_leading_tiles(&mut image, kept_tiles).map_err(|detail| mismatch(&path, detail))?;
     }
     let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-    if colors.len() != sheet.palette_colors {
-        return Err(mismatch(
-            &path,
-            format!(
-                "has {} embedded colours: expected {}",
-                colors.len(),
-                sheet.palette_colors
-            ),
-        ));
+    match sheet.palette {
+        PaletteSource::Own { colors: expected } => {
+            if colors.len() != expected {
+                return Err(mismatch(
+                    &path,
+                    format!("has {} embedded colours: expected {expected}", colors.len()),
+                ));
+            }
+            writer.push(build_palette_entry(
+                &path,
+                &colors,
+                format!("party-menu/palette/{}", sheet.stem),
+            )?);
+        }
+        PaletteSource::Shared { with } => {
+            if colors != shared {
+                return Err(mismatch(
+                    &path,
+                    format!(
+                        "embeds a palette that differs from `{}.png`'s, which it draws with",
+                        SHEETS[with].stem
+                    ),
+                ));
+            }
+        }
     }
-    writer.push(build_palette_entry(
-        &path,
-        &colors,
-        format!("party-menu/palette/{}", sheet.stem),
-    )?);
     writer.push(build_image_entry(
         &path,
         format!("party-menu/image/{}", sheet.stem),
         image,
     )?);
-    Ok(())
+    Ok(colors)
 }
 
 /// The buffer validated is the buffer queued: a second read of the path

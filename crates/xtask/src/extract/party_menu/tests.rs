@@ -4,16 +4,18 @@ use std::path::{Path, PathBuf};
 use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::{extract_to, repo_root, upstream_present};
 use super::{extract_map, extract_party_menu, extract_sheet, pack_ids, PARTY_MENU_DIRECTORY};
-use super::{MAPS, SHEETS};
+use super::{PaletteSource, MAPS, SHEETS};
+use crate::extract::jasc_pal;
 use crate::extract::{read_file, ExtractError};
 use pack_format::{DirectoryEntry, EntryKind, PackWriter};
 
 /// Every id the party menu publishes, written out independently of the manifest
 /// the extractor reads so that dropping an entry there fails here.
-const EXPECTED_IDS: [&str; 14] = [
+const EXPECTED_IDS: [&str; 15] = [
     "party-menu/image/bg",
     "party-menu/image/pokeball",
     "party-menu/image/hold_icons",
+    "party-menu/image/pokeball_small",
     "party-menu/palette/bg",
     "party-menu/palette/pokeball",
     "party-menu/palette/hold_icons",
@@ -31,10 +33,11 @@ const EXPECTED_IDS: [&str; 14] = [
 /// `(width, height)` of its image.
 type SheetShape = (&'static str, u32, u32, u8, usize, (u32, u32));
 
-const SHEET_SHAPES: [SheetShape; 3] = [
+const SHEET_SHAPES: [SheetShape; 4] = [
     ("bg", 64, 64, 8, 176, (8, 496)),
     ("pokeball", 32, 64, 4, 16, (32, 64)),
     ("hold_icons", 8, 16, 4, 16, (8, 16)),
+    ("pokeball_small", 16, 96, 4, 16, (16, 96)),
 ];
 const MAP_LENGTHS: [(&str, usize); 8] = [
     ("bg", 2048),
@@ -118,9 +121,31 @@ fn seed(stem: &str) -> u8 {
     stem.bytes().fold(0u8, u8::wrapping_add)
 }
 
+/// The sheet whose palette `stem` draws with: the small ball shares the big
+/// ball's, so its PNG embeds the same colours.
+fn palette_stem(stem: &str) -> &str {
+    if stem == "pokeball_small" {
+        "pokeball"
+    } else {
+        stem
+    }
+}
+
 fn sheet_png(stem: &str) -> Vec<u8> {
     let (_, width, height, depth, colors, _) = shape(stem);
-    png(stem, &source_pixels(stem), width, height, depth, colors)
+    png(
+        palette_stem(stem),
+        &source_pixels(stem),
+        width,
+        height,
+        depth,
+        colors,
+    )
+}
+
+/// The colours `pokeball.png` embeds, which the small ball must match.
+fn ball_colors() -> Vec<jasc_pal::Rgb888> {
+    crate::extract::png::decode_palette(&sheet_png("pokeball")).unwrap()
 }
 
 fn map_bytes(stem: &str) -> Vec<u8> {
@@ -196,31 +221,39 @@ fn leading_tiles(pixels: &[u8], width: usize, kept: usize) -> Vec<u8> {
 }
 
 #[test]
-fn the_inventory_is_the_fourteen_listed_ids_without_the_small_ball() {
+fn the_inventory_is_the_fifteen_listed_ids_with_no_palette_for_the_small_ball() {
     let ids = pack_ids();
     assert_eq!(ids, EXPECTED_IDS);
-    assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 14);
+    assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 15);
     assert_eq!(
         SHEETS.iter().map(|s| s.stem).collect::<Vec<_>>(),
-        ["bg", "pokeball", "hold_icons"]
+        ["bg", "pokeball", "hold_icons", "pokeball_small"]
     );
     assert_eq!(MAPS, MAP_LENGTHS);
-    assert!(!ids.join("\n").contains("small"));
+    assert!(!ids.contains(&"party-menu/palette/pokeball_small".to_owned()));
+}
+
+#[test]
+fn a_shared_palette_names_a_sheet_listed_before_it() {
+    for (index, sheet) in SHEETS.iter().enumerate() {
+        if let PaletteSource::Shared { with } = sheet.palette {
+            assert!(with < index, "{}", sheet.stem);
+            assert!(matches!(SHEETS[with].palette, PaletteSource::Own { .. }));
+        }
+    }
 }
 
 #[test]
 fn a_complete_checkout_yields_every_entry_with_its_shape_and_payload() {
     let upstream = scratch_dir("valid");
     write_valid_checkout(&upstream);
-    // Unlisted neighbours must not change the pack and are never opened: the
-    // small Poké Ball sheet, outside this manifest, is not even a PNG here.
-    write(&upstream, "pokeball_small.png", b"not a png");
+    // Unlisted neighbours must not change the pack and are never opened.
     write(&upstream, "bg.4bpp", b"built");
     write(&upstream, "stray.bin", b"stray");
 
     let pack = extracted(&upstream);
     let entries = pack_format::parse_directory(&pack).unwrap();
-    assert_eq!(entries.len(), 14);
+    assert_eq!(entries.len(), 15);
     assert_eq!(
         entries
             .iter()
@@ -308,7 +341,7 @@ fn a_background_with_colour_in_a_dropped_tile_is_rejected_after_narrowing() {
         *pixels.last_mut().unwrap() = index;
         std::fs::write(&path, png("bg", &pixels, width, height, depth, colors)).unwrap();
         let mut writer = PackWriter::new();
-        let result = extract_sheet(&dir, sheet, &mut writer);
+        let result = extract_sheet(&dir, sheet, &[], &mut writer);
         if accepted {
             // 0x10 narrows to blank, as `gbagfx` narrows before it cuts.
             result.unwrap();
@@ -322,7 +355,7 @@ fn a_background_with_colour_in_a_dropped_tile_is_rejected_after_narrowing() {
     pixels[62 / 8 * 8 * 64 + (62 % 8) * 8] = 2;
     std::fs::write(&path, png("bg", &pixels, width, height, depth, colors)).unwrap();
     assert_eq!(
-        mismatch_path(extract_sheet(&dir, sheet, &mut PackWriter::new()).unwrap_err()),
+        mismatch_path(extract_sheet(&dir, sheet, &[], &mut PackWriter::new()).unwrap_err()),
         path
     );
     std::fs::remove_dir_all(upstream).unwrap();
@@ -352,7 +385,8 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
         let file = format!("{stem}.png");
         let path = write(&upstream, &file, b"not a png");
         let mut writer = PackWriter::new();
-        let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+        let ball = ball_colors();
+        let err = extract_sheet(&dir, sheet, &ball, &mut writer).unwrap_err();
         assert!(
             matches!(&err, ExtractError::Png(p, _) if *p == path),
             "{file}"
@@ -393,7 +427,7 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
         ];
         for (name, bytes) in cases {
             write(&upstream, &file, bytes);
-            let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+            let err = extract_sheet(&dir, sheet, &ball, &mut writer).unwrap_err();
             assert_eq!(mismatch_path(err), path, "{file} {name}");
         }
         if colors == 16 {
@@ -406,13 +440,64 @@ fn a_sheet_with_the_wrong_depth_size_or_palette_count_is_rejected_before_it_is_q
             &file,
             png(stem, &source_pixels(stem), w, h, depth, colors + 1),
         );
-        let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+        let err = extract_sheet(&dir, sheet, &ball, &mut writer).unwrap_err();
         assert_eq!(mismatch_path(err), path, "{file} one colour more");
 
         assert_eq!(writer.len(), 0, "{file}");
         write(&upstream, &file, sheet_png(stem));
-        extract_sheet(&dir, sheet, &mut writer).unwrap();
+        extract_sheet(&dir, sheet, &ball, &mut writer).unwrap();
         assert_eq!(writer.len(), 2, "{file}");
+    }
+    std::fs::remove_dir_all(upstream).unwrap();
+}
+
+#[test]
+fn the_small_ball_publishes_an_image_and_no_palette_when_its_colours_match_the_ball() {
+    let upstream = scratch_dir("small-ball");
+    let dir = source_dir(&upstream);
+    let small = SHEETS.iter().find(|s| s.stem == "pokeball_small").unwrap();
+    write(&upstream, "pokeball_small.png", sheet_png("pokeball_small"));
+    let mut writer = PackWriter::new();
+    let colors = extract_sheet(&dir, small, &ball_colors(), &mut writer).unwrap();
+    assert_eq!(colors, ball_colors());
+    let pack = writer.finish().unwrap();
+    let entries = pack_format::parse_directory(&pack).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "party-menu/image/pokeball_small");
+    assert_eq!(
+        entries[0].kind,
+        EntryKind::Image {
+            width: 16,
+            height: 96,
+            bit_depth: 4
+        }
+    );
+    // The raster is kept whole and in row order, not cut into tiles.
+    assert_eq!(payload(&pack, &entries[0]), source_pixels("pokeball_small"));
+    std::fs::remove_dir_all(upstream).unwrap();
+}
+
+#[test]
+fn the_small_ball_is_rejected_when_one_colour_differs_from_the_ball() {
+    let upstream = scratch_dir("small-ball-colour");
+    let dir = source_dir(&upstream);
+    let small = SHEETS.iter().find(|s| s.stem == "pokeball_small").unwrap();
+    let (_, width, height, depth, colors, _) = shape("pokeball_small");
+    let pixels = source_pixels("pokeball_small");
+    for changed in [0, 7, colors - 1] {
+        let mut plte = plte(colors, seed("pokeball"));
+        plte[changed * 3 + 1] ^= 8;
+        let mut raw = Vec::new();
+        for row in pixels.chunks(width as usize) {
+            raw.push(0);
+            raw.extend(row.chunks(2).map(|pair| (pair[0] << 4) | pair[1]));
+        }
+        let bytes = indexed_png_from_raw_with_plte(depth, width, height, &raw, &plte);
+        let path = write(&upstream, "pokeball_small.png", bytes);
+        let mut writer = PackWriter::new();
+        let err = extract_sheet(&dir, small, &ball_colors(), &mut writer).unwrap_err();
+        assert_eq!(mismatch_path(err), path, "colour {changed}");
+        assert_eq!(writer.len(), 0);
     }
     std::fs::remove_dir_all(upstream).unwrap();
 }
@@ -504,7 +589,7 @@ fn the_real_checkout_yields_the_whole_family() {
     };
     let by_id = |id: &str| *family.iter().find(|e| e.id == id).unwrap();
 
-    // Sheets: upstream's built sizes (1,984 / 1,024 / 64 tile bytes).
+    // Sheets: upstream's built sizes (1,984 / 1,024 / 64 / 768 tile bytes).
     for (stem, _, _, _, colors, (w, h)) in SHEET_SHAPES {
         let entry = by_id(&format!("party-menu/image/{stem}"));
         assert_eq!(
@@ -528,9 +613,18 @@ fn the_real_checkout_yields_the_whole_family() {
         let tile_bytes = match stem {
             "bg" => 1_984,
             "pokeball" => 1_024,
+            "pokeball_small" => 768,
             _ => 64,
         };
         assert_eq!(tiles.len(), tile_bytes, "{stem}");
+        if stem == "pokeball_small" {
+            // It draws with the ball palette, which its PNG embeds unchanged.
+            assert_eq!(palette, source("pokeball").1);
+            assert!(!family
+                .iter()
+                .any(|e| e.id == "party-menu/palette/pokeball_small"));
+            continue;
+        }
         let palette_entry = by_id(&format!("party-menu/palette/{stem}"));
         assert_eq!(
             palette_entry.kind,

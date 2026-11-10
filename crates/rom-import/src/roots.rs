@@ -589,12 +589,14 @@ pub struct NamingScreenRoots {
 
 /// The party menu's graphics (`graphics/party_menu`).
 ///
-/// The fixed 14 `party-menu/` pack records the checkout extractor emits: the
-/// background, Poké Ball, and held-item sheets (`image`), their palettes, and
-/// eight maps (`raw`): the background screen, five slot panels, and two
-/// buttons. The background sheet, palette and screen and the Poké Ball sheet
-/// and palette are LZ77 streams (`src/graphics.c:1111-1117`); the slot maps,
-/// buttons, and held-item sheet and palette are raw (`src/data/party_menu.h`).
+/// The fixed 15 `party-menu/` pack records the checkout extractor emits: the
+/// background, Poké Ball, held-item, and small Poké Ball sheets (`image`),
+/// their palettes except the small sheet's, which draws with the Poké Ball's,
+/// and eight maps (`raw`): the background screen, five slot panels, and two
+/// buttons. The background sheet, palette and screen and the two Poké Ball
+/// sheets and the Poké Ball palette are LZ77 streams (`src/graphics.c:1111-1117`);
+/// the slot maps, buttons, and held-item sheet and palette are raw
+/// (`src/data/party_menu.h`).
 /// The background sheet is stored as its first 62 tiles, which the pack
 /// publishes as an 8x496 strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -245,14 +245,16 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/raw/bg_outer",
 ];
 
-/// The party menu's fourteen pack ids, named independently of the checkout
-/// extractor and of the profile: three sheets, three palettes, the
+/// The party menu's fifteen pack ids, named independently of the checkout
+/// extractor and of the profile: four sheets (the small Poké Ball sheet draws
+/// with the Poké Ball palette and has none of its own), three palettes, the
 /// background screen, five slot panels, and two buttons. `party-menu/` is a
 /// complete prefix, but a record both backends drop together would pass it.
-const PARTY_MENU_IDS: [&str; 14] = [
+const PARTY_MENU_IDS: [&str; 15] = [
     "party-menu/image/bg",
     "party-menu/image/pokeball",
     "party-menu/image/hold_icons",
+    "party-menu/image/pokeball_small",
     "party-menu/palette/bg",
     "party-menu/palette/pokeball",
     "party-menu/palette/hold_icons",
@@ -620,6 +622,12 @@ fn the_party_menu_handle_is_equal_from_the_rom_and_the_checkout() {
         assert_eq!(ours.palette.color_count, 16, "{name}");
         assert!(ours.palette.colors().eq(theirs.palette.colors()), "{name}");
     }
+    let (a, b) = (&ours.poke_ball_small, &theirs.poke_ball_small);
+    assert_eq!((a.width, a.height, a.bit_depth), (16, 96, 4));
+    assert_eq!(
+        (a.width, a.height, a.bit_depth, a.pixels),
+        (b.width, b.height, b.bit_depth, b.pixels)
+    );
     assert_eq!(ours.slots, theirs.slots);
     assert_eq!(ours.confirm_button, theirs.confirm_button);
     assert_eq!(ours.cancel_button, theirs.cancel_button);
@@ -893,7 +901,7 @@ fn the_naming_screen_profile_roots_are_the_manifest_ids() {
     assert_eq!(profiled, expected);
 }
 
-/// The profile's party-menu roots are exactly the 14 pinned ids, with the
+/// The profile's party-menu roots are exactly the 15 pinned ids, with the
 /// encodings and shapes upstream stores, so the complete `party-menu/` prefix
 /// cannot pass by both backends dropping the same entry.
 #[test]
@@ -927,6 +935,10 @@ fn the_party_menu_profile_roots_are_the_pinned_ids() {
     assert_eq!(image("party-menu/image/bg"), (Lz77, 8, 62 * 8, 62, 4, 4));
     assert_eq!(image("party-menu/image/pokeball"), (Lz77, 32, 64, 32, 4, 4));
     assert_eq!(image("party-menu/image/hold_icons"), (Raw, 8, 16, 2, 4, 4));
+    assert_eq!(
+        image("party-menu/image/pokeball_small"),
+        (Lz77, 16, 96, 24, 4, 4)
+    );
     let palette = |id: &str| {
         let root = roots.palettes.iter().find(|root| root.id == id).unwrap();
         (root.encoding, root.color_count)
