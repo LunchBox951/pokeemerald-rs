@@ -268,21 +268,15 @@ fn a_level_without_owner_write_on_another_filesystem_is_removed() {
     // with `more` left without owner write: it is unlinked in place, not
     // renamed (which would fail across filesystems anyway), and `new` goes
     // through the shared quarantine.
-    let shm = std::path::Path::new("/dev/shm");
     let dir = TempDir::new("unwritable-cross-device");
-    let Ok(shm_meta) = fs::metadata(shm) else {
-        panic!("this test needs /dev/shm");
-    };
+    let elsewhere =
+        crate::import_rom::tests::require_other_device_dir(&dir.path, "unwritable-cross-device");
+    let other = elsewhere.path.clone();
     assert_ne!(
-        shm_meta.dev(),
+        fs::metadata(&other).unwrap().dev(),
         fs::metadata(&dir.path).unwrap().dev(),
-        "this test needs /dev/shm on another filesystem than the temp dir"
+        "the scratch directory must be on another filesystem than the temp dir"
     );
-    let other = shm.join(format!(
-        "pokeemerald-rs-unwritable-cross-device-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&other).unwrap();
     std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
     let target = dir.join("new").join("..").join("m").join("more");
     let created = super::create_directories(&target).unwrap();
@@ -292,7 +286,6 @@ fn a_level_without_owner_write_on_another_filesystem_is_removed() {
 
     let on_shm = entry_names(&other);
     let in_base = entry_names(&dir.path);
-    fs::remove_dir_all(&other).unwrap();
-    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert!(on_shm.is_empty(), "left on the other device: {on_shm:?}");
     assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
 }

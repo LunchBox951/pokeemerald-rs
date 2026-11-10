@@ -46,6 +46,96 @@ impl Drop for TempDir {
     }
 }
 
+/// A scratch directory on a filesystem other than another directory's,
+/// removed on drop. Cross-device rollback tests need one: `TempDir` follows
+/// `TMPDIR`, so no fixed path (`/dev/shm` included) is reliably elsewhere.
+#[cfg(target_os = "linux")]
+pub(crate) struct OtherDeviceDir {
+    pub(crate) path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for OtherDeviceDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// The places to look for a filesystem other than the fixture root's, in
+/// order: `/dev/shm` first (usually tmpfs), then the common writable mounts,
+/// then the build tree and the working directory.
+#[cfg(target_os = "linux")]
+fn other_device_candidates() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = ["/dev/shm", "/tmp", "/var/tmp", "/run"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
+        candidates.push(PathBuf::from(target));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd);
+    }
+    candidates
+}
+
+/// A fresh directory under the first of `candidates` that is on a different
+/// device from `base` and accepts a new directory, or `None`.
+#[cfg(target_os = "linux")]
+pub(crate) fn other_device_dir_among(
+    base: &Path,
+    label: &str,
+    candidates: &[PathBuf],
+) -> Option<OtherDeviceDir> {
+    use std::os::unix::fs::MetadataExt as _;
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let base_dev = fs::metadata(base).ok()?.dev();
+    candidates.iter().find_map(|candidate| {
+        // Callers symlink to the directory from inside the fixture, where a
+        // relative path would resolve somewhere else.
+        let candidate = std::path::absolute(candidate).ok()?;
+        if fs::metadata(&candidate).ok()?.dev() == base_dev {
+            return None;
+        }
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = candidate.join(format!(
+            "pokeemerald-rs-other-device-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir(&path).ok()?;
+        // Judge the directory made, not its parent: a mount point inside the
+        // candidate would put the new directory elsewhere.
+        if fs::metadata(&path).ok()?.dev() == base_dev {
+            let _ = fs::remove_dir(&path);
+            return None;
+        }
+        Some(OtherDeviceDir { path })
+    })
+}
+
+/// A scratch directory on a filesystem other than `base`'s, found among the
+/// usual candidates, or `None` when this machine has no second writable one.
+#[cfg(target_os = "linux")]
+pub(crate) fn other_device_dir(base: &Path, label: &str) -> Option<OtherDeviceDir> {
+    other_device_dir_among(base, label, &other_device_candidates())
+}
+
+/// As [`other_device_dir`], but a machine with no second writable filesystem
+/// fails the test, naming what was tried, rather than passing without ever
+/// reaching rollback.
+#[cfg(target_os = "linux")]
+pub(crate) fn require_other_device_dir(base: &Path, label: &str) -> OtherDeviceDir {
+    other_device_dir(base, label).unwrap_or_else(|| {
+        panic!(
+            "{label} needs a writable directory on a different filesystem from {} (tried {:?})",
+            base.display(),
+            other_device_candidates()
+        )
+    })
+}
+
 /// Every file directly inside `dir`, sorted, as plain names.
 pub(super) fn file_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
