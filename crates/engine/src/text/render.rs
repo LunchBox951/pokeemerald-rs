@@ -55,6 +55,8 @@ mod keypad_icon;
 #[cfg(test)]
 mod font_control_tests;
 #[cfg(test)]
+mod glyph_clip_tests;
+#[cfg(test)]
 mod min_letter_spacing_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
@@ -82,12 +84,7 @@ pub const fn max_letter_height(font: FontId) -> i32 {
 /// metric from [`max_letter_height`], the `\n` advance, so the two tables
 /// disagree on every font but Short.
 const fn clear_span_height(font: FontId) -> i32 {
-    match font {
-        FontId::Small => 13,
-        FontId::Normal | FontId::Narrow => 15,
-        FontId::Short => 14,
-        FontId::SmallNarrow => 12,
-    }
+    font.glyph_height() as i32
 }
 
 /// Maps an upstream `FONT_*` id (`pokeemerald/include/text.h:10-21`) to the
@@ -689,6 +686,10 @@ impl<S: GlyphSource> Printer<S> {
             let Some(glyph) = self.source(font).and_then(|source| source.glyph(glyph_id)) else {
                 continue;
             };
+            // `CopyGlyphToWindow` copies only `gCurGlyph.width` columns and
+            // `gCurGlyph.height` rows of the cell (`text.c:608-612`), so the
+            // sheet's padding beyond them never reaches the window.
+            let glyph = glyph.clipped_to_height(font.glyph_height());
             // `ClearTextSpan` erases `gCurGlyph.height` rows
             // (`text.c:649-674`), which the latest `DecompressGlyph_*` set, so
             // the clear height follows the font of the latest glyph rather

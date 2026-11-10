@@ -173,8 +173,14 @@ pub(crate) fn blit_glyphs_colored_tracked(
 ) {
     let (content_width, content_height) = content_size;
     for revealed in glyphs {
+        // `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); the cell's right-hand padding is
+        // not drawn. The rows were already clipped to the font's
+        // `gCurGlyph.height` when the printer produced the glyph
+        // (`Glyph::clipped_to_height`).
+        let copied_width = GLYPH_SIZE.min(usize::from(revealed.glyph.advance_width));
         for pixel_y in 0..GLYPH_SIZE {
-            for pixel_x in 0..GLYPH_SIZE {
+            for pixel_x in 0..copied_width {
                 let palette_index =
                     usize::from(revealed.glyph.pixels[pixel_y * GLYPH_SIZE + pixel_x]);
                 let Some(Some(color)) = colors.get(palette_index) else {
@@ -558,7 +564,9 @@ mod tests {
             x,
             y,
             glyph: Glyph {
-                advance_width: u8::try_from(msgwin::TILE_SIZE).unwrap(),
+                // The whole 16x16 cell is in-width, so the clip tests below
+                // see the window clip alone.
+                advance_width: u8::try_from(GLYPH_SIZE).unwrap(),
                 pixels: [OPAQUE_GLYPH_PALETTE_INDEX; GLYPH_PIXELS],
             },
         }
@@ -670,6 +678,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn blit_glyphs_clips_cell_padding_past_the_glyph_advance_width() {
+        // Upstream `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); latin_narrow.png glyph 0xCD
+        // (width 5) carries stroke pixels at local x=8..11.
+        let mut fb = Framebuffer::new();
+        let origin = (10, 10);
+        let mut pixels = [0u8; GLYPH_PIXELS];
+        pixels[3 * 16 + 8] = OPAQUE_GLYPH_PALETTE_INDEX;
+        pixels[3 * 16 + 4] = OPAQUE_GLYPH_PALETTE_INDEX;
+        let glyph = RevealedGlyph {
+            x: 0,
+            y: 0,
+            glyph: Glyph {
+                advance_width: 5,
+                pixels,
+            },
+        };
+
+        blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 4, origin.1 + 3)),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the last in-width column stays painted"
+        );
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 8, origin.1 + 3)),
+            Some(Rgb888::BLACK)
+        );
+    }
+
+    #[test]
+    fn blit_glyphs_draws_nothing_for_a_zero_width_glyph() {
+        let mut fb = Framebuffer::new();
+        let mut glyph = opaque_glyph_at(0, 0);
+        glyph.glyph.advance_width = 0;
+
+        blit_glyphs_colored(&mut fb, &[glyph], (10, 10), (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(pixel_at(&fb, (10, 10)), Some(Rgb888::BLACK));
     }
 
     #[test]
