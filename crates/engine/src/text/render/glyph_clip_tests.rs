@@ -60,9 +60,7 @@ fn first_glyph(font: FontId, pixels: &[u8], glyph_byte: u8) -> RevealedGlyph {
 
 #[test]
 fn canonical_narrow_s_keeps_its_glyph_and_hides_the_second_stroke_in_the_cell_padding() {
-    let digit = |column: usize, row: usize| -> u8 {
-        NARROW_S_CELL[row].as_bytes()[column] - b'0'
-    };
+    let digit = |column: usize, row: usize| -> u8 { NARROW_S_CELL[row].as_bytes()[column] - b'0' };
     let pixels = sheet_with_cell(usize::from(NARROW_S), digit);
     let revealed = first_glyph(FontId::Narrow, &pixels, NARROW_S);
     assert_eq!(revealed.glyph.advance_width, 5);
