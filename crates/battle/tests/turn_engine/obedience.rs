@@ -326,7 +326,6 @@ fn a_self_hit_keeps_pp_and_draws_one_variance_roll() {
 /// `SPECIES_RATTATA`: its second ability slot is Guts.
 const RATTATA: u16 = 19;
 
-/// What a disobedience self-hit left behind.
 struct SelfHitRun {
     damage: u32,
     player_hp: u32,
@@ -335,15 +334,12 @@ struct SelfHitRun {
     draws: usize,
 }
 
-/// A traded level-20 `species` (ability `ability_slot`, known `moves`, slot 0
-/// chosen) disobeying into the self-hit branch: A=255 disobeys, B=255 takes
-/// the nap/self-hit branch, C=15 is not below the excess 10 (no nap) and
-/// `15 - 10 < 10` (self-hit), then `variance` is the damage roll
-/// (`Random() % 16`, `ApplyRandomDmgMultiplier`). `prepare` adjusts the
-/// battler before the battle is built.
-///
-/// `SequenceRng` pads the rest with zeros; the draw count is asserted by the
-/// callers (three setup, three gate, one variance, the enemy's four).
+/// The scripted gate draws reach the self-hit branch of `IsMonDisobedient`
+/// (`battle_util.c:3959`-`:4027`): A=255 disobeys, B=255 skips the
+/// alternate-move branch, and C=15 is not below the excess 10 (no nap) with
+/// `15 - 10 < 10` (self-hit). `variance` is then the one `Random() % 16` of
+/// `adjustnormaldamage2` (`ApplyRandomDmgMultiplier`,
+/// `battle_script_commands.c:1639`-`:1651`).
 fn disobedient_self_hit(
     species: u16,
     ability_slot: u8,
