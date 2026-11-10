@@ -117,9 +117,6 @@ struct SnapshotsRestore {
     dir_existed: bool,
     pointer: PathBuf,
     pointer_before: Option<Vec<u8>>,
-    /// When the baseline pointer file was last written, read from the same
-    /// handle as its bytes.
-    pointer_modified_before: Option<std::time::SystemTime>,
     /// Generation directories present at capture.
     generations_before: Vec<String>,
     own_generations: Vec<String>,
@@ -155,7 +152,14 @@ impl SnapshotsRestore {
         let pointer = dir.join("title.generation");
         for _ in 0..1000 {
             let mut generations_before = Self::generation_names(&dir);
-            let (pointer_before, pointer_modified_before) = Self::read_pointer(&pointer);
+            let pointer_before = match std::fs::read(&pointer) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!(
+                    "cannot read the existing snapshot pointer {}: {error}",
+                    pointer.display()
+                ),
+            };
             after_pointer_read();
             let mut relisted = Self::generation_names(&dir);
             generations_before.sort();
@@ -164,7 +168,6 @@ impl SnapshotsRestore {
                 return Self {
                     dir_existed: dir.exists(),
                     pointer_before,
-                    pointer_modified_before,
                     generations_before,
                     own_generations: Vec::new(),
                     dir,
@@ -176,30 +179,6 @@ impl SnapshotsRestore {
             "the snapshot generations under {} never settled; a publisher keeps landing",
             dir.display()
         );
-    }
-
-    /// The pointer's bytes and write time, `(None, None)` when absent.
-    ///
-    /// # Panics
-    ///
-    /// When the pointer exists but cannot be read, as [`Self::capture_in`].
-    fn read_pointer(pointer: &Path) -> (Option<Vec<u8>>, Option<std::time::SystemTime>) {
-        use std::io::Read;
-        let read = || {
-            let mut file = std::fs::File::open(pointer)?;
-            let modified = file.metadata()?.modified().ok();
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok::<_, std::io::Error>((bytes, modified))
-        };
-        match read() {
-            Ok((bytes, modified)) => (Some(bytes), modified),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
-            Err(error) => panic!(
-                "cannot read the existing snapshot pointer {}: {error}",
-                pointer.display()
-            ),
-        }
     }
 
     /// The `title.generation-*` directories directly under `dir`.
@@ -225,7 +204,6 @@ impl SnapshotsRestore {
     fn refresh_baseline(&mut self) {
         let fresh = Self::capture_in(self.dir.clone());
         self.pointer_before.clone_from(&fresh.pointer_before);
-        self.pointer_modified_before = fresh.pointer_modified_before;
         self.generations_before
             .clone_from(&fresh.generations_before);
     }
@@ -242,40 +220,35 @@ impl SnapshotsRestore {
         })
     }
 
-    /// A baseline generation that may belong to a publisher mid-publish.
+    /// A baseline generation the baseline pointer did not name, or the
+    /// baseline pointer not naming a generation at all.
     ///
     /// A publisher promotes its generation directory before it publishes
-    /// the pointer (`record_snapshot.rs`), so capture can see the new
-    /// directory beside the old pointer, and the publisher can still repoint
-    /// `title.generation` after the baseline; the child's atomic publish
-    /// would then discard what it wrote. Generations accumulate (nothing
-    /// prunes them), so an unnamed baseline generation alone proves nothing:
-    /// a superseded one is older than the pointer file that replaced it,
-    /// since a generation is promoted before the pointer naming it is
-    /// written. An unnamed generation not older than the pointer file, or
-    /// any generation beside no pointer, is unprovable (a retained failed
-    /// generation looks the same, and is refused the same way).
-    ///
-    /// Not covered: a publisher that promoted *before* the baseline pointer
-    /// was written and publishes after it looks like history.
-    fn unpublished_generation_at_baseline(&self) -> Option<String> {
-        let named = self
-            .pointer_before
-            .as_ref()
-            .map(|bytes| String::from_utf8_lossy(bytes).trim().to_owned());
+    /// the pointer (`record_snapshot.rs`), and nothing orders its promotion
+    /// against the baseline pointer's write: an unnamed generation may be
+    /// one whose publisher is mid-publish and will repoint
+    /// `title.generation` after the baseline, which the child's atomic
+    /// publish would then discard. Listings and timestamps cannot tell it
+    /// from superseded history or a retained failed generation, so the
+    /// baseline pointer is restorable only when it names a generation and
+    /// every generation present at capture is that one. A checkout holding
+    /// older or failed generations is therefore reported, never restored.
+    fn baseline_unprovable(&self) -> Option<String> {
+        let Some(bytes) = &self.pointer_before else {
+            return self.generations_before.first().map(|name| {
+                format!("generation {name} was present at the baseline beside no pointer")
+            });
+        };
+        let named = String::from_utf8_lossy(bytes).trim().to_owned();
+        if !self.generations_before.contains(&named) {
+            return Some(format!(
+                "the baseline pointer names {named}, which was not a generation at the baseline"
+            ));
+        }
         self.generations_before
             .iter()
-            .filter(|name| named.as_deref() != Some(name.as_str()))
-            .find(|name| {
-                let modified = std::fs::metadata(self.dir.join(name))
-                    .and_then(|meta| meta.modified())
-                    .ok();
-                match (modified, self.pointer_modified_before) {
-                    (Some(generation), Some(pointer)) => generation >= pointer,
-                    _ => true,
-                }
-            })
-            .cloned()
+            .find(|name| **name != named)
+            .map(|name| format!("generation {name} was present at the baseline but not published"))
     }
 
     /// The `<dir>/title.rgb` path of `<rgb> (+ <meta>); rgb hash ...`.
@@ -450,13 +423,12 @@ impl SnapshotsRestore {
                  replaced is unknown, so the child's pointer is kept"
             ));
         }
-        if let Some(orphan) = self.unpublished_generation_at_baseline() {
+        if let Some(why) = self.baseline_unprovable() {
             // That generation's publisher may have repointed the pointer
             // after the baseline, and the child's publish left no trace of
             // it: the baseline pointer cannot be proven current.
             return put_back(format!(
-                "generation {orphan} was present at the baseline without being the published \
-                 one; its publisher may have replaced the pointer since, which is unknown, so \
+                "{why}; a publisher may have replaced the pointer since, which is unknown, so \
                  the child's pointer is kept"
             ));
         }
@@ -611,22 +583,6 @@ fn snapshots_restore_keeps_a_concurrent_publishers_generation() {
         "a pointer written by another publisher must be left alone"
     );
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Writes `dir/title.generation` and stamps it ninety seconds ahead, so every
-/// generation directory the test already created is strictly older than the
-/// pointer whatever the filesystem's timestamp granularity; the real
-/// publisher writes the pointer after promoting the generation it names.
-fn publish_pointer_after_history(dir: &Path, name: &str) {
-    let pointer = dir.join("title.generation");
-    std::fs::write(&pointer, format!("{name}\n")).expect("pointer");
-    std::fs::File::options()
-        .write(true)
-        .open(&pointer)
-        .and_then(|file| {
-            file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(90))
-        })
-        .expect("stamp the pointer after the history");
 }
 
 fn success_line(generation: &Path) -> String {
@@ -883,12 +839,16 @@ fn snapshots_restore_reports_a_publisher_landing_between_baseline_and_child() {
 /// pointer, so the same interleaving loses nothing.
 #[test]
 fn snapshots_restore_keeps_a_pointer_published_before_the_refreshed_baseline() {
+    // No earlier generation: a baseline holding any generation beside the
+    // one its pointer names is refused (`baseline_unprovable`).
     let dir = scratch_snapshots("publish-before-refresh");
-    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
-    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer A");
     let mut restore = SnapshotsRestore::capture_in(dir.clone());
     std::fs::create_dir(dir.join("title.generation-4294967295-0")).expect("B generation");
-    publish_pointer_after_history(&dir, "title.generation-4294967295-0");
+    std::fs::write(
+        dir.join("title.generation"),
+        b"title.generation-4294967295-0\n",
+    )
+    .expect("pointer B");
     restore.refresh_baseline();
     let own = dir.join("title.generation-77-0");
     std::fs::create_dir(&own).expect("own generation");
@@ -910,15 +870,18 @@ fn snapshots_restore_keeps_a_pointer_published_before_the_refreshed_baseline() {
 /// present generation beside the older pointer it replaced.
 #[test]
 fn snapshots_capture_retries_when_a_publisher_lands_between_pointer_read_and_listing() {
+    // No earlier generation, as in the refresh test above.
     let dir = scratch_snapshots("capture-window");
-    std::fs::create_dir(dir.join("title.generation-1-0")).expect("old generation");
-    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer A");
     let mut landed = false;
     let mut restore = SnapshotsRestore::capture_in_with(dir.clone(), || {
         if !landed {
             landed = true;
             std::fs::create_dir(dir.join("title.generation-4294967295-0")).expect("B generation");
-            publish_pointer_after_history(&dir, "title.generation-4294967295-0");
+            std::fs::write(
+                dir.join("title.generation"),
+                b"title.generation-4294967295-0\n",
+            )
+            .expect("pointer B");
         }
     });
     let own = dir.join("title.generation-77-0");
@@ -967,5 +930,37 @@ fn adjudicator_restore_does_not_discard_a_publisher_promoted_before_the_baseline
         !(errors.is_empty() && pointer == b"title.generation-1-0\n"),
         "B's publication was silently discarded: the stale pointer A was restored with no error \
          (errors {errors:?})"
+    );
+}
+
+/// Adjudicator 2: publisher B promotes its generation, then publisher A
+/// (whose generation was promoted earlier) publishes pointer A, so B's
+/// generation is older than the baseline pointer. Capture, then B publishes,
+/// then the child C publishes over B. The restore must not silently put the
+/// stale pointer A back over B's successful publication.
+#[test]
+fn adjudicator2_restore_does_not_discard_a_publisher_promoted_before_the_baseline_pointer() {
+    let dir = scratch_snapshots("promoted-before-baseline-pointer");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("A generation");
+    std::fs::create_dir(dir.join("title.generation-4294967295-0")).expect("B generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-1-0\n").expect("pointer A");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    std::fs::write(
+        dir.join("title.generation"),
+        b"title.generation-4294967295-0\n",
+    )
+    .expect("pointer B");
+    let own = dir.join("title.generation-77-0");
+    std::fs::create_dir(&own).expect("own generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-77-0\n").expect("pointer C");
+    restore.own_generation_from_stdout(&success_line(&own));
+    let errors = restore.finish_with(|| {});
+    let pointer = std::fs::read(dir.join("title.generation")).expect("pointer");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !(errors.is_empty() && pointer == b"title.generation-1-0\n"),
+        "B's publication was silently discarded: the stale pointer A was restored with no error \
+         (errors {errors:?}, pointer {:?})",
+        String::from_utf8_lossy(&pointer)
     );
 }
