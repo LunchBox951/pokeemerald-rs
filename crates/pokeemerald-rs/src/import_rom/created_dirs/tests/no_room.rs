@@ -143,10 +143,15 @@ fn a_full_filesystem_leaves_a_directory_that_took_the_name_before_the_move() {
             stderr.contains("another entry has taken its name"),
             "stderr:\n{stderr}"
         );
-        assert!(
-            stderr.contains("moved away before rollback could take it back"),
-            "stderr:\n{stderr}"
-        );
+        // Only where the held original's link count can tell moved from
+        // removed (Linux, Android) is it reported as moved away; elsewhere
+        // the warning says it may have been.
+        let moved = if cfg!(any(target_os = "linux", target_os = "android")) {
+            "moved away before rollback could take it back"
+        } else {
+            "if it was moved rather than removed, the directory rollback made is left elsewhere"
+        };
+        assert!(stderr.contains(moved), "stderr:\n{stderr}");
         return;
     }
     let dir = TempDir::new("no-room-swap-before");
