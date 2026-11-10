@@ -68,30 +68,21 @@ fn identity_of(path: &Path) -> io::Result<Option<Identity>> {
     Ok(Some(Identity { token, is_dir }))
 }
 
-/// Opens the directory `identity` was read from and keeps the handle, if it
-/// is still that directory: an inode (Unix) or file ID (Windows) is not
-/// recycled while something holds it open, so a directory deleted and
-/// recreated at the path cannot inherit the planted identity.
+/// Windows: opens the directory `identity` was read from and keeps the handle,
+/// if it is still that directory, so a file ID is not recycled while the guard
+/// holds it.
+///
+/// Unix does not pin: one descriptor per planted directory would exhaust a
+/// 256-descriptor soft limit (the macOS default) on the voicegroup fixtures'
+/// hundreds of names. A directory there is instead proved ours by the unique
+/// content of its sentinel file; see [`PlantedEntry::sentinel`].
+#[cfg(windows)]
 fn pin(path: &Path, identity: &Identity) -> Option<std::fs::File> {
     if !identity.is_dir {
         return None;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        let handle = std::fs::File::open(path).ok()?;
-        let metadata = handle.metadata().ok()?;
-        ((metadata.dev(), metadata.ino()) == identity.token).then_some(handle)
-    }
-    #[cfg(windows)]
-    {
-        let handle = win_fs::open_for_verified_delete(path).ok()?;
-        (win_fs::WindowsFileIdentity::of(&handle).ok()? == identity.token).then_some(handle)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        None
-    }
+    let handle = win_fs::open_for_verified_delete(path).ok()?;
+    (win_fs::WindowsFileIdentity::of(&handle).ok()? == identity.token).then_some(handle)
 }
 
 struct PlantedEntry {
@@ -99,31 +90,67 @@ struct PlantedEntry {
     /// `None` when the identity could not be read at planting: the entry can
     /// then not be told from a replacement and is never removed.
     identity: Option<Identity>,
-    /// Held open on a planted directory so a replacement cannot recycle its
-    /// identity. A symlink cannot be opened without following it, so it has
-    /// none; a directory without one is never removed.
+    /// Windows: held open on a planted directory so a replacement cannot
+    /// recycle its identity. Never set on Unix, where it would cost a
+    /// descriptor per directory.
     handle: Option<std::fs::File>,
+    /// The content `populate` wrote to the directory's sentinel file, unique
+    /// to this planting. A directory is removed only if it holds the handle or
+    /// still has this content, so a replacement that recycled the inode (and
+    /// so passes the identity compare) is left alone unless it also copied the
+    /// sentinel. A symlink has none; a directory with neither is never removed.
+    sentinel: Option<String>,
+    /// Set for a name the plant created and then failed on, before it could
+    /// write a sentinel. It is removed only if empty, so a populated
+    /// replacement swapped in meanwhile is reported and kept.
+    created_by_failed_plant: bool,
+}
+
+impl PlantedEntry {
+    /// Whether the directory at `path` is the one planted, beyond its identity.
+    fn proves_ownership(&self, path: &Path) -> bool {
+        self.handle.is_some()
+            || self.created_by_failed_plant
+            || self
+                .sentinel
+                .as_deref()
+                .is_some_and(|expected| sentinel_of(path).as_deref() == Some(expected))
+    }
 }
 
 struct Planted(Vec<PlantedEntry>);
 
 impl Planted {
     fn entry(path: &Path) -> PlantedEntry {
-        let identity = identity_of(path).ok().flatten();
+        Self::entry_planted(path, None)
+    }
+
+    /// `planted` is the sentinel content the plant wrote. A directory that
+    /// does not hold it is a replacement swapped in after the plant: it is
+    /// recorded without an identity, so it is reported and never removed.
+    fn entry_planted(path: &Path, planted: Option<&str>) -> PlantedEntry {
+        let swapped = planted.is_some_and(|planted| sentinel_of(path).as_deref() != Some(planted));
+        let identity = identity_of(path).ok().flatten().filter(|_| !swapped);
+        let is_dir = identity.as_ref().is_some_and(|identity| identity.is_dir);
+        #[cfg(windows)]
         let handle = identity.as_ref().and_then(|identity| pin(path, identity));
+        #[cfg(not(windows))]
+        let handle: Option<std::fs::File> = None;
         PlantedEntry {
             path: path.to_path_buf(),
             identity,
             handle,
+            sentinel: if is_dir { sentinel_of(path) } else { None },
+            created_by_failed_plant: false,
         }
     }
 }
 
 impl Drop for Planted {
     /// Removes an entry only while its path still names the one the guard
-    /// planted (the rule of `OwnedDir`), and reports any left behind unless the
-    /// thread is unwinding: a passing test must not leave planted entries
-    /// unreported.
+    /// planted (the rule of `OwnedDir`), and reports any left behind: by
+    /// panicking, or by printing when the thread is already unwinding, so a
+    /// leftover is never silent.
     fn drop(&mut self) {
         let mut failures = Vec::new();
         for entry in &mut self.0 {
@@ -133,7 +160,7 @@ impl Drop for Planted {
                 Err(error) => failures.push(format!("{}: {error}", path.display())),
                 Ok(Some(current))
                     if Some(&current) != entry.identity.as_ref()
-                        || (current.is_dir && entry.handle.is_none()) =>
+                        || (current.is_dir && !entry.proves_ownership(path)) =>
                 {
                     failures.push(format!(
                         "{}: not the entry the guard planted, left alone",
@@ -144,7 +171,12 @@ impl Drop for Planted {
                     // The directory cannot be removed while a handle is open
                     // on Windows.
                     drop(entry.handle.take());
-                    let removed = if current.is_dir {
+                    let removed = if entry.created_by_failed_plant {
+                        // Only an empty directory (bar a half-written
+                        // sentinel): a populated replacement is not adopted.
+                        let _ = std::fs::remove_file(path.join(SENTINEL));
+                        std::fs::remove_dir(path)
+                    } else if current.is_dir {
                         std::fs::remove_dir_all(path)
                     } else {
                         std::fs::remove_file(path)
@@ -157,10 +189,16 @@ impl Drop for Planted {
                 }
             }
         }
-        assert!(
-            failures.is_empty() || std::thread::panicking(),
-            "removing planted entries failed: {failures:?}"
-        );
+        if std::thread::panicking() {
+            if !failures.is_empty() {
+                eprintln!("removing planted entries failed: {failures:?}");
+            }
+        } else {
+            assert!(
+                failures.is_empty(),
+                "removing planted entries failed: {failures:?}"
+            );
+        }
     }
 }
 
@@ -183,7 +221,7 @@ fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
 fn plant_all(
     prefix: &str,
     names: &[PathBuf],
-    plant: impl Fn(&Path) -> io::Result<()>,
+    plant: impl Fn(&Path) -> io::Result<Option<String>>,
     on_wait: &dyn Fn(),
 ) -> Planted {
     let mut planted = Planted(Vec::new());
@@ -193,7 +231,12 @@ fn plant_all(
             let absent =
                 std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
             match plant(path) {
-                Ok(()) => break,
+                Ok(sentinel) => {
+                    planted
+                        .0
+                        .push(Planted::entry_planted(path, sentinel.as_deref()));
+                    break;
+                }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline => {
                     on_wait();
                     std::thread::sleep(Duration::from_millis(2));
@@ -205,13 +248,14 @@ fn plant_all(
                         && e.kind() != io::ErrorKind::AlreadyExists
                         && std::fs::symlink_metadata(path).is_ok()
                     {
-                        planted.0.push(Planted::entry(path));
+                        let mut entry = Planted::entry(path);
+                        entry.created_by_failed_plant = true;
+                        planted.0.push(entry);
                     }
                     panic!("{prefix}: cannot plant {}: {e}", path.display());
                 }
             }
         }
-        planted.0.push(Planted::entry(path));
     }
     planted
 }
@@ -226,13 +270,44 @@ fn listing(dir: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
-fn populate(dir: &Path) -> io::Result<()> {
-    std::fs::write(dir.join(SENTINEL), PRECIOUS)
+/// `PRECIOUS` plus a suffix no other planting shares: process, a counter and
+/// the clock.
+fn fresh_sentinel() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{PRECIOUS}-{}-{}-{nanos}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Writes the sentinel and returns its content.
+fn populate(dir: &Path) -> io::Result<String> {
+    let content = fresh_sentinel();
+    std::fs::write(dir.join(SENTINEL), &content)?;
+    Ok(content)
+}
+
+fn sentinel_of(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(dir.join(SENTINEL)).ok()
+}
+
+/// `dir` holds only the sentinel, with `expected` content or, when it is
+/// `None`, any content `populate` writes.
+fn untouched_as(dir: &Path, expected: Option<&str>) -> bool {
+    listing(dir).as_deref() == Some(&[SENTINEL.to_owned()][..])
+        && sentinel_of(dir).is_some_and(|content| match expected {
+            Some(expected) => content == expected,
+            None => content.starts_with(PRECIOUS),
+        })
 }
 
 fn untouched(dir: &Path) -> bool {
-    listing(dir).as_deref() == Some(&[SENTINEL.to_owned()][..])
-        && std::fs::read_to_string(dir.join(SENTINEL)).ok().as_deref() == Some(PRECIOUS)
+    untouched_as(dir, None)
 }
 
 /// Runs `fixture`, the real test function, with something planted at each
@@ -266,7 +341,7 @@ fn assert_fixture_ignores_planted_names_observing(
         &names,
         |path| {
             std::fs::create_dir(path)?;
-            populate(path)
+            populate(path).map(Some)
         },
         on_wait,
     );
@@ -274,7 +349,7 @@ fn assert_fixture_ignores_planted_names_observing(
     let disturbed: Vec<_> = dirs
         .0
         .iter()
-        .filter(|e| !untouched(&e.path))
+        .filter(|e| !untouched_as(&e.path, e.sentinel.as_deref()))
         .map(|e| e.path.clone())
         .collect();
     assert!(
@@ -290,7 +365,7 @@ fn assert_fixture_ignores_planted_names_observing(
         let links = plant_all(
             prefix,
             &names,
-            |path| std::os::unix::fs::symlink(victim.path(), path),
+            |path| std::os::unix::fs::symlink(victim.path(), path).map(|()| None),
             on_wait,
         );
         fixture();
@@ -455,6 +530,30 @@ mod tests {
         );
     }
 
+    /// A populated directory swapped in between the plant and the guard's
+    /// record of it must be reported and kept, not adopted and deleted.
+    #[test]
+    fn a_replacement_swapped_in_before_the_record_is_not_adopted() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-swapped-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let planted_sentinel = populate(&path).unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let planted = Planted(vec![Planted::entry_planted(&path, Some(&planted_sentinel))]);
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let survived = untouched(&path);
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(survived, "the swapped-in directory was adopted and deleted");
+        assert!(
+            reported.is_err(),
+            "the swapped-in directory went unreported"
+        );
+    }
+
     #[test]
     fn plant_all_removes_a_directory_whose_population_failed() {
         let path = std::env::temp_dir().join(format!(
@@ -468,7 +567,7 @@ mod tests {
                 &names,
                 |p| {
                     std::fs::create_dir(p)?;
-                    Err(io::Error::other("injected population failure"))
+                    Err::<Option<String>, _>(io::Error::other("injected population failure"))
                 },
                 &|| {},
             )
@@ -531,5 +630,107 @@ mod tests {
             None,
             fixture_writing_through_only_a_symlink,
         );
+    }
+
+    /// A directory-pinning descriptor per planted name exhausted the 256
+    /// descriptor soft limit macOS sets by default: the voicegroup fixtures
+    /// plant hundreds of names, so planting failed with EMFILE.
+    #[cfg(unix)]
+    mod descriptor_limit {
+        use super::*;
+
+        const CHILD_ENV: &str = "FIXTURE_GUARD_DESCRIPTOR_LIMIT_CHILD";
+        const PANIC_PREFIX: &str = "pokeemerald-rs-fixture-guard-descriptor-limit";
+        const VOICEGROUP_TEST: &str = "extract::voicegroups::tests::\
+            voicegroup_fixtures_ignore_everything_planted_at_their_former_and_candidate_names";
+        const CHILD_TEST: &str =
+            "extract::fixture_guard::tests::descriptor_limit::panicking_fixture_child";
+        /// More names than the soft limit has descriptors.
+        const LINE_LIMIT: usize = 700;
+
+        fn fixture_that_panics() {
+            panic!("fixture panicked");
+        }
+
+        /// Runs only in the child `run_under_the_limit` starts, which has the
+        /// descriptor limit set.
+        #[test]
+        fn panicking_fixture_child() {
+            if std::env::var_os(CHILD_ENV).is_none() {
+                return;
+            }
+            assert!(names(PANIC_PREFIX, Some(LINE_LIMIT)).len() > 256);
+            let payload = std::panic::catch_unwind(|| {
+                assert_fixture_ignores_planted_names(
+                    PANIC_PREFIX,
+                    Some(LINE_LIMIT),
+                    fixture_that_panics,
+                );
+            })
+            .expect_err("the fixture's panic must propagate");
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|m| (*m).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            assert!(
+                message.contains("fixture panicked"),
+                "planting failed before the fixture ran: {message}"
+            );
+        }
+
+        /// Runs `test` alone in a child whose soft descriptor limit is 256, and
+        /// returns the child's pid and output.
+        fn run_under_the_limit(test: &str) -> (u32, std::process::Output) {
+            let child = std::process::Command::new("sh")
+                .args(["-c", "ulimit -Sn 256 && exec \"$0\" \"$@\""])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", test, "--test-threads=1"])
+                .env(CHILD_ENV, "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            (pid, child.wait_with_output().unwrap())
+        }
+
+        fn leftovers(prefix: &str, pid: u32) -> Vec<String> {
+            let own = format!("-{pid}");
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|name| {
+                    name.starts_with(prefix)
+                        && (name.ends_with(&own) || name.contains(&format!("{own}-")))
+                })
+                .collect()
+        }
+
+        fn assert_passed(what: &str, output: &std::process::Output) {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{what} under a 256-descriptor soft limit: {}\n{stdout}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        #[test]
+        fn the_voicegroup_fixtures_are_planted_under_a_256_descriptor_soft_limit() {
+            let (pid, output) = run_under_the_limit(VOICEGROUP_TEST);
+            let left = leftovers("pokeemerald-rs-voicegroup-", pid);
+            assert_passed("the voicegroup guard", &output);
+            assert!(left.is_empty(), "planted directories left behind: {left:?}");
+        }
+
+        #[test]
+        fn a_panicking_fixture_leaves_no_planted_directory_under_a_256_descriptor_soft_limit() {
+            let (pid, output) = run_under_the_limit(CHILD_TEST);
+            let left = leftovers(PANIC_PREFIX, pid);
+            assert_passed("the panicking fixture", &output);
+            assert!(left.is_empty(), "planted directories left behind: {left:?}");
+        }
     }
 }
