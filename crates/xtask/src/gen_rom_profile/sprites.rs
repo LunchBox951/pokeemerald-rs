@@ -15,7 +15,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::{only_one_matching, to_offset, u16_at_addr, u32_at_addr};
+use super::locate::{only_one_matching, slice_at_addr, to_offset, u16_at_addr, u32_at_addr};
 use super::plan::{PalettePlan, ReportLine, Resolution, SpritePlan};
 use super::tilesets::len32;
 use super::Context;
@@ -30,6 +30,11 @@ const FIELD_PADDING: u32 = 6;
 /// Exclusive bound on a neighbour's tag distance from the seed record for it
 /// to still belong to the table. Object-event tags form one dense block.
 const TAG_SPREAD: u16 = 0x100;
+/// How many records the importer reads before it decides the terminator is
+/// missing (`MAX_RECORDS` in `rom-import`'s `domains/sprites.rs`). The
+/// terminator must sit at an index below this, or the importer refuses the
+/// table, so the locator refuses it too.
+const MAX_RECORDS: u32 = 128;
 
 /// Locate every object-event sprite sheet and palette.
 ///
@@ -175,6 +180,26 @@ fn find_palette_table(ctx: &Context<'_>, seed: u32) -> Result<PaletteTable, GenR
     while is_neighbour(ctx, end, seed_tag) {
         end += RECORD_BYTES;
     }
+    // The importer reads whole records up to one with a NULL `data`, so a
+    // table ending in anything else (filler, a stray record) or whose
+    // terminator record is cut short by the image end is one it cannot read.
+    let terminator = slice_at_addr(ctx.rom, end, RECORD_BYTES as usize);
+    if terminator.map(|record| &record[..4]) != Some(&[0, 0, 0, 0]) {
+        return Err(GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: format!("the table at {start:#010X} does not end in a NULL terminator"),
+        });
+    }
+    let live = (end - start) / RECORD_BYTES;
+    if live >= MAX_RECORDS {
+        return Err(GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: format!(
+                "the table at {start:#010X} holds {live} records, so its terminator is past \
+                 the importer's {MAX_RECORDS}-record bound"
+            ),
+        });
+    }
     Ok(PaletteTable { start, end })
 }
 
@@ -230,6 +255,11 @@ mod tests {
         out
     }
 
+    /// The record with a NULL `data` that ends `sObjectEventSpritePalettes`.
+    fn terminator() -> Vec<u8> {
+        record(0, 0)
+    }
+
     /// Distinct 4bpp art for sheet `index`.
     fn sheet_art(index: usize) -> [u8; 32] {
         let mut art = [0x12; 32];
@@ -274,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_unique_palette_the_table_omits_is_refused() {
-        let (rom, entries) = fixture(&[record(0x0800_2000, 0x1100)], &[0x3000]);
+        let (rom, entries) = fixture(&[record(0x0800_2000, 0x1100), terminator()], &[0x3000]);
         with_context("sprite-palette-omitted", &rom, entries, |ctx| {
             let mut report = Vec::new();
             let err = locate(ctx, &mut report).unwrap_err();
@@ -293,7 +323,11 @@ mod tests {
 
     #[test]
     fn a_unique_palette_the_table_references_is_emitted() {
-        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            terminator(),
+        ];
         let (rom, entries) = fixture(&records, &[0x3000]);
         with_context("sprite-palette-listed", &rom, entries, |ctx| {
             let plan = locate(ctx, &mut Vec::new()).expect("located");
@@ -309,8 +343,76 @@ mod tests {
     }
 
     #[test]
+    fn a_table_ending_in_filler_without_a_terminator_is_refused() {
+        // Two live records then 0xFF filler: the importer reads on past the
+        // records, parses 0xFFFF_FFFF as a pointer and fails.
+        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let (rom, entries) = fixture(&records, &[0x3000]);
+        with_context("sprite-palette-unterminated", &rom, entries, |ctx| {
+            let result = locate(ctx, &mut Vec::new());
+            assert!(result.is_err(), "an unterminated table was located");
+        });
+    }
+
+    /// `live` records tagged in one dense block, the first naming the seed
+    /// bank and the rest the target bank, then a terminator.
+    fn terminated_table(live: u16) -> Vec<Vec<u8>> {
+        let mut records = vec![record(0x0800_2000, 0x1100)];
+        for index in 1..live {
+            records.push(record(0x0800_3000, 0x1100 + index));
+        }
+        records.push(terminator());
+        records
+    }
+
+    fn assert_refused_for(name: &str, records: &[Vec<u8>], needle: &str) {
+        let (rom, entries) = fixture(records, &[0x3000]);
+        with_context(name, &rom, entries, |ctx| {
+            match locate(ctx, &mut Vec::new()).unwrap_err() {
+                GenRomProfileError::StructMismatch { id, reason } => {
+                    assert_eq!(id, "sObjectEventSpritePalettes");
+                    assert!(reason.contains(needle), "{reason}");
+                }
+                other => panic!("expected StructMismatch, got {other}"),
+            }
+        });
+    }
+
+    #[test]
+    fn an_unterminated_table_names_the_missing_terminator() {
+        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        assert_refused_for("sprite-palette-no-nul", &records, "NULL terminator");
+    }
+
+    #[test]
+    fn a_table_one_record_under_the_importer_bound_is_located() {
+        // 127 live records put the terminator at index 127, the last one the
+        // importer reads.
+        let (rom, entries) = fixture(&terminated_table(127), &[0x3000]);
+        with_context("sprite-palette-bound-ok", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            assert_eq!(plan.palette_table, 0x0800_4000);
+        });
+    }
+
+    #[test]
+    fn a_table_past_the_importer_bound_is_refused() {
+        // 128 live records put the terminator at index 128: the importer
+        // gives up at its 128-record bound before reaching it.
+        assert_refused_for(
+            "sprite-palette-too-long",
+            &terminated_table(128),
+            "128-record bound",
+        );
+    }
+
+    #[test]
     fn a_duplicated_palette_resolves_to_the_copy_the_table_names() {
-        let records = [record(0x0800_2000, 0x1100), record(0x0800_5000, 0x1101)];
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_5000, 0x1101),
+            terminator(),
+        ];
         let (rom, entries) = fixture(&records, &[0x3000, 0x5000]);
         with_context("sprite-palette-duplicate", &rom, entries, |ctx| {
             let mut report = Vec::new();
@@ -328,7 +430,11 @@ mod tests {
     fn a_palette_named_by_the_table_after_sixteen_lower_copies_is_still_found() {
         // Sixteen unreferenced copies fill the ordinary search cap below the
         // copy the table names.
-        let records = [record(0x0800_2000, 0x1100), record(0x0803_0000, 0x1101)];
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0803_0000, 0x1101),
+            terminator(),
+        ];
         let mut copies: Vec<usize> = (0..16).map(|copy| 0x5000 + copy * 0x40).collect();
         copies.push(0x3_0000);
         let (rom, entries) = fixture(&records, &copies);
@@ -345,7 +451,11 @@ mod tests {
 
     #[test]
     fn a_gnu_ld_map_that_omits_the_static_table_does_not_reject_it() {
-        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            terminator(),
+        ];
         let (rom, entries) = fixture(&records, &[0x3000]);
         with_context("sprite-palette-static-map", &rom, entries, |ctx| {
             let mut report = Vec::new();
@@ -357,6 +467,46 @@ mod tests {
                 plan.palette_table,
                 &mut report,
             );
+        });
+    }
+
+    #[test]
+    fn a_terminator_cut_short_by_the_image_end_is_refused() {
+        // Two live records end four bytes before the image end, so only the
+        // terminator's `data` field fits: the importer's eight-byte read of
+        // that record is Truncated, so the locator must refuse the table.
+        let (mut rom, entries) = fixture(&[], &[0x3000]);
+        let len = rom.len();
+        let tail: Vec<u8> = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            vec![0, 0, 0, 0],
+        ]
+        .concat();
+        rom[len - tail.len()..].copy_from_slice(&tail);
+        with_context("sprite-palette-short-terminator", &rom, entries, |ctx| {
+            let result = locate(ctx, &mut Vec::new());
+            assert!(
+                result.is_err(),
+                "located a table whose terminator the importer cannot read: {:?}",
+                result.map(|plan| plan.palette_table)
+            );
+        });
+    }
+
+    #[test]
+    fn the_importer_accepts_the_plan_the_locator_emits_at_the_bound() {
+        let (rom, entries) = fixture(&terminated_table(127), &[0x3000]);
+        with_context("sprite-palette-bound-import", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            let reader = rom_import::RomReader::new(ctx.rom);
+            let table = rom_import::GbaPtr::new(plan.palette_table).expect("a ROM address");
+            let named = rom_import::sprite_palette_table(&reader, table)
+                .expect("the importer reads the located table");
+            for palette in &plan.palettes {
+                let addr = rom_import::GbaPtr::new(palette.addr).expect("a ROM address");
+                assert!(named.contains(&addr), "{} not named", palette.id);
+            }
         });
     }
 }
