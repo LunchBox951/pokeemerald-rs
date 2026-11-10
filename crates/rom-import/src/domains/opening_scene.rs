@@ -24,23 +24,8 @@ use crate::roots::Roots;
 ///
 /// Any [`ImportError`] an image, palette or blob read raises.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    let reader = rom.reader();
     let family = &roots.opening_scene;
-    let mut entries =
-        Vec::with_capacity(family.images.len() + family.palettes.len() + family.tilemaps.len());
-    for root in family.images {
-        entries.push(super::image(&reader, root)?);
-    }
-    for root in family.palettes {
-        entries.push(super::palette(&reader, root)?);
-    }
-    for root in family.tilemaps {
-        entries.push(super::blob(&reader, root)?);
-    }
-    for entry in entries {
-        writer.push(entry);
-    }
-    Ok(())
+    super::write_plain(rom, family.images, family.palettes, family.tilemaps, writer)
 }
 
 #[cfg(test)]

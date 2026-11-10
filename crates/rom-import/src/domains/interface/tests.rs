@@ -109,3 +109,22 @@ fn a_sheet_past_the_image_is_truncated() {
     let err = write(&rom(), &roots(&PAST_THE_ROM), &mut writer).unwrap_err();
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
 }
+
+#[test]
+fn a_late_failing_root_queues_nothing_like_the_staged_plain_domains() {
+    static GOOD_THEN_BAD: [ImageRoot; 2] = [
+        SHEETS[0],
+        ImageRoot {
+            id: "interface/image/late",
+            addr: NEAR_THE_END,
+            ..SHEETS[0]
+        },
+    ];
+    let mut writer = PackWriter::new();
+    let err = write(&rom(), &roots(&GOOD_THEN_BAD), &mut writer).unwrap_err();
+    assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
+    // The plain domains stage their entries and leave the writer untouched on
+    // a late failure; the interface domain shares that contract.
+    let bytes = writer.finish().expect("a pack");
+    assert!(parse_directory(&bytes).expect("a valid pack").is_empty());
+}

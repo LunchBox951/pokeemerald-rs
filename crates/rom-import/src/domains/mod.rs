@@ -172,6 +172,46 @@ pub(crate) fn blob(reader: &RomReader<'_>, root: &BlobRoot) -> Result<PackEntry,
     Ok(raw_entry(root.id.to_owned(), payload))
 }
 
+/// Read a plain family's images, palettes and blobs, then queue them all.
+///
+/// The one owner of the all-or-nothing contract the plain domains share:
+/// every entry is read before any is queued, so a failing root leaves
+/// `writer` untouched rather than holding part of the domain. Entries are
+/// queued images first, then palettes, then blobs, each in slice order. A
+/// family with no roots writes nothing.
+///
+/// A domain keeps choosing its own roots (and any checks over them); this
+/// only walks what it hands in. `blobs` is any run of blob roots, so a domain
+/// whose blobs come from more than one profile field chains them.
+///
+/// # Errors
+///
+/// Any [`ImportError`] an image, palette or blob read raises.
+pub(crate) fn write_plain<'a>(
+    rom: &Rom,
+    images: &[ImageRoot],
+    palettes: &[PaletteRoot],
+    blobs: impl IntoIterator<Item = &'a BlobRoot>,
+    writer: &mut PackWriter,
+) -> Result<(), ImportError> {
+    let reader = rom.reader();
+    let blobs = blobs.into_iter();
+    let mut entries = Vec::with_capacity(images.len() + palettes.len() + blobs.size_hint().0);
+    for root in images {
+        entries.push(image(&reader, root)?);
+    }
+    for root in palettes {
+        entries.push(palette(&reader, root)?);
+    }
+    for root in blobs {
+        entries.push(blob(&reader, root)?);
+    }
+    for entry in entries {
+        writer.push(entry);
+    }
+    Ok(())
+}
+
 /// Check one pointer field of a struct against the address the profile
 /// records for it.
 ///

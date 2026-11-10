@@ -34,19 +34,9 @@ use crate::roots::Roots;
 ///
 /// # Errors
 ///
-/// Any [`ImportError`] a root's read raises. Fails on the first one: a
-/// partial title screen is not a useful pack.
+/// Any [`ImportError`] a root's read raises. Fails on the first one, with
+/// the writer untouched: a partial title screen is not a useful pack.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    let reader = rom.reader();
     let title = &roots.title_screen;
-    for root in title.images {
-        writer.push(super::image(&reader, root)?);
-    }
-    for root in title.tilemaps {
-        writer.push(super::blob(&reader, root)?);
-    }
-    for root in title.palettes {
-        writer.push(super::palette(&reader, root)?);
-    }
-    Ok(())
+    super::write_plain(rom, title.images, title.palettes, title.tilemaps, writer)
 }

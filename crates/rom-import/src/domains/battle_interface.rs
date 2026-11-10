@@ -91,35 +91,17 @@ pub const HEALTHBOX_BATTLE_BAR: (&str, u32) = ("battle-interface/raw/battle_bar"
 /// table's thirteen records in order and back to back, or the battle bar is
 /// not the compressed run of 41 tiles.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    let reader = rom.reader();
     let family = &roots.battle_interface;
     check_elements(family.healthbox_elements)?;
     if let Some(bar) = &family.battle_bar {
         check_battle_bar(bar)?;
     }
-    let mut entries = Vec::with_capacity(
-        family.images.len()
-            + family.palettes.len()
-            + family.tilemaps.len()
-            + family.healthbox_elements.len()
-            + usize::from(family.battle_bar.is_some()),
-    );
-    for root in family.images {
-        entries.push(super::image(&reader, root)?);
-    }
-    for root in family.palettes {
-        entries.push(super::palette(&reader, root)?);
-    }
-    for root in family.tilemaps {
-        entries.push(super::blob(&reader, root)?);
-    }
-    for root in family.healthbox_elements.iter().chain(&family.battle_bar) {
-        entries.push(super::blob(&reader, root)?);
-    }
-    for entry in entries {
-        writer.push(entry);
-    }
-    Ok(())
+    let blobs = family
+        .tilemaps
+        .iter()
+        .chain(family.healthbox_elements)
+        .chain(&family.battle_bar);
+    super::write_plain(rom, family.images, family.palettes, blobs, writer)
 }
 
 fn table_mismatch(field: &'static str) -> ImportError {
