@@ -36,6 +36,7 @@ pub struct LiveObjectEvent {
     /// The map whose template this entry was seeded from, once a connection crossing has carried
     /// it out of that map; `None` for an entry of the collection's own current map.
     carried_from: Option<MapId>,
+    id: u32,
 }
 
 impl LiveObjectEvent {
@@ -76,6 +77,19 @@ impl LiveObjectEvent {
         self.carried_from
     }
 
+    /// Returns this entry's identity, unique among every entry a chain of connection crossings
+    /// has ever held, which survives the removal of other entries and a crossing's carry.
+    ///
+    /// A collection index is not an identity: removing a carried entry compacts the entries
+    /// after it, and a crossing seeds the entered map's templates ahead of the carried ones.
+    /// Upstream's field-effect sprites name their owner by (`localId`, `mapNum`, `mapGroup`)
+    /// (`field_effect_helpers.c:305-307`); a consumer that must follow one object across
+    /// removals and crossings keys on this and resolves it with [`ObjectEventCollection::by_id`].
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
     /// Moves this entry into the coordinates a camera update puts its map in: the current,
     /// previous, and template-snapshot tiles, and the admission tile `RemoveObjectEventIfOutsideView`
     /// also tests (`initialCoords`). The authored template itself is never written.
@@ -98,23 +112,31 @@ pub struct ObjectEventCollection {
     /// The player tile the scheduler last reconciled the spawn window at; `None` before the
     /// map-load admission pass.
     reconciled_at: Option<TilePos>,
+    /// The identity [`LiveObjectEvent::id`] gives the next entry seeded. A crossing continues the
+    /// departed collection's count, so no entry of the entered collection reuses a carried one's.
+    next_id: u32,
 }
 
 impl ObjectEventCollection {
     /// Seeds one live entry per template, in declaration order.
     #[must_use]
     pub fn from_templates(templates: &'static [ObjectEvent]) -> Self {
+        let entries: Vec<LiveObjectEvent> = templates
+            .iter()
+            .zip(0..)
+            .map(|(template, id)| LiveObjectEvent {
+                template,
+                state: ObjectEventState::from_template(template),
+                lifecycle: Lifecycle::Unadmitted,
+                carried_from: None,
+                id,
+            })
+            .collect();
+        let next_id = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         Self {
-            entries: templates
-                .iter()
-                .map(|template| LiveObjectEvent {
-                    template,
-                    state: ObjectEventState::from_template(template),
-                    lifecycle: Lifecycle::Unadmitted,
-                    carried_from: None,
-                })
-                .collect(),
+            entries,
             reconciled_at: None,
+            next_id,
         }
     }
 
@@ -139,6 +161,12 @@ impl ObjectEventCollection {
         self.entries
             .iter_mut()
             .find(|entry| entry.template.local_id == local_id)
+    }
+
+    /// Returns the entry [`LiveObjectEvent::id`] names, or `None` once it has been removed.
+    #[must_use]
+    pub fn by_id(&self, id: u32) -> Option<&LiveObjectEvent> {
+        self.entries.iter().find(|entry| entry.id == id)
     }
 
     /// Returns the entry [`LiveObjectEvent::carried_from`] and `local_id` name, unlike
@@ -206,22 +234,25 @@ impl ObjectEventCollection {
             })
             .collect();
         let mut entries = Vec::with_capacity(templates.len() + carried.len());
+        let mut next_id = self.next_id;
         for template in templates {
             let returned = carried.iter().position(|entry| {
                 entry.carried_from == Some(entered) && entry.template.local_id == template.local_id
             });
-            entries.push(match returned {
-                Some(index) => {
-                    let mut entry = carried.remove(index);
-                    entry.carried_from = None;
-                    entry
-                }
-                None => LiveObjectEvent {
+            entries.push(if let Some(index) = returned {
+                let mut entry = carried.remove(index);
+                entry.carried_from = None;
+                entry
+            } else {
+                let id = next_id;
+                next_id = next_id.saturating_add(1);
+                LiveObjectEvent {
                     template,
                     state: ObjectEventState::from_template(template),
                     lifecycle: Lifecycle::Unadmitted,
                     carried_from: None,
-                },
+                    id,
+                }
             });
         }
         entries.extend(carried);
@@ -230,6 +261,7 @@ impl ObjectEventCollection {
             reconciled_at: self
                 .reconciled_at
                 .map(|(x, y)| (x.saturating_add(shift.0), y.saturating_add(shift.1))),
+            next_id,
         }
     }
 
@@ -778,6 +810,46 @@ mod tests {
             frame(&mut carried, (5, 26));
             assert!(carried.find(Some(DEPARTED), 1).is_none());
             assert_eq!(carried.iter().count(), 1);
+        }
+
+        #[test]
+        fn an_entrys_id_survives_the_removal_of_an_earlier_entry_and_a_crossing() {
+            let mut rig = Rig::new(vec![fixed(1, 5, 9), fixed(2, 5, 4)], (5, 5));
+            rig.tick(1);
+            let [first, second] = [1, 2].map(|local_id| rig.collection.get(local_id).unwrap().id());
+            assert_ne!(first, second);
+
+            let mut carried = cross(&rig.collection, vec![fixed(3, 5, 25)]);
+            let entered = carried.get(3).unwrap().id();
+            assert!(
+                [first, second].iter().all(|&id| id != entered),
+                "the entered map's entry takes an id no carried entry holds"
+            );
+            // The first leaves the view, so the entries after it are compacted down an index.
+            frame(&mut carried, (5, 19));
+            frame(&mut carried, (5, 20));
+            assert!(carried.by_id(first).is_none(), "the earlier entry is gone");
+            assert_eq!(
+                carried.by_id(second).map(|entry| entry.template().local_id),
+                Some(2),
+                "the later entry is still found by its own id"
+            );
+            assert_eq!(carried.by_id(entered).unwrap().template().local_id, 3);
+        }
+
+        #[test]
+        fn a_returning_survivor_keeps_the_id_it_had_before_leaving() {
+            let templates = leaked(vec![fixed(1, 5, 6)]);
+            let mut rig = Rig::new(vec![], (5, 5));
+            rig.collection = ObjectEventCollection::from_templates(templates);
+            rig.tick(1);
+            let id = rig.collection.get(1).unwrap().id();
+            let away =
+                rig.collection
+                    .carry_across_connection(DEPARTED, ENTERED, leaked(vec![]), SHIFT);
+            let back =
+                away.carry_across_connection(ENTERED, DEPARTED, templates, (-SHIFT.0, -SHIFT.1));
+            assert_eq!(back.get(1).unwrap().id(), id);
         }
 
         #[test]

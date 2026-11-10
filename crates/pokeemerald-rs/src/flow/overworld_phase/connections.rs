@@ -484,9 +484,9 @@ impl OverworldPhase {
     /// the pre-step stance. Returns `true` on a completed rebind.
     ///
     /// `shift` is the departed-to-entered tile translation the player's own
-    /// step went through; the player's live tall-grass effects and the live
-    /// object events still in view follow it
-    /// ([`ObjectEventCollection::carry_across_connection`]). Unlike a warp, no
+    /// step went through; the live object events still in view follow it
+    /// ([`ObjectEventCollection::carry_across_connection`]), and so do the live
+    /// tall-grass effects of the player and of those objects. Unlike a warp, no
     /// freshly seeded collection replaces the departed one.
     pub(super) fn cross_connection(
         &mut self,
@@ -518,9 +518,6 @@ impl OverworldPhase {
         };
 
         assert_scene_owns_map(&scene, to_map);
-        // The player's still-live rustle follows the camera into the entered
-        // map's coordinates (`field_effect_helpers.c:325-330`).
-        scene.carry_tall_grass_from(&self.scene, shift);
         // The departed visit's active objects stay live, shifted into the entered map's
         // coordinates (`LoadMapFromCameraTransition` leaves them in place). The entered map's
         // templates enter unadmitted, and the next frame's camera update spawns before it
@@ -533,6 +530,9 @@ impl OverworldPhase {
             scene.map_events().object_events,
             shift,
         );
+        // The still-live rustles, the player's and those of the objects just kept, follow the
+        // camera into the entered map's coordinates (`field_effect_helpers.c:325-330`).
+        scene.carry_tall_grass_from(&self.scene, shift, &object_events);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;

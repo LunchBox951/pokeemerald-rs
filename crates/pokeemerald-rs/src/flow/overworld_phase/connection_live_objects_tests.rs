@@ -4,11 +4,13 @@
 //! of replacing the whole collection with the entered map's fresh templates.
 
 use super::tall_grass_tests::{
-    route_101_phase_crossing_into_oldale, LANDING_X, OLDALE_TOWN, ROUTE_101,
+    grass_entries, route_101_phase_crossing_into_oldale, shown_image, LANDING_X, OLDALE_TOWN,
+    ROUTE_101,
 };
 use super::test_support::*;
 use super::OverworldPhase;
 use assets::{MovementType, ObjectEvent, TrainerType};
+use engine::overworld::metatile_behavior::MB_TALL_GRASS;
 use engine::overworld::object_event::tile_is_in_view;
 use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
 use engine::overworld::Direction;
@@ -355,5 +357,107 @@ fn a_carried_npc_whose_sheet_the_entered_map_lacks_is_still_drawn() {
     assert!(
         phase.scene.binds_sprite("OBJ_EVENT_GFX_YOUNGSTER"),
         "the entered scene binds the carried NPC's sheet"
+    );
+}
+
+/// The ground Route 101's synthetic layout stands the NPCs on.
+const GROUND: u8 = 3;
+
+/// [`route_101_with_live_npcs`] over a departed scene that has tall grass on `grass`, whose
+/// admitted NPCs have each had their spawn-time ground-effect pass.
+fn route_101_with_npcs_on_grass(
+    npcs: Vec<ObjectEvent>,
+    grass: &[(u16, u16)],
+) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
+    let (mut phase, templates, path) = route_101_with_live_npcs(npcs);
+    let specials: Vec<_> = grass
+        .iter()
+        .map(|&tile| (tile, MB_TALL_GRASS, GROUND))
+        .collect();
+    phase.scene =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &specials)
+            .in_room_for_test(ROUTE_101);
+    idle(&mut phase, 1);
+    (phase, templates, path)
+}
+
+/// The live effect count, and the image the one drawn effect shows (`None` unless exactly one is
+/// drawn).
+fn effects(phase: &OverworldPhase) -> (usize, Option<u16>) {
+    (
+        phase.scene.tall_grass_effect_count(),
+        (grass_entries(phase).len() == 1).then(|| shown_image(phase)),
+    )
+}
+
+/// Removing a despawned carried entry compacts the collection. An effect keyed by collection index
+/// then named the wrong owner: the survivor's settled effect was re-rustled or lost.
+#[test]
+fn a_carried_survivor_keeps_its_grass_effect_when_an_earlier_carried_npc_leaves_view() {
+    let (mut phase, templates, path) =
+        route_101_with_npcs_on_grass(vec![npc(8, 13, 9), npc(9, 13, 4)], &[(13, 9), (13, 4)]);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 2, "both settled");
+    cross_north(&mut phase);
+    let right_away = effects(&phase);
+    idle(&mut phase, 3);
+    let later = effects(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert!(has_entry(&phase, &templates[1]), "the later NPC stays");
+    assert!(
+        !has_entry(&phase, &templates[0]),
+        "the earlier NPC left the view"
+    );
+    assert_eq!(
+        right_away,
+        (1, Some(0)),
+        "the survivor's settled effect carries"
+    );
+    assert_eq!(
+        later,
+        (1, Some(0)),
+        "and is not re-rustled once the other leaves"
+    );
+}
+
+/// The control: with no earlier carried NPC to compact away, the same effect carries.
+#[test]
+fn a_lone_carried_npc_keeps_its_settled_grass_effect() {
+    let (mut phase, _, path) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 4)]);
+    cross_north(&mut phase);
+    idle(&mut phase, 3);
+    let after = effects(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(after, (1, Some(0)));
+}
+
+/// `UpdateTallGrassFieldEffect` follows the camera for any owner, not only the player
+/// (`field_effect_helpers.c:324-337`): an NPC that has just stepped onto grass crosses with its
+/// rustle, which goes on from the image it had reached.
+#[test]
+fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
+    let (mut phase, _, path) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 5)]);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0, "off the grass");
+    phase
+        .object_events
+        .find_mut(None, 9)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::South);
+    idle(&mut phase, 1);
+    assert_eq!(shown_image(&phase), 1, "the step began a rustle");
+    while shown_image(&phase) < 2 {
+        idle(&mut phase, 1);
+    }
+    cross_north(&mut phase);
+    let after = effects(&phase);
+    // The effect is drawn in the entered scene without a second pass restarting it.
+    idle(&mut phase, 2);
+    let later = effects(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(after, (1, Some(2)), "carried at the image it had reached");
+    assert_eq!(later.0, 1, "no second effect for the carried owner");
+    assert!(
+        later.1 >= Some(2),
+        "the animation continues rather than restarts"
     );
 }

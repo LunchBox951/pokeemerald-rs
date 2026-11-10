@@ -45,7 +45,7 @@ fn eastward_phase(specials: &[((u16, u16), u8)]) -> OverworldPhase {
     phase_with((4, 4), Direction::East, specials)
 }
 
-fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
+pub(super) fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
     phase
         .scene
         .sprite_entries(&phase.player, &phase.save1.event_data)
@@ -56,7 +56,7 @@ fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
 }
 
 /// The image (0 to 4) the one effect on screen shows.
-fn shown_image(phase: &OverworldPhase) -> u16 {
+pub(super) fn shown_image(phase: &OverworldPhase) -> u16 {
     let first = phase
         .scene
         .tall_grass_first_tile()
