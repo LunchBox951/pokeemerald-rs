@@ -878,7 +878,7 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
 /// nine-frame 32x32 Zigzagoon.
 fn synthetic_sheet_dimensions(sprite_path: &str) -> (u32, u32) {
     match sprite_path {
-        "misc/birchs_bag" => (16, 16),
+        "misc/birchs_bag" | "misc/item_ball" => (16, 16),
         "pokemon/enemy_zigzagoon" => (288, 32),
         _ => (144, 32),
     }
@@ -953,4 +953,83 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
         entries.extend(tall_grass_entries());
     }
     write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// Writes a synthetic pack at `path` that loads the *real* bundled
+/// `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB` header and layout (`building`
+/// over `lab`, 13x13) through [`super::load_room_from_source`], with the two
+/// `tv_turned_on` frames the `building` primary tileset animates, and an
+/// opaque sheet for each of `sprite_paths`, so a phase test can complete the
+/// first-battle conclusion's warp without an extracted pack.
+pub(crate) fn write_birchs_lab_layout_pack(path: &std::path::Path, sprite_paths: &[&str]) {
+    let mut entries: Vec<Entry> = synthetic_overworld_pack_entries_for("building", 13, 13)
+        .into_iter()
+        .map(|mut e| {
+            if e.id == "layout/map_test/map" {
+                e.id = "layout/littleroot_town_professor_birchs_lab/map".into();
+            } else if e.id == "layout/map_test/border" {
+                e.id = "layout/littleroot_town_professor_birchs_lab/border".into();
+            }
+            e
+        })
+        .collect();
+    entries.extend(
+        synthetic_overworld_pack_entries_for("lab", 13, 13)
+            .into_iter()
+            .filter(|e| e.id.starts_with("tileset/lab/")),
+    );
+    for n in 0..2u8 {
+        entries.push(Entry {
+            id: format!("tileset/building/anim/tv_turned_on/{n}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(8, 8 * 4, 4),
+            payload: vec![GROUND_PALETTE_INDEX; 8 * 8 * 4],
+        });
+    }
+    for sprite in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(sprite);
+        entries.push(Entry {
+            id: format!("sprite/{sprite}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
+        });
+    }
+    write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// The people and item sheets Birch's lab's visible object events draw
+/// (`MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB`: scientist, Birch, starter
+/// balls; the rival's variable graphic stays undrawn while its var is 0).
+const BIRCHS_LAB_SPRITES: [&str; 3] = ["scientist_1", "prof_birch", "misc/item_ball"];
+
+/// A scratch pack file that lets `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB`
+/// load ([`write_birchs_lab_layout_pack`]), removed on drop. Hand
+/// [`Self::source`] to a phase so a warp into the lab succeeds without an
+/// extracted pack.
+pub(crate) struct BirchsLabPack {
+    path: std::path::PathBuf,
+}
+
+impl BirchsLabPack {
+    pub(crate) fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-birchs-lab-{}-{}.pack",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        write_birchs_lab_layout_pack(&path, &BIRCHS_LAB_SPRITES);
+        Self { path }
+    }
+
+    pub(crate) fn source(&self) -> crate::pack_source::PackSource {
+        crate::pack_source::PackSource::Explicit(self.path.as_path().into())
+    }
+}
+
+impl Drop for BirchsLabPack {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }

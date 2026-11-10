@@ -299,7 +299,10 @@ impl OverworldPhase {
     /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
     /// failure contract, except the landing position is validated directly
     /// against the destination's decoded grid rather than resolved through
-    /// a warp event.
+    /// a warp event. Returns whether the warp landed, as
+    /// [`OverworldPhase::warp_to_saved_location`] does: `false` means the
+    /// phase is untouched, so a caller that wrote state ahead of the warp can
+    /// undo it.
     ///
     /// Lands at the destination tile's own elevation immediately, rather
     /// than leaving upstream's spawn-time elevation sentinel in place until
@@ -321,15 +324,15 @@ impl OverworldPhase {
     /// # Panics
     ///
     /// Same as [`OverworldPhase::warp_to`].
-    pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) {
+    pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) -> bool {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let (elevation, facing) = {
             let runtime = scene.runtime();
@@ -337,7 +340,7 @@ impl OverworldPhase {
                 eprintln!(
                     "warp: destination position ({x}, {y}) is outside map {map:?} -- staying put"
                 );
-                return;
+                return false;
             };
             let behavior = runtime
                 .metatile_behavior(i32::from(x), i32::from(y))
@@ -364,6 +367,7 @@ impl OverworldPhase {
             y,
         };
         self.save1.pos = engine::save::Coords16 { x, y };
+        true
     }
 
     /// Executes a saved-location warp: lands using the complete saved
