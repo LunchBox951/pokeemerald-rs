@@ -268,7 +268,6 @@ fn run_boundary_harness(after_create: impl FnOnce(&std::path::Path)) {
     );
 }
 
-/// The `attempt`th candidate name for the replacement's staging file beside `pack`.
 #[cfg(unix)]
 fn staged_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
     if attempt == 0 {
@@ -389,7 +388,6 @@ fn scratch_pack_replacement_staging_does_not_write_through_a_planted_symlink() {
     );
 }
 
-/// The `attempt`th candidate name for the pack's displaced original beside `pack`.
 #[cfg(any(unix, windows))]
 fn aside_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf {
     if attempt == 0 {
