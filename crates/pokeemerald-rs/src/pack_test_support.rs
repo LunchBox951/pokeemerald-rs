@@ -132,12 +132,224 @@ pub(crate) fn claim_scratch_exclusive(path: &std::path::Path) -> std::fs::File {
 }
 
 /// Writes `bytes` to a fresh file at `path` claimed by
-/// [`claim_scratch_exclusive`].
-pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+/// [`claim_scratch_exclusive`], and returns the creating handle so a caller
+/// can keep owning the entry it made (see [`ScratchPack`]).
+pub(crate) fn write_scratch_exclusive(
+    path: &std::path::Path,
+    bytes: impl AsRef<[u8]>,
+) -> std::fs::File {
     use std::io::Write as _;
-    claim_scratch_exclusive(path)
-        .write_all(bytes.as_ref())
+    let mut file = claim_scratch_exclusive(path);
+    file.write_all(bytes.as_ref())
         .expect("the scratch pack is writable");
+    file
+}
+
+/// A scratch pack a fixture created, owned through cleanup: it keeps the
+/// creating handle, so the entry it made stays identifiable by `(dev, ino)`
+/// for as long as the guard lives. Dropping it unlinks the pathname only
+/// while the pathname still names that file; a replacement installed at the
+/// name is left alone (and reported), so cleanup never removes an entry the
+/// fixture does not own.
+///
+/// `PackSource::Test` needs a `'static` path: [`ScratchPack::leaked_path`]
+/// leaks a copy of the pathname for it. Nothing is read through the leaked
+/// path after the guard drops.
+pub(crate) struct ScratchPack {
+    path: std::path::PathBuf,
+    /// Held open so the created inode cannot be recycled for a replacement
+    /// while the guard compares identities.
+    file: std::fs::File,
+}
+
+/// What [`ScratchPack::remove_if_owned`] did to the entry at the pathname.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ScratchRemoval {
+    /// The entry was still the file this guard owns, and was unlinked.
+    Removed,
+    /// Nothing is at the pathname any more.
+    Gone,
+    /// A different entry now sits at the pathname; it was left alone.
+    Replaced,
+    /// This platform offers no identity to compare, so nothing was unlinked.
+    Unverifiable,
+}
+
+impl ScratchPack {
+    /// Takes ownership of the entry the handle `file` created at `path`.
+    /// `file` must come from the exclusive creation of `path` (for example
+    /// [`write_scratch_exclusive`]'s return value), never from an open of a
+    /// pre-existing entry.
+    pub(crate) fn adopt(path: &std::path::Path, file: std::fs::File) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            file,
+        }
+    }
+
+    /// [`write_scratch_exclusive`], owned.
+    pub(crate) fn write(path: &std::path::Path, bytes: impl AsRef<[u8]>) -> Self {
+        Self::adopt(path, write_scratch_exclusive(path, bytes))
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// A `'static` copy of the pathname, leaked once per call and reclaimed
+    /// only when the test process exits, for `PackSource::Test`.
+    pub(crate) fn leaked_path(&self) -> &'static std::path::Path {
+        Box::leak(self.path.clone().into_boxed_path())
+    }
+
+    /// Unlinks the pathname only if it still names the file this guard
+    /// created. `symlink_metadata` does not follow a link, so a symlink
+    /// planted at the name never matches the created file. std has no
+    /// unlink-by-handle, so a swap between the check and the unlink remains
+    /// possible; this closes the window the fixture's run opens, not that one.
+    pub(crate) fn remove_if_owned(&self) -> ScratchRemoval {
+        let current = match std::fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return ScratchRemoval::Gone;
+            }
+            Err(_) => return ScratchRemoval::Replaced,
+        };
+        let created = self.file.metadata().ok().and_then(|m| file_identity(&m));
+        let Some(created) = created else {
+            return ScratchRemoval::Unverifiable;
+        };
+        if file_identity(&current) != Some(created) {
+            return ScratchRemoval::Replaced;
+        }
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => ScratchRemoval::Removed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
+            Err(_) => ScratchRemoval::Replaced,
+        }
+    }
+}
+
+/// What distinguishes the file `metadata` describes from a later file at the
+/// same pathname: the `(dev, ino)` pair on Unix. Elsewhere `None`, so the
+/// guard fails closed and leaves the entry in place: Windows std exposes no
+/// file id on stable, and a creation time and length are not an identity (NTFS
+/// filename tunneling can give a file recreated at the same name the original's
+/// creation time).
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "non-Unix platforms have no identity to return"
+    )
+)]
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+impl Drop for ScratchPack {
+    fn drop(&mut self) {
+        match self.remove_if_owned() {
+            ScratchRemoval::Removed | ScratchRemoval::Gone => {}
+            ScratchRemoval::Replaced => eprintln!(
+                "the scratch pack {} was replaced after its fixture created it; leaving the \
+                 replacement in place",
+                self.path.display()
+            ),
+            ScratchRemoval::Unverifiable => eprintln!(
+                "cannot verify the scratch pack {} is still the file its fixture created; \
+                 leaving it in place",
+                self.path.display()
+            ),
+        }
+    }
+}
+
+/// Moves the entry at `path` to the free name `aside`. `hard_link` fails on an
+/// occupied destination where `rename` would silently overwrite it, so a
+/// pre-existing `aside` entry is never destroyed.
+#[cfg(unix)]
+fn move_aside(path: &std::path::Path, aside: &std::path::Path) {
+    std::fs::hard_link(path, aside).expect("the aside name is free");
+    std::fs::remove_file(path).expect("the owned pack is unlinkable");
+}
+
+/// Moves the entry `pack` owns aside, installs a different file at its
+/// pathname, drops `pack`, and asserts the replacement survived the
+/// guard's cleanup untouched. Removes the replacement and the moved-aside
+/// original afterwards.
+#[cfg(unix)]
+pub(crate) fn assert_scratch_pack_cleanup_spares_a_replacement(pack: ScratchPack) {
+    const REPLACEMENT: &[u8] = b"replacement the fixture never created";
+    let path = pack.path().to_path_buf();
+    let aside = path.with_extension("aside");
+    move_aside(&path, &aside);
+    write_scratch_exclusive(&path, REPLACEMENT);
+
+    drop(pack);
+
+    let survived = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&aside);
+    assert_eq!(
+        survived.ok().as_deref(),
+        Some(REPLACEMENT),
+        "cleanup unlinked a file the fixture did not create"
+    );
+}
+
+/// Unix only: elsewhere the guard has no file identity and fails closed.
+#[cfg(unix)]
+#[test]
+fn a_scratch_pack_guard_unlinks_the_file_it_created_when_dropped() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-scratch-pack-owned-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let pack = ScratchPack::write(&path, b"owned");
+    assert!(path.is_file());
+    drop(pack);
+    assert!(!path.exists(), "the guard must unlink what it created");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_scratch_pack_guard_spares_a_replacement_and_a_symlink_at_its_path() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-scratch-pack-replaced-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    assert_scratch_pack_cleanup_spares_a_replacement(ScratchPack::write(&path, b"owned"));
+
+    let target = path.with_extension("target");
+    let pack = ScratchPack::write(&path, b"owned");
+    let aside = path.with_extension("aside");
+    move_aside(&path, &aside);
+    write_scratch_exclusive(&target, b"link target");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert_eq!(pack.remove_if_owned(), ScratchRemoval::Replaced);
+    let link_kept = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+    drop(pack);
+    let link_kept_after_drop =
+        std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&target);
+    let _ = std::fs::remove_file(&aside);
+    assert!(
+        link_kept && link_kept_after_drop,
+        "the planted link survives"
+    );
 }
 
 /// Whether `a` and `b` resolve to one inode (a hard link pair, or a link and

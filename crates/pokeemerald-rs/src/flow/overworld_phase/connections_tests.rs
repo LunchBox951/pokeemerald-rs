@@ -177,11 +177,12 @@ const ROUTE_101_SPRITES: [&str; 5] = [
 ];
 
 /// A phase standing at rest on Route 101's north edge, facing Oldale Town,
-/// whose pack carries `behavior` on Oldale's landing tile. Returns the pack's
-/// path for removal.
+/// whose pack carries `behavior` on Oldale's landing tile. Returns the guard
+/// that owns the pack file: it removes the pack on drop only while the path
+/// still names the file created here.
 fn route101_phase_facing_a_forced_oldale_landing(
     behavior: u8,
-) -> (OverworldPhase, std::path::PathBuf) {
+) -> (OverworldPhase, crate::pack_test_support::ScratchPack) {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -194,12 +195,13 @@ fn route101_phase_facing_a_forced_oldale_landing(
         .chain(&ROUTE_101_SPRITES)
         .copied()
         .collect();
-    crate::overworld::test_support::write_route101_oldale_layout_pack(
+    let file = crate::overworld::test_support::write_route101_oldale_layout_pack(
         &path,
         &[((13, 19), behavior)],
         &sprites,
     );
-    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let pack = crate::pack_test_support::ScratchPack::adopt(&path, file);
+    let leaked = pack.leaked_path();
     let mut phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(20, 20),
         ROUTE_101,
@@ -207,7 +209,7 @@ fn route101_phase_facing_a_forced_oldale_landing(
         None,
     );
     phase.pack_source = PackSource::Test(leaked);
-    (phase, path)
+    (phase, pack)
 }
 
 /// Crosses north into Oldale through [`OverworldPhase::step`], so the
@@ -243,7 +245,7 @@ fn a_rebound_connection_landing_forces_the_next_phase_step_at_its_cadence() {
     use engine::overworld::metatile_behavior::{MB_ICE, MB_NORTHWARD_CURRENT};
     for (behavior, frames) in [(MB_NORTHWARD_CURRENT, 6), (MB_ICE, 8)] {
         for buttons in [ButtonState::new(), held(Buttons::DOWN)] {
-            let (mut phase, path) = route101_phase_facing_a_forced_oldale_landing(behavior);
+            let (mut phase, pack) = route101_phase_facing_a_forced_oldale_landing(behavior);
             cross_into_oldale_and_drain(&mut phase);
 
             phase.step(buttons);
@@ -267,7 +269,7 @@ fn a_rebound_connection_landing_forces_the_next_phase_step_at_its_cadence() {
                 !phase.player.in_transit(),
                 "behavior {behavior} settles on frame {frames}"
             );
-            let _ = std::fs::remove_file(&path);
+            drop(pack);
         }
     }
 }
@@ -279,7 +281,7 @@ fn a_rebound_connection_landing_forces_the_next_phase_step_at_its_cadence() {
 #[test]
 fn a_forced_current_on_a_rebound_landing_crosses_back_on_its_automatic_step() {
     use engine::overworld::metatile_behavior::MB_SOUTHWARD_CURRENT;
-    let (mut phase, path) = route101_phase_facing_a_forced_oldale_landing(MB_SOUTHWARD_CURRENT);
+    let (mut phase, pack) = route101_phase_facing_a_forced_oldale_landing(MB_SOUTHWARD_CURRENT);
     cross_into_oldale_and_drain(&mut phase);
 
     phase.step(ButtonState::new());
@@ -298,7 +300,21 @@ fn a_forced_current_on_a_rebound_landing_crosses_back_on_its_automatic_step() {
     }
     phase.step(ButtonState::new());
     assert!(!phase.player.in_transit(), "a current settles on frame 6");
-    let _ = std::fs::remove_file(&path);
+    drop(pack);
+}
+
+/// A file that replaces the landing pack before the rebound-landing tests
+/// clean it up must not be unlinked by that cleanup.
+#[cfg(unix)]
+#[test]
+fn the_rebound_landing_pack_cleanup_spares_a_replacement_at_its_path() {
+    use engine::overworld::metatile_behavior::{
+        MB_ICE, MB_NORTHWARD_CURRENT, MB_SOUTHWARD_CURRENT,
+    };
+    for behavior in [MB_NORTHWARD_CURRENT, MB_ICE, MB_SOUTHWARD_CURRENT] {
+        let (_phase, pack) = route101_phase_facing_a_forced_oldale_landing(behavior);
+        crate::pack_test_support::assert_scratch_pack_cleanup_spares_a_replacement(pack);
+    }
 }
 
 /// A nonzero east/west offset shifts the cross-axis y by `-offset` (`fieldmap.c:578-598,699-712`).

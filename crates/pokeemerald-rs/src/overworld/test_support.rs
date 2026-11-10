@@ -844,7 +844,11 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
 /// `MAP_OLDALE_TOWN` header and layout (`general`/`petalburg`, 20x20) through
 /// [`super::load_room_from_source`], with an opaque people sheet for each of
 /// `sprite_paths`, so a phase test can complete a real map transition.
-pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&str]) {
+/// Returns the creating handle, for `ScratchPack::adopt`.
+pub(crate) fn write_oldale_layout_pack(
+    path: &std::path::Path,
+    sprite_paths: &[&str],
+) -> std::fs::File {
     let mut entries: Vec<Entry> = synthetic_overworld_pack_entries_for("general", 20, 20)
         .into_iter()
         .map(|mut e| {
@@ -870,7 +874,7 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
             payload: vec![3u8; usize::try_from(width * height).unwrap()],
         });
     }
-    write_scratch_exclusive(path, write_synthetic_pack(entries));
+    write_scratch_exclusive(path, write_synthetic_pack(entries))
 }
 
 /// The pixel size of the real sheet a fixture sprite path stands for: nine
@@ -893,13 +897,14 @@ fn synthetic_sheet_dimensions(sprite_path: &str) -> (u32, u32) {
 ///
 /// Both layouts share the one `general` attribute table, so a phase test can
 /// cross the real connection, through `OverworldPhase::cross_connection`,
-/// onto a behaviour-bearing landing tile.
+/// onto a behaviour-bearing landing tile. Returns the creating handle, for
+/// `ScratchPack::adopt`.
 pub(crate) fn write_route101_oldale_layout_pack(
     path: &std::path::Path,
     oldale_specials: &[((u16, u16), u8)],
     sprite_paths: &[&str],
-) {
-    write_route101_oldale_layout_pack_with(path, oldale_specials, sprite_paths, false);
+) -> std::fs::File {
+    write_route101_oldale_layout_pack_with(path, oldale_specials, sprite_paths, false)
 }
 
 /// [`write_route101_oldale_layout_pack`], and the tall-grass sheet and palette
@@ -909,7 +914,7 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     oldale_specials: &[((u16, u16), u8)],
     sprite_paths: &[&str],
     with_tall_grass: bool,
-) {
+) -> std::fs::File {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -952,5 +957,5 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     if with_tall_grass {
         entries.extend(tall_grass_entries());
     }
-    write_scratch_exclusive(path, write_synthetic_pack(entries));
+    write_scratch_exclusive(path, write_synthetic_pack(entries))
 }

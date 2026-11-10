@@ -286,20 +286,27 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
     assert_eq!(state.previous_position(), walked);
 }
 
-#[test]
-fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_scheduled() {
-    use crate::pack_source::PackSource;
-
+/// The Oldale layout pack the map-transition test loads, owned by the returned guard: it
+/// removes the pack on drop only while the path still names the file created here.
+fn transition_pack() -> crate::pack_test_support::ScratchPack {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-fixed-facing-transition-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
-    crate::overworld::test_support::write_oldale_layout_pack(
+    let file = crate::overworld::test_support::write_oldale_layout_pack(
         &path,
         &["girl_3", "mart_employee", "maniac"],
     );
-    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    crate::pack_test_support::ScratchPack::adopt(&path, file)
+}
+
+#[test]
+fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_scheduled() {
+    use crate::pack_source::PackSource;
+
+    let pack = transition_pack();
+    let leaked_path = pack.leaked_path();
 
     let resolved = oldale::resolve_map_events(OLDALE_TOWN, &EventData::new()).unwrap();
     let events: &'static assets::MapEvents = Box::leak(Box::new(resolved));
@@ -374,5 +381,11 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
     assert_reseeded(&mut phase, "the connection crossing");
 
-    let _ = std::fs::remove_file(&path);
+    drop(pack);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_map_transition_pack_cleanup_spares_a_replacement_at_its_path() {
+    crate::pack_test_support::assert_scratch_pack_cleanup_spares_a_replacement(transition_pack());
 }
