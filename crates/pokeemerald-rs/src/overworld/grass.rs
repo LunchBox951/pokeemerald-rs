@@ -518,7 +518,7 @@ impl OverworldScene {
             let tile = state.position();
             self.grass.record_object_pass(slot, tile);
             if draws && self.is_tall_grass_at(tile) {
-                let elevation = self.sprites.settled_elevation(tile, state.elevation());
+                let elevation = state.previous_elevation();
                 self.grass
                     .spawn_placement(Owner::Object(slot), tile, elevation);
             }
@@ -553,7 +553,7 @@ impl OverworldScene {
             }
             self.grass.record_object_pass(slot, tile);
             if draws && self.is_tall_grass_at(tile) {
-                let elevation = self.sprites.settled_elevation(tile, state.elevation());
+                let elevation = state.previous_elevation();
                 self.grass.spawn_step(Owner::Object(slot), tile, elevation);
             }
         }

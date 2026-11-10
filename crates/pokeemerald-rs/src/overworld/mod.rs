@@ -90,6 +90,8 @@ mod tileset_anims;
 mod viewport;
 
 #[cfg(test)]
+mod retained_elevation_tests;
+#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -615,10 +617,22 @@ impl OverworldScene {
         self.sprites.entries(player, event_data, &self.grass)
     }
 
+    /// Settles each object's elevations on the cell it stands on
+    /// (`ObjectEventUpdateElevation`, `event_object_movement.c:7759-7771`).
+    /// Call it after creating `objects` and after they move, before
+    /// [`Self::compose_live`], which only reads the settled elevations.
+    pub fn update_object_elevations(
+        &self,
+        objects: &mut engine::overworld::object_event::ObjectEventCollection,
+    ) {
+        self.sprites.update_object_elevations(objects);
+    }
+
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
-    /// tile, facing, and elevation instead of the scene's authored templates,
-    /// under `palette` as [`Self::compose_staged`] applies it.
-    /// `objects` must be seeded from this scene's map events.
+    /// tile, facing, and retained elevation instead of the scene's authored
+    /// templates, under `palette` as [`Self::compose_staged`] applies it.
+    /// `objects` must be seeded from this scene's map events and settled by
+    /// [`Self::update_object_elevations`].
     #[must_use]
     pub fn compose_live(
         &self,

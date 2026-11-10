@@ -11,7 +11,7 @@
 
 use assets::{MovementType, ObjectEvent};
 
-use super::collision::ELEVATION_TRANSITION;
+use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::player::{PlayerState, TilePos};
@@ -244,7 +244,11 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 pub struct ObjectEventState {
     position: TilePos,
     previous_position: TilePos,
+    /// `currentElevation`: the elevation collision and lookups compare against.
     elevation: u8,
+    /// `previousElevation`: the elevation of the last ordinary cell, which draws the sprite.
+    previous_elevation: u8,
+    template_elevation: u8,
     facing: Direction,
     movement_type: MovementType,
     template_position: TilePos,
@@ -260,6 +264,8 @@ impl ObjectEventState {
             position,
             previous_position: position,
             elevation: event.elevation,
+            previous_elevation: event.elevation,
+            template_elevation: event.elevation,
             facing: initial_facing_direction(event.movement_type),
             movement_type: event.movement_type,
             template_position: position,
@@ -279,10 +285,32 @@ impl ObjectEventState {
         self.previous_position
     }
 
-    /// Returns the template elevation.
+    /// Returns the current elevation (`currentElevation`): the template's until
+    /// [`Self::update_elevation`] settles it on a cell.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
         self.elevation
+    }
+
+    /// Returns the retained elevation (`previousElevation`) that sets the sprite's OAM priority
+    /// (`sElevationToPriority[objEvent->previousElevation]`, `event_object_movement.c:7744-7745`).
+    #[must_use]
+    pub const fn previous_elevation(&self) -> u8 {
+        self.previous_elevation
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`), given the map elevation
+    /// at the current and the previous tile. Nothing changes while either is multi-level; else the
+    /// current elevation takes the current cell's, and the retained one does too unless that cell
+    /// is a transition, which keeps the last ordinary cell's.
+    pub const fn update_elevation(&mut self, current_cell: u8, previous_cell: u8) {
+        if current_cell == ELEVATION_MULTI_LEVEL || previous_cell == ELEVATION_MULTI_LEVEL {
+            return;
+        }
+        self.elevation = current_cell;
+        if current_cell != ELEVATION_TRANSITION {
+            self.previous_elevation = current_cell;
+        }
     }
 
     /// Returns the current facing direction.
@@ -339,10 +367,13 @@ impl ObjectEventState {
     /// Restores the position, movement type, and initial facing a respawn gives an object from
     /// this value's template snapshots, so a coordinate or movement override survives
     /// (`InitObjectEventStateFromTemplate` reads the saved template,
-    /// `event_object_movement.c:1287-1330`). Elevation and the snapshots themselves are kept.
+    /// `event_object_movement.c:1287-1330`). Both elevations return to the authored one, as
+    /// `:1313-1314` sets them; the snapshots themselves are kept.
     pub const fn reinit_from_template_snapshots(&mut self) {
         self.position = self.template_position;
         self.previous_position = self.template_position;
+        self.elevation = self.template_elevation;
+        self.previous_elevation = self.template_elevation;
         self.movement_type = self.template_movement_type;
         self.facing = initial_facing_direction(self.template_movement_type);
     }
@@ -1195,5 +1226,43 @@ mod tests {
             3,
             "elevation is not modelled for a walking object event (`walk`'s own docs)"
         );
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`).
+    #[test]
+    fn update_elevation_follows_upstreams_multi_level_and_transition_rules() {
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        assert_eq!((state.elevation(), state.previous_elevation()), (3, 3));
+
+        state.update_elevation(4, 4);
+        assert_eq!((state.elevation(), state.previous_elevation()), (4, 4));
+
+        state.update_elevation(ELEVATION_TRANSITION, 4);
+        assert_eq!(
+            (state.elevation(), state.previous_elevation()),
+            (ELEVATION_TRANSITION, 4),
+            "a transition cell keeps the retained elevation"
+        );
+
+        state.update_elevation(ELEVATION_MULTI_LEVEL, 6);
+        state.update_elevation(6, ELEVATION_MULTI_LEVEL);
+        assert_eq!(
+            (state.elevation(), state.previous_elevation()),
+            (ELEVATION_TRANSITION, 4),
+            "either multi-level cell skips the update"
+        );
+
+        state.update_elevation(6, ELEVATION_TRANSITION);
+        assert_eq!((state.elevation(), state.previous_elevation()), (6, 6));
+    }
+
+    /// `InitObjectEventStateFromTemplate` sets both elevations from the template
+    /// (`event_object_movement.c:1313-1314`).
+    #[test]
+    fn a_respawn_restores_both_elevations_to_the_authored_one() {
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        state.update_elevation(6, 6);
+        state.reinit_from_template_snapshots();
+        assert_eq!((state.elevation(), state.previous_elevation()), (3, 3));
     }
 }

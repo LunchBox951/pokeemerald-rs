@@ -90,6 +90,12 @@ impl ObjectEventCollection {
         self.entries.iter()
     }
 
+    /// Iterates entries mutably in declaration order, visiting each entry even when a local id
+    /// repeats.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LiveObjectEvent> {
+        self.entries.iter_mut()
+    }
+
     /// Returns the entry whose template declares `local_id`, or the first
     /// such entry in declaration order if `local_id` repeats, matching
     /// upstream's linear scan (`GetObjectEventIdByLocalId`,

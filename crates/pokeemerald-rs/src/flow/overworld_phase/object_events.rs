@@ -27,6 +27,7 @@ impl OverworldPhase {
         // movement. Map load's admission happens before the first callback, so
         // that frame's pass follows the scheduler's.
         let first_frame = self.scene.take_object_admission_pending();
+        self.scene.update_object_elevations(&mut self.object_events);
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
         let context = FrameContext {
@@ -43,6 +44,9 @@ impl OverworldPhase {
         }
         #[cfg(not(test))]
         self.object_events.run_frame(&context, &mut self.rng);
+        // Movement and respawns have changed tiles; settle their elevations
+        // before the begin-step pass and the frame's rendering read them.
+        self.scene.update_object_elevations(&mut self.object_events);
         if first_frame {
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);

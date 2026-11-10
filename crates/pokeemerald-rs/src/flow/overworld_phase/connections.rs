@@ -526,7 +526,9 @@ impl OverworldPhase {
 /// Upstream initialises them per map load (`event_object_movement.c:1287-1330`)
 /// and replaces them on a map change (`:1645-1673`).
 pub(super) fn seed_object_events(scene: &overworld::OverworldScene) -> ObjectEventCollection {
-    ObjectEventCollection::from_templates(scene.map_events().object_events)
+    let mut objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
+    scene.update_object_elevations(&mut objects);
+    objects
 }
 
 /// A saved-location landing: position, elevation, and warp-in facing.
