@@ -5,8 +5,12 @@ const NIDORAN_FEMALE: SpeciesId = SpeciesId(29);
 const NIDORAN_MALE: SpeciesId = SpeciesId(32);
 const MAGNEMITE: SpeciesId = SpeciesId(81);
 
-const RATTATA_FEMALE_PERSONALITY: u32 = 0;
-const RATTATA_MALE_PERSONALITY: u32 = 150;
+// Nature is `personality % 25` over all 32 bits; gender is the low byte against
+// Rattata's threshold of 127 (below is female).
+// 0x2345_0006 % 25 == 0 (Hardy), low byte 6: female.
+const RATTATA_FEMALE_PERSONALITY: u32 = 0x2345_0006;
+// 0x1234_008C % 25 == 0 (Hardy), low byte 140: male.
+const RATTATA_MALE_PERSONALITY: u32 = 0x1234_008C;
 const HP_AND_SPECIAL_ATTACK_IV_DRAWS: [u16; 2] = [0x001F, 0x03E0];
 
 fn build_rattata_with_cute_charm(
@@ -71,7 +75,9 @@ fn a_forced_female_rejects_a_male_personality_of_the_right_nature() {
 
 #[test]
 fn a_forced_gender_still_rejects_a_personality_of_the_wrong_nature() {
-    let wrong_nature_right_gender = 151;
+    // 0x3456_0096 % 25 == 3 (Adamant), though its low half 150 alone would be
+    // Hardy; low byte 150: male.
+    let wrong_nature_right_gender = 0x3456_0096;
     let right_nature_wrong_gender = RATTATA_FEMALE_PERSONALITY;
     let script = [1, u16::from(Nature::Hardy.id())]
         .into_iter()
@@ -130,8 +136,11 @@ fn gender_locked_and_genderless_species_take_no_activation_draw() {
         (MAGNEMITE, Gender::Genderless),
     ] {
         let nature_draw = u16::from(Nature::Hardy.id());
-        let mut rng =
-            SequenceRng::new([nature_draw].into_iter().chain(personality_and_iv_draws(0)));
+        let mut rng = SequenceRng::new(
+            [nature_draw]
+                .into_iter()
+                .chain(personality_and_iv_draws(RATTATA_FEMALE_PERSONALITY)),
+        );
         let mon = build_wild_pokemon(
             &Dex::new(),
             species,
@@ -150,7 +159,8 @@ fn gender_locked_and_genderless_species_take_no_activation_draw() {
 
 #[test]
 fn the_cute_charm_roll_comes_before_the_synchronize_coin_flip() {
-    let quirky_personality = 174;
+    // 0x4567_0089 % 25 == 24 (Quirky), low byte 137: male.
+    let quirky_personality = 0x4567_0089;
     assert_eq!(Nature::from_personality(quirky_personality), Nature::Quirky);
     assert_eq!(
         Gender::of_personality(assets::GenderRatio::HALF_FEMALE, quirky_personality),
@@ -166,7 +176,8 @@ fn the_cute_charm_roll_comes_before_the_synchronize_coin_flip() {
     assert_eq!(rng.draws(), 6);
     rng.assert_exhausted();
 
-    let adamant_male_personality = 153;
+    // 0x5678_0084 % 25 == 3 (Adamant), low byte 132: male.
+    let adamant_male_personality = 0x5678_0084;
     assert_eq!(
         Nature::from_personality(adamant_male_personality),
         Nature::Adamant

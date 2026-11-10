@@ -54,7 +54,8 @@ fn roll_nature_is_modulo_the_nature_count_of_one_draw() {
 
 #[test]
 fn roll_personality_for_nature_stops_at_the_first_match() {
-    let personality = u32::from(Nature::Hardy.id());
+    // 0x0001_000E % 25 == 0 (Hardy); its low half alone would not be Hardy.
+    let personality = 0x0001_000E;
     let mut rng = SequenceRng::new(personality_draw(personality));
     assert_eq!(
         roll_personality_for_nature(Nature::Hardy, &mut rng),
@@ -65,8 +66,12 @@ fn roll_personality_for_nature_stops_at_the_first_match() {
 
 #[test]
 fn roll_personality_for_nature_rejects_until_a_match() {
-    let rejected_personality = u32::from(Nature::Lonely.id());
-    let accepted_personality = u32::from(Nature::Bold.id());
+    // 0xCAFE_0005 % 25 == 6 (not Bold), though its low half 5 alone would be Bold.
+    let rejected_personality = 0xCAFE_0005;
+    // 0xBEEF_000B % 25 == 5 (Bold).
+    let accepted_personality = 0xBEEF_000B;
+    assert_ne!(Nature::from_personality(rejected_personality), Nature::Bold);
+    assert_eq!(Nature::from_personality(accepted_personality), Nature::Bold);
     let draws = [
         personality_draw(rejected_personality),
         personality_draw(accepted_personality),
@@ -117,7 +122,8 @@ fn roll_ivs_masks_to_five_bits_even_with_high_bits_set() {
 #[test]
 fn build_wild_pokemon_draws_nature_then_personality_then_ivs_in_order() {
     let dex = Dex::new();
-    let personality = u32::from(Nature::Quirky.id());
+    // 0xBEEF_0005 % 25 == 24 (Quirky).
+    let personality = 0xBEEF_0005;
     let [personality_low, personality_high] = personality_draw(personality);
     let hp_only_iv_draw = 0x001F;
     let special_attack_only_iv_draw = 0x03E0;
@@ -174,7 +180,8 @@ fn build_wild_pokemon_rejects_bad_inputs_before_drawing_anything() {
 #[test]
 fn build_pokemon_with_random_personality_draws_only_personality_then_ivs() {
     let dex = Dex::new();
-    let personality = u32::from(Nature::Lonely.id());
+    // 0x1234_0010 % 25 == 1 (Lonely).
+    let personality = 0x1234_0010;
     let [personality_low, personality_high] = personality_draw(personality);
     let hp_only_iv_draw = 0x001F;
     let special_attack_only_iv_draw = 0x03E0;
@@ -417,7 +424,8 @@ fn pick_wild_nature_synchronize_loss_spends_a_second_draw_on_a_random_nature() {
 #[test]
 fn build_wild_pokemon_with_a_winning_synchronize_flip_uses_the_lead_nature() {
     let dex = Dex::new();
-    let personality = u32::from(Nature::Quirky.id());
+    // 0xBEEF_0005 % 25 == 24 (Quirky).
+    let personality = 0xBEEF_0005;
     let [low, high] = personality_draw(personality);
     // coin, personality (2), IVs (2): the winning flip spends no nature draw.
     let mut rng = SequenceRng::new([0, low, high, 0, 0]);
@@ -438,7 +446,8 @@ fn build_wild_pokemon_with_a_winning_synchronize_flip_uses_the_lead_nature() {
 #[test]
 fn build_wild_pokemon_with_a_losing_synchronize_flip_draws_six_times() {
     let dex = Dex::new();
-    let personality = u32::from(Nature::Adamant.id());
+    // 0x5678_0007 % 25 == 3 (Adamant).
+    let personality = 0x5678_0007;
     let [low, high] = personality_draw(personality);
     // coin (odd), nature, personality (2), IVs (2).
     let mut rng = SequenceRng::new([1, u16::from(Nature::Adamant.id()), low, high, 0, 0]);
