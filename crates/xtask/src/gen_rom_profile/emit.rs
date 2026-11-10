@@ -162,7 +162,7 @@ fn bag_roots(out: &mut String, bag: &BagPlan) {
     let _ = writeln!(out, "    bag: BagRoots {{");
     image_slice(out, "        ", "images", &bag.images);
     palette_slice(out, "        ", &bag.palettes);
-    let _ = writeln!(out, "        raws: &[");
+    let _ = writeln!(out, "        tilemaps: &[");
     for blob in &bag.raws {
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
@@ -1431,6 +1431,12 @@ mod bag_field_tests {
             module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
             "{module}"
         );
+        // `BagRoots` is the shared `PlainRoots`, whose blob field is `tilemaps`.
+        assert!(
+            module.contains("        tilemaps: &[\n            BlobRoot { id: \"bag/raw/menu\""),
+            "{module}"
+        );
+        assert!(!module.contains("raws: &["), "{module}");
         assert!(!module.contains("BagRoots::NONE"), "{module}");
     }
 
