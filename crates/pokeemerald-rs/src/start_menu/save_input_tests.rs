@@ -1,6 +1,6 @@
 //! Item selection, input precedence, and SAVE outcomes against a fake save medium.
 
-use super::test_support::{pressed, FakeTarget, FRAME_BUDGET};
+use super::test_support::{pressed, save_selected_menu, FakeTarget, FRAME_BUDGET};
 use super::{
     menu_height, synthetic_start_menu, SaveMode, StartMenu, StartMenuItem, StartMenuOutcome, ITEMS,
     MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH,
@@ -63,26 +63,28 @@ fn drive_reporting_outcome(
 }
 
 #[test]
-fn the_item_list_is_save_then_take_then_exit() {
+fn the_item_list_is_bag_then_save_then_take_then_exit() {
     assert_eq!(
         ITEMS,
         [
+            StartMenuItem::Bag,
             StartMenuItem::Save,
             StartMenuItem::TakeItem,
             StartMenuItem::Exit
         ]
     );
+    assert_eq!(StartMenuItem::Bag.label(), "BAG");
     assert_eq!(StartMenuItem::Save.label(), "SAVE");
     assert_eq!(StartMenuItem::TakeItem.label(), "TAKE");
     assert_eq!(StartMenuItem::Exit.label(), "EXIT");
-    assert_eq!(synthetic_start_menu().selected(), StartMenuItem::Save);
+    assert_eq!(synthetic_start_menu().selected(), StartMenuItem::Bag);
 }
 
 /// Item-window height is `numActions * 2 + 2` tiles
 /// (`pokeemerald/src/menu.c:493`).
 #[test]
 fn item_window_geometry_matches_upstream() {
-    assert_eq!(menu_height(3), 8, "this shell's own three-item menu");
+    assert_eq!(menu_height(4), 10, "this shell's own four-item menu");
     assert_eq!(menu_height(7), 16, "a larger menu");
     assert_eq!(
         (MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH),
@@ -98,6 +100,8 @@ fn the_item_cursor_wraps_in_both_directions() {
     menu.tick(pressed(Buttons::UP), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
     menu.tick(pressed(Buttons::DOWN), &mut target);
+    assert_eq!(menu.selected(), StartMenuItem::Bag);
+    menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Save);
     menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::TakeItem);
@@ -112,7 +116,7 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
     // UP+A off a fresh menu (wrapping to EXIT): EXIT is selected but not yet
     // closed.
     let mut menu = synthetic_start_menu();
-    assert_eq!(menu.selected(), StartMenuItem::Save);
+    assert_eq!(menu.selected(), StartMenuItem::Bag);
     assert_eq!(
         menu.tick(pressed(Buttons::UP | Buttons::A), &mut target),
         StartMenuOutcome::Open,
@@ -127,11 +131,20 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
         "EXIT closes on the next tick, reading no input"
     );
 
-    // DOWN+A from EXIT: the cursor wraps back to SAVE and the same frame's A
-    // starts the save flow.
+    // DOWN+A from EXIT: the cursor wraps back to BAG and the same frame's A
+    // selects it.
     let mut menu = synthetic_start_menu();
     menu.tick(pressed(Buttons::UP), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
+    assert_eq!(
+        menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
+        StartMenuOutcome::Bag
+    );
+    assert_eq!(menu.selected(), StartMenuItem::Bag);
+
+    // DOWN+A from BAG: the cursor moves to SAVE and the same frame's A
+    // starts the save flow.
+    let mut menu = synthetic_start_menu();
     assert_eq!(
         menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
         StartMenuOutcome::Open
@@ -140,12 +153,18 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
     assert!(menu.saving(), "the same frame's A entered the SAVE flow");
 
     // A+START: A takes the same-frame selection, so START never closes it.
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     assert_eq!(
         menu.tick(pressed(Buttons::A | Buttons::START), &mut target),
         StartMenuOutcome::Open
     );
     assert!(menu.saving());
+    let mut menu = synthetic_start_menu();
+    assert_eq!(
+        menu.tick(pressed(Buttons::A | Buttons::START), &mut target),
+        StartMenuOutcome::Bag,
+        "START never closes the menu behind a BAG selection either"
+    );
 
     assert!(
         target.writes.is_empty(),
@@ -159,6 +178,7 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
 fn a_on_take_reports_the_take_without_opening_the_save_flow() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     let mut menu = synthetic_start_menu();
+    menu.tick(pressed(Buttons::DOWN), &mut target);
     menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::TakeItem);
 
@@ -205,7 +225,7 @@ fn exit_closes_next_tick_while_start_and_b_close_immediately_without_writing() {
 #[test]
 fn an_empty_cartridge_skips_the_overwrite_prompt() {
     let mut target = FakeTarget::new(SaveFileStatus::Empty, true);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let prompts = drive(&mut menu, &mut target, &[]);
 
     assert_eq!(
@@ -224,7 +244,7 @@ fn an_empty_cartridge_skips_the_overwrite_prompt() {
 #[test]
 fn a_corrupt_cartridge_also_skips_the_overwrite_prompt() {
     let mut target = FakeTarget::new(SaveFileStatus::Corrupt, true);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     assert_eq!(drive(&mut menu, &mut target, &[]).len(), 1);
     assert_eq!(
         target.writes,
@@ -237,7 +257,7 @@ fn a_corrupt_cartridge_also_skips_the_overwrite_prompt() {
 #[test]
 fn a_continued_session_is_asked_twice_and_saves_normally() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let prompts = drive(&mut menu, &mut target, &[]);
 
     assert_eq!(prompts, vec![0, 0], "both prompts default to YES");
@@ -250,7 +270,7 @@ fn a_continued_session_is_asked_twice_and_saves_normally() {
 #[test]
 fn the_different_save_file_warning_defaults_to_no_and_can_be_declined() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let prompts = drive(&mut menu, &mut target, &[true, false]);
 
     assert_eq!(
@@ -273,7 +293,7 @@ fn the_different_save_file_warning_defaults_to_no_and_can_be_declined() {
 #[test]
 fn answering_the_warning_writes_an_acknowledged_overwrite() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     drive(&mut menu, &mut target, &[true, true]);
     assert_eq!(
         target.writes,
@@ -284,7 +304,7 @@ fn answering_the_warning_writes_an_acknowledged_overwrite() {
 #[test]
 fn declining_the_first_question_never_reaches_the_save_medium() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     drive(&mut menu, &mut target, &[false]);
     assert!(target.writes.is_empty());
     assert!(!menu.saving());
@@ -295,7 +315,7 @@ fn declining_the_first_question_never_reaches_the_save_medium() {
 #[test]
 fn b_on_a_prompt_answers_no_even_with_the_cursor_on_yes() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
 
     menu.tick(pressed(Buttons::A), &mut target);
     for _ in 0..FRAME_BUDGET {
@@ -320,7 +340,7 @@ fn b_on_a_prompt_answers_no_even_with_the_cursor_on_yes() {
 fn a_failed_write_still_closes_the_menu() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     target.write_succeeds = false;
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let (_prompts, outcome) = drive_reporting_outcome(&mut menu, &mut target, &[]);
     assert_eq!(target.writes, vec![SaveMode::Normal]);
     assert_eq!(
@@ -339,7 +359,7 @@ fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
     target.write_succeeds = false;
 
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let first_attempt_prompts = drive(&mut menu, &mut target, &[true, true]);
     assert_eq!(
         first_attempt_prompts,
@@ -356,7 +376,7 @@ fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
     );
 
     target.write_succeeds = true;
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let retry_prompts = drive(&mut menu, &mut target, &[]);
     assert_eq!(
         retry_prompts,

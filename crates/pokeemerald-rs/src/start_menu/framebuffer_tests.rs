@@ -1,6 +1,6 @@
 //! Start-menu composition and item-window handoff over the overworld frame.
 
-use super::test_support::{pressed, FakeTarget};
+use super::test_support::{pressed, save_selected_menu, FakeTarget};
 use super::{
     synthetic_start_menu, StartMenu, StartMenuItem, StartMenuOutcome, MENU_TILEMAP_LEFT,
     MENU_TILEMAP_TOP,
@@ -61,7 +61,7 @@ fn selecting_save_keeps_the_item_window_until_its_message_exists() {
         usize::try_from(MENU_TILEMAP_TOP * 8 + 4).unwrap(),
     );
 
-    let mut menu = synthetic_start_menu();
+    let mut menu = save_selected_menu();
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     assert_eq!(menu.selected(), StartMenuItem::Save);
 
