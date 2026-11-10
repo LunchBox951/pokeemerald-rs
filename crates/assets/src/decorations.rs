@@ -319,10 +319,10 @@ macro_rules! define_decorations {
         ];
 
         const _: () = {
-            let ids = [$($id),+];
+            let ids: [usize; DECORATIONS_COUNT] = [$($id),+];
             let mut index = 0;
             while index < DECORATIONS_COUNT {
-                assert!(ids[index] as usize == index);
+                assert!(ids[index] == index);
                 index += 1;
             }
         };
@@ -652,104 +652,103 @@ mod tests {
         }
     }
 
+    type Pin = (
+        DecorationId,
+        &'static str,
+        DecorationPermission,
+        DecorationShape,
+        DecorationCategory,
+        u16,
+        &'static str,
+    );
+
+    const PINS: [Pin; 9] = [
+        (
+            DecorationId::POKEMON_DESK,
+            "POKéMON DESK",
+            DecorationPermission::SolidFloor,
+            DecorationShape::W1H1,
+            DecorationCategory::Desk,
+            3000,
+            "A small desk built in\nthe shape of a POKé\nBALL.",
+        ),
+        (
+            DecorationId::SLIDE,
+            "SLIDE",
+            DecorationPermission::PassFloor,
+            DecorationShape::W2H4,
+            DecorationCategory::Ornament,
+            8000,
+            "Use to slide down\nfrom the platform.",
+        ),
+        (
+            DecorationId::STAND,
+            "STAND",
+            DecorationPermission::PassFloor,
+            DecorationShape::W4H2,
+            DecorationCategory::Ornament,
+            7000,
+            "A large pedestal\nwith steps.",
+        ),
+        (
+            DecorationId::BIG_PLANT,
+            "BIG PLANT",
+            DecorationPermission::BehindFloor,
+            DecorationShape::W2H2,
+            DecorationCategory::Plant,
+            5000,
+            "A large, umbrella-\nshaped plant in a\nbig pot.",
+        ),
+        (
+            DecorationId::SILVER_SHIELD,
+            "SILVER SHIELD",
+            DecorationPermission::BehindFloor,
+            DecorationShape::W1H2,
+            DecorationCategory::Ornament,
+            0,
+            "Awarded for 50\nstraight wins at\nthe BATTLE TOWER.",
+        ),
+        (
+            DecorationId::FIRE_BLAST_MAT,
+            "FIRE BLAST MAT",
+            DecorationPermission::PassFloor,
+            DecorationShape::W3H3,
+            DecorationCategory::Mat,
+            4000,
+            "A mat designed with\na FIRE BLAST image.\nPut items on top.",
+        ),
+        (
+            DecorationId::BALL_POSTER,
+            "BALL POSTER",
+            DecorationPermission::NaWall,
+            DecorationShape::W1H1,
+            DecorationCategory::Poster,
+            1000,
+            "A small poster\nprinted with POKé\nBALLS.",
+        ),
+        (
+            DecorationId::SNORLAX_DOLL,
+            "SNORLAX DOLL",
+            DecorationPermission::Sprite,
+            DecorationShape::W1H2,
+            DecorationCategory::Doll,
+            10000,
+            "A large doll.\nPlace it on a mat\nor a desk.",
+        ),
+        (
+            DecorationId::REGISTEEL_DOLL,
+            "REGISTEEL DOLL",
+            DecorationPermission::Sprite,
+            DecorationShape::W1H2,
+            DecorationCategory::Doll,
+            10000,
+            "A large doll.\nPlace it on a mat\nor a desk.",
+        ),
+    ];
+
     #[test]
     fn hand_pinned_rows_match_upstream() {
-        use DecorationCategory::*;
-        use DecorationPermission::*;
-        use DecorationShape::*;
-        type Pin = (
-            DecorationId,
-            &'static str,
-            DecorationPermission,
-            DecorationShape,
-            DecorationCategory,
-            u16,
-            &'static str,
-        );
-        let pins: [Pin; 9] = [
-            (
-                DecorationId::POKEMON_DESK,
-                "POKéMON DESK",
-                SolidFloor,
-                W1H1,
-                Desk,
-                3000,
-                "A small desk built in\nthe shape of a POKé\nBALL.",
-            ),
-            (
-                DecorationId::SLIDE,
-                "SLIDE",
-                PassFloor,
-                W2H4,
-                Ornament,
-                8000,
-                "Use to slide down\nfrom the platform.",
-            ),
-            (
-                DecorationId::STAND,
-                "STAND",
-                PassFloor,
-                W4H2,
-                Ornament,
-                7000,
-                "A large pedestal\nwith steps.",
-            ),
-            (
-                DecorationId::BIG_PLANT,
-                "BIG PLANT",
-                BehindFloor,
-                W2H2,
-                Plant,
-                5000,
-                "A large, umbrella-\nshaped plant in a\nbig pot.",
-            ),
-            (
-                DecorationId::SILVER_SHIELD,
-                "SILVER SHIELD",
-                BehindFloor,
-                W1H2,
-                Ornament,
-                0,
-                "Awarded for 50\nstraight wins at\nthe BATTLE TOWER.",
-            ),
-            (
-                DecorationId::FIRE_BLAST_MAT,
-                "FIRE BLAST MAT",
-                PassFloor,
-                W3H3,
-                Mat,
-                4000,
-                "A mat designed with\na FIRE BLAST image.\nPut items on top.",
-            ),
-            (
-                DecorationId::BALL_POSTER,
-                "BALL POSTER",
-                NaWall,
-                W1H1,
-                Poster,
-                1000,
-                "A small poster\nprinted with POKé\nBALLS.",
-            ),
-            (
-                DecorationId::SNORLAX_DOLL,
-                "SNORLAX DOLL",
-                Sprite,
-                W1H2,
-                Doll,
-                10000,
-                "A large doll.\nPlace it on a mat\nor a desk.",
-            ),
-            (
-                DecorationId::REGISTEEL_DOLL,
-                "REGISTEEL DOLL",
-                Sprite,
-                W1H2,
-                Doll,
-                10000,
-                "A large doll.\nPlace it on a mat\nor a desk.",
-            ),
-        ];
-        for (id, name, permission, shape, category, price, description) in pins {
+        for (id, name, permission, shape, category, price, description) in PINS {
             let decoration = row(id);
             assert_eq!(decoration.id, id);
             assert_eq!(decoration.name, name, "{id:?}");
