@@ -172,9 +172,14 @@ impl Drop for Planted {
                     // on Windows.
                     drop(entry.handle.take());
                     let removed = if entry.created_by_failed_plant {
-                        // Only an empty directory (bar a half-written
-                        // sentinel): a populated replacement is not adopted.
-                        let _ = std::fs::remove_file(path.join(SENTINEL));
+                        // Only an empty directory, or one holding just an
+                        // empty sentinel (a write that failed before writing
+                        // anything): a replacement with any content is not
+                        // adopted and its sentinel is never deleted.
+                        let sentinel = path.join(SENTINEL);
+                        if std::fs::metadata(&sentinel).is_ok_and(|m| m.len() == 0) {
+                            let _ = std::fs::remove_file(&sentinel);
+                        }
                         std::fs::remove_dir(path)
                     } else if current.is_dir {
                         std::fs::remove_dir_all(path)
@@ -270,24 +275,22 @@ fn listing(dir: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
-/// `PRECIOUS` plus a suffix no other planting shares: process, a counter and
-/// the clock.
-fn fresh_sentinel() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// `PRECIOUS` plus a suffix no other planting shares: the process, the clock
+/// and the directory, so no state is shared between plantings.
+fn fresh_sentinel(dir: &Path) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     format!(
-        "{PRECIOUS}-{}-{}-{nanos}",
+        "{PRECIOUS}-{}-{nanos}-{}",
         std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
+        dir.display()
     )
 }
 
 /// Writes the sentinel and returns its content.
 fn populate(dir: &Path) -> io::Result<String> {
-    let content = fresh_sentinel();
+    let content = fresh_sentinel(dir);
     std::fs::write(dir.join(SENTINEL), &content)?;
     Ok(content)
 }
@@ -444,30 +447,70 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    /// A directory the guard planted but cannot remove must be reported. A
+    /// failed plant removes with `remove_dir`, which refuses a directory that
+    /// holds anything, whoever runs the test (directory modes do not stop root).
     #[test]
     fn planted_drop_reports_a_failed_removal() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-fixture-guard-undeletable-{}",
+            "pokeemerald-rs-fixture-guard-unremovable-{}",
             std::process::id()
         ));
         std::fs::create_dir(&dir).unwrap();
-        populate(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let planted = Planted(vec![Planted::entry(&dir)]);
+        std::fs::write(dir.join("racer"), "theirs").unwrap();
+        let mut entry = Planted::entry(&dir);
+        entry.created_by_failed_plant = true;
+        let planted = Planted(vec![entry]);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
-        let left_behind = dir.exists();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
+        let left_behind = dir.join("racer").exists();
         let _ = std::fs::remove_dir_all(&dir);
-        if !left_behind {
-            eprintln!("skipped: the process ignores directory modes (root), so 0555 is removable");
-            return;
-        }
+        let payload = reported.expect_err("Planted::drop left the directory without reporting it");
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
         assert!(
-            reported.is_err(),
-            "Planted::drop left {} behind without reporting it",
-            dir.display()
+            left_behind,
+            "Planted::drop deleted a directory it did not populate"
+        );
+        assert!(
+            message.contains("removing planted entries failed")
+                && message.contains(&dir.display().to_string()),
+            "unexpected report: {message}"
+        );
+    }
+
+    /// The plant creates its directory, a racer swaps in its own directory
+    /// holding a sentinel before `populate` writes, and the write fails. The
+    /// racer's sentinel must survive cleanup.
+    #[test]
+    fn a_replacement_swapped_in_during_a_failed_plant_keeps_its_sentinel() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-failed-plant-swap-{}",
+            std::process::id()
+        ));
+        let names = vec![path.clone()];
+        let result = std::panic::catch_unwind(|| {
+            plant_all(
+                "failed-plant-swap",
+                &names,
+                |p| {
+                    std::fs::create_dir(p)?;
+                    std::fs::remove_dir(p).unwrap();
+                    std::fs::create_dir(p).unwrap();
+                    std::fs::write(p.join(SENTINEL), "theirs").unwrap();
+                    Err::<Option<String>, _>(io::Error::from(io::ErrorKind::PermissionDenied))
+                },
+                &|| {},
+            )
+        });
+        let theirs = sentinel_of(&path);
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(result.is_err(), "plant_all did not panic");
+        assert_eq!(
+            theirs.as_deref(),
+            Some("theirs"),
+            "cleanup deleted the racer's sentinel"
         );
     }
 
