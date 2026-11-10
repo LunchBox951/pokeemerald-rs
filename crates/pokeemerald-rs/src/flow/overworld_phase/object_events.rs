@@ -8,6 +8,25 @@ use engine::overworld::object_event::FrameContext;
 use super::OverworldPhase;
 
 impl OverworldPhase {
+    /// Admits the objects already in view before the frame's input moves the player, as map
+    /// load's `TrySpawnObjectEvents` does ahead of the first frame (`src/overworld.c:2163`), so
+    /// the player's first step collides with them as with any active object
+    /// (`DoesObjectCollideWithObjectAt`, `src/event_object_movement.c:4730-4733`). A frozen
+    /// scheduler frame admits and moves nothing, and does nothing once the collection has
+    /// reconciled at the player's tile.
+    pub(super) fn admit_object_events_in_view(&mut self) {
+        let context = FrameContext {
+            player_position: self.player.position(),
+            event_data: &self.save1.event_data,
+            frozen: true,
+            player_dashing: self.player.dashing(),
+            terrain: self.scene.runtime(),
+            player_previous_position: self.player.previous_position(),
+            player_elevation: self.player.elevation(),
+        };
+        self.object_events.run_frame(&context, &mut self.rng);
+    }
+
     /// Runs one frame of object-event movement, after the frame's input and any
     /// script has run, as CB2's `AnimateSprites` follows CB1
     /// (`src/overworld.c:1465-1469`). Shared by [`Self::step`] and an open start menu's frame.

@@ -340,6 +340,7 @@ impl OverworldPhase {
         // (`src/overworld.c:1465-1469`). Every branch below, a dialog or a
         // cutscene included, leaves the field's sprites animating.
         self.scene.seed_tall_grass_placement(&self.player);
+        self.admit_object_events_in_view();
         self.step_field_frame(buttons);
         self.advance_object_events();
         self.scene
