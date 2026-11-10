@@ -364,6 +364,7 @@ impl OverworldPhase {
         let trainer = route103_rival::route103_rival_for(rival, starter);
         match npc_trainer_battle::start_npc_trainer_battle(lead.clone(), trainer, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Rival {
                     battle,
                     trainer_id: trainer,

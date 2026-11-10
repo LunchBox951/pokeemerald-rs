@@ -310,6 +310,7 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Wild(WildBattle {
                     battle,
                     reserves,
