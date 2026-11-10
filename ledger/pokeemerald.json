@@ -29328,6 +29328,24 @@
           "rust_target": "crates/battle/src/status1.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "sPickupItems": {
+          "reason": "src/battle_script_commands.c:784-803. The 18 normal Pickup items in upstream order, transcribed as pickup::COMMON_ITEMS (ItemId) and exposed by PickupTables::common_items. Cmd_pickup (:9654) reads entry [lvlDivBy10 + j] (:9715) for the first sPickupProbabilities step j whose threshold is strictly greater than the percentile; PickupTables::lookup/lookup_level reproduce that selection for all 10 level tiers by 100 percentiles. Data only: the Cmd_pickup eligibility checks (Pickup ability, empty held item, Random() % 10), the RNG draws, party mutation, the post-battle hook, the Battle Pike skip and the Battle Pyramid distribution (GetBattlePyramidPickupItemId) are NOT modelled; the Cmd_pickup artifact stays unclaimed.",
+          "rust_target": "crates/assets/src/pickup.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPickupProbabilities": {
+          "reason": "src/battle_script_commands.c:821-824. The nine ascending percentile thresholds 30, 40, 50, 60, 70, 80, 90, 94, 98 as pickup::THRESHOLDS, exposed by PickupTables::thresholds. Cmd_pickup compares them with a strict greater-than against Random() % 100 (:9713), so a percentile equal to a threshold moves to the next step; percentiles 98 and 99 are not strictly below the last threshold (98), so no step matches and they fall to the rare list (:9718). Data only; Cmd_pickup eligibility, RNG draws, party mutation, Battle Pike and Battle Pyramid behaviour are NOT modelled.",
+          "rust_target": "crates/assets/src/pickup.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sRarePickupItems": {
+          "reason": "src/battle_script_commands.c:806-818. The 11 rare Pickup items in upstream order, transcribed as pickup::RARE_ITEMS (ItemId; ITEM_TM_REST/FOCUS_PUNCH/EARTHQUAKE resolve through include/item.h:80-97 and include/constants/tms_hms.h to 332/289/314) and exposed by PickupTables::rare_items. Cmd_pickup reads entry [lvlDivBy10 + (99 - rand)] (:9720) only for percentile 98 or 99, so 99 selects the slot one before 98; PickupTables::lookup pins that ordering for every tier. Data only; Cmd_pickup eligibility, RNG draws, party mutation, Battle Pike and Battle Pyramid behaviour are NOT modelled.",
+          "rust_target": "crates/assets/src/pickup.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
