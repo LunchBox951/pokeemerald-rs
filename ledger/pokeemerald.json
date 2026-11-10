@@ -33693,6 +33693,14 @@
       "status": "pending"
     },
     "src/pokeblock.c": {
+      "artifacts": {
+        "gPokeblockFlavorCompatibilityTable": {
+          "reason": "src/pokeblock.c:136-164. gPokeblockFlavorCompatibilityTable (25 natures by 5 flavors, signed s8: +1 liked, -1 disliked, 0 neutral) transcribed as a [[i8; 5]; 25] matrix in Spicy, Dry, Sweet, Bitter, Sour order (include/constants/berry.h:13-18), read by Gen III numeric nature id through nature_row/compatibility/liked_flavor/disliked_flavor with UnknownNature rejecting ids >= 25 (NUM_NATURES, include/constants/pokemon.h:72). The assets crate does not depend on battle::Nature; callers pass Nature::id(). Pinned by an independent FNV-1a digest over all 125 entries plus hand-written liked/disliked pairs and the five all-zero natures. NOT modelled: PokeblockGetGain (:1407-1419), feeding, contest-condition mutation, Safari behavior, save representation and the Pokeblock case UI; src/pokeblock.c stays pending.",
+          "rust_target": "crates/assets/src/pokeblock_flavors.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
