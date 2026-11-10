@@ -88,10 +88,9 @@ fn a_glyph_lands_one_pixel_into_the_window_in_the_windows_text_colors() {
 
     assert_eq!(pixel(&framebuffer, LEFT, TOP), rgb(color(0, 0, 31)));
     assert_eq!(pixel(&framebuffer, LEFT, TOP + 1), rgb(color(31, 0, 0)));
-    assert_eq!(
-        pixel(&framebuffer, LEFT + 15, TOP + 1),
-        rgb(color(31, 0, 0))
-    );
+    // The fixture glyph's advance width is 8, the last column upstream copies.
+    assert_eq!(pixel(&framebuffer, LEFT + 7, TOP + 1), rgb(color(31, 0, 0)));
+    assert_eq!(pixel(&framebuffer, LEFT + 8, TOP + 1), rgb(color(0, 0, 31)));
     assert_eq!(pixel(&framebuffer, LEFT, TOP + 2), rgb(color(0, 31, 0)));
     assert_eq!(pixel(&framebuffer, LEFT - 1, TOP + 1), rgb(color(1, 2, 3)));
 }
@@ -104,21 +103,18 @@ fn a_finished_message_stays_up_until_the_next_one_starts_and_replaces_it() {
     run_same(&mut layer, 3, NONE);
     let second_glyph_x = LEFT + 8;
     assert_eq!(
-        pixel(&drawn(&layer), second_glyph_x + 15, TOP + 1),
+        pixel(&drawn(&layer), second_glyph_x + 7, TOP + 1),
         rgb(color(31, 0, 0))
     );
 
     submit(&mut layer, &fixture, &[message::AB_AGAIN]);
     run(&mut layer, &[NONE]);
 
-    // Only the new message's first glyph (x 16..32) remains.
+    // Only the new message's first glyph (x 0..8) remains.
     let framebuffer = drawn(&layer);
+    assert_eq!(pixel(&framebuffer, LEFT + 7, TOP + 1), rgb(color(31, 0, 0)));
     assert_eq!(
-        pixel(&framebuffer, LEFT + 15, TOP + 1),
-        rgb(color(31, 0, 0))
-    );
-    assert_eq!(
-        pixel(&framebuffer, second_glyph_x + 15, TOP + 1),
+        pixel(&framebuffer, second_glyph_x + 7, TOP + 1),
         rgb(color(0, 0, 31))
     );
 }
