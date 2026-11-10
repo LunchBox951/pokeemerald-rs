@@ -22,9 +22,11 @@
 //!
 //! A quarantine that cannot be opened after `mkdirat` is left standing, since
 //! nothing proves the name still denotes it. On a filesystem out of space,
-//! quota or inodes the quarantine's `mkdirat` fails and the created levels
-//! are left standing, except a level without the owner's write bit, which
-//! never needs a quarantine (see [`super::restore`]).
+//! quota or inodes the quarantine's `mkdirat` fails with `ENOSPC` or
+//! `EDQUOT`; that one failure is not reported or fatal: the level is taken
+//! back without a quarantine instead (see [`super::aside`]), as is a level
+//! without the owner's write bit (see [`super::restore`]). Any other
+//! `mkdirat` failure leaves the level standing.
 
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -114,25 +116,34 @@ impl Quarantine<'_> {
 }
 
 /// The quarantine for one rollback, made under a fresh random name beside
-/// the outermost pinned level, so no level it empties contains it; `None`,
-/// with `dir` reported as left standing, if none can be made.
+/// the outermost pinned level, so no level it empties contains it. Refused,
+/// with `dir` reported as left standing, if none can be made, unless the
+/// filesystem has no room for one ([`Claim::NoRoom`]). `mkdir` makes it.
 pub(super) fn claim_quarantine<'a>(
     created: &'a [CreatedDirectory],
     dir: &CreatedDirectory,
-) -> Option<Quarantine<'a>> {
-    let outermost = created.iter().find(|level| level.parent.is_some())?;
-    let home = outermost.parent.as_deref()?;
+    mkdir: &mut MakeDirectory<'_>,
+) -> Claim<'a> {
+    let Some(outermost) = created.iter().find(|level| level.parent.is_some()) else {
+        return Claim::Refused;
+    };
+    let Some(home) = outermost.parent.as_deref() else {
+        return Claim::Refused;
+    };
     let Some(name) = unguessable_quarantine_name() else {
         warn_left_standing(dir, format_args!("no entropy for a private cleanup name"));
-        return None;
+        return Claim::Refused;
     };
-    open_quarantine(home.as_fd(), outermost, &name, dir, &mut || {})
+    claim_in(home.as_fd(), outermost, &name, dir, mkdir)
 }
 
 /// Makes and opens the quarantine `name` in `home` (beside `home_level`),
 /// with `after_mkdir` run between the two, where a test swaps the name, and
 /// checks it is fresh. `None`, with `dir` reported as left standing, if it
-/// cannot be made, held or vouched for; nothing at the name is removed.
+/// cannot be made, held or vouched for; nothing at the name is removed. A
+/// `mkdirat` that fails for want of room is `None` too, but unreported (see
+/// [`claim_in`]).
+#[cfg(test)]
 pub(super) fn open_quarantine<'a>(
     home: BorrowedFd<'a>,
     home_level: &CreatedDirectory,
@@ -152,6 +163,7 @@ pub(super) fn open_quarantine<'a>(
 
 /// [`open_quarantine`] with `vouch` in place of [`is_fresh_quarantine`], so
 /// a test can make the freshness check fail with an error.
+#[cfg(test)]
 pub(super) fn open_quarantine_vouched_by<'a>(
     home: BorrowedFd<'a>,
     home_level: &CreatedDirectory,
@@ -160,8 +172,91 @@ pub(super) fn open_quarantine_vouched_by<'a>(
     after_mkdir: &mut dyn FnMut(),
     vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
 ) -> Option<Quarantine<'a>> {
+    open_quarantine_through(
+        home,
+        home_level,
+        name,
+        dir,
+        after_mkdir,
+        vouch,
+        &mut |home, name| make_private_directory(home, name),
+    )
+}
+
+/// What makes the quarantine `name` in `home`: [`make_private_directory`], or
+/// a test's stand-in that fails.
+pub(super) type MakeDirectory<'m> = dyn FnMut(BorrowedFd<'_>, &str) -> rustix::io::Result<()> + 'm;
+
+/// The real quarantine `mkdirat`: private to the owner.
+pub(super) fn make_private_directory(home: BorrowedFd<'_>, name: &str) -> rustix::io::Result<()> {
+    rustix::fs::mkdirat(home, name, Mode::RWXU)
+}
+
+/// Whether a failed `mkdirat` says the filesystem has no room for another
+/// directory: out of space or inodes, or over quota.
+fn is_out_of_room(err: rustix::io::Errno) -> bool {
+    matches!(err, rustix::io::Errno::NOSPC | rustix::io::Errno::DQUOT)
+}
+
+/// What asking for a quarantine came to.
+pub(super) enum Claim<'a> {
+    /// Made, held and vouched for.
+    Held(Quarantine<'a>),
+    /// None could be made for want of room (`ENOSPC` or `EDQUOT`): nothing
+    /// was created and nothing is reported, so the level can be taken back
+    /// without one (see [`super::aside`]).
+    NoRoom,
+    /// Not had, and reported with the level left standing.
+    Refused,
+}
+
+/// [`open_quarantine`] as a [`Claim`], with `mkdir` making the quarantine;
+/// only a `mkdir` that fails for want of room is [`Claim::NoRoom`].
+pub(super) fn claim_in<'a>(
+    home: BorrowedFd<'a>,
+    home_level: &CreatedDirectory,
+    name: &str,
+    dir: &CreatedDirectory,
+    mkdir: &mut MakeDirectory<'_>,
+) -> Claim<'a> {
+    let mut out_of_room = false;
+    let held = open_quarantine_through(
+        home,
+        home_level,
+        name,
+        dir,
+        &mut || {},
+        is_fresh_quarantine,
+        &mut |home, name| {
+            let made = mkdir(home, name);
+            out_of_room = made.err().is_some_and(is_out_of_room);
+            made
+        },
+    );
+    match held {
+        Some(held) => Claim::Held(held),
+        None if out_of_room => Claim::NoRoom,
+        None => Claim::Refused,
+    }
+}
+
+/// [`open_quarantine_vouched_by`] with `mkdir` making the quarantine. A
+/// failure for want of room is not reported here: [`claim_in`] tells it from
+/// the rest, and answers for it.
+pub(super) fn open_quarantine_through<'a>(
+    home: BorrowedFd<'a>,
+    home_level: &CreatedDirectory,
+    name: &str,
+    dir: &CreatedDirectory,
+    after_mkdir: &mut dyn FnMut(),
+    vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
+    mkdir: &mut MakeDirectory<'_>,
+) -> Option<Quarantine<'a>> {
     let path = located_beside(home, home_level, OsStr::new(name));
-    if let Err(err) = rustix::fs::mkdirat(home, name, Mode::RWXU) {
+    if let Err(err) = mkdir(home, name) {
+        if is_out_of_room(err) {
+            return None;
+        }
         warn_left_standing(
             dir,
             format_args!(
