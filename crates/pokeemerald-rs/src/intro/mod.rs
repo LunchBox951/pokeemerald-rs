@@ -352,7 +352,7 @@ impl IntroScene {
             self.ops.clear();
         }
         match event {
-            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
+            TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
                 for op in &mut self.ops {
                     op.shift_y(-dy);
@@ -375,12 +375,12 @@ impl IntroScene {
         // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
         // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
         if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
+            self.push_clipped(WindowOp::ClearSpan(span));
         }
         // A keypad icon also ends its frame as `TickEvent::Idle`
         // (`Printer::keypad_icon`), so it never competes with a glyph either.
         if let Some(icon) = self.printer.keypad_icon() {
-            self.ops.push(WindowOp::KeypadIcon(icon));
+            self.push_clipped(WindowOp::KeypadIcon(icon));
         }
 
         if self.finished {
@@ -388,6 +388,12 @@ impl IntroScene {
         } else {
             IntroStatus::Continue
         }
+    }
+
+    /// Retains `op` with the rows below the window removed, once, at reveal
+    /// time; see [`WindowOp::clipped_below`].
+    fn push_clipped(&mut self, op: WindowOp) {
+        textbox::push_clipped(&mut self.ops, op, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1);
     }
 
     fn advance_page(&mut self) {

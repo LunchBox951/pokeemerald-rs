@@ -242,9 +242,9 @@ fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reaso
     // Every distinct id in `SIGHT_TRAINERS` that does not fight, with the
     // refusal its real extracted party currently produces. The move ids
     // are the first move in that trainer's own level-up-derived moveset
-    // that some screen refuses. Miguel's Skitty is refused for its selected
-    // Cute Charm before the ability screen reaches its Attract, which the
-    // later screens would refuse in turn.
+    // that some screen refuses. Miguel's Skitty no longer stops at its
+    // selected Cute Charm, which the battle crate now models; it stops at Sing
+    // instead, ahead of the later screens.
     let expected = [
         (
             "Amy & Liv",
@@ -254,9 +254,7 @@ fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reaso
         (
             "Miguel",
             TrainerId(293),
-            Battle(BattleError::UnportedAbilityInteraction(
-                assets::AbilityId::CUTE_CHARM,
-            )),
+            Battle(BattleError::NonDamagingMove(assets::MoveId::SING)),
         ),
     ];
 

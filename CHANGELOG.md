@@ -4,6 +4,30 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.119.0] - 2026-11-09
+
+- A traded Pokémon above the level your badges allow can now disobey in battle as in the original game: it may loaf around, use one of its other moves instead, begin to nap and fall asleep, or hurt itself. Obedience for a traded Mew or Deoxys is still being prepared.
+
+## [0.0.118.0] - 2026-11-09
+
+- General improvements in preparation for tossing items from the Bag, with the how-many prompt and confirmation from the original game.
+
+## [0.0.117.0] - 2026-11-08
+
+- People and objects that look around now turn on the spot to a random direction after a random pause, as in the original game, without ever walking: this covers the items and dolls in both upstairs bedrooms, and the people and items on Route 101 and Route 103, where the woman faces only down or right. A trainer of that kind who sees you run close by turns toward you early.
+
+## [0.0.116.0] - 2026-11-07
+
+- The first battle on Route 101 now shows its battle text and waits on it. The wild Pokémon's appearance, each move, its result, and the experience award print in the battle message box at your text speed, and a turn or the end of the battle begins only once its message has been read and the original game's short pause after it has passed. Press A or B to move on at each prompt. The rest of the battle screen is still being prepared, and battles other than this first one do not show their messages yet.
+
+## [0.0.115.0] - 2026-11-07
+
+- Townsfolk standing in tall grass, such as the boy on Route 101, now show the grass around their feet as the player does.
+
+## [0.0.114.0] - 2026-11-07
+
+- Cute Charm now works in battle: a Pokémon with it has a one-in-three chance of making an opposite-gender attacker fall in love when that attacker hits it with a contact move and both survive the hit, and the infatuated Pokémon can be immobilized by love just as after Attract. It does not take hold on Pokémon with Oblivious, of the same gender, without a gender, or already in love. Miguel on Route 103 is still refused until his other moves are modelled.
+
 ## [0.0.113.0] - 2026-11-06
 
 - Attract can now be used in battle: it infatuates an opposite-gender target that is not already in love and lacks Oblivious, and an infatuated Pokémon has a 50% chance each turn of being immobilized by love, which also ends a Rollout series, as in the original game. Switching out or fainting clears it. Miguel on Route 103 is still refused until Cute Charm is modelled.
@@ -518,7 +542,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...dev
+[0.0.119.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/47e3a59acdd5f80298672b76a54e129f0c92363e...dev
+[0.0.118.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/560f5c7137223b8e22ee1181afafcb47cd4b6312...47e3a59acdd5f80298672b76a54e129f0c92363e
+[0.0.117.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/3196e94c2fec319d17c718653ac20fbe9fe8f289...560f5c7137223b8e22ee1181afafcb47cd4b6312
+[0.0.116.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/0d50ced5328e0baead9be1f45e4884cff1a95a9f...3196e94c2fec319d17c718653ac20fbe9fe8f289
+[0.0.115.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2bbf966619c27568282a1b7f3ea6042e21cdb9d4...0d50ced5328e0baead9be1f45e4884cff1a95a9f
+[0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...2bbf966619c27568282a1b7f3ea6042e21cdb9d4
+[0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...e9411c4552d44eaa0ba4de2e094a9a698a4f1a70
 [0.0.112.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/94c3b60a64c924ff98afbd4a1e74482c989d1526...8cc509c0cc722ad0084591f37301d43c7d047498
 [0.0.111.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f3a34deb7b9cde4f76a9f4f2f7d6246e70efaacf...94c3b60a64c924ff98afbd4a1e74482c989d1526
 [0.0.110.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/135a76b5a52a6ec5c09e647165efef13231591f5...f3a34deb7b9cde4f76a9f4f2f7d6246e70efaacf

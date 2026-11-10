@@ -273,7 +273,8 @@ mod nr32_attenuation_tests {
     #[test]
     fn full_volume_keeps_the_centered_nibble() {
         assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
-        assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
+        // Levels past the table read `gClockTable`, which mutes (`cgb_voice.rs`).
+        assert_eq!(render(0, 31), 0);
     }
 }
 
