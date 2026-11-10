@@ -107,19 +107,13 @@ fn is_fresh_quarantine(quarantine: &mut Dir) -> rustix::io::Result<bool> {
 /// permission bits, as a quarantine just made with `0700` is under any
 /// umask.
 ///
-/// A umask such as `0444` or `0777` makes `mkdirat(0700)` leave a quarantine
-/// its owner cannot read, which the read-mode open refuses with `EACCES`
-/// before [`is_fresh_quarantine`] could `fchmod` it. The read-mode open is
-/// still tried first, since it holds one descriptor and so succeeds when
-/// only one is free. On `EACCES` (Linux and Android only) the name is pinned
-/// with `O_PATH`, which needs no mode bit; the pin's own `fstat` checks the
-/// shape, and the owner's access is restored through the pin, so a swap of
-/// the name since cannot redirect the change. The readable handle is then
-/// reopened from the pin, so it is the same inode, and the pin is dropped.
-/// Emptiness is still [`is_fresh_quarantine`]'s, which needs the listing; a
-/// swapped-in private directory of this user's that is not empty gets its
-/// owner bits restored here and is then refused there. Without `O_PATH`
-/// there is no such pin, and the `EACCES` stands.
+/// A umask such as `0444` or `0777` leaves a quarantine its owner cannot
+/// read, which the read-mode open refuses with `EACCES` before
+/// [`is_fresh_quarantine`] could `fchmod` it. That open is still tried first
+/// because it needs one descriptor, not two. On Linux and Android the
+/// `EACCES` falls back to an `O_PATH` pin, and the repair goes through the pin
+/// so a later swap of the name cannot redirect it. Elsewhere the `EACCES`
+/// stands. Emptiness is left to [`is_fresh_quarantine`].
 fn open_listable(home: BorrowedFd<'_>, name: &str) -> rustix::io::Result<Option<OwnedFd>> {
     let read_mode = rustix::fs::openat(
         home,
