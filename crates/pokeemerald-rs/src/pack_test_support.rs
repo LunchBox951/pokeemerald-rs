@@ -145,6 +145,20 @@ pub(crate) fn write_scratch_exclusive(
     file
 }
 
+/// `path` with a per-call sequence number before its extension, so a fixture
+/// that claims a scratch pack more than once on one thread gets a free name each
+/// time even where an earlier guard could not verify (and so left) its file.
+pub(crate) fn unique_scratch_path(path: &std::path::Path) -> std::path::PathBuf {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let name = match path.extension() {
+        Some(extension) => format!("{stem}-{sequence}.{}", extension.to_string_lossy()),
+        None => format!("{stem}-{sequence}"),
+    };
+    path.with_file_name(name)
+}
+
 /// A scratch pack a fixture created, owned through cleanup: it keeps the
 /// creating handle, so the entry it made stays identifiable by `(dev, ino)`
 /// for as long as the guard lives. Dropping it unlinks the pathname only
@@ -160,6 +174,8 @@ pub(crate) struct ScratchPack {
     /// Held open so the created inode cannot be recycled for a replacement
     /// while the guard compares identities.
     file: std::fs::File,
+    /// Set by [`ScratchPack::with_identity_unavailable`].
+    identity_unavailable: bool,
 }
 
 /// What [`ScratchPack::remove_if_owned`] did to the entry at the pathname.
@@ -184,6 +200,7 @@ impl ScratchPack {
         Self {
             path: path.to_path_buf(),
             file,
+            identity_unavailable: false,
         }
     }
 
@@ -199,60 +216,72 @@ impl ScratchPack {
     /// A `'static` copy of the pathname, leaked once per call and reclaimed
     /// only when the test process exits, for `PackSource::Test`.
     pub(crate) fn leaked_path(&self) -> &'static std::path::Path {
-        Box::leak(self.path.clone().into_boxed_path())
+        Box::leak(self.path().to_path_buf().into_boxed_path())
     }
 
     /// Unlinks the pathname only if it still names the file this guard
-    /// created. `symlink_metadata` does not follow a link, so a symlink
-    /// planted at the name never matches the created file. std has no
-    /// unlink-by-handle, so a swap between the check and the unlink remains
-    /// possible; this closes the window the fixture's run opens, not that one.
+    /// created. Unix compares `(dev, ino)` of the path (`symlink_metadata`
+    /// does not follow a link, so a planted symlink never matches) against the
+    /// creating handle; std has no unlink-by-handle, so a swap between that
+    /// check and the unlink remains possible, and this closes the window the
+    /// fixture's run opens, not that one. Windows reads the handle's
+    /// [`win_fs::WindowsFileIdentity`] and deletes through a handle opened on
+    /// the path only if that handle has the same identity. Elsewhere there is
+    /// no identity to compare, so nothing is unlinked.
     pub(crate) fn remove_if_owned(&self) -> ScratchRemoval {
-        let current = match std::fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return ScratchRemoval::Gone;
-            }
-            Err(_) => return ScratchRemoval::Replaced,
-        };
-        let created = self.file.metadata().ok().and_then(|m| file_identity(&m));
-        let Some(created) = created else {
+        if self.identity_unavailable {
             return ScratchRemoval::Unverifiable;
-        };
-        if file_identity(&current) != Some(created) {
-            return ScratchRemoval::Replaced;
         }
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => ScratchRemoval::Removed,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
-            Err(_) => ScratchRemoval::Replaced,
-        }
-    }
-}
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
 
-/// What distinguishes the file `metadata` describes from a later file at the
-/// same pathname: the `(dev, ino)` pair on Unix. Elsewhere `None`, so the
-/// guard fails closed and leaves the entry in place: Windows std exposes no
-/// file id on stable, and a creation time and length are not an identity (NTFS
-/// filename tunneling can give a file recreated at the same name the original's
-/// creation time).
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "non-Unix platforms have no identity to return"
-    )
-)]
-fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        Some((metadata.dev(), metadata.ino()))
+            let current = match std::fs::symlink_metadata(&self.path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return ScratchRemoval::Gone;
+                }
+                Err(_) => return ScratchRemoval::Replaced,
+            };
+            let Ok(created) = self.file.metadata() else {
+                return ScratchRemoval::Unverifiable;
+            };
+            if (current.dev(), current.ino()) != (created.dev(), created.ino()) {
+                return ScratchRemoval::Replaced;
+            }
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => ScratchRemoval::Removed,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
+                Err(_) => ScratchRemoval::Replaced,
+            }
+        }
+        #[cfg(windows)]
+        {
+            let Ok(identity) = win_fs::WindowsFileIdentity::of(&self.file) else {
+                return ScratchRemoval::Unverifiable;
+            };
+            match win_fs::remove_through_verified_handle(&self.path, identity) {
+                Ok(win_fs::VerifiedRemoval::NotOurs) => ScratchRemoval::Replaced,
+                Ok(win_fs::VerifiedRemoval::Unlinked | win_fs::VerifiedRemoval::Pending) => {
+                    ScratchRemoval::Removed
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => ScratchRemoval::Gone,
+                Err(_) => ScratchRemoval::Unverifiable,
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = &self.file;
+            ScratchRemoval::Unverifiable
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        None
+
+    /// Test seam: makes this guard behave as on a platform whose file identity
+    /// cannot be read, so it leaves its file in place when dropped.
+    #[cfg(test)]
+    pub(crate) fn with_identity_unavailable(mut self) -> Self {
+        self.identity_unavailable = true;
+        self
     }
 }
 
@@ -307,8 +336,6 @@ pub(crate) fn assert_scratch_pack_cleanup_spares_a_replacement(pack: ScratchPack
     );
 }
 
-/// Unix only: elsewhere the guard has no file identity and fails closed.
-#[cfg(unix)]
 #[test]
 fn a_scratch_pack_guard_unlinks_the_file_it_created_when_dropped() {
     let path = std::env::temp_dir().join(format!(
@@ -538,4 +565,27 @@ fn claim_scratch_exclusive_leaves_a_foreign_single_link_occupant_intact() {
         message.is_some_and(|m| m.contains(&*path.to_string_lossy())),
         "the claim must fail naming the occupied path, got {message:?}"
     );
+}
+
+/// Where a guard cannot read its file's identity it leaves the file rather
+/// than risk a replacement; a fixture that claims its path again must still
+/// get a free one, so the claim does not depend on the earlier cleanup.
+#[test]
+fn a_guard_without_a_file_identity_leaves_its_file_and_the_next_claim_still_succeeds() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-scratch-pack-unverifiable-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let pack = ScratchPack::write(&path, b"owned").with_identity_unavailable();
+    assert_eq!(pack.remove_if_owned(), ScratchRemoval::Unverifiable);
+    drop(pack);
+    assert!(path.is_file(), "an unverifiable file is left in place");
+
+    let next = unique_scratch_path(&path);
+    let again = ScratchPack::write(&next, b"owned again");
+    assert!(next.is_file());
+    drop(again);
+    let _ = std::fs::remove_file(&path);
+    assert!(!next.exists());
 }

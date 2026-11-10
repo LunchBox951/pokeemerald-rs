@@ -185,11 +185,12 @@ fn route101_phase_facing_a_forced_oldale_landing(
 ) -> (OverworldPhase, crate::pack_test_support::ScratchPack) {
     use crate::pack_source::PackSource;
 
-    let path = std::env::temp_dir().join(format!(
+    // One thread claims this fixture several times, so each claim gets its own name.
+    let path = crate::pack_test_support::unique_scratch_path(&std::env::temp_dir().join(format!(
         "pokeemerald-rs-forced-landing-{behavior}-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
-    ));
+    )));
     let sprites: Vec<&str> = OLDALE_SPRITES
         .iter()
         .chain(&ROUTE_101_SPRITES)
