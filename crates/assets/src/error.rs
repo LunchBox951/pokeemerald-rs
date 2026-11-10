@@ -43,6 +43,9 @@ pub enum AssetError {
     /// The contained index is outside the ordered TM/HM slot list.
     UnknownTmHmSlot(usize),
 
+    /// The contained index is outside the ordered move-tutor slot list.
+    UnknownTutorSlot(usize),
+
     /// The contained [`SpeciesId`](crate::species::SpeciesId) is valid but has
     /// no egg-move group.
     NoEggMoves(u16),
@@ -181,6 +184,7 @@ impl fmt::Display for AssetError {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
+            Self::UnknownTutorSlot(index) => write!(f, "unknown move-tutor slot index `{index}`"),
             Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),

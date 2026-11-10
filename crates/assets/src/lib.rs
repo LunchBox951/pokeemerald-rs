@@ -6,6 +6,7 @@
 //! the species base-stats table (see [`species`]), the item table (see
 //! [`items`]), the per-species evolution table (see [`evolution`]), the
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
+//! move-tutor learnsets (see [`tutor_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the experience
@@ -65,6 +66,7 @@ pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod trainers;
+pub mod tutor_learnsets;
 pub mod type_chart;
 pub mod wild_encounters;
 
@@ -151,6 +153,7 @@ pub use trainers::{
     TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,
     TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
 };
+pub use tutor_learnsets::{TutorLearnsets, TutorSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
 pub use wild_encounters::{
     FishingEncounters, FishingRod, LandEncounters, MapId, RockSmashEncounters, WaterEncounters,
