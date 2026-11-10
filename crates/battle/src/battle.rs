@@ -1991,7 +1991,7 @@ impl Battle {
         let Some(obedience) = self.player_obedience.filter(|_| player_is_attacker) else {
             return Ok(Admission::Proceed);
         };
-        match crate::obedience::check(&obedience, &self.player, slot, rng)? {
+        match crate::obedience::check(&obedience, &self.player, slot, rng) {
             crate::obedience::Obedience::Obeys => Ok(Admission::Proceed),
             crate::obedience::Obedience::Loafs(message) => {
                 events.push(BattleEvent::Disobeyed { message });

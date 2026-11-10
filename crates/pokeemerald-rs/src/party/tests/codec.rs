@@ -766,3 +766,35 @@ fn healing_a_record_saved_above_the_maximum_restores_the_maximum() {
     decoded.heal(&dex).unwrap();
     assert_eq!(decoded.moves()[0].pp, max);
 }
+
+/// `PokemonSubstruct3::modernFatefulEncounter` is bit 31 of the ribbon word at
+/// misc offset 8 (`pokeemerald/include/pokemon.h:150-175`).
+#[test]
+fn the_modern_fateful_encounter_bit_round_trips_through_the_record() {
+    let dex = Dex::new();
+    let plain = treecko_fixture();
+    assert!(!plain.is_modern_fateful_encounter());
+    let plain_record = to_save_pokemon(&dex, &plain);
+    let plain_misc = plain_record.box_data.substructures().unwrap().misc;
+    assert_eq!(plain_misc[8..12], [0; 4], "no ribbon, no fateful bit");
+    assert!(!from_save_pokemon(&dex, &plain_record)
+        .unwrap()
+        .is_modern_fateful_encounter());
+
+    let fateful = treecko_fixture().with_modern_fateful_encounter(true);
+    let record = to_save_pokemon(&dex, &fateful);
+    let misc = record.box_data.substructures().unwrap().misc;
+    assert_eq!(misc[8..12], 0x8000_0000u32.to_le_bytes());
+    let loaded = from_save_pokemon(&dex, &record).unwrap();
+    assert!(loaded.is_modern_fateful_encounter());
+    assert_eq!(loaded, fateful);
+
+    // A hand-set bit on an otherwise ordinary record is read too.
+    let mut substructures = plain_record.box_data.substructures().unwrap();
+    substructures.misc[8..12].copy_from_slice(&0x8000_0000u32.to_le_bytes());
+    let mut hand_set = plain_record;
+    hand_set.box_data.set_substructures(&substructures);
+    assert!(from_save_pokemon(&dex, &hand_set)
+        .unwrap()
+        .is_modern_fateful_encounter());
+}

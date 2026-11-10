@@ -381,6 +381,14 @@ pub struct BattlePokemon {
     /// save boundary, which alone sees the owner's name and id; battle only
     /// reads it, for `Cmd_getexp`'s traded-recipient bonus.
     traded_recipient: bool,
+    /// `PokemonSubstruct3::modernFatefulEncounter`
+    /// (`pokeemerald/include/pokemon.h:175`): set on every legitimately
+    /// obtained Mew or Deoxys (`CreateEventMon`, `src/pokemon.c:2633-2639`).
+    /// Only the obedience gate reads it, for those two species
+    /// (`IsBattlerModernFatefulEncounter`, `src/battle_util.c:3913-3921`).
+    /// `false` until [`BattlePokemon::with_modern_fateful_encounter`], as
+    /// `CreateMon` leaves it.
+    modern_fateful_encounter: bool,
     /// The held item, [`ItemId::NONE`] when empty. Part of the mon's identity,
     /// so it survives fainting and write-back; which items a battle accepts is
     /// decided by [`crate::battle::held_item`].
@@ -429,6 +437,7 @@ impl PartialEq for BattlePokemon {
             original_trainer_id,
             original_trainer_name: _,
             traded_recipient,
+            modern_fateful_encounter,
             held_item,
             types,
             base_stats,
@@ -453,6 +462,7 @@ impl PartialEq for BattlePokemon {
             && *ability_slot == other.ability_slot
             && *original_trainer_id == other.original_trainer_id
             && *traded_recipient == other.traded_recipient
+            && *modern_fateful_encounter == other.modern_fateful_encounter
             && *held_item == other.held_item
             && *types == other.types
             && *base_stats == other.base_stats
@@ -565,6 +575,7 @@ impl BattlePokemon {
             original_trainer_id: 0,
             original_trainer_name: None,
             traded_recipient: false,
+            modern_fateful_encounter: false,
             held_item: ItemId::NONE,
             types: base.types,
             base_stats: *base,
@@ -727,6 +738,22 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_traded_recipient(mut self, traded_recipient: bool) -> Self {
         self.traded_recipient = traded_recipient;
+        self
+    }
+
+    /// Whether the record carries the modern fateful-encounter bit
+    /// (`MON_DATA_MODERN_FATEFUL_ENCOUNTER`). `false` until
+    /// [`Self::with_modern_fateful_encounter`] says otherwise.
+    #[must_use]
+    pub const fn is_modern_fateful_encounter(&self) -> bool {
+        self.modern_fateful_encounter
+    }
+
+    /// Record the fateful-encounter bit at the boundary that restores this
+    /// Pokémon from a save record.
+    #[must_use]
+    pub const fn with_modern_fateful_encounter(mut self, modern_fateful_encounter: bool) -> Self {
+        self.modern_fateful_encounter = modern_fateful_encounter;
         self
     }
 
