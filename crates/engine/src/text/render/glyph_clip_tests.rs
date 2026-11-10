@@ -117,11 +117,7 @@ fn each_fonts_glyph_keeps_exactly_its_width_by_height_rectangle() {
 #[test]
 fn small_narrow_row_twelve_is_cut_while_row_eleven_stays() {
     let pixels = sheet_with_cell(usize::from(super::tests::ENCODED_A), |column, row| {
-        if column == 0 && (row == 11 || row == 12) {
-            1
-        } else {
-            0
-        }
+        u8::from(column == 0 && (row == 11 || row == 12))
     });
     let revealed = first_glyph(FontId::SmallNarrow, &pixels, super::tests::ENCODED_A);
     assert_eq!(revealed.glyph.pixels[11 * SIDE], 1);
