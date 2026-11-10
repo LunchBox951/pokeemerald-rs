@@ -266,6 +266,11 @@ pub(super) fn drive_start_menu(
                     std::cmp::Ordering::Less => pressed(Buttons::DOWN),
                 }
             }
+            // The cursor is on whichever item the menu last held, so walk it
+            // to SAVE before choosing.
+            None if !menu.saving() && menu.selected() != StartMenuItem::Save => {
+                pressed(Buttons::DOWN)
+            }
             // No prompt waiting: A advances whatever message is printing,
             // picks SAVE off the item list, and dismisses the result
             // message once the write is done.
@@ -285,11 +290,6 @@ pub(super) fn save_from_the_start_menu(
     save_slot: &mut SaveSlot,
 ) -> Vec<u8> {
     phase.open_synthetic_start_menu();
-    assert_eq!(
-        phase.start_menu().unwrap().selected(),
-        StartMenuItem::Save,
-        "SAVE is the first item, so a fresh menu opens on it"
-    );
     let prompts = drive_start_menu(phase, save_slot, &[]);
     assert!(
         phase.start_menu().is_none(),

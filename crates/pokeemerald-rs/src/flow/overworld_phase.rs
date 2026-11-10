@@ -329,10 +329,12 @@ pub(crate) struct OverworldPhase {
     start_menu: Option<StartMenu>,
     /// `sStartMenuCursorPos` (`start_menu.c:83`): the item the menu opens
     /// on next, retained across close/reopen for the session's life --
-    /// neither upstream close path resets it. Zero (`SAVE`, upstream's
-    /// first `sCurrentStartMenuActions` entry) at construction, matching a
-    /// fresh boot's zeroed EWRAM.
+    /// neither upstream close path resets it. Zero (the port's first item,
+    /// BAG) at construction, matching a fresh boot's zeroed EWRAM.
     start_menu_cursor: usize,
+    /// The field bag: its retained positions and the fade sequence that
+    /// carries the open start menu to the bag screen and back.
+    field_bag: start_menu::FieldBag,
     /// Test-only: what [`Self::build_start_menu`] does instead of
     /// [`crate::start_menu::open`]'s real pack load, so an end-to-end
     /// [`Self::step`] test can drive a menu that genuinely opens, or one
@@ -669,6 +671,7 @@ impl OverworldPhase {
             new_game_session: false,
             start_menu: None,
             start_menu_cursor: 0,
+            field_bag: start_menu::FieldBag::default(),
             #[cfg(test)]
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
@@ -828,6 +831,7 @@ impl OverworldPhase {
             new_game_session: true,
             start_menu: None,
             start_menu_cursor: 0,
+            field_bag: start_menu::FieldBag::default(),
             #[cfg(test)]
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]

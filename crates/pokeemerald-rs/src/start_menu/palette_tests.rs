@@ -9,6 +9,9 @@ use super::{
 use crate::game_save::SaveFileStatus;
 use platform::Buttons;
 
+/// The cursor row of SAVE, the menu's second item.
+const SAVE_CURSOR: usize = 1;
+
 /// The content fill and glyph colours must come from the message-box
 /// palette, never the selected standard frame's own palette, which only
 /// borders the window (`pokeemerald/src/text_window.c:93-112`). The
@@ -134,7 +137,7 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
     let chrome =
         StartMenuChrome::from_pack(&pack, CHOSEN_FRAME).expect("the fixture pack has frame 5");
     crate::pack_test_support::assert_carries_every_font(&chrome.label_printer(Vec::new()));
-    let mut menu = StartMenu::assemble(chrome, 0);
+    let mut menu = StartMenu::assemble(chrome, SAVE_CURSOR);
 
     let frame_5_red = Bgr555::from_channels(31, 0, 0).to_rgb888();
 
@@ -211,13 +214,13 @@ mod staged {
         let path = synthetic_pack_path(label);
         let _guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
         let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
-        let build = || {
+        let build = |cursor| {
             let chrome = StartMenuChrome::from_pack(&pack, CHOSEN_FRAME)
                 .expect("the fixture pack has frame 5");
-            StartMenu::assemble(chrome, 0)
+            StartMenu::assemble(chrome, cursor)
         };
-        let items = build();
-        let mut prompt = build();
+        let items = build(0);
+        let mut prompt = build(SAVE_CURSOR);
         let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
         for _ in 0..=FRAME_BUDGET {
             if prompt.yes_no_cursor().is_some() {
