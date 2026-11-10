@@ -395,6 +395,8 @@ impl Consumer {
         // lowers `occupied`, so these slots stay queued until the
         // `fetch_sub` below frees them.
         let claimed = self.shared.occupied.load(Ordering::Acquire);
+        #[cfg(test)]
+        tests::before_discard_claim();
         let pending = self
             .shared
             .pending_discard
@@ -405,14 +407,12 @@ impl Consumer {
             NO_DISCARD => return,
             DISCARD_ALL => claimed,
             mark => {
-                // Narrowed before the claim: the queued samples pushed
-                // before the mark. Both counts are fixed from this side,
-                // the mark by the producer's `stop` and `consumed` by this
-                // consumer, so a push landing meanwhile changes neither;
-                // `claimed` bounds it only against a mark past the queue.
+                // The mark may postdate `claimed`, so count the queue afresh:
+                // `mark - consumed` bounds it, and only this side lowers it.
+                let queued = self.shared.occupied.load(Ordering::Acquire);
                 #[cfg(test)]
                 tests::between_bounded_discard_loads();
-                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), claimed)
+                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), queued)
             }
         };
         if queued == 0 {

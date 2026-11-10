@@ -538,3 +538,43 @@ fn a_discard_mark_the_consumer_already_passed_keeps_the_whole_queue() {
         "the same mark at a first read discards nothing either"
     );
 }
+
+thread_local! {
+    /// Run inside the next first-read discard, after its queue snapshot and
+    /// before it claims the pending state, as a `stop` racing a descheduled
+    /// callback would.
+    static BEFORE_DISCARD_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn before_discard_claim() {
+    if let Some(hook) = BEFORE_DISCARD_CLAIM.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[test]
+fn a_stop_between_the_discard_snapshot_and_claim_drops_all_history_before_its_mark() {
+    let (producer, mut consumer) = ring_buffer(8);
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    consumer.discard_queued_at_first_read();
+    let racer = producer.clone();
+    BEFORE_DISCARD_CLAIM.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            // More stale history lands after the snapshot, the stop marks
+            // after it, and the stopped stream's prefill queues behind.
+            assert_eq!(racer.push(&[0.25; 2]), 2);
+            racer.keep_pushed_from_at_first_read(racer.pushed());
+            assert_eq!(racer.push(&[0.5; 2]), 2);
+        }));
+    });
+
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(
+        out, [0.5; 2],
+        "every sample pushed before the stop mark is dropped, those after it play"
+    );
+    assert_eq!(consumer.available(), 0);
+    assert_eq!(consumer.underruns(), 0, "the discard is not an underrun");
+}
