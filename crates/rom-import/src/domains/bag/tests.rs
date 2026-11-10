@@ -85,7 +85,7 @@ fn every_bag_root_is_emitted() {
     let roots = roots(BagRoots {
         images: IMAGES,
         palettes: PALETTES,
-        raws: RAWS,
+        tilemaps: RAWS,
     });
     let entries = written(&roots).expect("every root is well-formed");
     let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
@@ -177,7 +177,7 @@ fn a_malformed_compressed_root_is_a_typed_error() {
         ..RAW
     }];
     let roots = roots(BagRoots {
-        raws: RAWS,
+        tilemaps: RAWS,
         ..BagRoots::NONE
     });
     let err = written(&roots).unwrap_err();

@@ -23,14 +23,8 @@ use crate::roots::Roots;
 ///
 /// Any [`ImportError`] an image or palette read raises.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    let reader = rom.reader();
-    for root in roots.interface.images {
-        writer.push(super::image(&reader, root)?);
-    }
-    for root in roots.interface.palettes {
-        writer.push(super::palette(&reader, root)?);
-    }
-    Ok(())
+    let family = &roots.interface;
+    super::write_plain(rom, family.images, family.palettes, &[], writer)
 }
 
 #[cfg(test)]

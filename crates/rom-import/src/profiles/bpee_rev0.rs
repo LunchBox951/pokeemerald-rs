@@ -2957,7 +2957,7 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {
             PaletteRoot { id: "bag/palette/scroll_indicator", addr: GbaPtr::at(0x0861_42A8), color_count: 16, encoding: Encoding::Raw },
             PaletteRoot { id: "bag/palette/swap_line", addr: GbaPtr::at(0x08D9_AFAC), color_count: 16, encoding: Encoding::Lz77 },
         ],
-        raws: &[
+        tilemaps: &[
             BlobRoot { id: "bag/raw/menu", addr: GbaPtr::at(0x08D9_A88C), encoding: Encoding::Lz77, len: 2048 },
         ],
     },

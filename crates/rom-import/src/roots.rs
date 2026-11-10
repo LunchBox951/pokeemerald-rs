@@ -464,36 +464,48 @@ pub struct BattleAnimationRoots {
     pub selectors: &'static [u16],
 }
 
+/// A plain asset family: images, palettes and opaque blobs, each a shared
+/// codec's root.
+///
+/// The shape [`BagRoots`], [`StarterChooserRoots`], [`OpeningSceneRoots`],
+/// [`EvolutionSceneRoots`] and [`NamingScreenRoots`] all take, written by one
+/// staged helper (`domains::write_plain`) so a failing root leaves the pack
+/// writer untouched in every one of them. Which family a value belongs to is
+/// the [`Roots`] field it sits in, not its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlainRoots {
+    /// Every image entry of the family.
+    pub images: &'static [ImageRoot],
+    /// Every palette entry of the family.
+    pub palettes: &'static [PaletteRoot],
+    /// Every raw blob entry of the family: its tilemaps and other opaque
+    /// runs, under the family's `raw/` pack ids.
+    pub tilemaps: &'static [BlobRoot],
+}
+
+impl PlainRoots {
+    /// No roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
 /// The ordinary-bag assets (`graphics/bag` and the item icons).
 ///
 /// Holds the pack ids the checkout extractor emits under `bag/`: the fixed
 /// bag entries plus the deduplicated item-icon images and palettes. The
 /// `gItemIconTable` row-to-icon mapping is not repeated here; it is the
 /// checkout's typed `BagAssets` data, not a ROM root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BagRoots {
-    /// Every `bag/image/*` and `bag/item-icon/image/*` entry.
-    pub images: &'static [ImageRoot],
-    /// Every `bag/palette/*` and `bag/item-icon/palette/*` entry.
-    pub palettes: &'static [PaletteRoot],
-    /// Every `bag/raw/*` entry.
-    pub raws: &'static [BlobRoot],
-}
+pub type BagRoots = PlainRoots;
 
 /// The starter chooser's graphics (`graphics/starter_choose`).
 ///
 /// The three sheets' images and palettes plus the two Birch background
 /// tilemaps, under the `starter-chooser/` pack ids the checkout extractor
 /// emits. The starters' shared battler art is the battler family's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StarterChooserRoots {
-    /// Every `starter-chooser/image/*` entry.
-    pub images: &'static [ImageRoot],
-    /// Every `starter-chooser/palette/*` entry.
-    pub palettes: &'static [PaletteRoot],
-    /// Every `starter-chooser/raw/*` entry.
-    pub tilemaps: &'static [BlobRoot],
-}
+pub type StarterChooserRoots = PlainRoots;
 
 /// Birch's speech scene and the wall clock (`graphics/birch_speech`,
 /// `graphics/wallclock`, and Lotad's front picture and normal palette).
@@ -501,15 +513,7 @@ pub struct StarterChooserRoots {
 /// The sheets, palettes, and tilemaps under the `opening-scene/` pack ids the
 /// checkout extractor emits. Lotad's normal palette is stored compressed;
 /// every other palette is a raw `.gbapal` run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OpeningSceneRoots {
-    /// Every `opening-scene/image/*` entry.
-    pub images: &'static [ImageRoot],
-    /// Every `opening-scene/palette/*` entry.
-    pub palettes: &'static [PaletteRoot],
-    /// Every `opening-scene/raw/*` tilemap.
-    pub tilemaps: &'static [BlobRoot],
-}
+pub type OpeningSceneRoots = PlainRoots;
 
 /// The evolution scene's animated background and sparkle sprite
 /// (`graphics/evolution_scene`, `graphics/misc/evo_sparkle.png`).
@@ -517,15 +521,7 @@ pub struct OpeningSceneRoots {
 /// The two images, three palettes, and two tilemaps under the
 /// `evolution-scene/` pack ids the checkout extractor emits. The images and
 /// tilemaps are stored compressed; the palettes are raw `.gbapal` runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EvolutionSceneRoots {
-    /// Every `evolution-scene/image/*` entry.
-    pub images: &'static [ImageRoot],
-    /// Every `evolution-scene/palette/*` entry.
-    pub palettes: &'static [PaletteRoot],
-    /// Every `evolution-scene/raw/*` tilemap.
-    pub tilemaps: &'static [BlobRoot],
-}
+pub type EvolutionSceneRoots = PlainRoots;
 
 /// The battle textbox, menu text, and singles health-box graphics
 /// (`graphics/battle_interface`).
@@ -577,15 +573,7 @@ pub struct BattleInterfaceRoots {
 /// and the tilemaps are LZ77 streams; the other sheets and the palettes are
 /// raw. The three cursor sheets are stored as their first five tiles, which
 /// the pack publishes as an 8x40 strip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NamingScreenRoots {
-    /// Every `naming-screen/image/*` entry.
-    pub images: &'static [ImageRoot],
-    /// Every `naming-screen/palette/*` entry.
-    pub palettes: &'static [PaletteRoot],
-    /// Every `naming-screen/raw/*` tilemap.
-    pub tilemaps: &'static [BlobRoot],
-}
+pub type NamingScreenRoots = PlainRoots;
 
 /// The party menu's graphics (`graphics/party_menu`).
 ///
@@ -914,42 +902,6 @@ impl BattleAnimationRoots {
     };
 }
 
-impl BagRoots {
-    /// No bag roots recorded: the domain writes nothing.
-    pub const NONE: Self = Self {
-        images: &[],
-        palettes: &[],
-        raws: &[],
-    };
-}
-
-impl StarterChooserRoots {
-    /// No starter-chooser roots recorded: the domain writes nothing.
-    pub const NONE: Self = Self {
-        images: &[],
-        palettes: &[],
-        tilemaps: &[],
-    };
-}
-
-impl OpeningSceneRoots {
-    /// No opening-scene roots recorded: the domain writes nothing.
-    pub const NONE: Self = Self {
-        images: &[],
-        palettes: &[],
-        tilemaps: &[],
-    };
-}
-
-impl EvolutionSceneRoots {
-    /// No evolution-scene roots recorded: the domain writes nothing.
-    pub const NONE: Self = Self {
-        images: &[],
-        palettes: &[],
-        tilemaps: &[],
-    };
-}
-
 impl BattleInterfaceRoots {
     /// No battle-interface roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
@@ -958,15 +910,6 @@ impl BattleInterfaceRoots {
         tilemaps: &[],
         healthbox_elements: &[],
         battle_bar: None,
-    };
-}
-
-impl NamingScreenRoots {
-    /// No naming-screen roots recorded: the domain writes nothing.
-    pub const NONE: Self = Self {
-        images: &[],
-        palettes: &[],
-        tilemaps: &[],
     };
 }
 

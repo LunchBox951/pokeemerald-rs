@@ -11,7 +11,7 @@
 
 use pack_format::{EntryKind, PackEntry, PackWriter};
 
-use super::{blob, check_pointer, image, len_usize, palette, DOMAINS};
+use super::{blob, check_pointer, image, len_usize, palette, title, DOMAINS};
 use crate::error::{ImportError, Lz77Fault};
 use crate::fixture::RomFixture;
 use crate::reader::{GbaPtr, RomReader, ROM_BASE};
@@ -550,4 +550,50 @@ fn the_domain_list_writes_every_root_it_is_given() {
             "title/raw/test",
         ]
     );
+}
+
+#[test]
+fn a_late_failing_title_root_queues_nothing() {
+    static IMAGES: &[ImageRoot] = &[ImageRoot {
+        id: "title/image/test",
+        addr: at(TILES_OFF),
+        encoding: Encoding::Lz77,
+        rom_bit_depth: 4,
+        pack_bit_depth: 4,
+        width: 8,
+        height: 8,
+        metatile_width: 1,
+        metatile_height: 1,
+        tile_count: 1,
+    }];
+    // The images and tilemaps read cleanly; the last palette runs off the ROM.
+    static TILEMAPS: &[BlobRoot] = &[BlobRoot {
+        id: "title/raw/test",
+        addr: at(TILEMAP_OFF),
+        encoding: Encoding::Lz77,
+        len: 8,
+    }];
+    static PALETTES: &[PaletteRoot] = &[PaletteRoot {
+        id: "title/palette/late",
+        addr: at(ROM_SIZE_U32 - 2),
+        encoding: Encoding::Raw,
+        color_count: 2,
+    }];
+    let roots = Roots {
+        title_screen: TitleScreenRoots {
+            images: IMAGES,
+            tilemaps: TILEMAPS,
+            palettes: PALETTES,
+            bg_palettes: at(PALETTE_OFF),
+        },
+        ..Roots::NONE
+    };
+
+    let mut writer = PackWriter::new();
+    let err = title::write(&fixture_rom(), &roots, &mut writer).unwrap_err();
+    assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
+    let bytes = writer.finish().expect("a pack");
+    assert!(pack_format::parse_directory(&bytes)
+        .expect("a valid pack")
+        .is_empty());
 }
