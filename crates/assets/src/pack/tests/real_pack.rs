@@ -625,6 +625,12 @@ fn real_pack_party_menu_has_every_record_in_its_upstream_shape() {
         (32, 64)
     );
     assert_eq!(menu.poke_ball.palette.color(0), Some(0x6605));
+    // `pokeball_small.png` is 24 tiles, 16x96, and draws with the ball palette.
+    let small = menu.poke_ball_small;
+    assert_eq!((small.width, small.height, small.bit_depth), (16, 96, 4));
+    assert_eq!(small.pixels.len(), 16 * 96);
+    assert!(small.pixels.iter().all(|&pixel| pixel < 16));
+    assert!(small.pixels.iter().any(|&pixel| pixel != 0));
     assert_eq!(
         (menu.held_item.image.width, menu.held_item.image.height),
         (8, 16)

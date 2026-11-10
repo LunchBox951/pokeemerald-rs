@@ -17155,7 +17155,10 @@
           "status": "ported"
         },
         "pokeball_small.png": {
-          "status": "pending"
+          "reason": "src/graphics.c:1116 builds pokeball_small.png as 4bpp LZ77 graphics (gPartyMenuPokeballSmall_Gfx, all 24 tiles, 0x300 bytes); the `//unused` comment there is wrong: sSpriteSheet_MenuPokeballSmall (src/data/party_menu.h:981-984) loads it (src/party_menu.c:4180) and CreateSmallPokeballButtonSprite (src/party_menu.c:4147-4150) draws the Confirm and Cancel ball sprites from it when chooseHalf is set (src/party_menu.c:1108-1110). Its sprite template uses the Poké Ball palette tag (src/data/party_menu.h:990), so the extractor requires its embedded PLTE to equal pokeball.png's and publishes only the 16x96 raster as party-menu/image/pokeball_small, with no palette record of its own (colour it with party-menu/palette/pokeball). The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/party_menu.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
         },
         "slot_main.bin": {
           "reason": "src/data/party_menu.h:565-569 includes slot_main.bin as raw u8 tile indices (INCBIN_U8, sSlotTilemap_*) on a 10x7 (main) or 18x3 (wide) grid; the extractor publishes the file's bytes unchanged as party-menu/raw/slot_main and AssetPack::party_menu_slot_tilemap checks its grid length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/party_menu.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
@@ -32231,7 +32234,10 @@
           "status": "stubbed"
         },
         "gPartyMenuPokeballSmall_Gfx": {
-          "status": "pending"
+          "reason": "src/graphics.c:1116 builds pokeball_small.png as 4bpp LZ77 graphics (gPartyMenuPokeballSmall_Gfx, all 24 tiles, 0x300 bytes); the `//unused` comment there is wrong: sSpriteSheet_MenuPokeballSmall (src/data/party_menu.h:981-984) loads it (src/party_menu.c:4180) and CreateSmallPokeballButtonSprite (src/party_menu.c:4147-4150) draws the Confirm and Cancel ball sprites from it when chooseHalf is set (src/party_menu.c:1108-1110). Its sprite template uses the Poké Ball palette tag (src/data/party_menu.h:990), so the extractor requires its embedded PLTE to equal pokeball.png's and publishes only the 16x96 raster as party-menu/image/pokeball_small, with no palette record of its own (colour it with party-menu/palette/pokeball). The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/party_menu.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/party_menu.rs",
+          "spec": "S-4",
+          "status": "ported"
         },
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",

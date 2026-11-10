@@ -2,8 +2,9 @@
 //! `src/graphics.c:1111-1117`, `src/data/party_menu.h`).
 //!
 //! The party screen draws one background (a 4bpp tile sheet over eleven palette
-//! banks, with its screen), the menu Poké Ball and held-item sprite sheets, five
-//! slot-panel tilemaps, and two button tilemaps. This module returns each record
+//! banks, with its screen), the menu Poké Ball and held-item sprite sheets, the
+//! small Poké Ball sheet the Confirm and Cancel buttons draw, five slot-panel
+//! tilemaps, and two button tilemaps. This module returns each record
 //! validated against upstream's shape; it draws nothing. Pack ids stay private so
 //! scene code composes no strings, and every lookup re-validates shapes, since a
 //! hand-built or corrupt pack can bypass extraction.
@@ -31,6 +32,9 @@ const BACKGROUND_TILEMAP_BYTES: usize = 32 * 32 * 2;
 const POKE_BALL_SHEET_SIZE: (u32, u32) = (32, 64);
 /// `hold_icons.png`: two 4bpp tiles, 8x16.
 const HELD_ITEM_SHEET_SIZE: (u32, u32) = (8, 16);
+/// `pokeball_small.png`: twenty-four 4bpp tiles, 16x96
+/// (`gPartyMenuPokeballSmall_Gfx`, `src/graphics.c:1116`).
+const POKE_BALL_SMALL_SHEET_SIZE: (u32, u32) = (16, 96);
 const BIT_DEPTH: u8 = 4;
 /// Colours in one 4bpp bank, the size of the Poké Ball and held-item palettes.
 const BANK_COLORS: u16 = 16;
@@ -125,6 +129,11 @@ pub struct PartyMenuHandle<'a> {
     pub background: PartyMenuBackground<'a>,
     /// The menu Poké Ball sprite sheet, 32x64, with its 16-colour palette.
     pub poke_ball: PalettedImage<'a>,
+    /// The small Poké Ball sheet, 16x96, that the Confirm and Cancel sprites
+    /// draw when both are present (`src/party_menu.c:4147-4150`). Its sprite
+    /// template uses the Poké Ball palette (`src/data/party_menu.h:990`), so it
+    /// has none of its own: colour it with [`poke_ball`](Self::poke_ball)'s.
+    pub poke_ball_small: ImageRef<'a>,
     /// The held-item icon sheet, 8x16, with its 16-colour palette.
     pub held_item: PalettedImage<'a>,
     /// The five slot-panel tilemaps in [`PartyMenuSlot::ALL`] order.
@@ -168,6 +177,7 @@ impl AssetPack {
         Ok(PartyMenuHandle {
             background: self.party_menu_background()?,
             poke_ball: self.party_menu_poke_ball()?,
+            poke_ball_small: self.party_menu_poke_ball_small()?,
             held_item: self.party_menu_held_item()?,
             slots: [
                 self.party_menu_slot_tilemap(PartyMenuSlot::Main)?,
@@ -209,6 +219,20 @@ impl AssetPack {
     /// As [`AssetPack::party_menu`], for the sheet and its palette.
     pub fn party_menu_poke_ball(&self) -> Result<PalettedImage<'_>, PackError> {
         self.party_menu_paired("pokeball", POKE_BALL_SHEET_SIZE)
+    }
+
+    /// The small Poké Ball sheet, which shares
+    /// [`party_menu_poke_ball`](Self::party_menu_poke_ball)'s palette.
+    ///
+    /// # Errors
+    ///
+    /// As [`AssetPack::party_menu`], for the sheet.
+    pub fn party_menu_poke_ball_small(&self) -> Result<ImageRef<'_>, PackError> {
+        self.bank_image(
+            &format!("{IMAGE_PREFIX}/pokeball_small"),
+            POKE_BALL_SMALL_SHEET_SIZE,
+            malformed,
+        )
     }
 
     /// The held-item icon sheet with its palette.

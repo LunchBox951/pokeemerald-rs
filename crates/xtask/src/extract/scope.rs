@@ -725,8 +725,8 @@ pub(crate) fn evolution_scene_ids() -> Vec<String> {
     evolution_scene_pack_ids()
 }
 
-/// Every `party-menu/` pack id extraction emits: three sheets, three
-/// palettes, and eight maps.
+/// Every `party-menu/` pack id extraction emits: four sheets, three
+/// palettes (the small Poké Ball sheet shares the Poké Ball's), and eight maps.
 pub(crate) fn party_menu_ids() -> Vec<String> {
     party_menu_pack_ids()
 }

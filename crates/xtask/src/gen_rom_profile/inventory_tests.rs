@@ -533,11 +533,11 @@ fn a_surplus_naming_screen_entry_is_refused_by_id() {
 }
 
 #[test]
-fn the_party_menu_inventory_is_three_sheets_three_palettes_and_eight_maps() {
+fn the_party_menu_inventory_is_four_sheets_three_palettes_and_eight_maps() {
     let ids = party_menu_ids();
     let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
-    assert_eq!(ids.len(), 14);
-    assert_eq!(count("party-menu/image/"), 3);
+    assert_eq!(ids.len(), 15);
+    assert_eq!(count("party-menu/image/"), 4);
     assert_eq!(count("party-menu/palette/"), 3);
     assert_eq!(count("party-menu/raw/"), 8);
 }
@@ -552,8 +552,9 @@ fn a_pack_missing_a_party_menu_entry_is_refused() {
 
 #[test]
 fn a_surplus_party_menu_entry_is_refused_by_id() {
-    // The small Poké Ball sheet is a later record, not part of this inventory.
-    let surplus = "party-menu/image/pokeball_small";
+    // The small Poké Ball sheet draws with the Poké Ball's palette, so a
+    // palette of its own is outside the inventory.
+    let surplus = "party-menu/palette/pokeball_small";
     let mut entries = complete_inventory();
     entries.push(raw_entry(surplus.to_owned(), vec![0]));
     let rom = RomFixture::new().emerald_header().finish();

@@ -8,7 +8,8 @@ use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
 use super::{
-    locate, Root, Shape, HELD_ITEM_TAG, POKEBALL_TAG, ROOTS, SHEET_SIZE_FIELD, SHEET_TAG_FIELD,
+    locate, Root, Shape, HELD_ITEM_TAG, POKEBALL_SMALL_TAG, POKEBALL_TAG, ROOTS, SHEET_SIZE_FIELD,
+    SHEET_TAG_FIELD,
 };
 use crate::extract::scope::party_menu_ids;
 use crate::gen_rom_profile::error::GenRomProfileError;
@@ -26,7 +27,13 @@ const STRAY: usize = 0x0A_0000;
 const BG_SHEET: usize = 0;
 const POKEBALL_SHEET: usize = 1;
 const HELD_ITEM_SHEET: usize = 2;
-const SLOT_MAIN: usize = 7;
+const SMALL_SHEET: usize = 3;
+const BG_PALETTE: usize = 4;
+const BG_MAP: usize = 7;
+const SLOT_MAIN: usize = 8;
+const CONFIRM_MAP: usize = 13;
+/// Roots before the first map: four sheets and three palettes.
+const NON_MAPS: usize = 7;
 
 fn bus(offset: usize) -> u32 {
     0x0800_0000 + u32::try_from(offset).expect("a fixture offset fits a bus address")
@@ -38,7 +45,7 @@ fn offset_of(index: usize) -> usize {
 
 /// The decompressed bytes of `ROOTS[index]`, distinct from every other root's.
 fn content(index: usize) -> Vec<u8> {
-    let salt = u8::try_from(index * 17 + 1).expect("fourteen roots");
+    let salt = u8::try_from(index * 17 + 1).expect("fifteen roots");
     match ROOTS[index].shape {
         Shape::Image { tiles, .. } => distinctive_tiles(tiles as usize)
             .iter()
@@ -115,9 +122,9 @@ const fn record_slot(index: usize) -> usize {
     RECORDS + index * 0x100
 }
 
-/// Every root, and the records naming the two sheets.
+/// Every root, and the records naming the three witnessed sheets.
 fn fixture() -> RomFixture {
-    [HELD_ITEM_SHEET, POKEBALL_SHEET]
+    [HELD_ITEM_SHEET, POKEBALL_SHEET, SMALL_SHEET]
         .into_iter()
         .fold(bare(), |fixture, index| {
             fixture.write(record_slot(index), &sheet_record(index, offset_of(index)))
@@ -148,15 +155,15 @@ fn the_roots_are_the_checkouts_fixed_inventory() {
 }
 
 #[test]
-fn all_fourteen_roots_are_found_with_their_production_shapes() {
+fn all_fifteen_roots_are_found_with_their_production_shapes() {
     let rom = fixture().finish();
     with_context("party-menu-found", &rom, entries(), |ctx| {
         let mut report = Vec::new();
         let plan = locate(ctx, &mut report).expect("located");
-        assert_eq!(report.len(), 14);
+        assert_eq!(report.len(), 15);
         assert_eq!(
             (plan.images.len(), plan.palettes.len(), plan.tilemaps.len()),
-            (3, 3, 8)
+            (4, 3, 8)
         );
         for image in &plan.images {
             let index = ROOTS.iter().position(|r| r.id == image.id).expect("a root");
@@ -169,8 +176,8 @@ fn all_fourteen_roots_are_found_with_their_production_shapes() {
             );
             assert_eq!((image.metatile_width, image.metatile_height), (1, 1));
         }
-        let [bg, pokeball, held] = &plan.images[..] else {
-            panic!("three images");
+        let [bg, pokeball, held, small] = &plan.images[..] else {
+            panic!("four images");
         };
         assert_eq!(
             (bg.width, bg.height, bg.tile_count, bg.encoding),
@@ -188,6 +195,10 @@ fn all_fourteen_roots_are_found_with_their_production_shapes() {
         assert_eq!(
             (held.width, held.height, held.tile_count, held.encoding),
             (8, 16, 2, Encoding::Raw)
+        );
+        assert_eq!(
+            (small.width, small.height, small.tile_count, small.encoding),
+            (16, 96, 24, Encoding::Lz77)
         );
         let colors: Vec<(u16, Encoding)> = plan
             .palettes
@@ -217,7 +228,10 @@ fn all_fourteen_roots_are_found_with_their_production_shapes() {
                 (28, Encoding::Raw),
             ]
         );
-        assert_eq!(plan.tilemaps[SLOT_MAIN - 6].addr, bus(offset_of(SLOT_MAIN)));
+        assert_eq!(
+            plan.tilemaps[SLOT_MAIN - NON_MAPS].addr,
+            bus(offset_of(SLOT_MAIN))
+        );
     });
 }
 
@@ -242,6 +256,10 @@ fn the_report_names_what_a_map_can_and_cannot_confirm() {
                 global("gPartyMenuPokeball_Pal"),
             ),
             ("party-menu/image/hold_icons", local("sHeldItemGfx")),
+            (
+                "party-menu/image/pokeball_small",
+                global("gPartyMenuPokeballSmall_Gfx"),
+            ),
             ("party-menu/palette/hold_icons", local("sHeldItemPalette")),
             (
                 "party-menu/raw/slot_main_no_hp",
@@ -256,6 +274,7 @@ fn the_report_names_what_a_map_can_and_cannot_confirm() {
         }
         assert_eq!(line(&report, "party-menu/image/bg").len, 62 * 32);
         assert_eq!(line(&report, "party-menu/palette/bg").len, 176 * 2);
+        assert_eq!(line(&report, "party-menu/image/pokeball_small").len, 0x300);
         assert_eq!(line(&report, "party-menu/raw/slot_wide").len, 54);
     });
 }
@@ -267,8 +286,9 @@ fn each_sheet_is_settled_by_its_record_and_the_rest_by_their_bytes() {
         let mut report = Vec::new();
         locate(ctx, &mut report).expect("located");
         for line in &report {
-            let expected = if line.id.ends_with("pokeball") && line.id.contains("/image/")
-                || line.id.ends_with("hold_icons") && line.id.contains("/image/")
+            let expected = if ["pokeball", "hold_icons", "pokeball_small"]
+                .map(|stem| format!("party-menu/image/{stem}"))
+                .contains(&line.id)
             {
                 Resolution::StructDerived
             } else {
@@ -281,7 +301,7 @@ fn each_sheet_is_settled_by_its_record_and_the_rest_by_their_bytes() {
 
 #[test]
 fn a_witnessed_sheet_takes_the_copy_its_record_names_over_sixteen_lower_ones() {
-    for index in [HELD_ITEM_SHEET, POKEBALL_SHEET] {
+    for index in [HELD_ITEM_SHEET, POKEBALL_SHEET, SMALL_SHEET] {
         let mut fixture = fixture();
         for copy in 0..17usize {
             fixture = fixture.write(
@@ -359,6 +379,32 @@ fn a_pointer_without_the_whole_record_names_nothing() {
 }
 
 #[test]
+fn the_small_ball_needs_its_own_size_and_tag_not_the_big_balls() {
+    let named = ROOTS[SMALL_SHEET].record.unwrap();
+    let target = bus(offset_of(SMALL_SHEET));
+    let big = ROOTS[POKEBALL_SHEET].record.unwrap();
+    for (label, decoy) in [
+        ("no record", vec![0; 8]),
+        ("wrong size", record(target, named.size + 32, named.tag)),
+        // Both balls load through one function and differ only in tag.
+        (
+            "the big ball's tag",
+            record(target, named.size, POKEBALL_TAG),
+        ),
+        ("the big ball's size", record(target, big.size, named.tag)),
+    ] {
+        let rom = fixture().write(record_slot(SMALL_SHEET), &decoy).finish();
+        with_context("party-menu-small-decoy", &rom, entries(), |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "party-menu/image/pokeball_small"),
+                "{label}: {err}"
+            );
+        });
+    }
+}
+
+#[test]
 fn an_unaligned_record_names_nothing() {
     let rom = fixture()
         .write(record_slot(POKEBALL_SHEET), &[0; 8])
@@ -394,12 +440,15 @@ fn the_record_size_and_tag_are_the_ones_upstream_writes() {
     assert_eq!(HELD_ITEM_TAG, 55120);
     assert_eq!(ROOTS[POKEBALL_SHEET].record.unwrap().size, 0x400);
     assert_eq!(POKEBALL_TAG, 1200);
+    assert_eq!(ROOTS[SMALL_SHEET].record.unwrap().size, 0x300);
+    assert_eq!(ROOTS[SMALL_SHEET].record.unwrap().tag, POKEBALL_SMALL_TAG);
+    assert_eq!(POKEBALL_SMALL_TAG, 1201);
     assert_eq!((SHEET_SIZE_FIELD, SHEET_TAG_FIELD), (4, 6));
 }
 
 #[test]
 fn a_root_without_a_record_stored_twice_is_an_arbitrary_copy_at_the_lowest_address() {
-    for index in [BG_SHEET, 3, 6, SLOT_MAIN] {
+    for index in [BG_SHEET, BG_PALETTE, BG_MAP, SLOT_MAIN] {
         let rom = fixture()
             .write(STRAY, &stored(&ROOTS[index], &content(index)))
             .finish();
@@ -485,7 +534,31 @@ fn a_pack_entry_of_another_shape_is_refused_before_any_report_line() {
             .unwrap(),
         ),
         (
-            3,
+            SMALL_SHEET,
+            image_entry_from_tiles(
+                "party-menu/image/pokeball_small".to_owned(),
+                &distinctive_tiles(24),
+                4,
+                8,
+                192,
+                None,
+            )
+            .unwrap(),
+        ),
+        (
+            SMALL_SHEET,
+            image_entry_from_tiles(
+                "party-menu/image/pokeball_small".to_owned(),
+                &distinctive_tiles(48),
+                8,
+                16,
+                96,
+                None,
+            )
+            .unwrap(),
+        ),
+        (
+            BG_PALETTE,
             palette_entry("party-menu/palette/bg".to_owned(), &[1; 16]).unwrap(),
         ),
         (
@@ -493,7 +566,7 @@ fn a_pack_entry_of_another_shape_is_refused_before_any_report_line() {
             raw_entry("party-menu/raw/slot_main".to_owned(), vec![1; 140]),
         ),
         (
-            12,
+            CONFIRM_MAP,
             raw_entry("party-menu/raw/confirm_button".to_owned(), vec![1; 14]),
         ),
     ];

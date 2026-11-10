@@ -9,6 +9,7 @@ const BG_PALETTE: &str = "party-menu/palette/bg";
 const BG_MAP: &str = "party-menu/raw/bg";
 const BALL_IMAGE: &str = "party-menu/image/pokeball";
 const BALL_PALETTE: &str = "party-menu/palette/pokeball";
+const SMALL_BALL_IMAGE: &str = "party-menu/image/pokeball_small";
 const HELD_IMAGE: &str = "party-menu/image/hold_icons";
 const HELD_PALETTE: &str = "party-menu/palette/hold_icons";
 const SLOTS: [(&str, usize); 5] = [
@@ -63,6 +64,7 @@ fn fixture_entries() -> Vec<Entry> {
         raw(BG_MAP, 2048, 0x11),
         image(BALL_IMAGE, (32, 64), TEXT_WINDOW_BIT_DEPTH, 15),
         palette(BALL_PALETTE, 16, 0x6605),
+        image(SMALL_BALL_IMAGE, (16, 96), TEXT_WINDOW_BIT_DEPTH, 15),
         image(HELD_IMAGE, (8, 16), TEXT_WINDOW_BIT_DEPTH, 15),
         palette(HELD_PALETTE, 16, 0x3727),
         raw(CONFIRM, 28, 0x21),
@@ -111,6 +113,15 @@ fn party_menu_bundles_every_record() {
         (32, 64)
     );
     assert_eq!(handle.poke_ball.palette.color(0), Some(0x6605));
+    let small = handle.poke_ball_small;
+    assert_eq!((small.width, small.height, small.bit_depth), (16, 96, 4));
+    assert_eq!(small.pixels.len(), 16 * 96);
+    assert_eq!(small.pixels[0], 15);
+    assert_eq!(small.pixels[1], 1);
+    assert_eq!(
+        pack.party_menu_poke_ball_small().unwrap().pixels,
+        small.pixels
+    );
     assert_eq!(
         (handle.held_item.image.width, handle.held_item.image.height),
         (8, 16)
@@ -140,7 +151,7 @@ fn party_menu_bundles_every_record() {
 #[test]
 fn missing_or_wrong_kind_entries_fail_without_substitution() {
     let ids: Vec<&str> = fixture_entries().iter().map(|e| e.id).collect();
-    assert_eq!(ids.len(), 14);
+    assert_eq!(ids.len(), 15);
     for missing in &ids {
         let entries = fixture_entries()
             .into_iter()
@@ -193,6 +204,15 @@ fn malformed_entries_are_rejected_on_read() {
         (BALL_IMAGE, image(BALL_IMAGE, (16, 96), 4, 0)),
         (BALL_IMAGE, image(BALL_IMAGE, (32, 64), INDEXED_8_BIT, 0)),
         (HELD_IMAGE, image(HELD_IMAGE, (16, 8), 4, 0)),
+        // The small ball sheet: the big sheet's raster, the same tile count
+        // laid out another way, a taller sheet, and an 8-bit depth.
+        (SMALL_BALL_IMAGE, image(SMALL_BALL_IMAGE, (32, 64), 4, 0)),
+        (SMALL_BALL_IMAGE, image(SMALL_BALL_IMAGE, (8, 192), 4, 0)),
+        (SMALL_BALL_IMAGE, image(SMALL_BALL_IMAGE, (16, 104), 4, 0)),
+        (
+            SMALL_BALL_IMAGE,
+            image(SMALL_BALL_IMAGE, (16, 96), INDEXED_8_BIT, 0),
+        ),
         // Wrong palette colour counts: a bank for the background, or the
         // background's banks for a sprite.
         (BG_PALETTE, palette(BG_PALETTE, 16, 0)),
@@ -227,6 +247,7 @@ fn a_pixel_outside_one_bank_is_rejected_even_over_the_wide_background_palette() 
         for (id, size) in [
             (BG_IMAGE, (8, 496)),
             (BALL_IMAGE, (32, 64)),
+            (SMALL_BALL_IMAGE, (16, 96)),
             (HELD_IMAGE, (8, 16)),
         ] {
             let (pack, path) = load(
@@ -266,6 +287,24 @@ fn individual_readers_need_only_their_own_records() {
     assert!(matches!(
         pack.party_menu_background().unwrap_err(),
         PackError::UnknownAsset(id) if id == BG_IMAGE
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn the_small_ball_sheet_needs_no_palette_of_its_own() {
+    // It draws with the Poké Ball palette (`TAG_POKEBALL`), so the pack holds
+    // no palette record for it and its reader needs no palette at all.
+    let entries: Vec<Entry> = fixture_entries()
+        .into_iter()
+        .filter(|e| e.id == SMALL_BALL_IMAGE)
+        .collect();
+    let (pack, path) = load("party-menu-small-ball-only", entries);
+    let small = pack.party_menu_poke_ball_small().unwrap();
+    assert_eq!((small.width, small.height), (16, 96));
+    assert!(matches!(
+        pack.party_menu_poke_ball().unwrap_err(),
+        PackError::UnknownAsset(id) if id == BALL_IMAGE
     ));
     let _ = std::fs::remove_file(path);
 }
