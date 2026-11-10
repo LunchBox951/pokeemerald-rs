@@ -361,6 +361,13 @@ impl ObjectEventState {
     /// (`FaceDirection` and `ShiftStillObjectEventCoords`,
     /// `event_object_movement.c:2162-2164,5048-5056`).
     pub const fn face_in_place(&mut self) {
+        self.settle_previous_position();
+    }
+
+    /// `ShiftStillObjectEventCoords` (`event_object_movement.c:2162-2164`): the tile the object
+    /// left stops being occupied, so a walk's finish-step elevation update reads the
+    /// destination for both of its cells.
+    pub const fn settle_previous_position(&mut self) {
         self.previous_position = self.position;
     }
 

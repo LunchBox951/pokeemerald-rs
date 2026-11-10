@@ -281,10 +281,16 @@ impl SightApproach {
                         tiles_left,
                         frames_left: frames_left - 1,
                     };
-                } else if tiles_left > 0 {
-                    self.begin_tile(trainer, tiles_left - 1);
                 } else {
-                    self.face_player(trainer, player_position);
+                    // `UpdateMovementNormal` ends every walked tile with
+                    // `ShiftStillObjectEventCoords`
+                    // (`event_object_movement.c:5116-5125`).
+                    trainer.settle_previous_position();
+                    if tiles_left > 0 {
+                        self.begin_tile(trainer, tiles_left - 1);
+                    } else {
+                        self.face_player(trainer, player_position);
+                    }
                 }
             }
             // Driven by `OverworldPhase`, which owns the player and the

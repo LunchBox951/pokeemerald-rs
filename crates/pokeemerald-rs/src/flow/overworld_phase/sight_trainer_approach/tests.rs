@@ -228,3 +228,22 @@ fn stand_in_battle() -> battle::Battle {
     )
     .expect("the stand-in trainer's party is constructible today")
 }
+
+/// `UpdateMovementNormal` ends every walked tile with
+/// `ShiftStillObjectEventCoords` (`event_object_movement.c:5116-5125`), so a
+/// trainer whose walk-up has finished stands with its previous coords on its
+/// own tile, and the finish-step elevation update reads `(dest, dest)`.
+#[test]
+fn a_finished_walk_up_settles_the_previous_tile_on_the_destination() {
+    let (mut approach, mut objects) = approaching_from((10, 5), Direction::South, 1);
+    for _ in 0..ICON_STAGE_FRAMES + WALK_FRAMES_PER_TILE {
+        approach.advance_movement(trainer_mut(&mut objects), (10, 7));
+    }
+    assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
+    assert_eq!(trainer(&objects).position(), (10, 6));
+    assert_eq!(
+        trainer(&objects).previous_position(),
+        (10, 6),
+        "the completed walk must settle previousCoords on currentCoords"
+    );
+}

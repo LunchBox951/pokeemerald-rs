@@ -231,3 +231,32 @@ fn composing_again_does_not_change_the_state_or_the_frame() {
     assert_eq!(frame(&scene, &objects), first);
     assert_eq!(pair(&objects), (TRANSITION, 4));
 }
+
+/// `UpdateMovementNormal` ends a walked tile with `ShiftStillObjectEventCoords`
+/// (`event_object_movement.c:5116-5125`) and then the finish-step elevation
+/// update reads `(dest, dest)` (`:8130`): the NPC that began its step off a
+/// multi-level cell at 4 adopts the ordinary destination's 5 once the walk is
+/// done, and so draws at priority 2 instead of 1.
+#[test]
+fn finishing_a_walk_off_a_multi_level_cell_draws_at_the_destinations_priority() {
+    let scene = scene(&[((1, 1), MULTI_LEVEL), ((2, 1), 5)], 1, 4);
+    let mut objects = seeded(&scene);
+    walk_east(&scene, &mut objects);
+    assert_eq!(pair(&objects), (4, 4), "the step's first frame is skipped");
+    assert_eq!(npc_priority(&scene, &objects), 1);
+
+    objects
+        .get_mut(1)
+        .unwrap()
+        .state_mut()
+        .settle_previous_position();
+    scene.update_object_elevations(&mut objects);
+    assert_eq!(pair(&objects), (5, 5));
+    assert_eq!(npc_priority(&scene, &objects), 2);
+
+    let reference_scene = scene_reference(&[((2, 1), 5)], 2, 5);
+    assert_eq!(
+        frame(&scene, &objects),
+        frame(&reference_scene, &seeded(&reference_scene))
+    );
+}
