@@ -204,11 +204,11 @@ fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
 
     let fb = blit_header_glyph_of_index(FOREGROUND_INDEX);
     assert_eq!(fb.pixel(0, 0), Some(fg));
-    assert_eq!(fb.pixel(7, 7), Some(fg));
+    assert_eq!(fb.pixel(5, 5), Some(fg));
 
     let fb = blit_header_glyph_of_index(SHADOW_INDEX);
     assert_eq!(fb.pixel(0, 0), Some(shadow));
-    assert_eq!(fb.pixel(7, 7), Some(shadow));
+    assert_eq!(fb.pixel(5, 5), Some(shadow));
 
     for transparent_index in [BACKGROUND_INDEX, BOX_INDEX] {
         let fb = blit_header_glyph_of_index(transparent_index);

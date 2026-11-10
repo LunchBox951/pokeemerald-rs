@@ -848,10 +848,12 @@ mod tests {
 
     #[test]
     fn clear_paints_the_erased_span_with_the_windows_background() {
+        const CLEARED_WIDTH: u8 = 4;
         // `0x0D`/`0x11` are `EXT_CTRL_CODE_SHIFT_RIGHT`/`EXT_CTRL_CODE_CLEAR`
         // (`pokeemerald/src/text.c:1063-1072`), one argument byte each per
         // `charmap.txt`. `SHIFT_RIGHT 0` moves the cursor back over the `A`
-        // just printed, so `CLEAR` erases exactly that glyph's width.
+        // just printed, so `CLEAR` erases `CLEARED_WIDTH` columns, fewer than the glyph's
+        // advance width, leaving its right-hand columns visible.
         let mut dialog = opaque_synthetic_dialog(vec![
             Token::Char('A'),
             Token::ExtCtrl {
@@ -860,7 +862,7 @@ mod tests {
             },
             Token::ExtCtrl {
                 sub: 0x11,
-                args: vec![u8::try_from(NORMAL_A_ADVANCE_WIDTH).unwrap()],
+                args: vec![CLEARED_WIDTH],
             },
             Token::End,
         ]);
@@ -889,7 +891,7 @@ mod tests {
         );
 
         let (still_glyph_x, still_glyph_y) = box_pixel((
-            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
             textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
         ));
         assert_eq!(
@@ -905,7 +907,6 @@ mod tests {
         // `:1077-1090`); the argument is an origin-relative column, so this
         // erases fewer pixels than the glyph's full advance width.
         const CLEAR_TO_COLUMN: u8 = 4;
-        let cleared_width = i32::from(CLEAR_TO_COLUMN);
 
         let mut dialog = opaque_synthetic_dialog(vec![
             Token::Char('A'),
@@ -944,7 +945,7 @@ mod tests {
         );
 
         let (still_glyph_x, still_glyph_y) = box_pixel((
-            textbox::STANDARD_PRINTER_ORIGIN.0 + cleared_width + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
             textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
         ));
         assert_eq!(
@@ -1001,10 +1002,85 @@ mod tests {
             Some(FRAME_INTERIOR_COLOR),
             "the gap up to the minimum is erased after the glyph draws"
         );
+        // The glyph's cell holds nothing past its advance width on screen
+        // (`CopyGlyphToWindow` copies `gCurGlyph.width` columns,
+        // `text.c:608-609`), so the gap's far end is the frame interior whether
+        // or not the clear reached it; the last copied glyph column is what
+        // stays observable.
+        assert_eq!(
+            probe(NORMAL_A_ADVANCE_WIDTH - 1),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the glyph's last copied column stays"
+        );
         assert_eq!(
             probe(i32::from(MINIMUM) + 1),
+            Some(FRAME_INTERIOR_COLOR),
+            "nothing is drawn past the glyph's width or the minimum"
+        );
+    }
+
+    #[test]
+    fn min_letter_spacing_gap_clear_erases_an_earlier_glyph_inside_the_gap() {
+        // An earlier opaque 'A' at column 8 is overlapped by the gap that a
+        // later 'A' at column 0 clears up to the minimum of 12
+        // (`text.c:1146-1156`), so only the gap's replay of the pre-glyph
+        // background can erase the seeded pixels; column 13 lies past the gap
+        // and keeps the seeded glyph.
+        const SKIP_TO_COLUMN: u8 = 0x12;
+        const MINIMUM: u8 = 12;
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![8],
+            },
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![0],
+            },
+            Token::ExtCtrl {
+                sub: 0x14,
+                args: vec![MINIMUM],
+            },
+            Token::Char('A'),
+            Token::End,
+        ]);
+
+        for _ in 0..8 {
+            if dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_)))
+            {
+                break;
+            }
+            dialog.tick(NO_INPUT);
+        }
+        assert!(
+            dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_))),
+            "the second glyph queues its gap span"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+        let probe = |x: i32| {
+            let (x, y) = box_pixel((
+                textbox::STANDARD_PRINTER_ORIGIN.0 + x,
+                textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+            ));
+            fb.pixel(x, y)
+        };
+        assert_eq!(
+            probe(13),
             Some(OPAQUE_GLYPH_COLOR),
-            "pixels past the minimum are untouched"
+            "the seeded glyph past the gap stays"
+        );
+        assert_eq!(
+            probe(9),
+            Some(FRAME_INTERIOR_COLOR),
+            "the seeded glyph inside the gap is erased"
         );
     }
 
