@@ -249,6 +249,8 @@ fn ice_ball_uses_the_same_series() {
 
     assert!(second > first);
     assert_eq!(player_lock(&battle), (Some(ICE_BALL), Some(3)));
+    rng.assert_exhausted();
+    assert_eq!(rng.draws(), 1 + 2 * 6, "construction plus six per turn");
 }
 
 #[test]
