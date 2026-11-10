@@ -29469,6 +29469,26 @@
       "status": "pending"
     },
     "src/berry.c": {
+      "artifacts": {
+        "GetBerryInfo": {
+          "reason": "BerryTable::get (strict item lookup) and BerryTable::by_type (the BERRY_NONE / past-last fallback to Cheri, src/berry.c:986-990) model the canonical-table branch only; the save-provided Enigma Berry override branch (src/berry.c:982-985, IsEnigmaBerryValid) is not modelled",
+          "rust_target": "crates/assets/src/berries.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "GetBerryNameByBerryType": {
+          "reason": "BerryTable::name_by_type returns the canonical name through the by_type fallback (src/berry.c:1171-1174) as a &'static str instead of an EOS-terminated buffer copy; the save-provided Enigma Berry name that GetBerryInfo can return for type 43 (src/berry.c:982-985) is not modelled",
+          "rust_target": "crates/assets/src/berries.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "gBerries": {
+          "reason": "All 43 canonical gBerries rows (src/berry.c:115-890) with the 86 description strings (:28-113) transcribed to assets::berries::BerryTable, indexed by item (ITEM_CHERI_BERRY..ITEM_ENIGMA_BERRY) with the canonical ENIGMA row; the save-provided Enigma Berry override is not modelled. The rest of src/berry.c (growth, planting, watering, tree state, Enigma checksum) stays pending.",
+          "rust_target": "crates/assets/src/berries.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
