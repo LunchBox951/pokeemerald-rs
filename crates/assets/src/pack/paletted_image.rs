@@ -9,8 +9,12 @@
 //! A family whose sheet and palette are read apart (a tilemap or sprite picks
 //! the palette bank) uses the two halves of that check instead:
 //! [`AssetPack::bank_image`] validates a 4bpp sheet against one bank and
-//! [`AssetPack::sized_palette`] validates a palette on its own size. This
-//! module owns no pack ids and knows no asset family.
+//! [`AssetPack::sized_palette`] validates a palette on its own size. The
+//! battle interface, party menu, bag, evolution scene, opening scene, naming
+//! screen and Pokédex families read palettes that way; the guard in
+//! `tests/paletted_image.rs` holds the last five's diagnostics to this one
+//! check.
+//! This module owns no pack ids and knows no asset family.
 
 use super::{AssetPack, ImageRef, PackError, PaletteRef};
 

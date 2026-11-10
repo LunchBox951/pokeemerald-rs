@@ -18,7 +18,6 @@ const SPRITE_PALETTE_PREFIX: &str = "sprite/palette";
 const BIT_DEPTH: u8 = 4;
 /// Colours in one 4bpp bank, the size of every naming-screen palette.
 const BANK_COLORS: u16 = 16;
-const PALETTE_ENTRY_BYTES: usize = 2;
 /// A 32x20 tilemap of 2-byte entries.
 const TILEMAP_BYTES: usize = 32 * 20 * 2;
 /// `GetTextWindowPalette(2)` (`naming_screen.c:1885`).
@@ -195,22 +194,12 @@ impl AssetPack {
         )
     }
 
-    fn naming_screen_palette(&self, stem: &str) -> Result<PaletteRef<'_>, PackError> {
-        let id = format!("{PALETTE_PREFIX}/{stem}");
-        let palette = self.palette(&id)?;
-        if palette.color_count != BANK_COLORS
-            || palette.raw.len() != usize::from(BANK_COLORS) * PALETTE_ENTRY_BYTES
-        {
-            return Err(PackError::MalformedNamingScreenAsset {
-                id,
-                detail: format!(
-                    "declares {} colours in {} bytes: expected {BANK_COLORS} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            });
-        }
-        Ok(palette)
+    pub(super) fn naming_screen_palette(&self, stem: &str) -> Result<PaletteRef<'_>, PackError> {
+        self.sized_palette(
+            &format!("{PALETTE_PREFIX}/{stem}"),
+            BANK_COLORS,
+            |id, detail| PackError::MalformedNamingScreenAsset { id, detail },
+        )
     }
 
     fn naming_screen_tilemap(&self, stem: &str) -> Result<&[u8], PackError> {

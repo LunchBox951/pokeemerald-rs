@@ -50,7 +50,6 @@ const SWAP_LINE_HEIGHT: u32 = 32;
 const MENU_INFO_SIDE: u32 = 128;
 const ICON_SIDE: u32 = 24;
 const TILEMAP_BYTES: usize = 32 * 32 * 2;
-const PALETTE_ENTRY_BYTES: usize = 2;
 
 /// Upstream `gMenuInfoElements{1,2,3}_Pal` (`src/graphics.c:1264-1266`).
 const MENU_INFO_PALETTES: usize = 3;
@@ -673,21 +672,11 @@ impl AssetPack {
         Ok(image)
     }
 
-    fn bag_palette(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
-        let palette = self.palette(id)?;
-        if palette.color_count != colors
-            || palette.raw.len() != usize::from(colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(malformed(
-                id,
-                format!(
-                    "declares {} colours in {} bytes: expected {colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            ));
-        }
-        Ok(palette)
+    pub(super) fn bag_palette(&self, id: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
+        self.sized_palette(id, colors, |id, detail| PackError::MalformedBagAsset {
+            id,
+            detail,
+        })
     }
 
     fn bag_paletted(
