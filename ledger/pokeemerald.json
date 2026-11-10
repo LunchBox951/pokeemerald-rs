@@ -29859,12 +29859,17 @@
       "status": "ported"
     },
     "src/data/decoration/header.h": {
+      "artifacts": {
+        "gDecorations": {
+          "reason": "gDecorations records (src/data/decoration/header.h:1-1454) extracted to a typed DecorationTable keyed by DecorationId (include/constants/decorations.h, IDs 0-120): id, name, permission, shape, category and price per row, DECOR_NONE included with its upstream SMALL DESK name, description linked to description.h; the .tiles pointers and the graphics they name (tiles.h) are not modelled",
+          "rust_target": "crates/assets/src/decorations.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
-      "reason": "gDecorations records (src/data/decoration/header.h:1-1454) extracted to a typed DecorationTable keyed by DecorationId (include/constants/decorations.h, IDs 0-120): id, name, permission, shape, category and price per row, DECOR_NONE included with its upstream SMALL DESK name; the .tiles pointers and the graphics they name (tiles.h) are not modelled",
-      "rust_target": "crates/assets/src/decorations.rs",
-      "spec": "S-4",
-      "status": "ported"
+      "status": "pending"
     },
     "src/data/decoration/icon.h": {
       "category": "code.header",
