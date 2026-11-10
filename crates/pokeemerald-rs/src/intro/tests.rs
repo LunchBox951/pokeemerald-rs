@@ -603,7 +603,6 @@ fn clear_to_paints_only_up_to_its_target_column() {
     // `:1077-1090`); the argument is an origin-relative column, so this
     // erases fewer pixels than the glyph's full advance width.
     const CLEAR_TO_COLUMN: u8 = 4;
-    let cleared_width = i32::from(CLEAR_TO_COLUMN);
 
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(

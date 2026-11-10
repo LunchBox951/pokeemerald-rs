@@ -907,7 +907,6 @@ mod tests {
         // `:1077-1090`); the argument is an origin-relative column, so this
         // erases fewer pixels than the glyph's full advance width.
         const CLEAR_TO_COLUMN: u8 = 4;
-        let cleared_width = i32::from(CLEAR_TO_COLUMN);
 
         let mut dialog = opaque_synthetic_dialog(vec![
             Token::Char('A'),
