@@ -31436,6 +31436,18 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "InitMoveInPlace": {
+          "reason": "InitMoveInPlace (:5704-5711) as ObjectEvent::begin_normal_walk_in_place: faces the direction without moving or committing a tile, and starts a StepKind::WalkInPlace action of the normal duration, 16 frames (data[3] = 16, :5758). StepAction::pixel_offset stays (0, 0). Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "InitMovementNormal": {
+          "reason": "InitMovementNormal (:5101-5107) as ObjectEvent::begin_normal_walk: InitNpcForMovement (:5081-5099) faces the direction, commits the destination tile as the current coordinates (ShiftObjectEventCoords) while the tile left stays held as previous_position, and starts the action at its first frame. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "InitObjectEventStateFromTemplate": {
           "reason": "ObjectEventCollection::from_templates seeds one live ObjectEventState per authored template, in declaration order, reproducing this function's position/previousCoords/elevation/facing/movementType initialization (:1296-1321; the facing derivation itself was already transcribed as gInitialMovementTypeFacingDirections/initial_facing_direction, object_event.rs). ObjectEventState::reinit_from_template_snapshots repeats that initialization for a respawned entry from the entry's own template-position and template-movement snapshots, so setobjectxyperm/setobjectmovementtype overrides survive as they do in the saved template (:1307-1321). Keyed lookup by local_id (LiveObjectEvent::template().local_id) models GetObjectEventIdByLocalId's linear scan (:1275-1285), and ObjectEventCollection::object_events_at models GetObjectEventIdByPosition/ObjectEventDoesElevationMatch's live-position scan (:2192-2215), which MapRuntime::object_events_at delegates to when a collection is bound. triggerGroundEffectsOnMove is not stored on the object: grass::TallGrassEffects keeps each live slot's last ground-effect pass, forgotten while the object is inactive. The active flag is the scheduler's Lifecycle (object_event_scheduler.rs), set by its spawn window and hide-flag admission. Not modelled: GetAvailableObjectEventId's slot reuse/dedup against (localId, mapNum, mapGroup) -- this collection is per-map so mapNum/mapGroup do not apply and every template keeps one persistent slot; the dynamic graphics id, sMovementTypeHasRange's zero-range-to-one clamp, and the state of the rest of the ObjectEvent struct (movementDirection, previousMovementDirection, facingDirectionLocked, held and single movement flags).",
           "rust_target": "crates/engine/src/overworld/live_object_events.rs",
@@ -31483,6 +31495,84 @@
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "MovementAction_WalkInPlaceNormalDown_Step0": {
+          "reason": "MovementAction_WalkInPlaceNormalDown_Step0 (:5756-5760) as ObjectEvent::begin_normal_walk_in_place(Direction::South): InitMoveInPlace with duration 16, then the first countdown frame of MovementAction_WalkInPlace_Step1 in the same callback. Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkInPlaceNormalLeft_Step0": {
+          "reason": "MovementAction_WalkInPlaceNormalLeft_Step0 (:5768-5772) as ObjectEvent::begin_normal_walk_in_place(Direction::West): InitMoveInPlace with duration 16, then the first countdown frame of MovementAction_WalkInPlace_Step1 in the same callback. Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkInPlaceNormalRight_Step0": {
+          "reason": "MovementAction_WalkInPlaceNormalRight_Step0 (:5774-5778) as ObjectEvent::begin_normal_walk_in_place(Direction::East): InitMoveInPlace with duration 16, then the first countdown frame of MovementAction_WalkInPlace_Step1 in the same callback. Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkInPlaceNormalUp_Step0": {
+          "reason": "MovementAction_WalkInPlaceNormalUp_Step0 (:5762-5766) as ObjectEvent::begin_normal_walk_in_place(Direction::North): InitMoveInPlace with duration 16, then the first countdown frame of MovementAction_WalkInPlace_Step1 in the same callback. Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkInPlace_Step1": {
+          "reason": "MovementAction_WalkInPlace_Step1 (:5713-5722) as ObjectEvent::advance_step over a StepKind::WalkInPlace action: the countdown reaches zero on the sixteenth callback and reports the action done (sActionFuncId 2) without any tile change. Not modelled: the slow (32-frame) and fast (8-frame) durations and WalkInPlaceSlow's animDelayCounter tweak (:5724-5730), the diagonal and Faster variants, the sprite's animation frames (SetStepAnimHandleAlternation, GetMoveDirectionAnimNum) and animPaused. Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalDown_Step0": {
+          "reason": "MovementAction_WalkNormalDown_Step0 (:5354-5358) as ObjectEvent::begin_normal_walk(Direction::South): runs InitMovementNormal, then the first frame of Step1 in the same callback (StepAction::begin starts at frames_elapsed 1). Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalDown_Step1": {
+          "reason": "MovementAction_WalkNormalDown_Step1 (:5360-5368) as ObjectEvent::advance_step over a StepKind::Walk action: returns done on the frame UpdateMovementNormal finishes (sActionFuncId 2) and false otherwise. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalLeft_Step0": {
+          "reason": "MovementAction_WalkNormalLeft_Step0 (:5386-5390) as ObjectEvent::begin_normal_walk(Direction::West): runs InitMovementNormal, then the first frame of Step1 in the same callback (StepAction::begin starts at frames_elapsed 1). Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalLeft_Step1": {
+          "reason": "MovementAction_WalkNormalLeft_Step1 (:5392-5400) as ObjectEvent::advance_step over a StepKind::Walk action: returns done on the frame UpdateMovementNormal finishes (sActionFuncId 2) and false otherwise. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalRight_Step0": {
+          "reason": "MovementAction_WalkNormalRight_Step0 (:5402-5406) as ObjectEvent::begin_normal_walk(Direction::East): runs InitMovementNormal, then the first frame of Step1 in the same callback (StepAction::begin starts at frames_elapsed 1). Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalRight_Step1": {
+          "reason": "MovementAction_WalkNormalRight_Step1 (:5408-5416) as ObjectEvent::advance_step over a StepKind::Walk action: returns done on the frame UpdateMovementNormal finishes (sActionFuncId 2) and false otherwise. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalUp_Step0": {
+          "reason": "MovementAction_WalkNormalUp_Step0 (:5370-5374) as ObjectEvent::begin_normal_walk(Direction::North): runs InitMovementNormal, then the first frame of Step1 in the same callback (StepAction::begin starts at frames_elapsed 1). Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "MovementAction_WalkNormalUp_Step1": {
+          "reason": "MovementAction_WalkNormalUp_Step1 (:5376-5384) as ObjectEvent::advance_step over a StepKind::Walk action: returns done on the frame UpdateMovementNormal finishes (sActionFuncId 2) and false otherwise. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "MovementType_FaceDirection": {
           "reason": "MOVEMENT_TYPE_FACE_UP/DOWN/LEFT/RIGHT: LiveObjectEvent::face_direction_step runs Step0 to Step2 (:3033-3057) in the first callback frame and idles every later one, with the face action (:5048-5056) re-facing the current facing and settling previousCoords onto currentCoords (ShiftStillObjectEventCoords, :2162-2164), so a facing a script set persists, and no field RNG is drawn. Not modelled: the action table dispatch (ObjectEventSetSingleMovement/ObjectEventExecSingleMovementAction), singleMovementActive, facingDirectionLocked, and sprite animation (SetStepAnim, animPaused).",
@@ -31565,6 +31655,12 @@
         "TrySpawnObjectEvents": {
           "reason": "The in-range rectangle that decides whether a template spawns, rewritten as engine::overworld::object_event::tile_is_in_view, with object_event_is_in_view applying it to a template's authored tile: transcribed in upstream's own two coordinate spaces (the window around gSaveBlock1Ptr->pos, each candidate tested as template->{x,y} + MAP_OFFSET), which reduces to player.x - 9 ..= player.x + 10 by player.y - 7 ..= player.y + 9. ObjectEventCollection::run_frame applies it as upstream's spawn pass, run on a change of the player tile (the camera tile delta of UpdateObjectEventsForCameraUpdate, field_camera.c:413-416) and once at load, so a flag cleared with the camera still admits nothing until it next moves: an unadmitted or removed entry whose template-snapshot tile is in the window and whose hide flag is clear becomes active, and a respawn reinitialises its state; the first run_frame admits the entries already in view before any callback, as map load does, and a later admission first runs its callback on the next frame. The same rectangle also gates the NPC render path (crate::overworld::npc::oam_entries) at each object's live tile, load-bearing there rather than an optimization: the GBA OAM y field is 8 bits, so without this gate an object event exactly 16 metatiles away wraps onto the player's own screen row (MAP_LITTLEROOT_TOWN's unhideable boy at (14, 17) did). Deliberately NOT applied to the collision/interaction queries, where it is unobservable -- those only ever query a tile adjacent to the player. The spawn pass admits in template order and finishes before the removal pass, and each admission takes the lowest sprite slot no active entry holds, as TrySetupObjectEventSprite's CreateSprite does (:1452, sprite.c:502-508); that slot orders the entry's callbacks. The hide-flag half stays recorded under TrySpawnObjectEventTemplate. Not modelled: the rest of sprite creation, GetAvailableObjectEventId's slot reuse, link-player object events, the Trainer Hill/Battle Pyramid object-count special cases, the camera's sub-tile scroll (the player tile stands in for it), and explicit spawns by scripts.",
           "rust_target": "crates/engine/src/overworld/object_event_scheduler.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "UpdateMovementNormal": {
+          "reason": "UpdateMovementNormal (:5116-5125) as StepAction::advance and ObjectEvent::advance_step: each callback runs one NpcTakeStep frame, the sixteenth (sStepTimes normal speed) reports the action done in that same callback and ShiftStillObjectEventCoords releases the previous tile. The per-frame pixel step (sNpcStepFuncTables) is StepAction::pixel_offset. Not modelled: the slow, fast, faster, and jump speeds, the diagonal walks (Direction has no diagonals), the sprite's animation frames (SetStepAnimHandleAlternation, :5101-5107) and animPaused, ground-effect triggers (triggerGroundEffectsOnMove/OnStop), and locked-animation objects (sLockedAnimObjectEvents). Remaining work: #3061.",
+          "rust_target": "crates/engine/src/overworld/object_event_motion.rs",
           "spec": "S-5",
           "status": "stubbed"
         },
