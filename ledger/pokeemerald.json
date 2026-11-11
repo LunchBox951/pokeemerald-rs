@@ -21414,6 +21414,14 @@
       "status": "pending"
     },
     "include/constants/decorations.h": {
+      "artifacts": {
+        "DECOR_ids": {
+          "reason": "All 121 DECOR_* IDs (include/constants/decorations.h:4-124, DECOR_NONE 0 through DECOR_REGISTEEL_DOLL 120) ported as the DecorationId associated constants of the same names, validated by DecorationId::new. NUM_DECORATIONS (:125, 120) is the highest named ID, not a count: assets::decorations::DECORATIONS_COUNT is 121, covering IDs 0-120 with DECOR_NONE's row included.",
+          "rust_target": "crates/assets/src/decorations.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -21776,6 +21784,20 @@
       "status": "pending"
     },
     "include/decoration.h": {
+      "artifacts": {
+        "Decoration": {
+          "reason": "struct Decoration (include/decoration.h:43-53) modelled as assets::decorations::Decoration: id, name, permission, shape, category, price and description. The .tiles pointer is not modelled. extern gDecorations is the DecorationTable (see src/data/decoration/header.h#gDecorations); gCurDecorationItems, gCurDecorationIndex, InitDecorationContextItems and DoSecretBaseDecorationMenu are not modelled.",
+          "rust_target": "crates/assets/src/decorations.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "decoration_enums": {
+          "reason": "enum DecorationPermission (DECORPERM_*, include/decoration.h:4-14), enum DecorationShape (DECORSHAPE_*, :16-28, the two unused 3x1 and 1x3 shapes kept so ids match) and enum DecorationCategory (DECORCAT_*, :30-41) ported as the DecorationPermission, DecorationShape and DecorationCategory enums with from_id/id round-trips and the DECORCAT_COUNT value as DECORATION_CATEGORY_COUNT (8); DecorationShape also exposes its footprint as dimensions().",
+          "rust_target": "crates/assets/src/decorations.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
