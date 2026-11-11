@@ -86,17 +86,29 @@ pub(super) const COOLDOWN: Duration = Duration::from_secs(5);
 /// How long a stream must stay healthy before a failure counts as new.
 pub(super) const STABLE_AFTER: Duration = Duration::from_secs(5);
 
-/// Discovery of the current OS default output.
+/// Discovery of the current OS default output, as the separate OS-facing
+/// calls it takes. Each can block, and none can be interrupted, so
+/// [`Transport::discover`] reads cancellation between them: a driver detached
+/// while one blocks makes no further call once it returns.
 pub(super) trait OutputHost: Send + 'static {
+    /// What the OS audio host is reached through, rebuilt for every discovery
+    /// so a restarted audio server is picked up instead of a dead connection
+    /// reused.
+    type Backend;
     type Device: OutputDevice;
 
-    /// The current default output as a stable identity plus the device, or
-    /// `None` when there is none. Called only from the transport's driver.
+    /// Connect to the OS audio host. Called only from the transport's driver.
+    fn backend(&mut self) -> Self::Backend;
+
+    /// The backend's current default output, or `None` when there is none.
+    fn default_device(&mut self, backend: &Self::Backend) -> Option<Self::Device>;
+
+    /// The stable identity of `device`.
     ///
     /// # Errors
     ///
-    /// A `cpal` failure to reach the host or the device.
-    fn default_output(&mut self) -> Result<Option<(String, Self::Device)>, cpal::Error>;
+    /// A `cpal` failure to reach the device.
+    fn device_id(&mut self, device: &Self::Device) -> Result<String, cpal::Error>;
 }
 
 struct Live<S> {
@@ -219,10 +231,33 @@ impl<H: OutputHost> Transport<H> {
         started
     }
 
+    /// The current default output as a stable identity plus the device, or
+    /// `None` when there is none, found by the separate calls of
+    /// [`OutputHost`]. Cancellation is read after the host connection and
+    /// after the default query, so a driver detached in either call makes no
+    /// further one; a discovery cancelled there stops and returns `Ok(None)`.
+    /// The identity query is the last call, so nothing follows it to stop.
+    /// Whatever this returns, the caller reads [`Self::cancelled`] before
+    /// using it, never treating a cancelled `Ok(None)` as an absent output.
+    fn discover(&mut self) -> Discovered<H> {
+        let backend = self.host.backend();
+        if self.cancelled() {
+            return Ok(None);
+        }
+        let Some(device) = self.host.default_device(&backend) else {
+            return Ok(None);
+        };
+        if self.cancelled() {
+            return Ok(None);
+        }
+        let id = self.host.device_id(&device)?;
+        Ok(Some((id, device)))
+    }
+
     /// Re-discover the default while waiting out a retry delay, and attempt
     /// at once on a fresh burst when its identity changed.
     fn probe(&mut self, now: Duration) {
-        let found = self.host.default_output();
+        let found = self.discover();
         if self.cancelled() {
             return;
         }
@@ -258,7 +293,7 @@ impl<H: OutputHost> Transport<H> {
             self.failures = 0;
         }
         if now >= self.next_discovery {
-            let found = self.host.default_output();
+            let found = self.discover();
             if self.cancelled() {
                 return;
             }
@@ -356,7 +391,7 @@ impl<H: OutputHost> Transport<H> {
     }
 
     fn attempt(&mut self, now: Duration) {
-        let found = self.host.default_output();
+        let found = self.discover();
         self.attempt_with(now, found);
     }
 
@@ -611,7 +646,7 @@ impl Observed {
     }
 }
 
-/// What one [`OutputHost::default_output`] call returned.
+/// What one [`Transport::discover`] returned.
 type Discovered<H> = Result<Option<(String, <H as OutputHost>::Device)>, cpal::Error>;
 
 fn failure_of(err: &PlatformError) -> TransportFailure {

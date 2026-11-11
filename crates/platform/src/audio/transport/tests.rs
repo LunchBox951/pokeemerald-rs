@@ -62,9 +62,20 @@ struct World {
     /// Run inside the next configuration query, before it answers, as a
     /// `drop` racing a blocked negotiation would.
     during_negotiate: Option<WorldHook>,
-    /// Block the next discovery, with the world unlocked, until this
-    /// channel's sender sends or drops, as a wedged audio server would.
+    /// Block the next connection to the host (the first call of a discovery),
+    /// with the world unlocked, until this channel's sender sends or drops,
+    /// as a wedged audio server would.
+    block_backend: Option<std::sync::mpsc::Receiver<()>>,
+    /// Block the next default-output query (the second call of a discovery),
+    /// with the world unlocked, until this channel's sender sends or drops.
     block_discovery: Option<std::sync::mpsc::Receiver<()>>,
+    /// Block the next identity query (the third call of a discovery), with
+    /// the world unlocked, until this channel's sender sends or drops.
+    block_id: Option<std::sync::mpsc::Receiver<()>>,
+    /// Run inside the next identity query, as a callback racing it would.
+    during_id: Option<WorldHook>,
+    /// Each call a discovery made, in order: `backend`, `default`, `id`.
+    discovery_calls: Vec<&'static str>,
     /// Block the next stream build, with the world unlocked, until this
     /// channel's sender sends or drops, as a wedged audio server would.
     block_build: Option<std::sync::mpsc::Receiver<()>>,
@@ -100,9 +111,20 @@ struct FakeDevice(SharedWorld);
 struct FakeStream(SharedWorld, usize);
 
 impl OutputHost for FakeHost {
+    type Backend = ();
     type Device = FakeDevice;
 
-    fn default_output(&mut self) -> Result<Option<(String, FakeDevice)>, cpal::Error> {
+    fn backend(&mut self) {
+        let block = with(&self.0).block_backend.take();
+        if let Some(block) = block {
+            let _ = block.recv();
+        }
+        let mut w = with(&self.0);
+        w.ops += 1;
+        w.discovery_calls.push("backend");
+    }
+
+    fn default_device(&mut self, (): &()) -> Option<FakeDevice> {
         let block = with(&self.0).block_discovery.take();
         if let Some(block) = block {
             let _ = block.recv();
@@ -110,6 +132,7 @@ impl OutputHost for FakeHost {
         let mut w = with(&self.0);
         w.ops += 1;
         w.discoveries += 1;
+        w.discovery_calls.push("default");
         let latency = w.discovery_latency;
         w.clock += latency;
         if let Some(shared) = w.start_during_discovery.take() {
@@ -119,9 +142,22 @@ impl OutputHost for FakeHost {
             hook(&mut w);
         }
         w.discovery_threads.push(std::thread::current().id());
-        Ok(w.default
-            .clone()
-            .map(|id| (id, FakeDevice(Arc::clone(&self.0)))))
+        w.default.as_ref()?;
+        Some(FakeDevice(Arc::clone(&self.0)))
+    }
+
+    fn device_id(&mut self, _: &FakeDevice) -> Result<String, cpal::Error> {
+        let block = with(&self.0).block_id.take();
+        if let Some(block) = block {
+            let _ = block.recv();
+        }
+        let mut w = with(&self.0);
+        w.ops += 1;
+        w.discovery_calls.push("id");
+        if let Some(hook) = w.during_id.take() {
+            hook(&mut w);
+        }
+        Ok(w.default.clone().expect("a device was found"))
     }
 }
 

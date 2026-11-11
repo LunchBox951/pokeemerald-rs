@@ -19,19 +19,23 @@ use super::{OutputHost, Shared, Transport, TransportState};
 pub(in crate::audio) struct CpalHost;
 
 impl OutputHost for CpalHost {
+    type Backend = cpal::Host;
     type Device = cpal::Device;
 
-    fn default_output(&mut self) -> Result<Option<(String, cpal::Device)>, cpal::Error> {
-        let host = cpal::default_host();
-        let Some(device) = host.default_output_device() else {
-            return Ok(None);
-        };
+    fn backend(&mut self) -> cpal::Host {
+        cpal::default_host()
+    }
+
+    fn default_device(&mut self, backend: &cpal::Host) -> Option<cpal::Device> {
+        backend.default_output_device()
+    }
+
+    fn device_id(&mut self, device: &cpal::Device) -> Result<String, cpal::Error> {
         // Only an absent default is `None`. A failed identity query (CoreAudio
         // reports a timed-out property read as `DeviceNotAvailable`) stays an
         // error: an attached stream ignores it, and an attempt still
         // classifies these kinds as `NoOutput`.
-        let id = device.id()?;
-        Ok(Some((id.to_string(), device)))
+        device.id().map(|id| id.to_string())
     }
 }
 
