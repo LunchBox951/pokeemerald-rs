@@ -24,13 +24,16 @@ use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEV
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{
-    burn_residual_damage, draw_freeze_canceller, draws_full_paralysis, draws_shed_skin_cure,
-    poison_residual_damage, tick_sleep, FreezeCanceller, SleepTick, Status1,
+    bad_poison_residual_damage, burn_residual_damage, draw_freeze_canceller, draws_full_paralysis,
+    draws_shed_skin_cure, poison_residual_damage, tick_sleep, try_inflict_sleep, FreezeCanceller,
+    SleepTick, Status1,
 };
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod attract_tests;
 pub mod battler_state;
 mod events;
 mod execute;
@@ -129,6 +132,21 @@ pub struct Battle {
     /// battler, `[player, enemy]`, reset whenever a battler leaves or enters
     /// the field.
     battler_states: [BattlerState; 2],
+    /// The player's identity and badge limit; `None` skips the obedience
+    /// gate (every Pokémon obeys).
+    player_obedience: Option<crate::obedience::PlayerObedience>,
+}
+
+/// How `Cmd_attackcanceler`'s tail left one action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    /// The action ended at the abort or the gate; nothing more runs.
+    Ended,
+    /// The action was announced and its PP spent; it executes.
+    Proceed,
+    /// A disobedient battler runs the move in `slot` instead
+    /// (`DISOBEDIENCE_OTHER` with `gCalledMove` set).
+    UsesInstead { slot: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -274,9 +292,9 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
+    /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
-    /// Speed Boost, Color Change, Trace, Flame Body, Cute Charm,
+    /// Speed Boost, Color Change, Trace, Flame Body,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
@@ -356,6 +374,7 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         })
     }
 
@@ -500,7 +519,26 @@ impl Battle {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         })
+    }
+
+    /// Supplies the player's identity and badge limit so the pre-PP
+    /// obedience gate runs for Pokémon of another original trainer
+    /// (`IsMonDisobedient`, `src/battle_util.c:3923`-`:4038`).
+    #[must_use]
+    pub const fn with_player_obedience(
+        mut self,
+        obedience: crate::obedience::PlayerObedience,
+    ) -> Self {
+        self.player_obedience = Some(obedience);
+        self
+    }
+
+    /// The identity and badge limit the obedience gate runs on, if supplied.
+    #[must_use]
+    pub const fn player_obedience(&self) -> Option<&crate::obedience::PlayerObedience> {
+        self.player_obedience.as_ref()
     }
 
     /// Returns the opponent's trainer context, if this is a trainer battle.
@@ -1095,6 +1133,7 @@ impl Battle {
                 continue;
             }
             self.apply_poison_residual(is_player, events);
+            self.apply_bad_poison_residual(is_player, events);
             self.apply_burn_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
@@ -1248,6 +1287,32 @@ impl Battle {
         });
     }
 
+    /// `ENDTURN_BAD_POISON`: a living badly poisoned battler raises its toxic
+    /// count (at most 15) and loses `max(1, max HP / 16)` times that count,
+    /// with no RNG draw and no status write-back
+    /// (`pokeemerald/src/battle_util.c:1536`-`:1549`). It reports through the
+    /// same script and message as ordinary poison.
+    fn apply_bad_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if target.is_fainted() {
+            return;
+        }
+        let max_hp = target.stats().max_hp;
+        let Some(counter) = target.advance_toxic_turns() else {
+            return;
+        };
+        let dealt = bad_poison_residual_damage(max_hp, counter).min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
+    }
+
     /// `ENDTURN_BURN`: a living burned battler loses an eighth of its max HP,
     /// at least one, with no RNG draw (`pokeemerald/src/battle_util.c:1550`-
     /// `:1560`).
@@ -1364,6 +1429,7 @@ impl Battle {
         // first, so the trainer's replacement scores against `MOVE_NONE`
         // (`battle_util.c:1936`-`:1946`, `battle_ai_switch_items.c:772`-`:779`).
         self.player.clear_battle_scratch();
+        self.clear_infatuation_from(BattlerSide::Player);
         self.battler_states[BattlerSide::Player.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1411,12 +1477,22 @@ impl Battle {
         // level crossed this turn snapshots the gain
         // (`src/battle_script_commands.c:3420`).
         self.player.gain_evs(defeated.ev_yield);
-        let pending = self.player.apply_experience(&self.dex, exp)?;
+        let award = self.player.apply_experience_reporting(&self.dex, exp)?;
         events.push(BattleEvent::ExpGained {
             amount: exp,
             boosted,
         });
-        if let Some(prompt) = pending {
+        // `BattleScript_LearnedNewMove` prints each free-slot learn as the
+        // walk reaches it (`data/battle_scripts_1.s:3182`-`:3188`), ahead of
+        // the question the first full-moveset entry opens
+        // (`:3164`-`:3171`).
+        events.extend(
+            award
+                .learned
+                .into_iter()
+                .map(|move_id| BattleEvent::MoveLearned { move_id }),
+        );
+        if let Some(prompt) = award.pending {
             events.push(BattleEvent::MoveLearnPrompt {
                 move_id: prompt.move_id(),
             });
@@ -1480,6 +1556,12 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
+        // The departing member's own copy went with its scratch; the player's
+        // battler is the only other holder, and `context` still borrows
+        // `self.kind`.
+        self.player
+            .volatiles_mut()
+            .clear_infatuation_from(BattlerSide::Enemy);
         self.battler_states[BattlerSide::Enemy.index()] = BattlerState::default();
         // `Cmd_switchineffects` then sets an incoming Truant holder's counter
         // (`battle_script_commands.c:5258`-`:5263`).
@@ -1514,7 +1596,7 @@ impl Battle {
 
     /// Runs one battler's turn-order slot: the sleep decrement, the frozen
     /// draw, the Truant loafing gate, the confusion decrement, the
-    /// full-paralysis draw, the thaw-hit thaw, the Soundproof block, PP
+    /// full-paralysis draw, the infatuation coin, the thaw-hit thaw, the Soundproof block, PP
     /// handling, then
     /// execution.
     ///
@@ -1565,7 +1647,7 @@ impl Battle {
                 // `BattleScript_DoSelfConfusionDmg` cancels the series before
                 // the self-hit lands (`data/battle_scripts_1.s:3802`).
                 self.cancel_multi_turn_moves(player_is_attacker);
-                self.apply_confusion_self_hit(player_is_attacker, move_id, rng, events)?;
+                self.apply_self_hit(player_is_attacker, false, move_id, rng, events)?;
                 self.record_confusion_self_hit(player_is_attacker);
                 return Ok(());
             }
@@ -1586,13 +1668,35 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
+        // `CANCELER_IN_LOVE` follows paralysis and precedes the thaw
+        // (`src/battle_util.c:2188`-`:2262`).
+        if self.cancels_for_love(player_is_attacker, move_id, rng, events)? {
+            return Ok(());
+        }
         if thaws_with_move {
             self.thaw_with_move(player_is_attacker, move_id, events);
         }
-        events.push(BattleEvent::UsedMove {
-            by_player: player_is_attacker,
-            move_id,
-        });
+        self.admit_and_execute(player_is_attacker, move_id, slot, false, rng, events)
+    }
+
+    /// The rest of `Cmd_attackcanceler` once the status cancellers are past:
+    /// the Soundproof block, the no-PP abort, the obedience gate, the
+    /// announcement, `ppreduce` and execution. `obeys` is
+    /// `HITMARKER_OBEYS`: set when a disobedient battler's alternate move
+    /// re-enters here through `jumptocalledmove`
+    /// (`BattleScript_IgnoresAndUsesRandomMove`, `data/battle_scripts_1.s:4227`-
+    /// `:4230`), whose fresh `attackcanceler` reruns the block and the abort
+    /// for the alternate move but skips the gate
+    /// (`battle_script_commands.c:944`).
+    fn admit_and_execute(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        obeys: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
         // test (`battle_script_commands.c:932-939`); the blocked script's
@@ -1608,6 +1712,7 @@ impl Battle {
                     attacker.deduct_pp_by(slot, pp_cost)?;
                 }
             }
+            Self::announce_move(player_is_attacker, move_id, events);
             events.push(BattleEvent::SoundproofProtected {
                 by_player: player_is_attacker,
                 move_id,
@@ -1615,10 +1720,27 @@ impl Battle {
             self.record_cancelled_move(player_is_attacker, move_id)?;
             return Ok(());
         }
-        if !self.spend_pp_or_abort(player_is_attacker, move_id, slot, pp_cost, events)? {
-            return Ok(());
+        match self.spend_pp_or_abort(player_is_attacker, move_id, slot, obeys, rng, events)? {
+            Admission::Ended => Ok(()),
+            Admission::Proceed => self.execute_move(player_is_attacker, move_id, rng, events),
+            Admission::UsesInstead { slot } => {
+                // `jumptocalledmove FALSE` replaces both `gChosenMove` and
+                // `gCurrentMove` (`battle_script_commands.c:5743`-`:5751`),
+                // and `IsMonDisobedient` already moved `gCurrMovePos` to the
+                // drawn slot (`battle_util.c:3989`-`:3993`), so the move-end
+                // records and `ppreduce` see the alternate move.
+                let alternate = self.player.moves()[slot].move_id;
+                // A directly selected move passes `validate_player_move`'s
+                // pipeline and ability-interaction screens before the turn;
+                // the drawn move only exists after the gate's draws, so it
+                // is screened here, against the current participants,
+                // before it is announced or spends PP.
+                ensure_executable(&self.dex, alternate)?;
+                secondary::ensure_admissible(&self.dex, alternate, &self.player, &self.enemy)?;
+                self.last_move_used = alternate;
+                self.admit_and_execute(player_is_attacker, alternate, Some(slot), true, rng, events)
+            }
         }
-        self.execute_move(player_is_attacker, move_id, rng, events)
     }
 
     /// `CANCELER_FROZEN` follows sleep and precedes confusion and paralysis
@@ -1720,8 +1842,11 @@ impl Battle {
 
     /// Runs the attacker's `CANCELER_ASLEEP` step: sleep is decremented ahead
     /// of every other modelled canceller (`src/battle_util.c:2015`-`:2057`).
-    /// A duration that survives cancels the move and returns `true`; expiry
-    /// wakes the attacker and lets the move proceed.
+    /// A duration that survives cancels the move and returns `true`, except
+    /// for Snore and Sleep Talk, which the cancel exempts
+    /// (`src/battle_util.c:2038`): they keep the decrement but proceed to the
+    /// later cancellers and the no-PP abort. Expiry wakes the attacker and
+    /// lets the move proceed.
     fn tick_attacker_sleep(
         &mut self,
         player_is_attacker: bool,
@@ -1737,6 +1862,9 @@ impl Battle {
             SleepTick::NotAsleep => Ok(false),
             SleepTick::StillAsleep(status) => {
                 attacker.set_status1(status);
+                if move_id == MoveId::SNORE || move_id == MoveId::SLEEP_TALK {
+                    return Ok(false);
+                }
                 events.push(BattleEvent::FastAsleep {
                     by_player: player_is_attacker,
                     move_id,
@@ -1754,46 +1882,146 @@ impl Battle {
         }
     }
 
-    /// The no-PP abort and `ppreduce` for a chosen slot; `false` means the
-    /// action ended at the abort.
+    /// `attackstring`: the move announcement every script that reaches it
+    /// prints, after `Cmd_attackcanceler` has let the action through or sent
+    /// it to a script that announces anyway (`BattleScript_NoPPForMove`,
+    /// `BattleScript_SoundproofProtected`). A disobedience refusal prints
+    /// none (`BattleScript_MoveUsedLoafingAround`,
+    /// `BattleScript_IgnoresAndHitsItself`, `data/battle_scripts_1.s:4232`-
+    /// `:4255`).
+    fn announce_move(player_is_attacker: bool, move_id: MoveId, events: &mut Vec<BattleEvent>) {
+        events.push(BattleEvent::UsedMove {
+            by_player: player_is_attacker,
+            move_id,
+        });
+    }
+
+    /// The no-PP abort, `IsMonDisobedient`, the move announcement and
+    /// `ppreduce` for a chosen action.
     ///
-    /// A locked attempt skips both (`Cmd_attackcanceler`,
-    /// `battle_script_commands.c:934`-`:935`; `data/battle_scripts_1.s:1599`-
-    /// `:1600`), so only a series' first attempt spends PP.
+    /// A locked attempt skips the abort, the gate and the PP spend
+    /// (`Cmd_attackcanceler`, `battle_script_commands.c:934`-`:945`;
+    /// `data/battle_scripts_1.s:1599`-`:1600`), so only a series' first
+    /// attempt is screened and spends PP. A slotless action (a forced
+    /// Struggle) has nothing to abort or spend but still faces the gate.
+    /// `obeys` (`HITMARKER_OBEYS`) skips the gate for a disobedient
+    /// battler's alternate move.
     fn spend_pp_or_abort(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
         slot: Option<usize>,
-        pp_cost: u8,
+        obeys: bool,
+        rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) -> Result<bool, BattleError> {
+    ) -> Result<Admission, BattleError> {
+        let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         let locked = self
             .battler_state(BattlerSide::from_is_player(player_is_attacker))
             .locked_move()
             .is_some();
-        let Some(slot) = slot.filter(|_| !locked) else {
-            return Ok(true);
-        };
+        if !locked {
+            if let Some(slot) = slot {
+                let attacker = if player_is_attacker {
+                    &self.player
+                } else {
+                    &self.enemy
+                };
+                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+                // nothing from an empty slot (`:1230`).
+                if attacker.moves()[slot].pp == 0 && move_id != STRUGGLE {
+                    Self::announce_move(player_is_attacker, move_id, events);
+                    events.push(BattleEvent::FailedNoPp {
+                        by_player: player_is_attacker,
+                        move_id,
+                    });
+                    self.record_cancelled_move(player_is_attacker, move_id)?;
+                    return Ok(Admission::Ended);
+                }
+            }
+            if !obeys {
+                match self.run_obedience_gate(player_is_attacker, move_id, slot, rng, events)? {
+                    Admission::Proceed => {}
+                    other => return Ok(other),
+                }
+            }
+        }
+        Self::announce_move(player_is_attacker, move_id, events);
+        if let Some(slot) = slot.filter(|_| !locked) {
+            self.spend_move_pp(player_is_attacker, slot, pp_cost)?;
+        }
+        Ok(Admission::Proceed)
+    }
+
+    /// `Cmd_ppreduce` for one slot: spends `pp_cost`, nothing from an empty
+    /// slot (`battle_script_commands.c:1230`).
+    fn spend_move_pp(
+        &mut self,
+        player_is_attacker: bool,
+        slot: usize,
+        pp_cost: u8,
+    ) -> Result<(), BattleError> {
         let attacker = if player_is_attacker {
             &mut self.player
         } else {
             &mut self.enemy
         };
-        if attacker.moves()[slot].pp > 0 {
-            attacker.deduct_pp_by(slot, pp_cost)?;
-        } else if move_id != STRUGGLE {
-            // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
-            // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
-            // nothing from an empty slot (`:1230`).
-            events.push(BattleEvent::FailedNoPp {
-                by_player: player_is_attacker,
-                move_id,
-            });
-            self.record_cancelled_move(player_is_attacker, move_id)?;
-            return Ok(false);
+        if attacker.moves()[slot].pp == 0 {
+            return Ok(());
         }
-        Ok(true)
+        attacker.deduct_pp_by(slot, pp_cost)
+    }
+
+    /// `IsMonDisobedient` sits after the no-PP abort and before `ppreduce`
+    /// (`battle_script_commands.c:944`-`:957`), so a refused action spends no
+    /// PP. Non-obvious: a loaf and a nap still run `MOVEEND_UPDATE_LAST_MOVES`
+    /// (`data/battle_scripts_1.s:4232`-`:4250`, `battle_script_commands.c:4405`-
+    /// `:4417`), so the attacker becomes its target's last hitter even though
+    /// no move ran. The nap's sleep guards already held at the gate, so
+    /// `SetMoveEffect` cannot fail there (`:2287`-`:2298`).
+    fn run_obedience_gate(
+        &mut self,
+        player_is_attacker: bool,
+        move_id: MoveId,
+        slot: Option<usize>,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<Admission, BattleError> {
+        let Some(obedience) = self.player_obedience.filter(|_| player_is_attacker) else {
+            return Ok(Admission::Proceed);
+        };
+        match crate::obedience::check(&obedience, &self.player, slot, rng)? {
+            crate::obedience::Obedience::Obeys => Ok(Admission::Proceed),
+            crate::obedience::Obedience::Loafs(message) => {
+                events.push(BattleEvent::Disobeyed { message });
+                self.record_cancelled_move(true, move_id)?;
+                Ok(Admission::Ended)
+            }
+            crate::obedience::Obedience::UsesInstead { slot } => {
+                let alternate = self.player.moves()[slot].move_id;
+                crate::obedience::draw_move_target(self.dex.move_data(alternate)?.target, rng);
+                events.push(BattleEvent::IgnoredOrders);
+                Ok(Admission::UsesInstead { slot })
+            }
+            crate::obedience::Obedience::Naps => {
+                let Some(asleep) =
+                    try_inflict_sleep(self.player.status1(), self.player.ability(), rng)
+                else {
+                    unreachable!("the nap draw already required a healthy, non-Insomnia, non-Vital Spirit sleeper");
+                };
+                self.player.set_status1(asleep);
+                self.cancel_multi_turn_moves(true);
+                events.push(BattleEvent::DisobedientNap);
+                self.record_cancelled_move(true, move_id)?;
+                Ok(Admission::Ended)
+            }
+            crate::obedience::Obedience::HurtsItself => {
+                self.apply_self_hit(true, true, move_id, rng, events)?;
+                self.record_confusion_self_hit(true);
+                Ok(Admission::Ended)
+            }
+        }
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one
@@ -1928,6 +2156,7 @@ mod tests {
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
             battler_states: [BattlerState::default(); 2],
+            player_obedience: None,
         };
         (battle, player_max_hp, player_move_max_pp)
     }

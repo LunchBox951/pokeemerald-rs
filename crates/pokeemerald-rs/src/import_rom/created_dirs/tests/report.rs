@@ -370,7 +370,7 @@ fn a_level_swapped_out_of_its_quarantine_before_put_back_is_reported_where_it_we
     mark_path("level at: ", &level);
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_level_swapped_out_of_its_quarantine_before_its_unlink_is_reported_where_it_went() {
     // The capture is found to be this level; before its unlink another
@@ -460,4 +460,130 @@ fn a_quarantine_renamed_before_its_removal_is_reported_where_it_went() {
     assert!(!level.exists() && !name.exists());
     assert!(entry_names(&away).is_empty(), "the moved quarantine stays");
     mark_path("quarantine at: ", &away);
+}
+
+#[cfg(unix)]
+mod path_probe {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::path::{Path, PathBuf};
+
+    use super::super::take_back::verified_location;
+    use super::*;
+
+    fn candidate(path: &Path) -> CString {
+        CString::new(path.as_os_str().as_bytes()).unwrap()
+    }
+
+    fn stat_of(path: &Path) -> rustix::fs::Stat {
+        rustix::fs::stat(path).unwrap()
+    }
+
+    /// The directory at `path` held open, as rollback holds a level, so
+    /// its inode cannot be recycled while the test removes and replaces it.
+    fn held(path: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
+        rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+            rustix::fs::Mode::empty(),
+        )
+    }
+
+    #[test]
+    fn a_path_that_resolves_to_the_held_directory_is_its_location() {
+        let dir = TempDir::new("verified-location-match");
+        let level = dir.join("level");
+        fs::create_dir(&level).unwrap();
+        assert_eq!(
+            verified_location(Ok(candidate(&level)), &stat_of(&level)),
+            Ok(Some(PathBuf::from(&level)))
+        );
+    }
+
+    #[test]
+    fn a_path_that_no_longer_resolves_is_not_a_location() {
+        // What a removed directory reads back through `F_GETPATH`: its old
+        // path, now vacant.
+        let dir = TempDir::new("verified-location-vacant");
+        let level = dir.join("level");
+        fs::create_dir(&level).unwrap();
+        let own = held(&level).unwrap();
+        let held = rustix::fs::fstat(&own).unwrap();
+        fs::remove_dir(&level).unwrap();
+        assert_eq!(verified_location(Ok(candidate(&level)), &held), Ok(None));
+    }
+
+    #[test]
+    fn a_path_taken_by_another_directory_is_not_a_location() {
+        // The old path of a removed directory, retaken by a replacement.
+        let dir = TempDir::new("verified-location-retaken");
+        let level = dir.join("level");
+        fs::create_dir(&level).unwrap();
+        let own = held(&level).unwrap();
+        let held = rustix::fs::fstat(&own).unwrap();
+        fs::remove_dir(&level).unwrap();
+        fs::create_dir(&level).unwrap();
+        assert_ne!(stat_of(&level).st_ino, held.st_ino);
+        assert_eq!(verified_location(Ok(candidate(&level)), &held), Ok(None));
+    }
+
+    #[test]
+    fn a_symlink_to_the_held_directory_is_not_its_location() {
+        let dir = TempDir::new("verified-location-symlink");
+        let (level, link) = (dir.join("level"), dir.join("link"));
+        fs::create_dir(&level).unwrap();
+        std::os::unix::fs::symlink(&level, &link).unwrap();
+        assert_eq!(
+            verified_location(Ok(candidate(&link)), &stat_of(&level)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_failed_or_relative_answer_is_not_a_location() {
+        let dir = TempDir::new("verified-location-unanswered");
+        let held = stat_of(&dir.path);
+        assert_eq!(
+            verified_location(Err(rustix::io::Errno::NOENT), &held),
+            Ok(None)
+        );
+        let cwd = stat_of(Path::new("."));
+        assert_eq!(
+            verified_location(Ok(candidate(Path::new("."))), &cwd),
+            Ok(None),
+            "a relative path says nothing about where the directory is"
+        );
+    }
+
+    #[test]
+    fn a_path_whose_examination_fails_is_not_reported_as_vacant() {
+        // A file where a directory should be makes the path unexaminable
+        // (`ENOTDIR`), which is not the entry being vacant (`ENOENT`).
+        let dir = TempDir::new("verified-location-unexaminable");
+        let (file, level) = (dir.join("file"), dir.join("level"));
+        fs::write(&file, b"").unwrap();
+        fs::create_dir(&level).unwrap();
+        let held = stat_of(&level);
+        assert_eq!(
+            verified_location(Ok(candidate(&file.join("level"))), &held),
+            Err(rustix::io::Errno::NOTDIR),
+            "an examination that failed is an error, not a vacant path"
+        );
+        let vacant = dir.join("vacant");
+        assert_eq!(
+            verified_location(Ok(candidate(&vacant)), &held),
+            Ok(None),
+            "a vacant path is not a location"
+        );
+    }
+
+    #[test]
+    fn a_platform_answer_that_failed_unexpectedly_is_an_error() {
+        let dir = TempDir::new("verified-location-getpath-failed");
+        let held = stat_of(&dir.path);
+        assert_eq!(
+            verified_location(Err(rustix::io::Errno::ACCESS), &held),
+            Err(rustix::io::Errno::ACCESS)
+        );
+    }
 }

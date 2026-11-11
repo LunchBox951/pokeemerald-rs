@@ -9,8 +9,9 @@
 //! scripting battler and the afflicted battler as the effect battler.
 
 use assets::{AbilityId, Effectiveness};
-use battle::{BattleEvent, ChangedStat, Status1};
+use battle::{BattleEvent, ChangedStat, LoafMessage, Status1};
 
+use super::attract;
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
 use super::lifecycle;
 use super::names::NarrationNames;
@@ -18,7 +19,7 @@ use super::narrator::Narrator;
 use super::string_ids as id;
 use super::{NarrationError, NarrationRequest, TemplateId};
 
-fn table(template: u16, context: NarrationContext) -> NarrationRequest {
+pub(super) fn table(template: u16, context: NarrationContext) -> NarrationRequest {
     NarrationRequest {
         template: TemplateId::Table(template),
         context,
@@ -60,7 +61,9 @@ fn stat_change_buffer(rose: bool, magnitude: u8) -> BattleBuffer {
 
 fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     match status {
-        Status1::Poisoned => Ok(BattleBuffer::Status(StatusName::Poison)),
+        Status1::Poisoned | Status1::BadPoisoned { .. } => {
+            Ok(BattleBuffer::Status(StatusName::Poison))
+        }
         Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
@@ -81,7 +84,13 @@ pub(super) fn requests(
     if let Some(requests) = setseeded_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = attract::requests(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = sleep_results(narrator, event) {
+        return Ok(requests);
+    }
+    if let Some(requests) = disobedience_results(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = ability_results(narrator, event)? {
@@ -142,6 +151,57 @@ fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         context = context.with_move(move_id);
     }
     Some(vec![table(template, context)])
+}
+
+/// `IsMonDisobedient`'s outcomes, in the user's own name and with no move
+/// announcement of the chosen move: a loaf prints the drawn
+/// `gInobedientStringIds` entry (`BattleScript_MoveUsedLoafingAround`,
+/// `data/battle_scripts_1.s:4232`-`:4242`; `src/battle_message.c:1176`-
+/// `:1182`); the alternate move prints `STRINGID_PKMNIGNOREDORDERS` before
+/// the move's own announcement (`BattleScript_IgnoresAndUsesRandomMove`,
+/// `:4227`-`:4230`); the nap prints `STRINGID_PKMNBEGANTONAP` and then
+/// `SetMoveEffect`'s `gFellAsleepStringIds` entry for the user as
+/// `gEffectBattler` (`BattleScript_IgnoresAndFallsAsleep`, `:4244`-`:4250`;
+/// `BattleScript_MoveEffectSleep`, `:3869`-`:3872`); the self-hit prints
+/// `STRINGID_PKMNWONTOBEY` before `BattleScript_DoSelfConfusionDmg`'s
+/// `STRINGID_ITHURTCONFUSION` (`:4252`-`:4255`, `:3801`-`:3804`). Only the
+/// player's battler is gated, so the fieldless events name the player's side.
+fn disobedience_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    match event {
+        BattleEvent::IgnoredOrders => Some(vec![table(
+            id::PKMNIGNOREDORDERS,
+            narrator.context().user_vs_target(Side::user(true)),
+        )]),
+        BattleEvent::DisobedientNap => {
+            let user = Side::user(true);
+            let mut asleep = narrator.context().user_vs_target(user);
+            asleep.effect = Some(user);
+            Some(vec![
+                table(id::PKMNBEGANTONAP, narrator.context().user_vs_target(user)),
+                table(id::PKMNFELLASLEEP, asleep),
+            ])
+        }
+        BattleEvent::Disobeyed { message } => {
+            let template = match message {
+                LoafMessage::Loafing => id::PKMNLOAFING,
+                LoafMessage::WontObey => id::PKMNWONTOBEY,
+                LoafMessage::TurnedAway => id::PKMNTURNEDAWAY,
+                LoafMessage::PretendedNotToNotice => id::PKMNPRETENDNOTNOTICE,
+            };
+            Some(vec![table(
+                template,
+                narrator.context().user_vs_target(Side::user(true)),
+            )])
+        }
+        BattleEvent::DisobedientSelfHit { by_player, .. } => Some(vec![
+            table(
+                id::PKMNWONTOBEY,
+                narrator.context().user_vs_target(Side::user(*by_player)),
+            ),
+            table(id::ITHURTCONFUSION, narrator.context()),
+        ]),
+        _ => None,
+    }
 }
 
 /// Announcements and failures printed in the user's own name.
