@@ -33538,10 +33538,10 @@
           "status": "stubbed"
         },
         "PrintControls": {
-          "reason": "PrintControls (naming_screen.c:1998-2006): the banner window filled with 15 and gText_MoveOkBack printed in FONT_SMALL at (2, 1), white on dark gray, in bank 11. Not modelled: the D-pad, A and B keypad icons, whose keypad_icons art is not in the asset pack; the banner reserves each icon's 8 pixels and draws only the words.",
+          "reason": "PrintControls (naming_screen.c:1998-2006): fills the banner window with index 15 and prints the charmap-encoded gText_MoveOkBack (strings.c:1593) in FONT_SMALL at (2,1), foreground 1 and shadow 2, in bank 11. Printer keypad placements draw DPAD_NONE, A and B as 8x12 rectangles from the pack-backed KeypadIconSheet; window index 0 is transparent and other icon indices copy unchanged (text.c:98-115,1114-1118,1609-1623; window.c:398-413). The compositor retains the resulting window tiles.",
           "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
           "spec": "I-3",
-          "status": "stubbed"
+          "status": "rewritten"
         },
         "PrintKeyboardKeys": {
           "reason": "PrintKeyboardKeys (naming_screen.c:1927-1959) with sFillValues and the sNamingScreenKeyboardText rows of text_input_strings.c:10-21, rewritten as NamingScene's per-page 152x64 window: page fill (13 upper, 14 lower, 15 symbols), white-on-dark-gray FONT_NORMAL rows at y = 16 * row + 1, the {CLEAR n} gaps of KeyboardPage::clear_gaps, and sPageColumnXPos as KeyboardPage::column_x_offsets in page_spec.rs. Printed through the engine Printer with every glyph revealed at once.",
@@ -34866,6 +34866,12 @@
     },
     "src/strings.c": {
       "artifacts": {
+        "gText_MoveOkBack": {
+          "reason": "gText_MoveOkBack (strings.c:1593): DPAD_NONE, MOVE, two spaces, A_BUTTON, OK, two spaces, B_BUTTON, BACK, held as charmap bytes through EOS (charmap.txt) and decoded by engine::text::decode for the naming controls banner.",
+          "rust_target": "crates/pokeemerald-rs/src/naming/compositor.rs",
+          "spec": "I-3",
+          "status": "ported"
+        },
         "gText_PkmnFainted_FldPsn": {
           "reason": "src/strings.c:1189 defines gText_PkmnFainted_FldPsn as {STR_VAR_1} fainted…\\p\\n, shown by Task_TryFieldPoisonWhiteOut (src/field_poison.c:76). Its charmap token stream through EOS is extracted into field-message/table by crates/xtask/src/extract/field_message.rs (src/strings.c through charmap.txt) and by crates/rom-import/src/domains/field_messages.rs (profiled EOS-terminated root), validated by assets::pack::FieldMessageTable, with the {STR_VAR_1} placeholder, \\p, newline, single-glyph ellipsis, and EOS retained. Only this one symbol is modelled; message sequencing, nickname substitution, and the poison white-out task are not.",
           "rust_target": "crates/rom-import/src/domains/field_messages.rs",
@@ -34897,7 +34903,7 @@
           "status": "rewritten"
         },
         "DrawKeypadIcon": {
-          "reason": "DrawKeypadIcon (text.c:1609-1623): BlitBitmapRectToWindow copies the icon's width x 12 rectangle out of sKeypadIconTiles at its tile offset with the sheet's 128-pixel row stride and colour key 0 (window.c:398-413), so index 0 is transparent and every other index lands in the window unchanged. textbox.rs's blit_keypad_icon does the same into the framebuffer: KeypadIconSheet::pixel resolves an icon-local offset to a sheet pixel, and the window's loaded palette colours the index directly rather than through the four glyph roles. NpcDialog, IntroScene and the start menu's message box retain the placement Printer::keypad_icon reports after each tick as a WindowOp::KeypadIcon, so a later CLEAR/CLEAR_TO or window scroll acts on the icon like on a glyph. The label printers of the main menu, options, start menu and bag build their own Char/Newline/End streams and never emit a keypad-icon token, so they carry no icon sheet; an icon-bearing label would need one threaded in.",
+          "reason": "DrawKeypadIcon (text.c:1609-1623): BlitBitmapRectToWindow copies the icon's width x 12 rectangle out of sKeypadIconTiles at its tile offset with the sheet's 128-pixel row stride and colour key 0 (window.c:398-413), so index 0 is transparent and every other index lands in the window unchanged. textbox.rs's blit_keypad_icon does the same into the framebuffer: KeypadIconSheet::pixel resolves an icon-local offset to a sheet pixel, and the window's loaded palette colours the index directly rather than through the four glyph roles. NpcDialog, IntroScene and the start menu's message box retain the placement Printer::keypad_icon reports after each tick as a WindowOp::KeypadIcon, so a later CLEAR/CLEAR_TO or window scroll acts on the icon like on a glyph. The label printers of the main menu, options, start menu and bag build their own Char/Newline/End streams and never emit a keypad-icon token, so they carry no icon sheet; an icon-bearing label would need one threaded in. The naming controls banner also consumes Printer::keypad_icon in crates/pokeemerald-rs/src/naming/compositor/text.rs, copying the same nonzero sheet indices into its indexed WindowBuffer before tile composition.",
           "rust_target": "crates/pokeemerald-rs/src/textbox.rs",
           "spec": "S-5",
           "status": "rewritten"
