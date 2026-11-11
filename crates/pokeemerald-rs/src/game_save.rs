@@ -175,9 +175,12 @@ enum BaseReconcile {
 /// this session's storage into both slots within two saves. Exactly antipodal
 /// counters ([`counters_are_antipodal`]) are unordered, and upstream's slot
 /// choice (`pokeemerald/src/save.c:586-602`) always orders two different
-/// counters, so such a counter proves no lineage: it keeps only an identical
-/// base and is otherwise refused, even on `donor_lost`, which describes the
-/// session's own legacy head and so needs equal counters.
+/// counters, so such a counter proves no lineage: it keeps an identical base
+/// and is otherwise refused, even on `donor_lost`, which describes the
+/// session's own legacy head and so needs equal counters. The one exception
+/// is `damage_fallback`: there the reload has no intact slot and resolves to
+/// counter zero, which is antipodal to a session at `2^31`, so there is no
+/// save to protect and the session's cached base is restored.
 ///
 /// A disk the session is ahead of is no different: a lower counter proves
 /// damage no more than an equal one proves lineage. It restores over an
@@ -202,6 +205,8 @@ const fn reconcile_base(
     } else if counters_are_antipodal(disk, session) {
         if same_base {
             BaseReconcile::Keep
+        } else if damage_fallback {
+            BaseReconcile::Restore
         } else {
             BaseReconcile::Refuse
         }
@@ -487,7 +492,9 @@ impl SaveSlot {
                 // The reload above fell back past a generation damaged since
                 // the session read it (tests::healing_a_damaged_newest_slot_*),
                 // or kept the same legacy head but lost the donor that
-                // supplied its storage (tests::equal_counter_donor_loss_*);
+                // supplied its storage (tests::equal_counter_donor_loss_*),
+                // or found no intact slot at all, even at the half-range
+                // counter (tests::a_session_at_the_half_range_counter_*);
                 // any other equal-, lower- or antipodal-counter mismatch is refused
                 // (tests::an_equal_counter_replacement_is_refused_*,
                 // tests::an_older_counter_unrelated_replacement_is_refused_*,

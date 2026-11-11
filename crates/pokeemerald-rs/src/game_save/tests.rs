@@ -1551,7 +1551,8 @@ fn an_antipodal_counter_unrelated_replacement_is_refused_rather_than_overwritten
 
 /// The unordered half-range boundary in the pure reconcile: only an identical
 /// base keeps; nothing else, not even a lost donor (which needs the session's
-/// own equal-counter head), makes it safe to write over.
+/// own equal-counter head), makes it safe to write over. A reload with no
+/// intact slot (`damage_fallback`) has nothing to protect and restores.
 #[test]
 fn an_antipodal_counter_keeps_only_an_identical_base() {
     use super::{reconcile_base, BaseReconcile};
@@ -1571,7 +1572,66 @@ fn an_antipodal_counter_keeps_only_an_identical_base() {
         );
         assert_eq!(
             reconcile_base(disk, session, false, false, true),
-            BaseReconcile::Refuse
+            BaseReconcile::Restore
         );
+    }
+}
+
+/// How [`a_session_at_the_half_range_counter_recreates_a_lost_save`] takes
+/// the session's save away after load.
+#[derive(Debug, Clone, Copy)]
+enum SaveLoss {
+    /// The save file is deleted.
+    Deleted,
+    /// The session's only slot is damaged beside an erased one, so neither
+    /// slot is intact.
+    BothSlotsCorrupt,
+}
+
+/// A reload with no intact slot resolves to counter zero, which is exactly
+/// antipodal to a session at `2^31`. No foreign progress is left to protect,
+/// so the session recreates its save on its cached base, as it does at any
+/// other counter, instead of being refused as a conflicting save.
+#[test]
+fn a_session_at_the_half_range_counter_recreates_a_lost_save() {
+    const SESSION_COUNTER: u32 = 1 << 31;
+    for loss in [SaveLoss::Deleted, SaveLoss::BothSlotsCorrupt] {
+        let temp = TempSave::new(&format!("half-range-lost-save-{loss:?}"));
+        let (block1, block2) = replacement_blocks();
+        write_full_generation(
+            &temp,
+            SESSION_COUNTER,
+            &block1,
+            &block2,
+            SESSION_STORAGE_FILL,
+        );
+        let mut slot = temp.slot();
+        assert_eq!(slot.load().status, SaveFileStatus::Ok);
+        assert_eq!(slot.session_counter, Some(SESSION_COUNTER));
+
+        // The damaged slot stays damaged after the rewrite, so that reload
+        // reports `Error` over the recreated generation.
+        let (lost_status, recreated_status) = match loss {
+            SaveLoss::Deleted => {
+                std::fs::remove_file(&temp.path).unwrap();
+                (SaveFileStatus::Empty, SaveFileStatus::Ok)
+            }
+            SaveLoss::BothSlotsCorrupt => {
+                let mut image = std::fs::read(&temp.path).unwrap();
+                corrupt_sector_payload(&mut image, 1);
+                std::fs::write(&temp.path, &image).unwrap();
+                (SaveFileStatus::Corrupt, SaveFileStatus::Error)
+            }
+        };
+        assert_eq!(temp.slot().load().status, lost_status, "{loss:?}");
+
+        let outcome = slot
+            .store(&block1, &block2, SaveLineage::Continued)
+            .unwrap();
+        assert_eq!(outcome, super::StoreOutcome::Written, "{loss:?}");
+        let saved = temp.slot().load();
+        assert_eq!(saved.status, recreated_status, "{loss:?}");
+        assert_eq!(saved.block1.money, block1.money, "{loss:?}");
+        assert_slot_storage(&temp, 1, 1, SESSION_STORAGE_FILL);
     }
 }
