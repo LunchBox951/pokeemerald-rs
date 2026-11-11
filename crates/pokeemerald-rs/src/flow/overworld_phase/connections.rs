@@ -198,16 +198,31 @@ impl OverworldPhase {
         overworld::OverworldScene,
         ObjectEventCollection,
     )> {
+        let (event_data, scene) = self.stage_scene(map, &[])?;
+        let object_events = seed_object_events(&scene);
+        Some((event_data, scene, object_events))
+    }
+
+    /// [`Self::stage_transition`] without the live object events, for the crossing, whose
+    /// collection carries the departed visit's entries rather than starting over.
+    ///
+    /// `carried` are the templates of the live objects the scene keeps; it binds their
+    /// sprites beside its own events'.
+    fn stage_scene(
+        &self,
+        map: assets::MapId,
+        carried: &[&'static assets::ObjectEvent],
+    ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
-        let scene = overworld::load_room_from_source(
+        let scene = overworld::load_room_carrying_from_source(
             &self.pack_source,
             map,
             self.save2.player_gender.into(),
             &event_data,
+            carried,
         )
         .ok()?;
-        let object_events = seed_object_events(&scene);
-        Some((event_data, scene, object_events))
+        Some((event_data, scene))
     }
 
     /// Executes a resolved [`engine::overworld::WarpTrigger::Resolved`]
@@ -469,7 +484,10 @@ impl OverworldPhase {
     /// the pre-step stance. Returns `true` on a completed rebind.
     ///
     /// `shift` is the departed-to-entered tile translation the player's own
-    /// step went through; the player's live tall-grass effects follow it.
+    /// step went through; the live object events still in view follow it
+    /// ([`ObjectEventCollection::carry_across_connection`]), and so do the live
+    /// tall-grass effects of the player and of those objects. Unlike a warp, no
+    /// freshly seeded collection replaces the departed one.
     pub(super) fn cross_connection(
         &mut self,
         to_map: assets::MapId,
@@ -483,9 +501,15 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, mut scene, object_events)) =
-            self.stage_transition(to_map)
-        else {
+        // The scene binds the sprites of every object it keeps, which its own events' need not
+        // cover.
+        let carried: Vec<&'static assets::ObjectEvent> = self
+            .object_events
+            .iter()
+            .filter(|entry| entry.is_active())
+            .map(engine::overworld::object_event::LiveObjectEvent::template)
+            .collect();
+        let Some((transitioned_event_data, mut scene)) = self.stage_scene(to_map, &carried) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -494,9 +518,21 @@ impl OverworldPhase {
         };
 
         assert_scene_owns_map(&scene, to_map);
-        // The player's still-live rustle follows the camera into the entered
-        // map's coordinates (`field_effect_helpers.c:325-330`).
-        scene.carry_tall_grass_from(&self.scene, shift);
+        // The departed visit's active objects stay live, shifted into the entered map's
+        // coordinates (`LoadMapFromCameraTransition` leaves them in place). The entered map's
+        // templates enter unadmitted, and the next frame's camera update spawns before it
+        // removes, as `UpdateObjectEventsForCameraUpdate` does
+        // (`event_object_movement.c:2217-2222`). Built whole before anything is assigned, so a
+        // refused rebind above touched nothing.
+        let object_events = self.object_events.carry_across_connection(
+            self.map_id,
+            to_map,
+            scene.map_events().object_events,
+            shift,
+        );
+        // The still-live rustles, the player's and those of the objects just kept, follow the
+        // camera into the entered map's coordinates (`field_effect_helpers.c:325-330`).
+        scene.carry_tall_grass_from(&self.scene, shift, &object_events);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;

@@ -181,8 +181,10 @@ pub(crate) struct OverworldPhase {
     pub(super) map_id: assets::MapId,
     /// Live object events for the current map visit, seeded from the same
     /// resolved events the scene simulates
-    /// ([`connections::seed_object_events`]) and replaced only by a
-    /// completed map transition.
+    /// ([`connections::seed_object_events`]) and replaced by a warp; a
+    /// connection crossing instead carries the in-view entries forward beside
+    /// the entered map's seeds
+    /// ([`ObjectEventCollection::carry_across_connection`]).
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
@@ -1033,6 +1035,8 @@ mod animated_door_elevation_tests;
 mod animation_tick_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
+#[cfg(test)]
+mod connection_live_objects_tests;
 #[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
