@@ -212,7 +212,9 @@ impl ObjectEventCollection {
     /// one only when the view and its hide flag allow, as at any map load, so a crossing never
     /// activates one by itself. A template whose object is already live, because an entry
     /// originally of `entered` survived the trip out and back, is that entry rather than a second
-    /// one (`GetAvailableObjectEventId`, `:1362-1381`). Entries still carried from another map
+    /// one (`GetAvailableObjectEventId`, `:1362-1381`), and it takes that template for its next
+    /// spawn, as upstream's reloaded template array serves it (`TrySpawnObjectEvents`,
+    /// `:1666-1672`). Entries still carried from another map
     /// follow the templates, so the entered map's own indices never move.
     #[must_use]
     pub fn carry_across_connection(
@@ -242,6 +244,11 @@ impl ObjectEventCollection {
             entries.push(if let Some(index) = returned {
                 let mut entry = carried.remove(index);
                 entry.carried_from = None;
+                // The entered map's templates were reloaded, and its on-transition script may
+                // have moved this one: the live object keeps its state, but its next spawn
+                // reads the reloaded template.
+                entry.template = template;
+                entry.state.reload_template_snapshots(template);
                 entry
             } else {
                 let id = next_id;
@@ -885,6 +892,54 @@ mod tests {
                 "its live tile came back with it"
             );
             assert!(std::ptr::eq(walked.template(), &raw const templates[1]));
+        }
+
+        #[test]
+        fn a_survivor_that_returns_takes_the_reloaded_template_for_its_next_respawn() {
+            // Upstream's crossing reloads the entered map's templates from its header and reruns
+            // its on-transition script (`LoadObjEventTemplatesFromHeader`,
+            // `RunOnTransitionMapScript`, `overworld.c:796,807`), so a placement such as Oldale
+            // Town's flag-gated `setobjectxyperm` can differ from the one the survivor spawned
+            // from. A live object keeps its tile; its next spawn reads the reloaded template
+            // (`TrySpawnObjectEvents`, `event_object_movement.c:1666-1672`).
+            let before = leaked(vec![fixed(1, 5, 6)]);
+            let mut rig = Rig::new(vec![], (5, 5));
+            rig.collection = ObjectEventCollection::from_templates(before);
+            rig.tick(1);
+            let away =
+                rig.collection
+                    .carry_across_connection(DEPARTED, ENTERED, leaked(vec![]), SHIFT);
+            let after = leaked(vec![template(
+                1,
+                5,
+                9,
+                MovementType::FaceLeft,
+                NEVER_HIDDEN,
+            )]);
+            let mut back =
+                away.carry_across_connection(ENTERED, DEPARTED, after, (-SHIFT.0, -SHIFT.1));
+
+            let returned = back.get(1).unwrap();
+            assert!(returned.is_active());
+            assert_eq!(returned.state().position(), (5, 6), "the live tile is kept");
+            assert!(std::ptr::eq(returned.template(), &raw const after[0]));
+            assert_eq!(returned.state().template_position(), (5, 9));
+            assert_eq!(
+                returned.state().template_movement_type(),
+                MovementType::FaceLeft
+            );
+
+            frame(&mut back, (5, 60));
+            assert!(!back.get(1).unwrap().is_active(), "out of view, removed");
+            frame(&mut back, (5, 9));
+            let respawned = back.get(1).unwrap();
+            assert!(respawned.is_active());
+            assert_eq!(
+                respawned.state().position(),
+                (5, 9),
+                "respawned at the reloaded template's tile"
+            );
+            assert_eq!(respawned.state().movement_type(), MovementType::FaceLeft);
         }
 
         #[test]

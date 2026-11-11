@@ -380,6 +380,14 @@ impl ObjectEventState {
     pub const fn override_template_movement_type(&mut self, movement_type: MovementType) {
         self.template_movement_type = movement_type;
     }
+
+    /// Replaces the template-position and template-movement snapshots with `event`'s, as a map
+    /// load rewrites the templates a later spawn reads (`LoadObjEventTemplatesFromHeader`,
+    /// `overworld.c:796`); the live tile, facing, and movement type are kept.
+    pub fn reload_template_snapshots(&mut self, event: &ObjectEvent) {
+        self.template_position = (i32::from(event.x), i32::from(event.y));
+        self.template_movement_type = event.movement_type;
+    }
 }
 
 #[cfg(test)]
