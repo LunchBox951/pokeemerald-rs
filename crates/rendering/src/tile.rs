@@ -51,6 +51,17 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// The largest palette index a [`BitDepth::Bpp4`] tile can hold.
+    const MAX_4BPP_INDEX: u8 = 0x0F;
+
+    /// A tile of palette index 0 everywhere: transparent on every OBJ and BG.
+    #[must_use]
+    pub const fn transparent() -> Self {
+        Self {
+            indices: [0; BitDepth::TILE_DIM * BitDepth::TILE_DIM],
+        }
+    }
+
     /// The palette index at `(x, y)`.
     ///
     /// # Panics
@@ -117,6 +128,33 @@ impl Tileset {
             BitDepth::Bpp8 => Tile::decode_8bpp,
         };
         let tiles = data.chunks_exact(tile_len).map(decode_one).collect();
+        Ok(Self { bit_depth, tiles })
+    }
+
+    /// Builds a set from already decoded tiles sharing `bit_depth`.
+    ///
+    /// A [`Tile`] does not record the depth it was decoded at, so the set
+    /// checks it: a [`BitDepth::Bpp4`] set rejects any index above 15. Without
+    /// the check a wider index would pass the nonzero transparency test yet be
+    /// masked to a 4bpp palette entry, drawing opaque where index 0 is
+    /// transparent. Every [`BitDepth::Bpp8`] index is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::TileIndexExceedsBitDepth`] for the first tile
+    /// holding an index beyond `bit_depth`'s range.
+    pub fn from_tiles(bit_depth: BitDepth, tiles: Vec<Tile>) -> Result<Self, RenderError> {
+        if bit_depth == BitDepth::Bpp4 {
+            for (tile, decoded) in tiles.iter().enumerate() {
+                if let Some(&index) = decoded.indices.iter().find(|&&i| i > Tile::MAX_4BPP_INDEX) {
+                    return Err(RenderError::TileIndexExceedsBitDepth {
+                        bit_depth,
+                        tile,
+                        index,
+                    });
+                }
+            }
+        }
         Ok(Self { bit_depth, tiles })
     }
 
@@ -325,6 +363,30 @@ mod tests {
                 len: INVALID_8BPP_LEN,
             }
         );
+    }
+
+    #[test]
+    fn from_tiles_accepts_in_range_indices_and_rejects_wider_ones() {
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len() * 2];
+        bytes[BitDepth::Bpp8.tile_byte_len() + 63] = 15;
+        let narrow = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let tiles: Vec<Tile> = (0..2).map(|i| *narrow.tile(i).unwrap()).collect();
+        let set = Tileset::from_tiles(BitDepth::Bpp4, tiles.clone()).unwrap();
+        assert_eq!((set.bit_depth(), set.len()), (BitDepth::Bpp4, 2));
+
+        // The offending tile and index are reported; an 8bpp set takes any.
+        bytes[BitDepth::Bpp8.tile_byte_len() + 63] = 255;
+        let wide = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let tiles: Vec<Tile> = (0..2).map(|i| *wide.tile(i).unwrap()).collect();
+        assert_eq!(
+            Tileset::from_tiles(BitDepth::Bpp4, tiles.clone()).unwrap_err(),
+            RenderError::TileIndexExceedsBitDepth {
+                bit_depth: BitDepth::Bpp4,
+                tile: 1,
+                index: 255,
+            }
+        );
+        assert!(Tileset::from_tiles(BitDepth::Bpp8, tiles).is_ok());
     }
 
     #[test]

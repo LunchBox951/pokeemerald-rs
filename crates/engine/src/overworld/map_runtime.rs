@@ -198,6 +198,20 @@ impl<'a> MapRuntime<'a> {
         live.into_iter().flatten().chain(authored)
     }
 
+    /// Returns the map `template`'s live entry was carried out of by a connection crossing
+    /// ([`LiveObjectEvent::carried_from`]), or `None` for an entry of this map, an unbound
+    /// runtime, or a template no bound entry was seeded from.
+    ///
+    /// Entries are told apart by template identity, not value: a collection never holds two
+    /// entries over one template, because an object already live is not spawned a second time.
+    #[must_use]
+    pub fn carried_from(&self, template: &ObjectEvent) -> Option<MapId> {
+        self.object_events?
+            .iter()
+            .find(|entry| std::ptr::eq(entry.template(), template))?
+            .carried_from()
+    }
+
     /// Returns the first warp at `(x, y, elevation)`.
     ///
     /// A stored [`super::collision::ELEVATION_TRANSITION`] matches any query
@@ -359,6 +373,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections,
         }
     }
@@ -655,7 +670,7 @@ mod tests {
         let scripts: Vec<&str> = candidates
             .iter()
             .map(|c| match c.kind {
-                CoordEventKind::Trigger { script, .. } => script,
+                CoordEventKind::Trigger { script, .. } => script.id(),
                 CoordEventKind::Weather(_) => "<weather>",
             })
             .collect();
@@ -677,10 +692,8 @@ mod tests {
         });
         assert!(matches!(
             picked.map(|c| c.kind),
-            Some(CoordEventKind::Trigger {
-                script: "LittlerootTown_EventScript_GoSaveBirchTrigger",
-                ..
-            })
+            Some(CoordEventKind::Trigger { script, .. })
+                if script.id() == "LittlerootTown_EventScript_GoSaveBirchTrigger"
         ));
     }
 
@@ -704,10 +717,8 @@ mod tests {
         assert!(
             matches!(
                 candidates[1].kind,
-                CoordEventKind::Trigger {
-                    script: "JaggedPass_EventScript_OpenMagmaHideout",
-                    ..
-                }
+                CoordEventKind::Trigger { script, .. }
+                    if script.id() == "JaggedPass_EventScript_OpenMagmaHideout"
             ),
             "the trigger behind the weather event must still be reachable"
         );
@@ -728,7 +739,7 @@ mod tests {
                 movement_range_y: 0,
                 trainer_type: assets::TrainerType::None,
                 trainer_sight_or_berry_tree_id: "0",
-                script: "0x0",
+                script: None,
                 flag: "0",
             },
             ObjectEvent {
@@ -742,7 +753,7 @@ mod tests {
                 movement_range_y: 0,
                 trainer_type: assets::TrainerType::None,
                 trainer_sight_or_berry_tree_id: "0",
-                script: "0x0",
+                script: None,
                 flag: "0",
             },
             ObjectEvent {
@@ -756,7 +767,7 @@ mod tests {
                 movement_range_y: 0,
                 trainer_type: assets::TrainerType::None,
                 trainer_sight_or_berry_tree_id: "0",
-                script: "0x0",
+                script: None,
                 flag: "0",
             },
         ]));

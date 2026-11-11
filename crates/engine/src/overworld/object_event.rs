@@ -5,9 +5,9 @@
 //! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision, and
-//! interaction read the collection's live state; sight still consults the static templates this
-//! module also exposes.
+//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision,
+//! interaction, and trainer sight read the collection's live state; an unbound runtime still
+//! consults the static templates this module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -19,7 +19,7 @@ use crate::event_data::EventData;
 
 #[path = "live_object_events.rs"]
 mod live_object_events;
-pub use live_object_events::{LiveObjectEvent, ObjectEventCollection};
+pub use live_object_events::{FrameContext, LiveObjectEvent, ObjectEventCollection};
 
 /// Returns whether an object's hide flag permits it to spawn.
 ///
@@ -237,8 +237,9 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// Template overrides remain inside this value. A map runtime observes them only through an
 /// [`ObjectEventCollection`] bound to it, which then answers collision and interaction queries
 /// from each object's live position and elevation and feeds overworld rendering; an unbound
-/// runtime still reads the authored template coordinates. Walking commits the destination
-/// immediately, while the owning script or collection entry tracks animation time.
+/// runtime still reads the authored template coordinates. Trainer sight reads a collection
+/// handed to it directly. Walking commits the destination immediately, while the owning script
+/// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,
@@ -327,6 +328,44 @@ impl ObjectEventState {
         self.position = (self.position.0 + dx, self.position.1 + dy);
     }
 
+    /// Settles the previous tile onto the current one without changing facing, as the
+    /// fixed-facing face action does when it re-faces the current direction
+    /// (`FaceDirection` and `ShiftStillObjectEventCoords`,
+    /// `event_object_movement.c:2162-2164,5048-5056`).
+    pub const fn face_in_place(&mut self) {
+        self.previous_position = self.position;
+    }
+
+    /// Restores the position, movement type, and initial facing a respawn gives an object from
+    /// this value's template snapshots, so a coordinate or movement override survives
+    /// (`InitObjectEventStateFromTemplate` reads the saved template,
+    /// `event_object_movement.c:1287-1330`). Elevation and the snapshots themselves are kept.
+    pub const fn reinit_from_template_snapshots(&mut self) {
+        self.position = self.template_position;
+        self.previous_position = self.template_position;
+        self.movement_type = self.template_movement_type;
+        self.facing = initial_facing_direction(self.template_movement_type);
+    }
+
+    /// Shifts the current, previous, and template-snapshot tiles by `shift`, as
+    /// `UpdateObjectEventCoordsForCameraUpdate` moves a live object into the coordinates a
+    /// camera update puts its map in (`event_object_movement.c:2167-2189`). Elevation, facing,
+    /// and movement are kept.
+    pub const fn translate(&mut self, (dx, dy): (i32, i32)) {
+        self.position = (
+            self.position.0.saturating_add(dx),
+            self.position.1.saturating_add(dy),
+        );
+        self.previous_position = (
+            self.previous_position.0.saturating_add(dx),
+            self.previous_position.1.saturating_add(dy),
+        );
+        self.template_position = (
+            self.template_position.0.saturating_add(dx),
+            self.template_position.1.saturating_add(dy),
+        );
+    }
+
     /// Changes the current movement type.
     pub const fn set_movement_type(&mut self, movement_type: MovementType) {
         self.movement_type = movement_type;
@@ -340,6 +379,14 @@ impl ObjectEventState {
     /// Copies a movement type into this value's template-movement snapshot.
     pub const fn override_template_movement_type(&mut self, movement_type: MovementType) {
         self.template_movement_type = movement_type;
+    }
+
+    /// Replaces the template-position and template-movement snapshots with `event`'s, as a map
+    /// load rewrites the templates a later spawn reads (`LoadObjEventTemplatesFromHeader`,
+    /// `overworld.c:796`); the live tile, facing, and movement type are kept.
+    pub fn reload_template_snapshots(&mut self, event: &ObjectEvent) {
+        self.template_position = (i32::from(event.x), i32::from(event.y));
+        self.template_movement_type = event.movement_type;
     }
 }
 
@@ -363,7 +410,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "SomeScript",
+            script: Some(assets::ScriptRef::new("SomeScript")),
             flag,
         }
     }
@@ -473,6 +520,7 @@ mod tests {
             allow_run: false,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &[MapConnection],
         };
         let layout = MapLayout {
@@ -905,11 +953,14 @@ mod tests {
             .filter(|o| (o.x, o.y) == (6, 8))
             .collect();
         assert_eq!(
-            balls.iter().map(|o| o.script).collect::<Vec<_>>(),
+            balls
+                .iter()
+                .map(|o| o.script.map(assets::ScriptRef::id))
+                .collect::<Vec<_>>(),
             vec![
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Totodile",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita",
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita"),
             ],
             "fixture precondition: three starter balls stacked on (6, 8), in \
              this declaration order"
@@ -926,13 +977,17 @@ mod tests {
 
         let mut data = EventData::new();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil")
         );
 
         data.flag_set(cyndaquil).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
             "a hidden first template must be scanned past, not returned and \
              then rejected"
@@ -940,7 +995,9 @@ mod tests {
 
         data.flag_set(totodile).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita")
         );
 
@@ -951,7 +1008,9 @@ mod tests {
         data.flag_set(cyndaquil).unwrap();
         let player = PlayerState::new((6, 9), 3, Direction::North);
         assert_eq!(
-            facing_object_event(&player, &runtime, &data).map(|o| o.script),
+            facing_object_event(&player, &runtime, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile")
         );
     }

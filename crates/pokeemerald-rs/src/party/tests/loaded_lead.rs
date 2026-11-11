@@ -17,9 +17,11 @@ fn a_loaded_lead_saves_battle_changes_after_the_battler_is_lent_and_returned() {
 
     let merged = loaded.merge_and_save(&dex);
     assert_eq!(
-        u32::from(merged.hp),
-        loaded.battler().current_hp() + u32::try_from(loaded.hidden_hp_offset()).unwrap()
+        (merged.hp, merged.max_hp),
+        (27, 38),
+        "the retained fixture's 31 HP less the 4 lent-out damage, against its cache"
     );
+    assert_eq!(u32::from(merged.hp), loaded.battler().current_hp());
     assert_eq!(loaded.record().to_bytes(), merged.to_bytes());
 }
 
@@ -46,7 +48,7 @@ fn a_lent_out_battler_cannot_be_saved_from() {
 }
 
 #[test]
-fn healing_a_loaded_lead_restores_hp_pp_and_status_and_remeasures_the_offset() {
+fn healing_a_loaded_lead_restores_hp_pp_and_status() {
     let dex = Dex::new();
     let mut stored = stored_record_with_retained_fields();
     stored.status = 0x8;
@@ -61,9 +63,11 @@ fn healing_a_loaded_lead_restores_hp_pp_and_status_and_remeasures_the_offset() {
     assert_eq!(healed.hp, healed.max_hp);
     assert!(!loaded.battler().is_fainted());
     assert_eq!(
-        loaded.hidden_hp_offset(),
-        i32::from(healed.hp) - i32::try_from(loaded.battler().stats().max_hp).unwrap()
+        (healed.hp, healed.max_hp),
+        (38, 38),
+        "healed to the saved cache's maximum"
     );
+    assert_eq!(u32::from(healed.hp), loaded.battler().current_hp());
     assert!(loaded.battler().moves().iter().all(|slot| slot.pp > 0));
 }
 

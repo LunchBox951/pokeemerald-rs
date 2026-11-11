@@ -30,6 +30,11 @@ const BEHAVIORS: [u8; 4] = [0, mb::MB_PC, mb::MB_COUNTER, mb::MB_SECRET_BASE_PC]
 
 type Cell = ((i32, i32), u16, u8);
 
+/// The authored script reference: `"0x0"` is upstream's null script pointer and has none.
+fn script_ref(script: &'static str) -> Option<assets::ScriptRef> {
+    (script != "0x0").then(|| assets::ScriptRef::new(script))
+}
+
 fn object(local_id: u8, (x, y): (i32, i32), elevation: u8, script: &'static str) -> ObjectEvent {
     ObjectEvent {
         local_id,
@@ -42,7 +47,7 @@ fn object(local_id: u8, (x, y): (i32, i32), elevation: u8, script: &'static str)
         movement_range_y: 0,
         trainer_type: TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script,
+        script: script_ref(script),
         flag: "0",
     }
 }
@@ -57,7 +62,10 @@ fn sign(
         x: u16::try_from(x).unwrap(),
         y: u16::try_from(y).unwrap(),
         elevation,
-        kind: BgEventKind::Sign { facing, script },
+        kind: BgEventKind::Sign {
+            facing,
+            script: script_ref(script),
+        },
     }
 }
 
@@ -85,6 +93,7 @@ fn scene<R>(
         allow_run: false,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &[MapConnection],
     };
     const SIZE: u16 = 5;
@@ -168,6 +177,7 @@ fn select_with(
 fn selected_object() -> InteractionTarget {
     InteractionTarget::Object(ObjectInteraction {
         local_id: OBJECT_ID,
+        carried_from: None,
         script: OBJECT_SCRIPT,
         player_facing: Direction::North,
     })
@@ -257,6 +267,7 @@ fn the_selected_object_carries_the_players_facing() {
             target,
             Some(InteractionTarget::Object(ObjectInteraction {
                 local_id: OBJECT_ID,
+                carried_from: None,
                 script: OBJECT_SCRIPT,
                 player_facing: facing,
             }))
@@ -299,6 +310,7 @@ fn an_object_on_the_counter_wins_over_one_behind_it() {
         target,
         Some(InteractionTarget::Object(ObjectInteraction {
             local_id: nearer,
+            carried_from: None,
             script: "NearScript",
             player_facing: Direction::North,
         }))
@@ -504,4 +516,59 @@ fn a_saved_secret_base_entrance_falls_through_to_the_next_stage() {
         "a taken entrance selects no background event, so the metatile beneath is next"
     );
     assert_eq!(select_entrance(&saved, &[]), None);
+}
+
+/// A connection crossing leaves the departed map's object in front of the player while the entered
+/// map declares an object with the same local id elsewhere: the selection still names the object
+/// the A press hit, by the map it came from, not the entered map's namesake.
+#[test]
+fn a_carried_object_is_selected_with_the_map_it_was_carried_from() {
+    use crate::overworld::object_event::FrameContext;
+    use crate::overworld::object_event_harness::{leaked, ScriptedRng};
+
+    const DEPARTED: MapId = MapId("MAP_DEPARTED");
+    scene(
+        &[],
+        vec![object(OBJECT_ID, FAR, ELEVATION, "EnteredScript")],
+        vec![],
+        |runtime, entered| {
+            let event_data = EventData::new();
+            let context = FrameContext {
+                player_position: STANDING,
+                event_data: &event_data,
+                frozen: false,
+                player_dashing: false,
+            };
+            let mut departed = ObjectEventCollection::from_templates(leaked(vec![object(
+                OBJECT_ID,
+                FRONT,
+                ELEVATION,
+                OBJECT_SCRIPT,
+            )]));
+            departed.run_frame(&context, &mut ScriptedRng::exhausted());
+            let live =
+                departed.carry_across_connection(DEPARTED, MapId("MAP_TEST"), entered, (0, 0));
+            let bound = (*runtime).with_object_events(&live);
+
+            assert_eq!(
+                select_interaction_target(
+                    &player_facing(Direction::North),
+                    &bound,
+                    &event_data,
+                    &[]
+                ),
+                Some(InteractionTarget::Object(ObjectInteraction {
+                    local_id: OBJECT_ID,
+                    carried_from: Some(DEPARTED),
+                    script: OBJECT_SCRIPT,
+                    player_facing: Direction::North,
+                }))
+            );
+            assert_eq!(
+                live.get(OBJECT_ID).unwrap().carried_from(),
+                None,
+                "a bare local id still resolves to the entered map's namesake"
+            );
+        },
+    );
 }
