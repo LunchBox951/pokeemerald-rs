@@ -196,7 +196,9 @@ impl PlayerState {
     /// `MovementAction_WalkSlow*`: one unchecked tile step at
     /// [`super::WALK_SLOW_FRAMES_PER_TILE`], the exit step's facing and movement
     /// direction `direction` (`InitNpcForWalkSlow`, `event_object_movement.c:5140-5155`).
-    /// A direction with no tile at all turns without moving.
+    /// A direction with no tile at all turns without moving and disarms the
+    /// mat: upstream's unchecked walk always leaves it, so the next poll
+    /// never reads the mat again (`field_player_avatar.c:412-427`).
     fn start_walk_slow(
         &mut self,
         direction: Direction,
@@ -206,6 +208,7 @@ impl PlayerState {
         self.facing = direction;
         self.movement_direction = direction;
         let Ok(landing) = self.resolve_landing(direction, runtime, maps) else {
+            self.forced_movement_armed = false;
             return StepOutcome::Idle;
         };
         let from = self.position;

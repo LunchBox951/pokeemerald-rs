@@ -299,3 +299,72 @@ fn a_blocked_attempt_on_a_placed_jump_mat_arms_it() {
         Some(ForcedMat::Jump { jump: 0, .. })
     ));
 }
+
+/// A spin mat on the west edge of a two-tile map, a wall east of it: the
+/// exit west has no tile, so the exit step turns without moving.
+fn west_edge_spin_mat_runtime() -> MapRuntime<'static> {
+    let mut bytes = Vec::new();
+    for x in 0..2u16 {
+        let raw = MetatileCell {
+            metatile_id: u16::from(x == 0),
+            collision: u8::from(x == 1),
+            elevation: 3,
+        }
+        .pack();
+        bytes.extend_from_slice(&raw.to_le_bytes());
+    }
+    let attrs = [
+        u16::from(MB_NORMAL).to_le_bytes(),
+        u16::from(MB_SECRET_BASE_SPIN_MAT).to_le_bytes(),
+    ]
+    .concat();
+    let layout = assets::MapLayout {
+        id: assets::LayoutId("MAP_TEST"),
+        name: "MapTest",
+        width: 2,
+        height: 1,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    };
+    let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+    MapRuntime::new(
+        assets::MapId("MAP_TEST"),
+        Box::leak(Box::new(header)),
+        Box::leak(Box::new(events)),
+        layout.grid(Box::leak(bytes.into_boxed_slice())).unwrap(),
+        assets::MetatileAttributeTable::new(Box::leak(attrs.into_boxed_slice())),
+        assets::MetatileAttributeTable::new(&[]),
+    )
+}
+
+/// Upstream's exit is an unchecked held walk (`field_player_avatar.c:1635-1644`),
+/// so the player always leaves the mat and the next forced-movement poll
+/// reads the landing tile (`:412-427`); the mat never spins twice. Where the
+/// port's exit has no tile, the sequence must still end disarmed.
+#[test]
+fn a_spin_mat_whose_exit_has_no_tile_does_not_spin_again() {
+    let runtime = west_edge_spin_mat_runtime();
+    let mut player = PlayerState::new((0, 0), 3, Direction::East);
+    assert!(matches!(
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked { .. }
+    ));
+    player.tick();
+    let mut spun = false;
+    for _ in 0..200 {
+        frame(&mut player, &runtime, None);
+        spun |= player.forced_mat().is_some();
+        if spun && player.forced_mat().is_none() {
+            break;
+        }
+    }
+    assert!(spun, "the blocked attempt arms the spin mat");
+    assert_eq!(player.facing(), Direction::West);
+    assert!(!player.forced_movement_armed());
+    for f in 0..200 {
+        assert_eq!(frame(&mut player, &runtime, None), StepOutcome::Idle);
+        assert_eq!(player.forced_mat(), None, "frame {f}: no second spin");
+        assert_eq!(player.position(), (0, 0));
+        assert_eq!(player.facing(), Direction::West);
+    }
+}
