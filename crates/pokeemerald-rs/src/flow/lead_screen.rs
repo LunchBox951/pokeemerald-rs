@@ -1,6 +1,7 @@
 //! The player-side screen every battle start shares.
 //!
-//! A battle refuses a lead its turn engine cannot play: one it does not admit
+//! A battle refuses a lead its turn engine cannot play: one that has fainted
+//! ([`BattleError::FaintedBattler`]), one it does not admit
 //! ([`battle::ensure_participant_admissible`]) or one holding an item whose
 //! effect it does not model ([`battle::ensure_held_item_playable`]). Every flow
 //! runs this before its first RNG draw, and the overworld runs it before it
@@ -17,9 +18,15 @@
 //! Only the lead is screened here for the first-battle, rival and
 //! sight-trainer flows, which bring no reserves. The wild flow screens each
 //! saved reserve through the same function and leaves out one it refuses,
-//! keeping its saved item. No item effect is implemented, so an imported save
-//! whose lead holds an item with a battle effect cannot enter these battles
-//! until the player takes the item off it.
+//! keeping its saved item. A fainted lead is refused the same way, before any
+//! draw and before any trigger state is spent: the Route 101 rescue stays
+//! armed and no encounter is rolled for a battle that cannot start.
+//!
+//! Only Oran Berry's end-turn heal is implemented
+//! ([`battle::ensure_held_item_playable`] admits it), so an imported save
+//! whose lead holds any other item with a battle effect cannot enter these
+//! battles until the player takes the item off it. An item with no battle
+//! effect, and Oran Berry, pass the screen.
 //!
 //! # Taking the item off
 //!
@@ -38,9 +45,14 @@ use battle::{BattleError, BattlePokemon};
 ///
 /// # Errors
 ///
-/// Returns the participant's admission error first, otherwise
-/// [`BattleError::UnsupportedHeldItem`] for an item with a battle effect.
+/// Returns [`BattleError::FaintedBattler`] for a fainted lead first, then the
+/// participant's admission error, otherwise
+/// [`BattleError::UnsupportedHeldItem`] for an item whose battle effect is
+/// not implemented.
 pub(super) fn ensure_lead_can_battle(lead: &BattlePokemon) -> Result<(), BattleError> {
+    if lead.is_fainted() {
+        return Err(BattleError::FaintedBattler(true));
+    }
     battle::ensure_participant_admissible(lead)?;
     battle::ensure_held_item_playable(lead.held_item())
 }
