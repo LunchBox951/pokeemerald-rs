@@ -258,6 +258,60 @@ fn an_npc_whose_step_begins_onto_tall_grass_starts_a_rustling_effect_and_leaves_
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 }
 
+/// The boy has stepped east off a settled effect, so only his previous tile
+/// keeps it; his movement type is now a fixed-facing one whose first callback
+/// (`face_in_place`) settles that previous tile, as after a sight approach.
+fn boy_pending_settle_off_his_effect() -> OverworldPhase {
+    let mut phase = boy_phase(&ROUTE101_BOY_EVENTS, MB_TALL_GRASS, (5, 13));
+    // Long enough for the settled animation to end.
+    idle(&mut phase, 100);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1);
+    let boy = phase.object_events.get_mut(6).unwrap().state_mut();
+    boy.walk(Direction::East);
+    boy.set_movement_type(assets::MovementType::FaceRight);
+    phase
+}
+
+/// Control: on field frames `step` runs the object events and then the
+/// effects, so the effect ends on the second frame.
+#[test]
+fn an_effect_whose_owner_settles_off_it_ends_on_the_second_field_frame() {
+    let mut phase = boy_pending_settle_off_his_effect();
+    // Frame 1: the callback settles the owner off the tile and the effect
+    // marks its owner moved; frame 2: the effect ends.
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0, "field frames");
+}
+
+/// Upstream's menu is a task under the same `OverworldBasic`
+/// (`src/overworld.c:1465-1476`: `RunTasks` then `AnimateSprites`), so the
+/// frame a menu closes is a field frame: the callbacks that resume there
+/// precede that frame's effect update, and the effect ends one frame later,
+/// as on the field.
+#[test]
+fn the_menu_closing_frame_runs_object_events_before_the_effect_update() {
+    let temp = crate::flow::tests::TempSave::new("menu-close-grass-order");
+    let mut slot = temp.slot();
+    let mut phase = boy_pending_settle_off_his_effect();
+    phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(platform::ButtonState::new(), &mut slot);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "frozen while open"
+    );
+    phase.advance_start_menu_frame(crate::flow::tests::pressed(Buttons::B), &mut slot);
+    assert!(phase.start_menu().is_none(), "B closed the menu");
+    // The closing frame is the first unfrozen frame; one more frame must end
+    // the effect, as on the field.
+    idle(&mut phase, 1);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        0,
+        "menu-closing frame: the resumed callback settled the owner off the effect"
+    );
+}
+
 #[test]
 fn setting_the_hide_flag_of_an_admitted_npc_retires_its_effect_and_it_gains_no_new_one() {
     // `removeobject` sets the hide flag and removes the object

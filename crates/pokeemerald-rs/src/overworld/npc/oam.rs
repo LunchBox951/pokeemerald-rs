@@ -163,16 +163,30 @@ impl DepthSprite {
     }
 }
 
+/// The first wrapped OAM `y` upstream reads as negative (`DISPLAY_HEIGHT`).
+const SORT_WRAP_Y: u8 = 160;
+
+/// A wrapped OAM `y` as `SortSprites` compares it: values at or beyond
+/// `DISPLAY_HEIGHT` are `y - 256` (`sprite.c:385-389`).
+fn signed_screen_y(y: u8) -> i16 {
+    if y >= SORT_WRAP_Y {
+        i16::from(y) - 256
+    } else {
+        i16::from(y)
+    }
+}
+
 /// Orders sprites as upstream emits OAM: ascending parent OBJ priority, then
-/// subpriority, then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`);
-/// ties keep input order and each sprite's OBJs stay together.
+/// subpriority, then lower on-screen signed `y` (`SortSprites`,
+/// `sprite.c:413-419`); ties keep input order and each sprite's OBJs stay
+/// together. The emitted OBJs keep their wrapped `y`.
 pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
     let mut ordered: Vec<&DepthSprite> = sprites.iter().collect();
     ordered.sort_by_key(|sprite| {
         (
             sprite.parent_priority,
             sprite.subpriority,
-            std::cmp::Reverse(sprite.parent_y),
+            std::cmp::Reverse(signed_screen_y(sprite.parent_y)),
         )
     });
     ordered

@@ -81,7 +81,14 @@ fn corroborate(reader: &RomReader<'_>, sprites: &SpriteRoots) -> Result<(), Impo
 }
 
 /// Every `data` pointer in the table, up to its terminator.
-fn palette_table(reader: &RomReader<'_>, table: GbaPtr) -> Result<Vec<GbaPtr>, ImportError> {
+///
+/// # Errors
+///
+/// Returns [`ImportError::Truncated`] when a record runs past the ROM, a
+/// pointer error when a live record's `data` does not parse as a ROM
+/// pointer, and [`ImportError::StructMismatch`] when no terminator appears
+/// within the first `MAX_RECORDS` records.
+pub fn palette_table(reader: &RomReader<'_>, table: GbaPtr) -> Result<Vec<GbaPtr>, ImportError> {
     let mut named = Vec::new();
     for index in 0..MAX_RECORDS {
         let record = reader.table_entry(TABLE, table, index, MAX_RECORDS, RECORD_BYTES)?;
