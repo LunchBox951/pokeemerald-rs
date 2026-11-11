@@ -88,16 +88,14 @@ impl ObjectEventCollection {
     /// The window is reconciled when `player_position` differs from the tile it last was, as
     /// `UpdateObjectEventsForCameraUpdate` runs only on a camera tile delta
     /// (`field_camera.c:413-416`), so a hide flag cleared while the camera is still admits
-    /// nothing until the next move. The first call also admits the entries already in view before
-    /// any callback runs, as map load's `TrySpawnObjectEvents` does ahead of the first frame
-    /// (`overworld.c:2163`). An entry the camera pass admits first runs on the following frame.
+    /// nothing until the next move. The first call admits the entries already in view before any
+    /// callback runs, unless [`Self::admit_on_map_load`] has. An entry the camera pass admits
+    /// first runs on the following frame.
     ///
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
     /// sprite-slot order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
-        if self.reconciled_at.is_none() {
-            self.reconcile_with_view(context);
-        }
+        let _ = self.admit_on_map_load(context);
         if !context.frozen {
             for index in self.active_indices_in_sprite_slot_order() {
                 self.entries[index].run_movement_type(context, rng);
@@ -106,6 +104,19 @@ impl ObjectEventCollection {
         if self.reconciled_at != Some(context.player_position) {
             self.reconcile_with_view(context);
         }
+    }
+
+    /// Admits the entries already in view, once per collection, as map load's
+    /// `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`); a later call does
+    /// nothing. No callback runs. A caller whose first input can end the map's visit, a
+    /// connection crossing, calls this first so the crossing finds the objects upstream already
+    /// holds ([`Self::carry_across_connection`]). Returns whether this call did the admission.
+    pub fn admit_on_map_load(&mut self, context: &FrameContext<'_>) -> bool {
+        let first = self.reconciled_at.is_none();
+        if first {
+            self.reconcile_with_view(context);
+        }
+        first
     }
 
     /// Spawns every in-window, unhidden entry in template order, then removes every active entry

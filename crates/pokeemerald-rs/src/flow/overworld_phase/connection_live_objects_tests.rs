@@ -105,6 +105,49 @@ fn a_crossing_keeps_an_in_view_npc_at_its_translated_tile() {
     assert_eq!(entry.carried_from(), Some(ROUTE_101));
 }
 
+/// Continue seeds a fresh, unadmitted collection and returns control without a frame of
+/// admission; a crossing on the very first input frame must still carry the in-view NPC that
+/// upstream's map load already spawned (`overworld.c:2163`).
+#[test]
+fn a_crossing_on_the_first_frame_after_continue_keeps_the_in_view_npc() {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 4)].into_boxed_slice());
+    // Exactly what `from_saved` installs: `connections::seed_object_events`.
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert!(
+        has_entry(&phase, &templates[0]),
+        "the in-view Route 101 NPC survives an immediate post-Continue crossing"
+    );
+}
+
+/// Admission before the first input must not also advance the NPC's callback: a looking-around
+/// NPC seeded with `Rng::new(0)` loads delay 32 on frame 1, holds through frame 32 and turns on
+/// frame 33 (`MovementType_LookAround`, `event_object_movement.c:2844-2892`).
+#[test]
+fn admitting_the_initial_map_before_input_runs_each_callback_once_per_frame() {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let templates: &'static [ObjectEvent] = Box::leak(
+        vec![ObjectEvent {
+            movement_type: MovementType::LookAround,
+            ..npc(9, 13, 4)
+        }]
+        .into_boxed_slice(),
+    );
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    let mut phase = phase.with_private_object_event_rng();
+    let facing = |phase: &OverworldPhase| entry_of(phase, &templates[0]).state().facing();
+
+    idle(&mut phase, 32);
+    assert_eq!(facing(&phase), Direction::South, "still holding the delay");
+    idle(&mut phase, 1);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(facing(&phase), Direction::West, "turned on frame 33");
+}
+
 /// `UpdateObjectEventCoordsForCameraUpdate` shifts current, initial, and previous coordinates
 /// alike (`event_object_movement.c:2167-2189`).
 #[test]
@@ -423,6 +466,28 @@ fn a_carried_survivor_keeps_its_grass_effect_when_an_earlier_carried_npc_leaves_
 #[test]
 fn a_lone_carried_npc_keeps_its_settled_grass_effect() {
     let (mut phase, _, path) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 4)]);
+    cross_north(&mut phase);
+    idle(&mut phase, 3);
+    let after = effects(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(after, (1, Some(0)));
+}
+
+/// An NPC on grass that map load spawned gets its spawn-time ground effect from the departed
+/// scene, so a crossing on the first input frame carries it with the NPC
+/// (`DoGroundEffects_OnSpawn`, `event_object_movement.c:8078-8096`).
+#[test]
+fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
+        20,
+        20,
+        &[((13, 4), MB_TALL_GRASS, GROUND)],
+    )
+    .in_room_for_test(ROUTE_101);
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 4)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
     cross_north(&mut phase);
     idle(&mut phase, 3);
     let after = effects(&phase);

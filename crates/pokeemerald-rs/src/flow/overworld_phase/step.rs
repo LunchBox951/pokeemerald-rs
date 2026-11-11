@@ -323,6 +323,10 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        // Map load has already spawned the objects in view, so a crossing on the first frame
+        // carries them.
+        self.admit_object_events_on_map_load();
+
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
