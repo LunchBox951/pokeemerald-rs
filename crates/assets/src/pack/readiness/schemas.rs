@@ -38,6 +38,7 @@ impl AssetPack {
                         | "pokedex/data"
                         | "battle-anim/catalog"
                         | "battle-message/table"
+                        | "field-message/table"
                 )
             {
                 let is_required = required.iter().any(|asset| asset.id == id);
@@ -162,6 +163,8 @@ impl AssetPack {
             BattleAnimationCatalog::decode(bytes).map_err(|err| invalid(id, err))?;
         } else if id == "battle-message/table" {
             self.battle_messages().map_err(|err| invalid(id, err))?;
+        } else if id == "field-message/table" {
+            self.field_messages().map_err(|err| invalid(id, err))?;
         }
         Ok(())
     }

@@ -153,6 +153,21 @@ fn malformed_payload_is_rejected_even_outside_the_required_inventory() {
     assert_eq!(std::fs::read(&pack.0).unwrap(), bytes);
 }
 
+/// The field-message table is an unfinished domain: optional, but checked when present, so a
+/// malformed one is refused here instead of when a field message is first read.
+#[test]
+fn a_malformed_field_message_table_is_rejected_when_present() {
+    let bytes = pack_with(vec![pack_format::raw_entry(
+        "field-message/table".into(),
+        vec![0],
+    )]);
+    let pack = ScratchPack::new(&bytes);
+    let error = AssetPack::load_ready(&pack.0, &[]).unwrap_err();
+    assert!(
+        matches!(error.problem(), PackProblem::InvalidAsset { id, .. } if id == "field-message/table")
+    );
+}
+
 fn song_naming(voicegroup: &str) -> Vec<u8> {
     crate::Song::new(
         crate::VoiceGroupId(voicegroup.into()),
