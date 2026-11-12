@@ -389,16 +389,10 @@ fn disobedient_self_hit(
     }
 }
 
-/// The self-hit is `CalculateBaseDamage(mon, mon, MOVE_POUND, 0, 40, 0, ..)`
-/// (`battle_util.c:4020`), the confusion call's shape (`battle_util.c:2173`),
-/// then `adjustnormaldamage2`'s one `Random() % 16` roll
-/// (`BattleScript_IgnoresAndHitsItself` -> `BattleScript_DoSelfConfusionDmg`,
-/// `data/battle_scripts_1.s:4252`, `:3801`-`:3803`;
-/// `ApplyRandomDmgMultiplier`, `battle_script_commands.c:1639`-`:1651`).
-/// Level-20 Hardy max-IV Gastly has Attack 25 and Defense 23:
-/// `((2 * 20 / 5 + 2) * 40 * 25 / 23) / 50 + 2 = 8 + 2 = 10`
-/// (`pokemon.c:3250`-`:3264`, `:3340` onward). A variance draw of 15 scales
-/// by 85% to 8.
+/// `BattleScript_IgnoresAndHitsItself` -> `BattleScript_DoSelfConfusionDmg`
+/// (`data/battle_scripts_1.s:4252`, `:3801`-`:3803`): the confusion call's
+/// `CalculateBaseDamage` shape (`battle_util.c:2173`, `:4020`) plus one
+/// `Random() % 16` roll (`battle_script_commands.c:1639`-`:1651`).
 #[test]
 fn a_self_hit_deals_the_typeless_forty_power_pound_damage_to_itself() {
     let full = disobedient_self_hit(GASTLY, 0, vec![TACKLE], 0, |_| {});
@@ -414,10 +408,8 @@ fn a_self_hit_deals_the_typeless_forty_power_pound_damage_to_itself() {
     assert_eq!(low.draws, 3 + 3 + 1 + 4);
 }
 
-/// `if ((attacker->status1 & STATUS1_BURN) && attacker->ability !=
-/// ABILITY_GUTS) damage /= 2;` after the division by 50
-/// (`pokemon.c:3262`-`:3264`), and the disobedient battler is both attacker
-/// and defender. Gastly: `8 / 2 + 2 = 6`, against the unburned 10.
+/// The burn halving applies after the division by 50 (`pokemon.c:3262`-`:3264`),
+/// with the disobedient battler as both attacker and defender.
 #[test]
 fn a_burned_battlers_self_hit_halves_its_damage() {
     let burned = |mon: &mut battle::BattlePokemon| mon.set_status1(Status1::Burned);
@@ -427,11 +419,7 @@ fn a_burned_battlers_self_hit_halves_its_damage() {
 }
 
 /// Guts is exempt from the burn halving and takes the 1.5x Attack of its
-/// status (`pokemon.c:3211`-`:3212`, `:3262`). Level-20 Hardy max-IV Rattata
-/// has Attack 33 and Defense 25. Run Away (slot 0) burned:
-/// `(33 * 40 * 10 / 25) / 50 = 10`, halved to 5, `+ 2 = 7`. Guts (slot 1)
-/// burned: Attack `150 * 33 / 100 = 49`, `(49 * 40 * 10 / 25) / 50 = 15`, no
-/// halving, `+ 2 = 17`. Unburned either way: `10 + 2 = 12`.
+/// status (`pokemon.c:3211`-`:3212`, `:3262`).
 #[test]
 fn a_gutsy_burned_battlers_self_hit_is_neither_halved_nor_unboosted() {
     let burned = |mon: &mut battle::BattlePokemon| mon.set_status1(Status1::Burned);
