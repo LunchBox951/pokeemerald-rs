@@ -434,16 +434,8 @@ fn a_gutsy_burned_battlers_self_hit_is_neither_halved_nor_unboosted() {
     assert_eq!(guts.draws, 3 + 3 + 1 + 4);
 }
 
-/// `CalculateBaseDamage` tests the attempted `gCurrentMove`, not the Pound it
-/// is handed, for `EFFECT_EXPLOSION` and halves the raw Defense
-/// (`pokemon.c:3228`-`:3230`), and the shared self-hit path models that for
-/// confusion (`confusion_explosion.rs`). A disobedient player cannot reach it
-/// yet: the player's selected move must be executable, and Selfdestruct and
-/// Explosion have no pipeline, so the turn is refused before the obedience
-/// gate draws anything. When one lands, this test fails and must be replaced
-/// by the disobedient case: Gastly Defense 23 halves to 11, so
-/// `(25 * 40 * 10 / 11) / 50 + 2 = 20` (burned `18 / 2 + 2 = 11`), against
-/// the Tackle self-hit's 10.
+/// Explosion and Selfdestruct have no pipeline, so the turn is refused before
+/// the obedience gate draws (`pokemon.c:3228`-`:3230` halves the Defense).
 #[test]
 fn a_disobedient_explosion_is_unreachable_until_the_move_has_a_pipeline() {
     for move_id in [MoveId::SELF_DESTRUCT, MoveId::EXPLOSION] {
