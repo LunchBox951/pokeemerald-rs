@@ -2,6 +2,7 @@
 
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
+use crate::extract::scope::trainer_battler_ids;
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
     layout_ids, naming_screen_ids, opening_scene_ids, party_menu_ids, poke_ball_ids,
@@ -9,7 +10,6 @@ use crate::extract::scope::{
     tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
     KEYPAD_ICONS, TILESETS,
 };
-use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
 /// attributes, and each palette bank, as `tilesets::locate_one` asks for them.
@@ -281,28 +281,6 @@ pub fn require_battle_interface(pack: &PackSource) -> Result<(), GenRomProfileEr
     Ok(())
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless both trainer front pictures and
-/// their palettes are present, and with [`GenRomProfileError::StructMismatch`] for a pack
-/// `trainer-pic/` entry outside the fixed inventory, which the locator, reading only the
-/// inventory, would otherwise silently leave out of the profile.
-pub fn require_trainer_front(pack: &PackSource) -> Result<(), GenRomProfileError> {
-    let expected = trainer_front_ids();
-    expected
-        .iter()
-        .try_for_each(|id| pack.get(id).map(|_| ()))?;
-    if let Some(surplus) = pack
-        .ids_with_prefix("trainer-pic/")
-        .into_iter()
-        .find(|id| !expected.contains(id))
-    {
-        return Err(GenRomProfileError::StructMismatch {
-            id: surplus,
-            reason: "is not in the checkout's trainer-pic inventory".to_owned(),
-        });
-    }
-    Ok(())
-}
-
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless both trainers' battler front
 /// pictures, back sheets and palettes are present, and with
 /// [`GenRomProfileError::StructMismatch`] for a pack `trainer/` entry outside the fixed inventory.
@@ -360,6 +338,5 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battle_interface(pack)?;
     require_naming_screen(pack)?;
     require_party_menu(pack)?;
-    require_trainer_front(pack)?;
     require_trainer_battlers(pack)
 }

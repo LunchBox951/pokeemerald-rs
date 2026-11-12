@@ -84,7 +84,6 @@ pub(crate) const DOMAINS: &[Domain] = &[
     naming_screen::write,
     party_menu::write,
     poke_ball::write,
-    trainer_front::write,
     trainer_battlers::write,
 ];
 

@@ -34,9 +34,8 @@
 //! - the static battler art of the starters and the checkpoint's other eleven
 //!   Pokémon (`scope::BATTLERS`): front and back images with normal and shiny
 //!   palettes;
-//! - the Brendan and May trainer front pictures with their palettes;
-//! - the Brendan and May trainer battlers: front picture, four-frame back
-//!   sheet and the palette both share;
+//! - the Brendan and May trainer battlers: front picture (also the trainer's
+//!   portrait), four-frame back sheet and the palette both share;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -79,7 +78,7 @@
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `evolution-scene/{image,palette,raw}/<name>`
-//! - `trainer-pic/<trainer>/{front,palette}`
+//! - `trainer/<trainer>/{front,back,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `battle-interface/{image,palette,raw}/<name>` and
 //!   `battle-interface/raw/healthbox_element/<stem>`
@@ -141,7 +140,6 @@ mod text_window;
 mod tilesets;
 mod title;
 mod trainer_battler;
-mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -209,7 +207,6 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
     field_effect::extract_field_effects(&upstream, &mut writer)?;
-    trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
     trainer_battler::extract_trainer_battlers(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;

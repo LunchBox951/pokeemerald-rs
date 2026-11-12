@@ -71,7 +71,6 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "text-window/",
     "audio/voicegroup/",
     "audio/sample/",
-    "trainer-pic/",
     "trainer/",
     "battle-message/",
     "field-message/",
@@ -266,17 +265,8 @@ const PARTY_MENU_IDS: [&str; 14] = [
     "party-menu/raw/cancel_button",
 ];
 
-/// The Birch-speech portraits: the front image and palette of Brendan and of
-/// May. Named by id so portraits both backends drop together still fail.
-const TRAINER_PORTRAIT_IDS: [&str; 4] = [
-    "trainer-pic/brendan/front",
-    "trainer-pic/brendan/palette",
-    "trainer-pic/may/front",
-    "trainer-pic/may/palette",
-];
-
-/// The Brendan and May trainer battlers: the front image, back sheet and
-/// shared palette of each. Named by id so entries both backends drop together
+/// The Brendan and May trainer battlers: the front image (also the
+/// trainer's portrait), back sheet and shared palette of each. Named by id so entries both backends drop together
 /// still fail.
 const TRAINER_BATTLER_IDS: [&str; 6] = [
     "trainer/brendan/front",
@@ -407,7 +397,6 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .into_iter()
         .chain(checkpoint_payload_ids())
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
-        .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))

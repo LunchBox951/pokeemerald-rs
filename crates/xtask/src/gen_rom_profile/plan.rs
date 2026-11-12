@@ -577,7 +577,7 @@ pub struct TrainerFrontPicPlan {
     pub palette: PalettePlan,
 }
 
-/// The Birch-speech trainer front pictures, owned.
+/// The trainer front pictures and palettes with their tables, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPlan {
     /// `gTrainerFrontPicTable`.
@@ -696,8 +696,6 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
-    /// The Birch-speech trainer front pictures.
-    pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.
     pub trainer_battlers: TrainerBattlerPlan,
 }

@@ -1,8 +1,8 @@
 //! The Brendan and May trainer battlers: `trainer/*`.
 //!
-//! A trainer's front picture and palette are read and corroborated exactly
-//! as the Birch-speech portraits are ([`super::trainer_front`]); the profile
-//! records them again under the battler ids. The back picture is the
+//! A trainer's front picture and palette are read and corroborated by
+//! [`super::trainer_front`] and are also the trainer's portrait
+//! (`AssetPack::trainer_pic`), so they are written once. The back picture is the
 //! uncompressed four-frame sheet `gTrainerBackPicTable` points at. Its two
 //! tables are indexed by `TRAINER_BACK_PIC_*`, not by the front picture's
 //! index, and the back palette row points at the same palette stream as the

@@ -10,7 +10,9 @@ use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
     opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    trainer_battlers,
 };
+use crate::extract::scope::trainer_battler_ids;
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
@@ -19,7 +21,6 @@ use crate::extract::scope::{
     INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
     TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
-use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
 fn complete_inventory() -> Vec<PackEntry> {
@@ -49,7 +50,6 @@ fn complete_inventory() -> Vec<PackEntry> {
         ])
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
-        .chain(trainer_front_ids())
         .chain(trainer_battler_ids())
         .chain(opening_scene_ids())
         .chain(evolution_scene_ids())
@@ -107,6 +107,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             poke_ball::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "trainer_battlers" {
+            trainer_battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
             battle_anims::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
@@ -882,5 +884,13 @@ fn a_pack_missing_a_poke_ball_entry_is_refused() {
     for id in poke_ball_ids() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "poke_ball");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_trainer_battler_entry_is_refused() {
+    for id in trainer_battler_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "trainer_battlers");
     }
 }

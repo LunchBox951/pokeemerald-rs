@@ -1,7 +1,8 @@
-//! Locating the Birch-speech trainer front pictures (`src/data/trainer_graphics`).
+//! Locating the Brendan and May trainer front pictures and palettes
+//! (`src/data/trainer_graphics`), the front half of the trainer battlers.
 //!
-//! The pack's `trainer-pic/{brendan,may}/{front,palette}` entries are the
-//! expectation. The ROM stores each as an LZ77 stream, and two 8-byte-row
+//! The pack's `trainer/{brendan,may}/{front,palette}` entries are the
+//! expectation; [`super::trainer_battlers::locate`] checks the inventory first. The ROM stores each as an LZ77 stream, and two 8-byte-row
 //! tables index them by `TRAINER_PIC_*`: `gTrainerFrontPicTable`
 //! (`{data, size, tag}`) and `gTrainerFrontPicPaletteTable` (`{data, tag}`).
 //! The object-event sprite tables name no trainer picture and are not evidence.
@@ -24,14 +25,13 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::inventory;
 use super::locate::{camel_case, only_one_matching, to_addr, u16_at_addr, u32_at_addr};
 use super::plan::{
     PalettePlan, ReportLine, Resolution, SymbolExpectation, TrainerFrontPicPlan, TrainerFrontPlan,
 };
 use super::tilesets::len32;
 use super::Context;
-use crate::extract::scope::TRAINER_FRONT_PICS;
+use crate::extract::scope::TRAINER_BATTLERS;
 
 /// One table row, in bytes.
 pub(super) const RECORD_BYTES: u32 = 8;
@@ -85,23 +85,21 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<TrainerFrontPlan, GenRomProfileError> {
-    inventory::require_trainer_front(ctx.pack)?;
-
-    let queries: Vec<ImageQuery> = TRAINER_FRONT_PICS
+    let queries: Vec<ImageQuery> = TRAINER_BATTLERS
         .iter()
-        .map(|pic| ImageQuery::lz77(pic.image_id))
+        .map(|pic| ImageQuery::lz77(pic.front_id))
         .collect();
     let first_line = report.len();
     let images = locate_images(ctx, &queries, report)?;
     name_image_symbols(&mut report[first_line..]);
     let palette_candidates = palette_candidates(ctx)?;
 
-    let picture_rows: Vec<(u16, Vec<u32>)> = TRAINER_FRONT_PICS
+    let picture_rows: Vec<(u16, Vec<u32>)> = TRAINER_BATTLERS
         .iter()
         .zip(&images)
         .map(|(pic, image)| (u16::from(pic.trainer_pic.index()), vec![image.addr]))
         .collect();
-    let palette_rows: Vec<(u16, Vec<u32>)> = TRAINER_FRONT_PICS
+    let palette_rows: Vec<(u16, Vec<u32>)> = TRAINER_BATTLERS
         .iter()
         .zip(&palette_candidates)
         .map(|(pic, addrs)| (u16::from(pic.trainer_pic.index()), addrs.clone()))
@@ -123,8 +121,8 @@ pub fn locate(
         report,
     )?;
 
-    let mut trainers = Vec::with_capacity(TRAINER_FRONT_PICS.len());
-    for (index, pic) in TRAINER_FRONT_PICS.iter().enumerate() {
+    let mut trainers = Vec::with_capacity(TRAINER_BATTLERS.len());
+    for (index, pic) in TRAINER_BATTLERS.iter().enumerate() {
         let trainer_pic = u16::from(pic.trainer_pic.index());
         let palette = palette_plan(
             ctx,
@@ -153,8 +151,8 @@ pub fn locate(
 /// The shared image classifier knows no trainer naming convention, so the
 /// expectation is set here on the lines [`locate_images`] just reported.
 fn name_image_symbols(lines: &mut [ReportLine]) {
-    for pic in &TRAINER_FRONT_PICS {
-        if let Some(line) = lines.iter_mut().find(|line| line.id == pic.image_id) {
+    for pic in &TRAINER_BATTLERS {
+        if let Some(line) = lines.iter_mut().find(|line| line.id == pic.front_id) {
             line.symbol =
                 SymbolExpectation::Exact(format!("gTrainerFrontPic_{}", camel_case(pic.name)));
         }
@@ -163,8 +161,8 @@ fn name_image_symbols(lines: &mut [ReportLine]) {
 
 /// Every address each palette's decompressed colours turn up at, Brendan then May.
 fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileError> {
-    let mut needles = Vec::with_capacity(TRAINER_FRONT_PICS.len());
-    for pic in &TRAINER_FRONT_PICS {
+    let mut needles = Vec::with_capacity(TRAINER_BATTLERS.len());
+    for pic in &TRAINER_BATTLERS {
         needles.push(
             ctx.pack
                 .get(pic.palette_id)?
@@ -174,7 +172,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
         );
     }
     let hits = ctx.lz77.find_all_uncapped(&needles);
-    TRAINER_FRONT_PICS
+    TRAINER_BATTLERS
         .iter()
         .zip(&hits)
         .map(|(pic, offsets)| {

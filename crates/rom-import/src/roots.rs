@@ -655,8 +655,8 @@ pub struct TrainerFrontRoot {
 }
 
 /// A set of trainer front pictures with the tables that index them
-/// (`src/data/trainer_graphics/front_pic_tables.h`): the Birch-speech
-/// portraits, and the front half of the trainer battlers.
+/// (`src/data/trainer_graphics/front_pic_tables.h`): the front half of the
+/// trainer battlers, which also serve as the trainers' portraits.
 ///
 /// The two tables are recorded so a reader can corroborate each picture's
 /// row by pointer, size and tag rather than trust the addresses alone.
@@ -687,10 +687,10 @@ pub struct TrainerBackRoot {
 /// The Brendan and May trainer battlers
 /// (`src/data/trainer_graphics/front_pic_tables.h`, `back_pic_tables.h`).
 ///
-/// The front half reuses [`TrainerFrontRoots`]: the same tables and the same
-/// ROM payloads the Birch-speech portraits read, published under the battler
-/// ids. Each back picture's palette row in `gTrainerBackPicPaletteTable` points
-/// at that trainer's front palette, so the palette is recorded once.
+/// The front half is a [`TrainerFrontRoots`], published once under the
+/// `trainer/` ids for both the portrait and the battler lookups. Each back
+/// picture's palette row in `gTrainerBackPicPaletteTable` points at that
+/// trainer's front palette, so the palette is recorded once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerBattlerRoots {
     /// The front pictures and palettes, with the front tables.
@@ -752,8 +752,6 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
-    /// The Birch-speech trainer front pictures.
-    pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
     pub trainer_battlers: TrainerBattlerRoots,
 }
@@ -810,7 +808,6 @@ impl Roots {
         party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
-        trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
 
@@ -850,7 +847,6 @@ impl Roots {
                     .iter()
                     .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
-            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
                 self.trainer_battlers
                     .front
@@ -884,7 +880,6 @@ impl Roots {
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
             .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
-            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers
                     .front
