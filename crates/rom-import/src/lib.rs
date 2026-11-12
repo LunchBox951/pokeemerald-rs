@@ -50,11 +50,11 @@
 //!   evolution scene's background and sparkle (`evolution-scene/*`), the
 //!   battle textbox with the two menu text palettes (`battle-interface/*`), the
 //!   naming screen's sheets, palettes and tilemaps (`naming-screen/*`), the
-//!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
-//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
-//!   battlers (`trainer/*`: the same front pictures again, the uncompressed
-//!   four-frame back sheets behind `gTrainerBackPicTable`, and one palette per
-//!   trainer that `gTrainerBackPicPaletteTable` shares with the front).
+//!   Brendan and May trainer battlers (`trainer/*`: the front pictures behind
+//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`, which are
+//!   also the trainers' portraits, the uncompressed four-frame back sheets
+//!   behind `gTrainerBackPicTable`, and one palette per trainer that
+//!   `gTrainerBackPicPaletteTable` shares with the front).
 //!   The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from

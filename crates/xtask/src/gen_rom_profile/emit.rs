@@ -150,8 +150,6 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
 
-    trainer_front_roots(&mut out, &plan.trainer_front);
-
     trainer_battler_roots(&mut out, &plan.trainer_battlers);
 
     let _ = writeln!(out, "}};");
@@ -257,12 +255,6 @@ fn evolution_scene_roots(out: &mut String, scene: &EvolutionScenePlan) {
         ("evolution_scene", "EvolutionSceneRoots"),
         (&scene.images, &scene.palettes, &scene.tilemaps),
     );
-}
-
-fn trainer_front_roots(out: &mut String, trainer_front: &TrainerFrontPlan) {
-    let _ = writeln!(out, "    trainer_front: TrainerFrontRoots {{");
-    trainer_front_family(out, "        ", trainer_front);
-    let _ = writeln!(out, "    }},");
 }
 
 /// The fields of one `TrainerFrontRoots`: both tables, then each trainer.
@@ -1327,7 +1319,6 @@ mod bag_field_tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "one field per profile family")]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
         let plan = ProfilePlan {
@@ -1379,11 +1370,6 @@ mod bag_field_tests {
                 palette_table: base,
                 shiny_palette_table: base,
                 species: vec![],
-            },
-            trainer_front: TrainerFrontPlan {
-                front_table: base,
-                palette_table: base,
-                trainers: vec![],
             },
             trainer_battlers: TrainerBattlerPlan {
                 front: TrainerFrontPlan {
@@ -1462,69 +1448,6 @@ mod bag_field_tests {
 }
 
 #[cfg(test)]
-mod trainer_front_emit_tests {
-    use rom_import::Encoding;
-
-    use super::trainer_front_roots;
-    use crate::gen_rom_profile::plan::{
-        ImagePlan, PalettePlan, TrainerFrontPicPlan, TrainerFrontPlan,
-    };
-
-    fn picture(name: &str, trainer_pic: u16, addr: u32) -> TrainerFrontPicPlan {
-        TrainerFrontPicPlan {
-            trainer_pic,
-            front: ImagePlan {
-                id: format!("trainer-pic/{name}/front"),
-                addr,
-                encoding: Encoding::Lz77,
-                rom_bit_depth: 4,
-                pack_bit_depth: 4,
-                width: 64,
-                height: 64,
-                metatile_width: 8,
-                metatile_height: 8,
-                tile_count: 64,
-            },
-            palette: PalettePlan {
-                id: format!("trainer-pic/{name}/palette"),
-                addr: addr + 0x1000,
-                color_count: 16,
-                encoding: Encoding::Lz77,
-            },
-        }
-    }
-
-    #[test]
-    fn both_tables_and_both_pictures_are_emitted_as_one_family() {
-        let plan = TrainerFrontPlan {
-            front_table: 0x0830_0000,
-            palette_table: 0x0831_0000,
-            trainers: vec![
-                picture("brendan", 71, 0x0832_0000),
-                picture("may", 72, 0x0834_0000),
-            ],
-        };
-        let mut out = String::new();
-        trainer_front_roots(&mut out, &plan);
-        for expected in [
-            "    trainer_front: TrainerFrontRoots {",
-            "        front_table: GbaPtr::at(0x0830_0000),",
-            "        palette_table: GbaPtr::at(0x0831_0000),",
-            "            TrainerFrontRoot {",
-            "                trainer_pic: 71,",
-            "                trainer_pic: 72,",
-            "ImageRoot { id: \"trainer-pic/brendan/front\", addr: GbaPtr::at(0x0832_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4, width: 64, height: 64,",
-            "PaletteRoot { id: \"trainer-pic/brendan/palette\", addr: GbaPtr::at(0x0832_1000), color_count: 16, encoding: Encoding::Lz77 }",
-            "ImageRoot { id: \"trainer-pic/may/front\", addr: GbaPtr::at(0x0834_0000),",
-            "PaletteRoot { id: \"trainer-pic/may/palette\", addr: GbaPtr::at(0x0834_1000), color_count: 16, encoding: Encoding::Lz77 }",
-        ] {
-            assert!(out.contains(expected), "{expected}\n{out}");
-        }
-        assert!(!out.contains("TrainerFrontRoots::NONE"), "{out}");
-    }
-}
-
-#[cfg(test)]
 mod trainer_battler_emit_tests {
     use rom_import::Encoding;
 
@@ -1598,6 +1521,9 @@ mod trainer_battler_emit_tests {
             "                trainer_pic: 71,",
             "                trainer_pic: 72,",
             "ImageRoot { id: \"trainer/brendan/front\", addr: GbaPtr::at(0x0832_0000), encoding: Encoding::Lz77,",
+            "ImageRoot { id: \"trainer/brendan/front\", addr: GbaPtr::at(0x0832_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4, width: 64, height: 64,",
+            "PaletteRoot { id: \"trainer/brendan/palette\", addr: GbaPtr::at(0x0832_1000), color_count: 16, encoding: Encoding::Lz77 }",
+            "ImageRoot { id: \"trainer/may/front\", addr: GbaPtr::at(0x0834_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4, width: 64, height: 64,",
             "PaletteRoot { id: \"trainer/may/palette\", addr: GbaPtr::at(0x0834_1000), color_count: 16, encoding: Encoding::Lz77 }",
             "        back_table: GbaPtr::at(0x0835_0000),",
             "        back_palette_table: GbaPtr::at(0x0836_0000),",
@@ -1609,6 +1535,8 @@ mod trainer_battler_emit_tests {
             assert!(out.contains(expected), "{expected}\n{out}");
         }
         assert!(!out.contains("TrainerBattlerRoots::NONE"), "{out}");
+        assert!(!out.contains("trainer_front:"), "{out}");
+        assert!(!out.contains("trainer-pic/"), "{out}");
         assert_eq!(
             out.matches("PaletteRoot {").count(),
             2,

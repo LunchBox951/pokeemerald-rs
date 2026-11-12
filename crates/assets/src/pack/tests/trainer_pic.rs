@@ -1,4 +1,4 @@
-use super::super::{AssetPack, PackError};
+use super::super::{AssetPack, BattlerDirection, PackError};
 use super::shared::{
     image_meta, pack_bytes, write_pack, Entry, IMAGE_KIND_TAG, INDEXED_8_BIT, PALETTE_KIND_TAG,
     RAW_KIND_TAG, TEXT_WINDOW_BIT_DEPTH,
@@ -35,13 +35,13 @@ fn entries() -> Vec<Entry> {
     for (index, (_, name)) in PICS.iter().enumerate() {
         let tag = u8::try_from(index).unwrap() + 1;
         entries.push(image(
-            format!("trainer-pic/{name}/front"),
+            format!("trainer/{name}/front"),
             (64, 64),
             TEXT_WINDOW_BIT_DEPTH,
             tag,
         ));
         entries.push(palette(
-            format!("trainer-pic/{name}/palette"),
+            format!("trainer/{name}/palette"),
             16,
             u16::from(tag) << 8,
         ));
@@ -97,29 +97,26 @@ fn identities_without_a_published_picture_are_unsupported() {
 fn missing_and_wrong_kind_entries_are_named() {
     let without: Vec<Entry> = entries()
         .into_iter()
-        .filter(|e| e.id != "trainer-pic/may/palette")
+        .filter(|e| e.id != "trainer/may/palette")
         .collect();
     let (pack, path) = load("trainer-pic-missing", without);
     assert!(pack.trainer_pic(TrainerPicId::BRENDAN).is_ok());
     assert!(matches!(
         pack.trainer_pic(TrainerPicId::MAY).unwrap_err(),
-        PackError::UnknownAsset(id) if id == "trainer-pic/may/palette"
+        PackError::UnknownAsset(id) if id == "trainer/may/palette"
     ));
     let _ = std::fs::remove_file(path);
 
     let raw = Entry {
-        id: "trainer-pic/may/front",
+        id: "trainer/may/front",
         kind_tag: RAW_KIND_TAG,
         meta: vec![],
         payload: vec![0; 4],
     };
-    let (pack, path) = load(
-        "trainer-pic-wrong-kind",
-        replaced("trainer-pic/may/front", raw),
-    );
+    let (pack, path) = load("trainer-pic-wrong-kind", replaced("trainer/may/front", raw));
     assert!(matches!(
         pack.trainer_pic(TrainerPicId::MAY).unwrap_err(),
-        PackError::WrongKind { id, expected: "image", .. } if id == "trainer-pic/may/front"
+        PackError::WrongKind { id, expected: "image", .. } if id == "trainer/may/front"
     ));
     let _ = std::fs::remove_file(path);
 }
@@ -128,29 +125,29 @@ fn missing_and_wrong_kind_entries_are_named() {
 fn malformed_entries_are_rejected_on_read() {
     let cases = [
         (
-            "trainer-pic/brendan/front",
+            "trainer/brendan/front",
             TrainerPicId::BRENDAN,
-            image("trainer-pic/brendan/front".into(), (32, 32), 4, 1),
+            image("trainer/brendan/front".into(), (32, 32), 4, 1),
         ),
         (
-            "trainer-pic/may/front",
+            "trainer/may/front",
             TrainerPicId::MAY,
-            image("trainer-pic/may/front".into(), (64, 64), INDEXED_8_BIT, 1),
+            image("trainer/may/front".into(), (64, 64), INDEXED_8_BIT, 1),
         ),
         (
-            "trainer-pic/may/front",
+            "trainer/may/front",
             TrainerPicId::MAY,
-            image("trainer-pic/may/front".into(), (64, 64), 4, 16),
+            image("trainer/may/front".into(), (64, 64), 4, 16),
         ),
         (
-            "trainer-pic/brendan/palette",
+            "trainer/brendan/palette",
             TrainerPicId::BRENDAN,
-            palette("trainer-pic/brendan/palette".into(), 15, 0),
+            palette("trainer/brendan/palette".into(), 15, 0),
         ),
         (
-            "trainer-pic/may/palette",
+            "trainer/may/palette",
             TrainerPicId::MAY,
-            palette("trainer-pic/may/palette".into(), 32, 0),
+            palette("trainer/may/palette".into(), 32, 0),
         ),
     ];
     for (index, (entry_id, pic, entry)) in cases.into_iter().enumerate() {
@@ -167,4 +164,53 @@ fn malformed_entries_are_rejected_on_read() {
         );
         let _ = std::fs::remove_file(path);
     }
+}
+
+#[test]
+fn the_portrait_and_the_battler_front_read_the_same_entries() {
+    let (pack, path) = load("trainer-pic-single-owner", entries());
+    for (id, _) in PICS {
+        let portrait = pack.trainer_pic(id).unwrap();
+        let battler = pack.trainer_battler(id, BattlerDirection::Front).unwrap();
+        assert!(std::ptr::eq(
+            portrait.art.image.pixels,
+            battler.art.image.pixels
+        ));
+        assert_eq!(portrait.art.palette.color(0), battler.art.palette.color(0));
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_retired_portrait_entry_is_never_consulted() {
+    let mut with_legacy = entries();
+    with_legacy.push(image(
+        "trainer-pic/brendan/front".into(),
+        (64, 64),
+        TEXT_WINDOW_BIT_DEPTH,
+        9,
+    ));
+    with_legacy.push(palette("trainer-pic/brendan/palette".into(), 16, 0x0300));
+    let (pack, path) = load("trainer-pic-legacy-ignored", with_legacy);
+    let handle = pack.trainer_pic(TrainerPicId::BRENDAN).unwrap();
+    assert_eq!(handle.art.image.pixels[0], 1);
+    assert_eq!(handle.art.palette.color(0), Some(0x0100));
+    let _ = std::fs::remove_file(path);
+
+    let without_canonical: Vec<Entry> = entries()
+        .into_iter()
+        .filter(|e| e.id != "trainer/brendan/front")
+        .chain([image(
+            "trainer-pic/brendan/front".into(),
+            (64, 64),
+            TEXT_WINDOW_BIT_DEPTH,
+            9,
+        )])
+        .collect();
+    let (pack, path) = load("trainer-pic-no-fallback", without_canonical);
+    assert!(matches!(
+        pack.trainer_pic(TrainerPicId::BRENDAN).unwrap_err(),
+        PackError::UnknownAsset(id) if id == "trainer/brendan/front"
+    ));
+    let _ = std::fs::remove_file(path);
 }

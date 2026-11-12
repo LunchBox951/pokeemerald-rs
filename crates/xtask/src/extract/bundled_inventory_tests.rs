@@ -10,8 +10,8 @@ use assets::bundled_overworld::{BUNDLED_LAYOUT_IDS, BUNDLED_TILESETS};
 use rom_import::profiles::bpee_rev0::EMERALD_US_REV0_ROOTS;
 
 use super::scope::{
-    sprite_palette_ids, sprite_sheet_ids, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, LAYOUTS,
-    TILESETS,
+    sprite_palette_ids, sprite_sheet_ids, trainer_battler_ids, INTERFACE_IMAGE_IDS,
+    INTERFACE_PALETTE_IDS, LAYOUTS, TILESETS,
 };
 
 fn set<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
@@ -87,4 +87,59 @@ fn the_text_printer_down_arrow_is_pinned_in_the_manifest_and_the_profile() {
     assert!(EMERALD_US_REV0_ROOTS
         .images()
         .any(|image| image.id == "interface/image/down_arrow"));
+}
+
+#[test]
+fn the_trainer_front_art_is_published_once_under_the_battler_ids() {
+    // Literals, so the manifest and the profile cannot both drop an entry or
+    // regrow a second family unnoticed.
+    const IDS: [&str; 6] = [
+        "trainer/brendan/front",
+        "trainer/brendan/back",
+        "trainer/brendan/palette",
+        "trainer/may/front",
+        "trainer/may/back",
+        "trainer/may/palette",
+    ];
+    let manifest = trainer_battler_ids();
+    assert_eq!(manifest, IDS);
+
+    let roots = &EMERALD_US_REV0_ROOTS;
+    let mut images: Vec<&str> = roots
+        .images()
+        .map(|image| image.id)
+        .filter(|id| id.starts_with("trainer"))
+        .collect();
+    let mut palettes: Vec<&str> = roots
+        .palettes()
+        .map(|palette| palette.id)
+        .filter(|id| id.starts_with("trainer"))
+        .collect();
+    images.sort_unstable();
+    palettes.sort_unstable();
+    assert_eq!(
+        images,
+        [
+            "trainer/brendan/back",
+            "trainer/brendan/front",
+            "trainer/may/back",
+            "trainer/may/front"
+        ]
+    );
+    assert_eq!(palettes, ["trainer/brendan/palette", "trainer/may/palette"]);
+    let pics: Vec<u16> = roots
+        .trainer_battlers
+        .front
+        .trainers
+        .iter()
+        .map(|trainer| trainer.trainer_pic)
+        .collect();
+    assert_eq!(pics, [71, 72]);
+    let backs: Vec<u16> = roots
+        .trainer_battlers
+        .backs
+        .iter()
+        .map(|back| back.back_pic)
+        .collect();
+    assert_eq!(backs, [0, 1]);
 }

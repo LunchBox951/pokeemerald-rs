@@ -1,4 +1,6 @@
-//! The Birch-speech trainer front pictures: `trainer-pic/*`.
+//! The trainer front pictures: the front half of `trainer/*`, which
+//! `AssetPack::trainer_pic` also serves as the trainer's portrait.
+//! [`super::trainer_battlers`] writes them.
 //!
 //! Each picture is an LZ77 4bpp image and an LZ77 palette that go through
 //! the shared codecs. What the profile adds is the two trainer tables
@@ -8,13 +10,12 @@
 //! art is [`ImportError::StructMismatch`] rather than a picture that happens
 //! to have the right pixels today.
 
-use pack_format::{PackEntry, PackWriter};
+use pack_format::PackEntry;
 
 use super::{check_pointer, palette};
 use crate::error::ImportError;
 use crate::reader::{GbaPtr, RomReader};
-use crate::rom::Rom;
-use crate::roots::{ImageRoot, Roots, TrainerFrontRoot, TrainerFrontRoots};
+use crate::roots::{ImageRoot, TrainerFrontRoot, TrainerFrontRoots};
 
 /// Every table row is `{data, size, tag}` or `{data, tag, pad}`: eight bytes.
 const RECORD_BYTES: usize = 8;
@@ -29,31 +30,14 @@ const PICTURE_TAG_FIELD: usize = 6;
 /// Offset of a palette row's `tag` field.
 const PALETTE_TAG_FIELD: usize = 4;
 
-/// Write every trainer front image and palette.
-///
-/// Entries are read before any is queued, so a failing root leaves the
-/// writer untouched rather than holding part of the domain. A profile with
-/// no trainer front roots writes nothing.
+/// Read and corroborate every picture of one front family: an image and a
+/// palette per trainer, in that order.
 ///
 /// # Errors
 ///
 /// [`ImportError::StructMismatch`] if a table row disagrees with the
 /// profile; [`ImportError::IndexOutOfRange`] if a picture is past the end of
 /// a table; any [`ImportError`] an image or palette read raises.
-pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    let entries = read_entries(&rom.reader(), &roots.trainer_front)?;
-    for entry in entries {
-        writer.push(entry);
-    }
-    Ok(())
-}
-
-/// Read and corroborate every picture of one front family: an image and a
-/// palette per trainer, in that order.
-///
-/// # Errors
-///
-/// As [`write`].
 pub(super) fn read_entries(
     reader: &RomReader<'_>,
     family: &TrainerFrontRoots,

@@ -20364,8 +20364,8 @@
     "graphics/trainers/front_pics/brendan.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "reason": "Trainer front picture published as pack id trainer-pic/brendan/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerFrontPic_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174). The ROM importer (crates/rom-import/src/domains/trainer_front.rs) reads the LZ77 stream and corroborates its gTrainerFrontPicTable row (front_pic_tables.h:98,173-174) by pointer, size and tag, writing the same entry. Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905); that drawing behaviour is not ported. The same picture is also published as pack id trainer/brendan/front for AssetPack::trainer_battler, read by crates/rom-import/src/domains/trainer_battlers.rs through the same table-row corroboration.",
-      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "reason": "Trainer front picture published once as pack id trainer/brendan/front (64x64, 4bpp) by the checkout extractor and read through both AssetPack::trainer_pic(TrainerPicId::BRENDAN) and AssetPack::trainer_battler(TrainerPicId::BRENDAN, Front). Upstream binds gTrainerFrontPic_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174). The ROM importer reads the LZ77 stream through crates/rom-import/src/domains/trainer_front.rs and corroborates its gTrainerFrontPicTable row (front_pic_tables.h:98,173-174) by pointer, size and tag, writing the same entry via crates/rom-import/src/domains/trainer_battlers.rs. Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905); that drawing behaviour is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_battler.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -20618,8 +20618,8 @@
     "graphics/trainers/front_pics/may.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "reason": "Trainer front picture published as pack id trainer-pic/may/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerFrontPic_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174). The ROM importer (crates/rom-import/src/domains/trainer_front.rs) reads the LZ77 stream and corroborates its gTrainerFrontPicTable row (front_pic_tables.h:98,173-174) by pointer, size and tag, writing the same entry. Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905); that drawing behaviour is not ported. The same picture is also published as pack id trainer/may/front for AssetPack::trainer_battler, read by crates/rom-import/src/domains/trainer_battlers.rs through the same table-row corroboration.",
-      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "reason": "Trainer front picture published once as pack id trainer/may/front (64x64, 4bpp) by the checkout extractor and read through both AssetPack::trainer_pic(TrainerPicId::MAY) and AssetPack::trainer_battler(TrainerPicId::MAY, Front). Upstream binds gTrainerFrontPic_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174). The ROM importer reads the LZ77 stream through crates/rom-import/src/domains/trainer_front.rs and corroborates its gTrainerFrontPicTable row (front_pic_tables.h:98,173-174) by pointer, size and tag, writing the same entry via crates/rom-import/src/domains/trainer_battlers.rs. Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905); that drawing behaviour is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_battler.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -20860,8 +20860,8 @@
     "graphics/trainers/palettes/brendan.pal": {
       "category": "graphics.trainer",
       "kind": "file",
-      "reason": "Trainer front palette published as pack id trainer-pic/brendan/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerPalette_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN. The ROM importer (crates/rom-import/src/domains/trainer_front.rs) reads the .gbapal.lz stream and corroborates its gTrainerFrontPicPaletteTable row (front_pic_tables.h:197,272-273) by pointer and tag, writing the same entry. The same palette is also published as pack id trainer/brendan/palette and shared by both directions of AssetPack::trainer_battler; the ROM importer also corroborates its gTrainerBackPicPaletteTable row, which names the same stream.",
-      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "reason": "Trainer palette published once as pack id trainer/brendan/palette (16 colours) by the checkout extractor, paired with the front image by AssetPack::trainer_pic(TrainerPicId::BRENDAN) and shared by both directions of AssetPack::trainer_battler. Upstream binds gTrainerPalette_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN. The ROM importer reads the .gbapal.lz stream through crates/rom-import/src/domains/trainer_front.rs and corroborates its gTrainerFrontPicPaletteTable row (front_pic_tables.h:197,272-273) by pointer and tag; crates/rom-import/src/domains/trainer_battlers.rs also corroborates the gTrainerBackPicPaletteTable row, which names the same stream.",
+      "rust_target": "crates/xtask/src/extract/trainer_battler.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -20874,8 +20874,8 @@
     "graphics/trainers/palettes/may.pal": {
       "category": "graphics.trainer",
       "kind": "file",
-      "reason": "Trainer front palette published as pack id trainer-pic/may/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerPalette_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY. The ROM importer (crates/rom-import/src/domains/trainer_front.rs) reads the .gbapal.lz stream and corroborates its gTrainerFrontPicPaletteTable row (front_pic_tables.h:197,272-273) by pointer and tag, writing the same entry. The same palette is also published as pack id trainer/may/palette and shared by both directions of AssetPack::trainer_battler; the ROM importer also corroborates its gTrainerBackPicPaletteTable row, which names the same stream.",
-      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "reason": "Trainer palette published once as pack id trainer/may/palette (16 colours) by the checkout extractor, paired with the front image by AssetPack::trainer_pic(TrainerPicId::MAY) and shared by both directions of AssetPack::trainer_battler. Upstream binds gTrainerPalette_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY. The ROM importer reads the .gbapal.lz stream through crates/rom-import/src/domains/trainer_front.rs and corroborates its gTrainerFrontPicPaletteTable row (front_pic_tables.h:197,272-273) by pointer and tag; crates/rom-import/src/domains/trainer_battlers.rs also corroborates the gTrainerBackPicPaletteTable row, which names the same stream.",
+      "rust_target": "crates/xtask/src/extract/trainer_battler.rs",
       "spec": "S-4",
       "status": "ported"
     },

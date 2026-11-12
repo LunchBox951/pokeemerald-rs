@@ -15,6 +15,10 @@
 //! because the pack keeps the source graphic and which frame shows is the
 //! animation tables' business, not this lookup's.
 //!
+//! The front image and palette are also the trainer's portrait
+//! ([`AssetPack::trainer_pic`] reads them through [`AssetPack::trainer_battler`]),
+//! so the pack holds them once.
+//!
 //! The pack ids stay private so battle code composes no strings, and every
 //! lookup re-validates shapes, since a hand-built or corrupt pack can bypass
 //! extraction.

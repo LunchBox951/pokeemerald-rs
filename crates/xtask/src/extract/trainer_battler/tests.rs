@@ -10,7 +10,6 @@ use pack_format::PackWriter;
 
 use super::{extract_trainer_battlers, TRAINERS};
 use crate::extract::png::tests::indexed_png_from_raw_with_plte;
-use crate::extract::trainer_pic::extract_trainer_pics;
 use crate::extract::{extract_to, png, repo_root, upstream_present, ExtractError};
 
 const FRAME_ROWS: u32 = 64;
@@ -47,6 +46,16 @@ fn png_of(height: u32, bit_depth: u8, pixel_of_frame: impl Fn(u32) -> u8) -> Vec
     indexed_png_from_raw_with_plte(bit_depth, 64, height, &raw, &plte)
 }
 
+/// A 32x32 4bpp picture, too small for a trainer front.
+fn narrow_front_png() -> Vec<u8> {
+    let mut raw = Vec::new();
+    for _ in 0..32 {
+        raw.push(0);
+        raw.resize(raw.len() + 16, 0);
+    }
+    indexed_png_from_raw_with_plte(4, 32, 32, &raw, &[7; 48])
+}
+
 /// A pixel byte (two equal nibbles) per trainer, direction and frame.
 fn front_pixel(trainer: usize) -> u8 {
     0x11 * (u8::try_from(trainer).unwrap() * 5 + 1)
@@ -67,14 +76,18 @@ fn write_checkout(dir: &Path) {
         std::fs::create_dir_all(root.join(sub)).unwrap();
     }
     for (index, trainer) in TRAINERS.iter().enumerate() {
-        write_at(dir, trainer.pic.png, png_of(64, 4, |_| front_pixel(index)));
+        write_at(
+            dir,
+            trainer.front_png,
+            png_of(64, 4, |_| front_pixel(index)),
+        );
         write_at(
             dir,
             trainer.back_png,
             png_of(256, 4, |frame| back_pixel(index, frame)),
         );
         let first = u8::try_from(index).unwrap() + 1;
-        write_at(dir, trainer.pic.palette, palette_text(16, 8 * first));
+        write_at(dir, trainer.palette, palette_text(16, 8 * first));
     }
 }
 
@@ -97,7 +110,7 @@ fn the_manifest_names_two_trainers_with_six_unique_ids_and_their_files() {
     assert!(ids.iter().all(|id| id.starts_with("trainer/")));
     let files: Vec<_> = TRAINERS
         .iter()
-        .map(|t| (t.pic.png, t.back_png, t.pic.palette))
+        .map(|t| (t.front_png, t.back_png, t.palette))
         .collect();
     assert_eq!(
         files,
@@ -114,7 +127,7 @@ fn the_manifest_names_two_trainers_with_six_unique_ids_and_their_files() {
             ),
         ]
     );
-    let trainers: Vec<_> = TRAINERS.iter().map(|t| t.pic.trainer_pic).collect();
+    let trainers: Vec<_> = TRAINERS.iter().map(|t| t.trainer_pic).collect();
     assert_eq!(trainers, [TrainerPicId::BRENDAN, TrainerPicId::MAY]);
 }
 
@@ -124,7 +137,7 @@ fn a_complete_checkout_extracts_four_direction_pairs_that_resolve() {
     write_checkout(&dir);
     let (pack, _) = extracted(&dir);
     for (index, trainer) in TRAINERS.iter().enumerate() {
-        let id = trainer.pic.trainer_pic;
+        let id = trainer.trainer_pic;
         let front = pack.trainer_battler(id, BattlerDirection::Front).unwrap();
         let back = pack.trainer_battler(id, BattlerDirection::Back).unwrap();
         assert_eq!((front.art.image.width, front.art.image.height), (64, 64));
@@ -162,28 +175,44 @@ fn a_complete_checkout_extracts_four_direction_pairs_that_resolve() {
 }
 
 #[test]
-fn the_battler_entries_repeat_the_portrait_art_under_their_own_ids() {
-    let dir = scratch_dir("with-portraits");
+fn the_portrait_and_the_battler_front_resolve_the_one_published_entry() {
+    let dir = scratch_dir("single-owner");
     write_checkout(&dir);
     let mut writer = PackWriter::new();
-    extract_trainer_pics(&dir, &mut writer).unwrap();
     extract_trainer_battlers(&dir, &mut writer).unwrap();
-    assert_eq!(writer.len(), 10);
+    assert_eq!(writer.len(), 6);
     let path = dir.join("t.pack");
     std::fs::write(&path, writer.finish().unwrap()).unwrap();
     let pack = AssetPack::load(&path).unwrap();
-    for id in [TrainerPicId::BRENDAN, TrainerPicId::MAY] {
+    for (index, trainer) in TRAINERS.iter().enumerate() {
+        let id = trainer.trainer_pic;
         let portrait = pack.trainer_pic(id).unwrap().art;
         let front = pack
             .trainer_battler(id, BattlerDirection::Front)
             .unwrap()
             .art;
         assert_eq!(portrait.image.pixels, front.image.pixels);
+        assert!(portrait
+            .image
+            .pixels
+            .iter()
+            .all(|&p| p == front_pixel(index) & 0xF));
         assert_eq!(
             portrait.palette.colors().collect::<Vec<_>>(),
             front.palette.colors().collect::<Vec<_>>()
         );
     }
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(
+        !bytes
+            .windows(b"trainer-pic/".len())
+            .any(|w| w == b"trainer-pic/"),
+        "the retired portrait ids must not be published"
+    );
+    assert!(matches!(
+        pack.trainer_pic(TrainerPicId::HIKER),
+        Err(PackError::UnsupportedTrainerPic(TrainerPicId::HIKER))
+    ));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -212,7 +241,7 @@ fn a_missing_back_sheet_names_its_path() {
 
 #[test]
 fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
-    let cases: [(&str, &str, Vec<u8>); 6] = [
+    let cases: [(&str, &str, Vec<u8>); 8] = [
         (
             "back as a single frame",
             "back_pics/may.png",
@@ -237,6 +266,16 @@ fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
             "front at two bits",
             "front_pics/may.png",
             png_of(64, 2, |_| 0),
+        ),
+        (
+            "front at eight bits",
+            "front_pics/may.png",
+            png_of(64, 8, |_| 0),
+        ),
+        (
+            "front of half the width",
+            "front_pics/may.png",
+            narrow_front_png(),
         ),
         (
             "palette of fifteen colours",
@@ -271,6 +310,13 @@ fn sources_that_are_not_png_are_rejected() {
     let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
     assert!(matches!(err, ExtractError::Png(p, _) if p == path));
     assert_eq!(writer.len(), 0);
+
+    write_checkout(&dir);
+    write_at(&dir, "front_pics/brendan.png", b"not a png");
+    let path = dir.join("graphics/trainers/front_pics/brendan.png");
+    let err = extract_trainer_battlers(&dir, &mut writer).unwrap_err();
+    assert!(matches!(err, ExtractError::Png(p, _) if p == path));
+    assert_eq!(writer.len(), 0);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -288,11 +334,11 @@ fn trainer_battlers_are_extracted_and_resolve_through_the_typed_lookup() {
 
     for trainer in TRAINERS {
         for (direction, file, height) in [
-            (BattlerDirection::Front, trainer.pic.png, 64),
+            (BattlerDirection::Front, trainer.front_png, 64),
             (BattlerDirection::Back, trainer.back_png, 256),
         ] {
             let art = pack
-                .trainer_battler(trainer.pic.trainer_pic, direction)
+                .trainer_battler(trainer.trainer_pic, direction)
                 .unwrap()
                 .art;
             let decoded = png::decode(&std::fs::read(upstream.join(file)).unwrap()).unwrap();
@@ -300,6 +346,15 @@ fn trainer_battlers_are_extracted_and_resolve_through_the_typed_lookup() {
             assert_eq!((art.image.width, art.image.height), (64, height));
             assert_eq!(art.palette.color_count, 16);
         }
+        let portrait = pack.trainer_pic(trainer.trainer_pic).unwrap().art;
+        let decoded =
+            png::decode(&std::fs::read(upstream.join(trainer.front_png)).unwrap()).unwrap();
+        assert_eq!(
+            portrait.image.pixels,
+            decoded.pixels.as_slice(),
+            "{}",
+            trainer.name
+        );
     }
     let _ = std::fs::remove_file(path);
 }

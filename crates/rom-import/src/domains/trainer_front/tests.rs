@@ -1,4 +1,5 @@
-//! Trainer front picture reader tests over a synthetic ROM.
+//! Trainer front picture reader tests over a synthetic ROM, driven through
+//! the battler domain that owns the front pictures.
 //!
 //! The reader's own logic is the corroboration of each picture's row in the
 //! two tables, so the cases are a well-formed ROM and, per table, a row
@@ -8,12 +9,16 @@
 
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, PackWriter};
 
-use super::{write, RECORD_BYTES, TABLE_ROWS};
+use super::{RECORD_BYTES, TABLE_ROWS};
+use crate::domains::trainer_battlers;
 use crate::error::{ImportError, Lz77Fault};
 use crate::fixture::RomFixture;
 use crate::reader::{GbaPtr, ROM_BASE};
 use crate::rom::{Rom, ROM_SIZE};
-use crate::roots::{Encoding, ImageRoot, PaletteRoot, Roots, TrainerFrontRoot, TrainerFrontRoots};
+use crate::roots::{
+    Encoding, ImageRoot, PaletteRoot, Roots, TrainerBattlerRoots, TrainerFrontRoot,
+    TrainerFrontRoots,
+};
 
 const BRENDAN: u16 = 71;
 const MAY: u16 = 72;
@@ -152,14 +157,14 @@ const fn palette(id: &'static str, addr: u32) -> PaletteRoot {
 
 const BRENDAN_ROOT: TrainerFrontRoot = TrainerFrontRoot {
     trainer_pic: BRENDAN,
-    front: image("trainer-pic/brendan/front", BRENDAN_IMAGE),
-    palette: palette("trainer-pic/brendan/palette", BRENDAN_PALETTE),
+    front: image("trainer/brendan/front", BRENDAN_IMAGE),
+    palette: palette("trainer/brendan/palette", BRENDAN_PALETTE),
 };
 
 const MAY_ROOT: TrainerFrontRoot = TrainerFrontRoot {
     trainer_pic: MAY,
-    front: image("trainer-pic/may/front", MAY_IMAGE),
-    palette: palette("trainer-pic/may/palette", MAY_PALETTE),
+    front: image("trainer/may/front", MAY_IMAGE),
+    palette: palette("trainer/may/palette", MAY_PALETTE),
 };
 
 static TRAINERS: [TrainerFrontRoot; 2] = [BRENDAN_ROOT, MAY_ROOT];
@@ -186,13 +191,20 @@ fn roots_at(
     trainers: &'static [TrainerFrontRoot],
 ) -> Roots {
     Roots {
-        trainer_front: TrainerFrontRoots {
-            front_table,
-            palette_table,
-            trainers,
+        trainer_battlers: TrainerBattlerRoots {
+            front: TrainerFrontRoots {
+                front_table,
+                palette_table,
+                trainers,
+            },
+            ..TrainerBattlerRoots::NONE
         },
         ..Roots::NONE
     }
+}
+
+fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
+    trainer_battlers::write(rom, roots, writer)
 }
 
 fn roots(trainers: &'static [TrainerFrontRoot]) -> Roots {
@@ -231,10 +243,10 @@ fn both_pictures_write_an_image_and_a_palette_with_their_decompressed_payloads()
     assert_eq!(
         ids,
         [
-            "trainer-pic/brendan/front",
-            "trainer-pic/brendan/palette",
-            "trainer-pic/may/front",
-            "trainer-pic/may/palette",
+            "trainer/brendan/front",
+            "trainer/brendan/palette",
+            "trainer/may/front",
+            "trainer/may/palette",
         ]
     );
     for entry in &entries {
@@ -250,19 +262,19 @@ fn both_pictures_write_an_image_and_a_palette_with_their_decompressed_payloads()
     }
     let alternating = |low: u8, high: u8| [low, high].repeat(64 * 64 / 2);
     assert_eq!(
-        payload(&pack, &entries, "trainer-pic/brendan/front"),
+        payload(&pack, &entries, "trainer/brendan/front"),
         alternating(1, 2)
     );
     assert_eq!(
-        payload(&pack, &entries, "trainer-pic/may/front"),
+        payload(&pack, &entries, "trainer/may/front"),
         alternating(3, 4)
     );
     assert_eq!(
-        payload(&pack, &entries, "trainer-pic/brendan/palette"),
+        payload(&pack, &entries, "trainer/brendan/palette"),
         colors(0x0100)
     );
     assert_eq!(
-        payload(&pack, &entries, "trainer-pic/may/palette"),
+        payload(&pack, &entries, "trainer/may/palette"),
         colors(0x0200)
     );
 }
@@ -285,12 +297,12 @@ fn a_row_naming_another_copy_is_refused_in_each_table() {
                 &picture_row(stray, 0x800, BRENDAN),
             )
         }),
-        "trainer-pic/brendan/front",
+        "trainer/brendan/front",
         "CompressedSpriteSheet.data",
     );
     mismatch(
         &broken(|f| f.write(idx(row_start(PALETTE_TABLE, MAY)), &palette_row(stray, MAY))),
-        "trainer-pic/may/palette",
+        "trainer/may/palette",
         "CompressedSpritePalette.data",
     );
 }
@@ -315,7 +327,7 @@ fn a_row_with_the_wrong_size_or_tag_is_refused() {
                 &picture_row(at(MAY_IMAGE), 0x400, MAY),
             )
         }),
-        "trainer-pic/may/front",
+        "trainer/may/front",
         "CompressedSpriteSheet.size",
     );
     mismatch(
@@ -325,7 +337,7 @@ fn a_row_with_the_wrong_size_or_tag_is_refused() {
                 &picture_row(at(MAY_IMAGE), 0x800, BRENDAN),
             )
         }),
-        "trainer-pic/may/front",
+        "trainer/may/front",
         "CompressedSpriteSheet.tag",
     );
     mismatch(
@@ -335,7 +347,7 @@ fn a_row_with_the_wrong_size_or_tag_is_refused() {
                 &palette_row(at(MAY_PALETTE), BRENDAN),
             )
         }),
-        "trainer-pic/may/palette",
+        "trainer/may/palette",
         "CompressedSpritePalette.tag",
     );
 }
@@ -518,12 +530,6 @@ fn the_roots_expose_every_trainer_image_and_palette() {
     let roots = roots(&TRAINERS);
     let images: Vec<&str> = roots.images().map(|root| root.id).collect();
     let palettes: Vec<&str> = roots.palettes().map(|root| root.id).collect();
-    assert_eq!(
-        images,
-        ["trainer-pic/brendan/front", "trainer-pic/may/front"]
-    );
-    assert_eq!(
-        palettes,
-        ["trainer-pic/brendan/palette", "trainer-pic/may/palette"]
-    );
+    assert_eq!(images, ["trainer/brendan/front", "trainer/may/front"]);
+    assert_eq!(palettes, ["trainer/brendan/palette", "trainer/may/palette"]);
 }

@@ -1,18 +1,17 @@
-//! Locator tests over a synthetic ROM: both trainers' battlers on top of the
-//! portraits' plan, the two back tables with their own index space, and every
-//! way a battler entry or a back table can fail to corroborate.
+//! Locator tests over a synthetic ROM: both trainers' battlers, the front
+//! tables the portraits share, the two back tables with their own index
+//! space, and every way a battler entry or a table can fail to corroborate.
 
 use pack_format::{image_entry_from_tiles, palette_entry, raw_entry, PackEntry};
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
 use super::{locate, BACK_PICTURE_SIZE, BACK_TABLE_ROWS};
-use crate::extract::scope::{trainer_battler_ids, TRAINER_BATTLERS, TRAINER_FRONT_PICS};
+use crate::extract::scope::{trainer_battler_ids, TRAINER_BATTLERS};
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::inventory::require_trainer_battlers;
 use crate::gen_rom_profile::plan::{ReportLine, SymbolExpectation, TrainerBattlerPlan};
 use crate::gen_rom_profile::tests::with_context;
-use crate::gen_rom_profile::trainer_front;
 
 const BUS: u32 = 0x0800_0000;
 const FRONT_TABLE: u32 = 0x10_0000;
@@ -70,14 +69,10 @@ fn front_entry(id: &str, seed: usize) -> PackEntry {
     image_entry_from_tiles(id.to_owned(), &tiles(seed, 64), 4, 64, 64, None).expect("image")
 }
 
-/// The portraits' entries and the battlers' entries, for both trainers.
+/// The battler entries of both trainers.
 fn entries() -> Vec<PackEntry> {
     let mut entries = Vec::new();
     for (index, trainer) in TRAINER_BATTLERS.iter().enumerate() {
-        entries.push(front_entry(trainer.pic.image_id, index));
-        entries.push(
-            palette_entry(trainer.pic.palette_id.to_owned(), &colors(index)).expect("palette"),
-        );
         entries.push(front_entry(trainer.front_id, index));
         entries
             .push(palette_entry(trainer.palette_id.to_owned(), &colors(index)).expect("palette"));
@@ -111,12 +106,11 @@ fn palette_row(data: u32, tag: u16) -> Vec<u8> {
 }
 
 fn front_pic(index: usize) -> u16 {
-    u16::from(TRAINER_BATTLERS[index].pic.trainer_pic.index())
+    u16::from(TRAINER_BATTLERS[index].trainer_pic.index())
 }
 
 fn back_pic(index: usize) -> u16 {
     TRAINER_BATTLERS[index]
-        .pic
         .trainer_pic
         .battler_back_index()
         .unwrap()
@@ -166,8 +160,7 @@ type Located = Result<(TrainerBattlerPlan, Vec<ReportLine>), GenRomProfileError>
 fn located(label: &str, rom: &[u8], pack: Vec<PackEntry>) -> Located {
     with_context(label, rom, pack, |ctx| {
         let mut report = Vec::new();
-        let portraits = trainer_front::locate(ctx, &mut report)?;
-        locate(ctx, &portraits, &mut report).map(|plan| (plan, report))
+        locate(ctx, &mut report).map(|plan| (plan, report))
     })
 }
 
@@ -214,9 +207,13 @@ fn both_trainers_and_both_back_tables_are_found() {
             (4, 4, 64, 256, 256)
         );
     }
-    // The portraits' four lines and two tables, then the battlers' two
-    // repeated pictures and palettes, two back sheets, and two back tables.
-    assert_eq!(report.len(), 6 + 4 + 2 + 2);
+    // Two fronts, two palettes and two front tables, then two back sheets and
+    // two back tables, each id reported once.
+    assert_eq!(report.len(), 6 + 2 + 2);
+    let mut ids: Vec<&str> = report.iter().map(|line| line.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), report.len());
     let table = report
         .iter()
         .find(|line| line.id == "gTrainerBackPicTable")
@@ -225,18 +222,14 @@ fn both_trainers_and_both_back_tables_are_found() {
 }
 
 #[test]
-fn the_battler_lines_repeat_the_portraits_addresses_and_name_each_symbol() {
+fn each_line_carries_its_canonical_address_and_names_its_symbol() {
     let (_, report) = located("trainer-battlers-symbols", &rom(), entries()).expect("located");
     let line = |id: &str| report.iter().find(|line| line.id == id).expect(id);
     let exact = |name: &str| SymbolExpectation::Exact(name.to_owned());
-    for (index, (battler, portrait)) in TRAINER_BATTLERS.iter().zip(TRAINER_FRONT_PICS).enumerate()
-    {
-        assert_eq!(line(battler.front_id).addr, line(portrait.image_id).addr);
-        assert_eq!(
-            line(battler.palette_id).addr,
-            line(portrait.palette_id).addr
-        );
-        assert_eq!(line(battler.back_id).addr, BUS + back_at(index));
+    for (index, trainer) in TRAINER_BATTLERS.iter().enumerate() {
+        assert_eq!(line(trainer.front_id).addr, BUS + front_at(index));
+        assert_eq!(line(trainer.palette_id).addr, BUS + palette_at(index));
+        assert_eq!(line(trainer.back_id).addr, BUS + back_at(index));
     }
     assert_eq!(
         line("trainer/brendan/front").symbol,
@@ -265,32 +258,39 @@ fn the_battler_lines_repeat_the_portraits_addresses_and_name_each_symbol() {
 }
 
 #[test]
-fn a_battler_entry_that_differs_from_its_portrait_is_refused() {
-    let replaced = |id: &str, entry: PackEntry| {
-        let mut pack = entries();
-        pack.retain(|existing| existing.id != id);
-        pack.push(entry);
-        pack
-    };
-    assert_struct_mismatch(
-        located(
-            "trainer-battlers-front-differs",
-            &rom(),
-            replaced("trainer/may/front", front_entry("trainer/may/front", 9)),
-        ),
-        "trainer/may/front",
-    );
-    assert_struct_mismatch(
-        located(
-            "trainer-battlers-palette-differs",
-            &rom(),
-            replaced(
-                "trainer/brendan/palette",
-                palette_entry("trainer/brendan/palette".to_owned(), &colors(9)).unwrap(),
-            ),
-        ),
-        "trainer/brendan/palette",
-    );
+fn front_art_the_rom_lacks_is_not_found_under_its_battler_id() {
+    for (label, id, addr) in [
+        ("image", "trainer/brendan/front", front_at(0)),
+        ("palette", "trainer/may/palette", palette_at(1)),
+    ] {
+        let mut bytes = rom();
+        bytes[addr as usize..addr as usize + 4].fill(0xFF);
+        let err = located(
+            &format!("trainer-battlers-missing-{label}"),
+            &bytes,
+            entries(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::NotFound { id: missing } if missing == id),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn retired_portrait_entries_in_the_pack_change_nothing() {
+    let (plan, report) = located("trainer-battlers-clean", &rom(), entries()).expect("located");
+    let mut pack = entries();
+    pack.push(front_entry("trainer-pic/brendan/front", 9));
+    pack.push(palette_entry("trainer-pic/brendan/palette".to_owned(), &colors(9)).unwrap());
+    let (with_legacy, legacy_report) =
+        located("trainer-battlers-legacy", &rom(), pack).expect("located");
+    assert_eq!(format!("{with_legacy:?}"), format!("{plan:?}"));
+    assert_eq!(legacy_report.len(), report.len());
+    assert!(legacy_report
+        .iter()
+        .all(|line| !line.id.starts_with("trainer-pic/")));
 }
 
 #[test]
@@ -389,12 +389,8 @@ fn a_pack_without_a_battler_entry_is_refused_before_any_report_line() {
         pack.retain(|entry| entry.id != id);
         let rom = rom();
         with_context("trainer-battlers-pack-gap", &rom, pack, |ctx| {
-            let portraits = {
-                let mut report = Vec::new();
-                trainer_front::locate(ctx, &mut report).expect("portraits")
-            };
             let mut report = Vec::new();
-            let err = locate(ctx, &portraits, &mut report).unwrap_err();
+            let err = locate(ctx, &mut report).unwrap_err();
             assert!(
                 matches!(&err, GenRomProfileError::MissingPackEntry(missing) if *missing == id),
                 "{err}"
