@@ -55,11 +55,9 @@ impl ScratchPack {
     /// Unlinks the pathname only if it still names the file this guard created, and fails closed
     /// ([`ScratchRemoval::Unverifiable`]) wherever that cannot be established.
     ///
-    /// Unix compares `(dev, ino)` of the path (`symlink_metadata`, so a planted symlink never
-    /// matches) against the creating handle. std has no unlink-by-handle, so a swap between that
-    /// check and the unlink remains possible; this closes the window the child run opens, not that
-    /// one. Windows reads the handle's [`win_fs::WindowsFileIdentity`] and deletes through a
-    /// handle opened on the path only if that handle has the same identity.
+    /// Unix has no std unlink-by-handle, so a swap between its identity check and the unlink
+    /// remains possible; this closes the window the child run opens, not that one. Windows
+    /// deletes through a handle verified against the creating handle's identity.
     fn remove_if_owned(&self) -> ScratchRemoval {
         #[cfg(unix)]
         {
@@ -124,10 +122,8 @@ impl Drop for ScratchPack {
 
 /// A scratch, valid but entryless asset pack: an empty
 /// [`pack_format::PackWriter`] already serializes exactly this, at the live
-/// [`pack_format::FORMAT_VERSION`]. The file is created exclusively
-/// (`O_EXCL`), so a name already occupied -- including by a symlink -- is
-/// skipped rather than followed and truncated, and the bytes go through the
-/// handle that creation returned, which the returned guard keeps.
+/// [`pack_format::FORMAT_VERSION`]. Creation is exclusive, so a name already occupied -- including
+/// by a symlink -- is skipped rather than followed and truncated.
 fn write_empty_scratch_pack(label: &str) -> ScratchPack {
     use std::io::Write as _;
 
@@ -232,9 +228,8 @@ fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bou
     run_boundary_harness(|_| {});
 }
 
-/// The parent half of the harness: creates the scratch pack, hands its path to `after_create`
-/// (a seam for a test to interfere with the pack before the child runs), re-executes this binary
-/// against it, checks the child's stderr, then lets the pack guard clean up.
+/// The parent half of the harness. `after_create` is a seam for a test to interfere with the
+/// scratch pack before the child runs.
 fn run_boundary_harness(after_create: impl FnOnce(&std::path::Path)) {
     let pack = write_empty_scratch_pack("start-title-music-boundary");
     after_create(pack.path());
@@ -277,9 +272,9 @@ fn staged_candidate(pack: &std::path::Path, attempt: u32) -> std::path::PathBuf 
     }
 }
 
-/// Replaces the pack at `path` with a different file holding the same bytes, so a child still
-/// loads a valid entryless pack, and returns the name the original stays reachable under. One
-/// rename does the swap, so the pathname never lacks a pack.
+/// Replaces the pack at `path` with a different file holding the same bytes, and returns the name
+/// the original stays reachable under. The swap is a single rename, so the pathname never lacks a
+/// pack and a child loading it cannot race a gap.
 #[cfg(unix)]
 fn replace_pack_with_lookalike(path: &std::path::Path) -> std::path::PathBuf {
     use std::io::Write as _;
@@ -313,9 +308,8 @@ fn replace_pack_with_lookalike(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// A file that replaces the scratch pack at its pathname during the harness run must not be
-/// unlinked by the harness's cleanup. The replacement is swapped in through the harness's
-/// `after_create` seam, so it is installed before the child runs and before cleanup, with no
-/// scheduling dependence.
+/// unlinked by the harness's cleanup. The swap goes through the `after_create` seam so the test
+/// has no scheduling dependence.
 #[cfg(unix)]
 #[test]
 fn scratch_pack_cleanup_spares_a_file_that_replaced_it_during_the_child_run() {
