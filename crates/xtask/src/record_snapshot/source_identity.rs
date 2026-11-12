@@ -92,4 +92,3 @@ pub(crate) fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
     }
     String::from_utf8(output.stdout).ok()
 }
-
