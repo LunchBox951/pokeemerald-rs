@@ -29807,7 +29807,10 @@
     "src/data/battle_frontier/battle_frontier_exchange_corner.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All four reward lists (sFrontierExchangeCorner_Decor1, Decor2, Vitamins, HoldItems, src/data/battle_frontier/battle_frontier_exchange_corner.h:1-49) with their paired description lists (:51-99), including the repeated large-doll description and the gText_Exit entry that ends each list, as assets::frontier_exchange_corner::ExchangeCornerTable. The ITEM_LIST_END terminator is the Exit reward (raw_id 0xFFFF). Description text is transcribed from BattleFrontier_ExchangeServiceCorner_Text_*Desc in data/maps/BattleFrontier_ExchangeServiceCorner/scripts.inc. BP prices, purchases, icons and the src/field_specials.c FillFrontierExchangeCornerWindowAndItemIcon rendering are not modelled.",
+      "rust_target": "crates/assets/src/frontier_exchange_corner.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/battle_frontier/battle_frontier_mons.h": {
       "category": "code.header",

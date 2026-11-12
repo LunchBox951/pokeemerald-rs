@@ -48,6 +48,7 @@ pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
 pub mod fonts;
+pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
 pub mod items;
 pub mod keypad_icons;
