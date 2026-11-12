@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
+//! Lilycove Lady quiz, favor, and contest data (see [`lilycove_lady`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -52,6 +53,7 @@ pub mod hidden_item_flags;
 pub mod items;
 pub mod keypad_icons;
 pub mod level_up_learnsets;
+pub mod lilycove_lady;
 pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
@@ -96,6 +98,11 @@ pub use fonts::{
 };
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+pub use lilycove_lady::{
+    ContestCategory, ContestLadyRecord, FavorLadyRequest, LilycoveLadyData, LilycoveLadyError,
+    LilycoveLadyKind, QuizLadyQuiz, CONTEST_CATEGORY_COUNT, EC_EMPTY_WORD, FAVOR_REQUEST_COUNT,
+    LILYCOVE_LADY_COUNT, QUIZ_COUNT, QUIZ_QUESTION_LEN,
+};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
     MapEventsTable, MovementType, ObjectEvent, SecretBaseId, TrainerType, WarpDestination,
