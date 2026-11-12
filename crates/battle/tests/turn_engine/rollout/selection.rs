@@ -118,6 +118,7 @@ fn a_locked_players_turn_order_reads_rollouts_priority() {
         })
         .expect("Rollout lands");
     assert!(enemy_acted < player_hit, "{events:?}");
+    rng.assert_exhausted();
 }
 
 #[test]
@@ -130,12 +131,16 @@ fn a_slot_outside_the_moveset_is_still_refused_while_locked() {
     );
     take(&mut battle, PlayerAction::UseMove(0), &mut rng);
 
+    rng.assert_exhausted();
+
+    let mut refused = SequenceRng::new([]);
     let error = battle
-        .take_turn(PlayerAction::UseMove(4), &mut SequenceRng::new([]))
+        .take_turn(PlayerAction::UseMove(4), &mut refused)
         .unwrap_err();
 
     assert_eq!(error.error(), BattleError::InvalidMoveSlot(4));
     assert_eq!(player_lock(&battle), (Some(ROLLOUT), Some(4)));
+    refused.assert_exhausted();
 }
 
 #[test]
@@ -218,10 +223,15 @@ fn a_locked_first_battle_enemy_draws_nothing_to_choose() {
         &mut rng,
     )
     .unwrap();
+    assert_eq!(rng.0, 1, "the turn-number seed");
+
     battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert_eq!(enemy_lock(&battle), (Some(ROLLOUT), Some(4)));
+    // Turn start, the first-battle pick (four setup fills and the slot draw),
+    // then the enemy's accuracy, variance and effect chance (no critical hit).
+    assert_eq!(rng.0, 1 + (1 + 4 + 1 + 3));
 
     let before = rng.0;
     battle
