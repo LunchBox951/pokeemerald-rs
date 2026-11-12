@@ -80,6 +80,49 @@ fn other_device_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+/// How many differently named directories [`create_fresh_dir`] tries inside
+/// one parent before giving up on it.
+#[cfg(target_os = "linux")]
+const FRESH_DIR_ATTEMPTS: u32 = 16;
+
+/// Makes a new directory inside `parent` that did not exist before, or
+/// `None` when `parent` refuses one. The name carries the process id, the
+/// clock and the thread, and the directory is created exclusively: a name
+/// somebody else already holds is never touched, and the next name is tried.
+#[cfg(target_os = "linux")]
+fn create_fresh_dir(parent: &Path, label: &str) -> Option<PathBuf> {
+    let thread = format!("{:?}", std::thread::current().id());
+    let thread: String = thread.chars().filter(char::is_ascii_digit).collect();
+    create_fresh_dir_named(parent, |attempt| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        format!(
+            "pokeemerald-rs-other-device-{label}-{}-{nanos}-{thread}-{attempt}",
+            std::process::id()
+        )
+    })
+}
+
+/// [`create_fresh_dir`] with the name of each attempt chosen by `name`: the
+/// first one `parent` does not already hold becomes a new directory, and a
+/// taken name is left exactly as it was.
+#[cfg(target_os = "linux")]
+pub(crate) fn create_fresh_dir_named(
+    parent: &Path,
+    name: impl Fn(u32) -> String,
+) -> Option<PathBuf> {
+    for attempt in 0..FRESH_DIR_ATTEMPTS {
+        let path = parent.join(name(attempt));
+        match fs::create_dir(&path) {
+            Ok(()) => return Some(path),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// A fresh directory under the first of `candidates` that is on a different
 /// device from `base` and accepts a new directory, or `None`.
 #[cfg(target_os = "linux")]
@@ -89,7 +132,6 @@ pub(crate) fn other_device_dir_among(
     candidates: &[PathBuf],
 ) -> Option<OtherDeviceDir> {
     use std::os::unix::fs::MetadataExt as _;
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
     let base_dev = fs::metadata(base).ok()?.dev();
     candidates.iter().find_map(|candidate| {
         // Callers symlink to the directory from inside the fixture, where a
@@ -98,13 +140,7 @@ pub(crate) fn other_device_dir_among(
         if fs::metadata(&candidate).ok()?.dev() == base_dev {
             return None;
         }
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = candidate.join(format!(
-            "pokeemerald-rs-other-device-{label}-{}-{unique}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir(&path).ok()?;
+        let path = create_fresh_dir(&candidate, label)?;
         // Judge the directory made, not its parent: a mount point inside the
         // candidate would put the new directory elsewhere.
         if fs::metadata(&path).ok()?.dev() == base_dev {

@@ -390,7 +390,7 @@ fn a_deep_rollback_takes_back_every_level_and_its_quarantine() {
 
 #[cfg(target_os = "linux")]
 use crate::import_rom::tests::{
-    other_device_dir, other_device_dir_among, require_other_device_dir,
+    create_fresh_dir_named, other_device_dir, other_device_dir_among, require_other_device_dir,
 };
 
 #[cfg(target_os = "linux")]
@@ -474,10 +474,8 @@ fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
 #[test]
 fn the_other_device_directory_is_never_on_the_fixture_roots_device() {
     use std::os::unix::fs::MetadataExt as _;
-    // `TMPDIR=/dev/shm` puts every `TempDir` on /dev/shm's filesystem, which
-    // is exactly where the cross-device tests used to look for "another"
-    // one. Whatever the temp directory is, and whether or not /dev/shm is
-    // the base, a directory handed back must really differ from it.
+    // Whatever the temp directory is, and whether or not /dev/shm is the
+    // base, a directory handed back must really differ from the base's device.
     let temp = TempDir::new("other-device-selection");
     for base in [temp.path.as_path(), std::path::Path::new("/dev/shm")] {
         let Some(elsewhere) = other_device_dir(base, "other-device-selection") else {
@@ -559,4 +557,79 @@ fn a_relative_candidate_is_handed_back_as_an_absolute_path() {
         "{:?}",
         found.path
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stale_directory_at_the_predictable_path_is_not_deleted() {
+    // The directory a helper makes must never be one somebody else already
+    // owns: plant a directory holding a file at every PID-and-counter name
+    // a predictable scheme would pick, and none may lose its contents.
+    let temp = TempDir::new("stale-predictable");
+    let mut planted = Vec::new();
+    for counter in 0..64 {
+        let stale = temp.join(&format!(
+            "pokeemerald-rs-other-device-stale-predictable-{}-{counter}",
+            std::process::id()
+        ));
+        fs::create_dir(&stale).unwrap();
+        let keep = stale.join("keep");
+        fs::write(&keep, b"somebody else's").unwrap();
+        planted.push(keep);
+    }
+    // /proc is on no disk filesystem, so the temp dir is "another device".
+    let found = other_device_dir_among(
+        std::path::Path::new("/proc"),
+        "stale-predictable",
+        &[temp.path.clone()],
+    )
+    .expect("the temp dir is on another device than /proc");
+
+    for keep in &planted {
+        assert!(keep.is_file(), "{} was deleted", keep.display());
+    }
+    assert!(found.path.starts_with(&temp.path), "{:?}", found.path);
+    assert!(entry_names(&found.path).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_same_device_candidate_is_skipped_for_a_later_writable_other_device_one() {
+    use std::os::unix::fs::MetadataExt as _;
+    let base = TempDir::new("skip-then-choose");
+    let inside = base.join("inside");
+    fs::create_dir(&inside).unwrap();
+    let elsewhere = require_other_device_dir(&base.path, "skip-then-choose-target");
+    let candidates = [base.path.clone(), inside.clone(), elsewhere.path.clone()];
+
+    let found = other_device_dir_among(&base.path, "skip-then-choose", &candidates)
+        .expect("the third candidate is writable and on another device");
+
+    assert!(found.path.starts_with(&elsewhere.path), "{:?}", found.path);
+    assert_ne!(
+        fs::metadata(&found.path).unwrap().dev(),
+        fs::metadata(&base.path).unwrap().dev()
+    );
+    assert_eq!(entry_names(&base.path), ["inside"]);
+    assert!(entry_names(&inside).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_taken_name_is_passed_over_and_its_contents_are_kept() {
+    let temp = TempDir::new("taken-name");
+    let taken = temp.join("a");
+    fs::create_dir(&taken).unwrap();
+    fs::write(taken.join("keep"), b"somebody else's").unwrap();
+
+    let made = create_fresh_dir_named(&temp.path, |attempt| {
+        if attempt < 2 { "a" } else { "b" }.to_owned()
+    })
+    .expect("the third name is free");
+
+    assert_eq!(made, temp.join("b"));
+    assert!(taken.join("keep").is_file());
+    // Every name taken: no directory is made and none is disturbed.
+    assert_eq!(create_fresh_dir_named(&temp.path, |_| "a".to_owned()), None);
+    assert!(taken.join("keep").is_file());
 }

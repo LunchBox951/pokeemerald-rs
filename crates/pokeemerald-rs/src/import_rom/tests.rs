@@ -19,14 +19,16 @@ use std::fs;
 use super::import_to_with;
 use super::TEMP_PREFIX;
 pub(super) use support::TempDir;
+#[cfg(target_os = "linux")]
+pub(super) use support::{
+    create_fresh_dir_named, other_device_dir, other_device_dir_among, require_other_device_dir,
+};
 #[cfg(unix)]
 use support::{fake_pack, SourceRom};
 #[cfg(unix)]
 pub(super) use support::{
     fill_descriptor_table_leaving, in_descriptor_pressure_child, run_under_descriptor_pressure,
 };
-#[cfg(target_os = "linux")]
-pub(super) use support::{other_device_dir, other_device_dir_among, require_other_device_dir};
 
 #[cfg(unix)]
 #[test]
