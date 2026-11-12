@@ -112,6 +112,42 @@ fn the_first_frame_runs_steps_0_to_2_and_draws_only_the_delay() {
 }
 
 #[test]
+fn admitting_on_map_load_runs_no_callback_and_leaves_the_first_frame_one_callback() {
+    let (mut collection, mut rng) = seeded(MovementType::LookAround, 0);
+    let event_data = crate::event_data::EventData::new();
+    let terrain = crate::overworld::object_event_harness::Terrain::flat();
+    let context = FrameContext {
+        player_position: FAR,
+        event_data: &event_data,
+        frozen: false,
+        player_dashing: false,
+        terrain: terrain.runtime(),
+        player_previous_position: FAR,
+        player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
+    };
+    assert!(
+        collection.admit_on_map_load(&context),
+        "the first call admits"
+    );
+    assert!(
+        !collection.admit_on_map_load(&context),
+        "a later call does not"
+    );
+    assert!(collection.get(1).unwrap().is_active());
+    assert_eq!(phase(&collection, 1), 0, "admission ran no callback");
+
+    run(&mut collection, &mut rng, FAR, false, 1);
+
+    assert_eq!(phase(&collection, 1), 3);
+    assert_eq!(
+        delay(&collection, 1),
+        32,
+        "the first frame still runs exactly one callback"
+    );
+    assert!(draws_made(0, &rng, |r| advance(r, 1)));
+}
+
+#[test]
 fn look_around_seed_0_holds_for_the_delay_then_turns_on_the_frame_after() {
     let (mut collection, mut rng) = seeded(MovementType::LookAround, 0);
 

@@ -3,28 +3,52 @@
 //! scheduler, with the field RNG and the pause state the rest of the phase
 //! decides.
 
+use engine::event_data::EventData;
 use engine::overworld::object_event::FrameContext;
+use engine::overworld::{MapRuntime, PlayerState};
 
 use super::OverworldPhase;
 
+/// What one overworld frame lets the object-event scheduler see of the player and the flags.
+fn frame_context<'a>(
+    player: &PlayerState,
+    event_data: &'a EventData,
+    terrain: MapRuntime<'a>,
+    frozen: bool,
+) -> FrameContext<'a> {
+    FrameContext {
+        player_position: player.position(),
+        event_data,
+        frozen,
+        player_dashing: player.dashing(),
+        terrain,
+        player_previous_position: player.previous_position(),
+        player_elevation: player.elevation(),
+    }
+}
+
 impl OverworldPhase {
-    /// Admits the objects already in view before the frame's input moves the player, as map
-    /// load's `TrySpawnObjectEvents` does ahead of the first frame (`src/overworld.c:2163`), so
-    /// the player's first step collides with them as with any active object
-    /// (`DoesObjectCollideWithObjectAt`, `src/event_object_movement.c:4730-4733`). A frozen
-    /// scheduler frame admits and moves nothing, and does nothing once the collection has
-    /// reconciled at the player's tile.
-    pub(super) fn admit_object_events_in_view(&mut self) {
-        let context = FrameContext {
-            player_position: self.player.position(),
-            event_data: &self.save1.event_data,
-            frozen: true,
-            player_dashing: self.player.dashing(),
-            terrain: self.scene.runtime(),
-            player_previous_position: self.player.previous_position(),
-            player_elevation: self.player.elevation(),
-        };
-        self.object_events.run_frame(&context, &mut self.rng);
+    /// Admits the objects already in view when the map was entered, before the frame's input can
+    /// end the visit: map load's `TrySpawnObjectEvents` runs ahead of the first frame
+    /// (`src/overworld.c:2163`), so a connection crossing on the first input frame finds them
+    /// live. Does nothing once the collection has been admitted.
+    ///
+    /// The admitted objects also get their spawn-time ground-effect pass here, while the scene
+    /// they stand on is still the one that loaded them: that pass opens each object's first
+    /// sprite callback (`DoGroundEffects_OnSpawn`, `:4931`), and a crossing before it would
+    /// carry no effect for the object to bring along. No object has moved yet, so the pass finds
+    /// the tile it would find after the frame's input.
+    pub(super) fn admit_object_events_on_map_load(&mut self) {
+        let context = frame_context(
+            &self.player,
+            &self.save1.event_data,
+            self.scene.runtime(),
+            false,
+        );
+        if self.object_events.admit_on_map_load(&context) {
+            self.scene
+                .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+        }
     }
 
     /// Runs one frame of object-event movement, after the frame's input and any
@@ -43,20 +67,17 @@ impl OverworldPhase {
             || self.in_battle();
         // Each object's spawn-time ground-effect pass opens its sprite
         // callback (`UpdateObjectEventCurrentMovement`, `:4931`), ahead of the
-        // movement. Map load's admission happens before the first callback, so
-        // that frame's pass follows the scheduler's.
+        // movement. A scene's first frame also seeds again after the scheduler, so an object
+        // its camera update admits on that frame, as a crossing's does, gets its pass then.
         let first_frame = self.scene.take_object_admission_pending();
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
-        let context = FrameContext {
-            player_position: self.player.position(),
-            event_data: &self.save1.event_data,
+        let context = frame_context(
+            &self.player,
+            &self.save1.event_data,
+            self.scene.runtime(),
             frozen,
-            player_dashing: self.player.dashing(),
-            terrain: self.scene.runtime(),
-            player_previous_position: self.player.previous_position(),
-            player_elevation: self.player.elevation(),
-        };
+        );
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
             self.object_events.run_frame(&context, scratch);

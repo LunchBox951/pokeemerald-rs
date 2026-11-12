@@ -323,6 +323,10 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        // Map load has already spawned the objects in view, so a crossing on the first frame
+        // carries them.
+        self.admit_object_events_on_map_load();
+
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
@@ -340,7 +344,6 @@ impl OverworldPhase {
         // (`src/overworld.c:1465-1469`). Every branch below, a dialog or a
         // cutscene included, leaves the field's sprites animating.
         self.scene.seed_tall_grass_placement(&self.player);
-        self.admit_object_events_in_view();
         self.step_field_frame(buttons);
         self.advance_object_events();
         self.scene
@@ -656,7 +659,7 @@ impl OverworldPhase {
         // forced-movement tile that closes the first of those two states
         // (method doc, issue #926).
         let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
+            && !self.field_input_closed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -677,7 +680,7 @@ impl OverworldPhase {
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
         let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+            (!landing_claimed && arrow_trigger.is_none() && !self.field_input_closed())
                 .then(|| self.interaction_tokens_this_frame(buttons, runtime))
                 .flatten();
 
