@@ -267,7 +267,7 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
 }
 
 fn wave(adsr: CgbAdsr, length: u8) -> CgbVoice {
-    wave_voice_with_adsr(adsr, false, TestNote::default()).with_length(length)
+    wave_voice_with_adsr(adsr, false, TestNote::unmodulated()).with_length(length)
 }
 
 /// Raw wave length 240 loads `256 - 240 = 16` into `NR31` (`mgba/src/gb/audio.c:255-258`);
@@ -344,7 +344,7 @@ fn a_tied_wave_is_not_retriggered_by_later_writes_after_its_count() {
     // they revive a square's.
     let write = |voice: &mut CgbVoice, rig: &mut Rig| -> Vec<StereoAcc> {
         let mut rendered = run(rig, voice, 2);
-        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.set_track_volume(MAX_TRACK_VOLUME, MAX_TRACK_VOLUME);
         voice.set_track_pitch(0, 0);
         rendered.extend(run(rig, voice, TIED_FRAMES - 2));
         rendered
@@ -675,7 +675,14 @@ fn a_wave_length_expiry_holds_the_latch_of_its_expiry_sample() {
     // The wave latch the expiry sample presents is held
     // (`mgba/src/gb/audio.c:649-657,768-774`); see `wave_held_oracle`.
     let voice_at = |key, length| {
-        wave_voice_with_adsr(CgbAdsr::flat(), false, TestNote::at_key(key)).with_length(length)
+        // An unmodulated track volume keeps the wave envelope inside `gCgb3Vol`;
+        // the default full volume centres past it and mutes the channel.
+        let note = TestNote {
+            note_key: key,
+            played_key: key,
+            ..TestNote::unmodulated()
+        };
+        wave_voice_with_adsr(CgbAdsr::flat(), false, note).with_length(length)
     };
     let (key, reference) = (0..=127)
         .map(|key| (key, run(&mut Rig::at_step(6), &mut voice_at(key, 0), 1)))

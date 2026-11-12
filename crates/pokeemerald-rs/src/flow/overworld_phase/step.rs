@@ -323,6 +323,10 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        // Map load has already spawned the objects in view, so a crossing on the first frame
+        // carries them.
+        self.admit_object_events_on_map_load();
+
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
@@ -330,7 +334,7 @@ impl OverworldPhase {
 
         // An active battle owns the frame ahead of the dialog check, as the
         // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
-        if self.advance_active_battle_frame() {
+        if self.advance_active_battle_frame(buttons) {
             return;
         }
 
@@ -342,7 +346,8 @@ impl OverworldPhase {
         self.scene.seed_tall_grass_placement(&self.player);
         self.step_field_frame(buttons);
         self.advance_object_events();
-        self.scene.advance_tall_grass(&self.player);
+        self.scene
+            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no
@@ -472,16 +477,10 @@ impl OverworldPhase {
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
         // fightable map (`wild_table_fightable`), and only with a lead the
-        // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
-        // used to sit here too, for the one loss path issue #261's
-        // white-out could not yet cover (a lost Route 101 first battle --
-        // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
-        // #251's `first_battle_conclusion` now heals that lead the
-        // instant the battle ends, on every outcome, and a pre-#251 save
-        // that *serialized* the residual state is healed at load
-        // (`from_saved`'s migration, PR #291 review), so no path can
-        // leave a fainted lead standing here any more and the filter
-        // was removed
+        // turn engine admits (`wild_lead_admissible`). That shared lead
+        // screen also refuses a fainted lead, so a lead the healing paths
+        // cannot reach (an imported save, or an undecodable reserve that
+        // keeps the party's HP total nonzero) rolls nothing
         // (`crate::flow::wild_encounter`'s module docs, "Lead-health
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
@@ -660,7 +659,7 @@ impl OverworldPhase {
         // forced-movement tile that closes the first of those two states
         // (method doc, issue #926).
         let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
+            && !self.field_input_closed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -681,7 +680,7 @@ impl OverworldPhase {
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
         let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+            (!landing_claimed && arrow_trigger.is_none() && !self.field_input_closed())
                 .then(|| self.interaction_tokens_this_frame(buttons, runtime))
                 .flatten();
 
@@ -726,7 +725,12 @@ impl OverworldPhase {
         else {
             return;
         };
-        if self.cross_connection(to_map, to_position) {
+        // The departed-to-entered translation: the step has already left the
+        // player in the entered map's coordinates, so its previous tile there
+        // against its pre-step tile is the camera offset.
+        let (from, previous) = (pre_step_player.position(), self.player.previous_position());
+        let shift = (previous.0 - from.0, previous.1 - from.1);
+        if self.cross_connection(to_map, to_position, shift) {
             // The crossing step's own begin-step pass, on the entered map.
             self.scene
                 .player_step_began(to_position, self.player.previous_elevation());

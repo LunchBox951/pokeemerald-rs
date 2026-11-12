@@ -135,6 +135,32 @@ pub enum BattleEvent {
         /// HP removed from that battler, capped at its HP before the hit.
         damage: u32,
     },
+    /// A traded Pokémon above its obedience limit ignored the order and
+    /// loafed (`IsMonDisobedient`, `src/battle_util.c:4030`-`:4035`). No PP
+    /// is spent.
+    Disobeyed {
+        /// The loaf text drawn.
+        message: crate::obedience::LoafMessage,
+    },
+    /// A traded Pokémon above its obedience limit ignored the order and is
+    /// about to use another of its moves instead (`src/battle_util.c:3985`-
+    /// `:3997`; `BattleScript_IgnoresAndUsesRandomMove`). The
+    /// [`BattleEvent::UsedMove`] that follows names that move, whose PP is
+    /// spent in place of the chosen move's.
+    IgnoredOrders,
+    /// A traded Pokémon above its obedience limit ignored the order and fell
+    /// asleep for the ordinary two-to-five turn duration
+    /// (`src/battle_util.c:4004`-`:4016`; `BattleScript_IgnoresAndFallsAsleep`).
+    /// No PP is spent.
+    DisobedientNap,
+    /// A disobedient player Pokémon hurt itself instead of acting
+    /// (`src/battle_util.c:4020`-`:4027`). No PP is spent.
+    DisobedientSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
@@ -569,6 +595,23 @@ pub enum BattleEvent {
         /// The contact move that triggered Effect Spore.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::CUTE_CHARM`] infatuated the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_CUTE_CHARM`,
+    /// `battle_util.c:2851`-`:2870`; `BattleScript_CuteCharmActivates`,
+    /// `data/battle_scripts_1.s:4193`-`:4197`).
+    ///
+    /// The roll is one `Random() % 3` draw spent only when both battlers
+    /// survived the hit; only a zero roll on an opposite-gender pair, an
+    /// attacker without Oblivious and one not already infatuated emits this
+    /// event. The attacker then carries the holder's slot as its
+    /// infatuation, exactly as after Attract.
+    InfatuatedByCuteCharm {
+        /// Whether the player used the contact move and so was infatuated.
+        by_player: bool,
+        /// The contact move that triggered Cute Charm.
+        move_id: MoveId,
+    },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
     /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
     /// `battle_script_commands.c:4280`; `ABILITY_POISON_POINT`,
@@ -798,9 +841,19 @@ pub enum BattleEvent {
         /// second buffer (`src/battle_script_commands.c:3381`-`:3397`).
         boosted: bool,
     },
+    /// A level-up move took a free slot without asking the player.
+    ///
+    /// One event per learned move, in the order the level-up walk reached
+    /// them. They follow [`BattleEvent::ExpGained`] and precede any
+    /// [`BattleEvent::MoveLearnPrompt`] the same award opens.
+    MoveLearned {
+        /// The newly learned move.
+        move_id: MoveId,
+    },
     /// Move learning paused experience application and faint resolution.
     ///
-    /// This follows [`BattleEvent::ExpGained`] or a previous move-learning answer
+    /// This follows [`BattleEvent::ExpGained`], a [`BattleEvent::MoveLearned`],
+    /// or a previous move-learning answer
     /// and blocks further turns until the player answers it.
     MoveLearnPrompt {
         /// The move offered to the player.

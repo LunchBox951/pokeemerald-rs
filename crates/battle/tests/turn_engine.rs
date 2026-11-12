@@ -20,6 +20,8 @@ mod burn;
 mod confusion;
 #[path = "turn_engine/confusion_explosion.rs"]
 mod confusion_explosion;
+#[path = "turn_engine/cute_charm_contact/mod.rs"]
+mod cute_charm_contact;
 #[path = "turn_engine/effect_spore_contact/mod.rs"]
 mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
@@ -36,6 +38,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/obedience.rs"]
+mod obedience;
 #[path = "turn_engine/oran_berry.rs"]
 mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
