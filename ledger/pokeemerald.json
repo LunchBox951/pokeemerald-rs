@@ -29870,7 +29870,10 @@
     "src/data/credits.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "Data only: the PAGE_* order, sCreditsEntryPointerTable (src/data/credits.h:385-786, 57 pages of ENTRIES_PER_PAGE = 5 slots, blank slots kept) and the sCreditsText_* English strings with each sCreditsEntry_* isTitle flag, re-expressed as crates/assets/src/credits.rs CREDITS_PAGES; the 19 sCreditsEntry_* rows no page references are kept as CREDITS_UNUSED_ENTRIES. The never-read leading byte of struct CreditsEntry is dropped. The roll itself (src/credits.c Task_UpdatePage paging, PrintCreditsText title/name colours and centring, bicycle scene, Pokemon slideshow, timing) is not modelled and src/credits.c stays pending.",
+      "rust_target": "crates/assets/src/credits.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/decoration/description.h": {
       "category": "code.header",
