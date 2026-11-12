@@ -87,6 +87,26 @@ fn no_two_temp_names_are_the_same_across_separate_dest_instances() {
     );
 }
 
+/// An arbitrary fixed clock reading, in nanoseconds since the Unix epoch.
+const CLOCK_NANOS: u128 = 0x18e6_99e5_a242_6d06;
+
+#[test]
+fn separate_dest_instances_differ_even_on_the_same_clock_reading() {
+    // Both names share pid, clock reading and sequence (a fresh `Dest`
+    // starts its counter at 0), so only the salt can tell them apart.
+    let dir = TempDir::new("temp-name-same-clock");
+    let first_dest = Dest::open(&dir.path).expect("the directory opens");
+    let second_dest = Dest::open(&dir.path).expect("the directory opens");
+
+    let first = first_dest.temp_name_at(CLOCK_NANOS);
+    let second = second_dest.temp_name_at(CLOCK_NANOS);
+
+    assert_ne!(
+        first, second,
+        "two fresh Dest instances on one clock reading must not hand out the same temp name"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_long_but_valid_pack_name_still_imports() {

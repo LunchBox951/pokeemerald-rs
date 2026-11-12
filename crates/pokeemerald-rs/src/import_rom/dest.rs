@@ -60,6 +60,12 @@ fn next_temp_name(sequence: &AtomicU64) -> OsString {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
+    temp_name_at(nanos, sequence)
+}
+
+/// [`next_temp_name`] with the clock reading (nanoseconds since the Unix
+/// epoch) given, so a test can hold it fixed.
+fn temp_name_at(nanos: u128, sequence: &AtomicU64) -> OsString {
     let sequence = sequence.fetch_add(1, Ordering::Relaxed);
     let salt = RandomState::new().build_hasher().finish();
     OsString::from(format!(
@@ -530,6 +536,12 @@ impl Dest {
         next_temp_name(&self.temp_sequence)
     }
 
+    /// [`Self::temp_name`] at a given clock reading, in nanoseconds.
+    #[cfg(test)]
+    pub(super) fn temp_name_at(&self, nanos: u128) -> OsString {
+        temp_name_at(nanos, &self.temp_sequence)
+    }
+
     /// Whether `name`, inside this directory, is the open file `rom`.
     ///
     /// A device and inode pair names the file itself, so a hard link under
@@ -717,6 +729,12 @@ impl Dest {
     /// it does.
     pub(super) fn temp_name(&self) -> OsString {
         next_temp_name(&self.temp_sequence)
+    }
+
+    /// [`Self::temp_name`] at a given clock reading, in nanoseconds.
+    #[cfg(test)]
+    pub(super) fn temp_name_at(&self, nanos: u128) -> OsString {
+        temp_name_at(nanos, &self.temp_sequence)
     }
 
     /// Whether `name`, inside this directory, is the open file `rom`.
