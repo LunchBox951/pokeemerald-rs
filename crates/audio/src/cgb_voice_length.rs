@@ -698,33 +698,63 @@ fn a_square_length_expiry_latches_before_a_coincident_sweep_retune() {
     // sweep that retunes channel 1 at the expiry sample does not move the
     // latch: it is the duty level at the pre-sweep frequency. Length 61 on a
     // step-6 epoch expires at sample 104, where the first sweep clock lands.
+    //
+    // No sounding sweep and key here both steps the pre-sweep duty level at
+    // the expiry sample and has the retune move it there, so two fixtures pin
+    // the two ways to get the latch wrong: one where the expiry sample's level
+    // differs from the sample before it (holding that earlier sample fails),
+    // and one where the retune moves the expiry sample's level (latching
+    // after the retune fails). Each requires the sweep to act first at the
+    // expiry sample and to leave the channel sounding.
     const COINCIDENT_EXPIRY: usize = 104;
-    let voice_at = |sweep, length| {
+    let voice_at = |key, sweep, length| {
         square_voice_with_adsr(
             CgbChannelNumber::Square1,
             Some(sweep),
             CgbAdsr::flat(),
-            TestNote::at_key(56),
+            TestNote::at_key(key),
         )
         .with_length(length)
     };
-    let swept = run(&mut Rig::at_step(6), &mut voice_at(0x13, 0), 1);
-    let unswept = run(&mut Rig::at_step(6), &mut voice_at(0x08, 0), 1);
-    assert_ne!(
-        swept[COINCIDENT_EXPIRY], unswept[COINCIDENT_EXPIRY],
-        "sanity: the retune moves the level at the expiry sample"
-    );
+    let fixtures = || {
+        (0x11..=0x17)
+            .flat_map(|sweep| (40..=110).map(move |key| (key, sweep)))
+            .map(|(key, sweep)| {
+                (
+                    key,
+                    sweep,
+                    run(&mut Rig::at_step(6), &mut voice_at(key, sweep, 0), 1),
+                    run(&mut Rig::at_step(6), &mut voice_at(key, 0x08, 0), 1),
+                )
+            })
+            .filter(|(_, _, swept, unswept)| {
+                swept[..COINCIDENT_EXPIRY] == unswept[..COINCIDENT_EXPIRY]
+                    && swept[COINCIDENT_EXPIRY] != (0, 0)
+            })
+    };
+    let duty_step = fixtures()
+        .find(|(_, _, _, unswept)| unswept[COINCIDENT_EXPIRY] != unswept[COINCIDENT_EXPIRY - 1])
+        .expect("some sweep and key step the duty level at the coincident expiry");
+    let retune_step = fixtures()
+        .find(|(_, _, swept, unswept)| swept[COINCIDENT_EXPIRY] != unswept[COINCIDENT_EXPIRY])
+        .expect("some sweep and key have the retune move the level at the coincident expiry");
 
-    let mut voice = voice_at(0x13, 61);
-    let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
-    assert!(voice.is_length_stopped());
-    assert_eq!(rendered[..COINCIDENT_EXPIRY], swept[..COINCIDENT_EXPIRY]);
-    assert!(
-        rendered[COINCIDENT_EXPIRY..]
-            .iter()
-            .all(|&sample| sample == unswept[COINCIDENT_EXPIRY]),
-        "held {:?}, pre-sweep latch {:?}",
-        rendered[COINCIDENT_EXPIRY],
-        unswept[COINCIDENT_EXPIRY]
-    );
+    for (key, sweep, swept, unswept) in [duty_step, retune_step] {
+        let mut voice = voice_at(key, sweep, 61);
+        let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
+        assert!(voice.is_length_stopped(), "key {key} sweep {sweep:#04x}");
+        assert_eq!(
+            rendered[..COINCIDENT_EXPIRY],
+            swept[..COINCIDENT_EXPIRY],
+            "key {key} sweep {sweep:#04x}"
+        );
+        assert!(
+            rendered[COINCIDENT_EXPIRY..]
+                .iter()
+                .all(|&sample| sample == unswept[COINCIDENT_EXPIRY]),
+            "key {key} sweep {sweep:#04x}: held {:?}, pre-sweep latch {:?}",
+            rendered[COINCIDENT_EXPIRY],
+            unswept[COINCIDENT_EXPIRY]
+        );
+    }
 }
