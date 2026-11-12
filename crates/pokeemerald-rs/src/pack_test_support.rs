@@ -145,18 +145,27 @@ pub(crate) fn write_scratch_exclusive(
     file
 }
 
-/// `path` with a per-call sequence number before its extension, so a fixture
-/// that claims a scratch pack more than once on one thread gets a free name each
-/// time even where an earlier guard could not verify (and so left) its file.
+/// `path` with the wall-clock nanoseconds of this call before its extension, so a
+/// fixture that claims a scratch pack more than once on one thread gets a free name
+/// each time even where an earlier guard could not verify (and so left) its file.
+/// The callers' paths already carry the pid and thread id; the clock reading is read
+/// per call, so no counter outlives the fixture. A reading that lands on an occupied
+/// name is redrawn.
 pub(crate) fn unique_scratch_path(path: &std::path::Path) -> std::path::PathBuf {
-    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let name = match path.extension() {
-        Some(extension) => format!("{stem}-{sequence}.{}", extension.to_string_lossy()),
-        None => format!("{stem}-{sequence}"),
-    };
-    path.with_file_name(name)
+    loop {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let name = match path.extension() {
+            Some(extension) => format!("{stem}-{nanos}.{}", extension.to_string_lossy()),
+            None => format!("{stem}-{nanos}"),
+        };
+        let candidate = path.with_file_name(name);
+        if std::fs::symlink_metadata(&candidate).is_err() {
+            return candidate;
+        }
+    }
 }
 
 /// A scratch pack a fixture created, owned through cleanup: it keeps the
@@ -376,6 +385,37 @@ fn a_scratch_pack_guard_spares_a_replacement_and_a_symlink_at_its_path() {
     assert!(
         link_kept && link_kept_after_drop,
         "the planted link survives"
+    );
+}
+
+/// The Windows arm of [`ScratchPack::remove_if_owned`] compares the creating handle's
+/// file identity with the entry at the path through `win-fs`; moving the owned pack
+/// aside and planting a different file at its path must leave that file alone.
+#[cfg(windows)]
+#[test]
+fn a_scratch_pack_guard_spares_a_windows_replacement_at_its_path() {
+    const REPLACEMENT: &[u8] = b"replacement the fixture never created";
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-scratch-pack-windows-replaced-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let aside = path.with_extension("aside");
+    let pack = ScratchPack::write(&path, b"owned");
+    std::fs::rename(&path, &aside).expect("the owned pack moves aside");
+    write_scratch_exclusive(&path, REPLACEMENT);
+
+    let outcome = pack.remove_if_owned();
+    drop(pack);
+
+    let survived = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&aside);
+    assert_eq!(outcome, ScratchRemoval::Replaced);
+    assert_eq!(
+        survived.ok().as_deref(),
+        Some(REPLACEMENT),
+        "cleanup unlinked a file the fixture did not create"
     );
 }
 
