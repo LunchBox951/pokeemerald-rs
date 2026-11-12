@@ -114,21 +114,26 @@ pub fn collision_in_direction(
 }
 
 impl ObjectEventCollection {
-    /// [`collision_in_direction`] for the entry declaring `local_id`, against every other
-    /// admitted entry and the player (`gObjectEvents[0]`, which `DoesObjectCollideWithObjectAt`
-    /// scans with the rest). `None` if no entry declares `local_id` or nothing refuses the step.
+    /// [`collision_in_direction`] for the entry [`LiveObjectEvent::id`] names, against every
+    /// other admitted entry and the player (`gObjectEvents[0]`, which
+    /// `DoesObjectCollideWithObjectAt` scans with the rest). `None` if no entry has `id` or
+    /// nothing refuses the step.
+    ///
+    /// The mover is named by its identity, not its local id: after a connection crossing an
+    /// entered-map entry and a carried one may share a local id, and upstream's
+    /// `GetCollisionInDirection` takes the moving object itself
+    /// (`event_object_movement.c:4650-4656`).
+    ///
+    /// [`LiveObjectEvent::id`]: super::LiveObjectEvent::id
     #[must_use]
     pub fn collision_in_direction(
         &self,
-        local_id: u8,
+        id: u32,
         direction: Direction,
         range: Option<MovementRange>,
         context: &FrameContext<'_>,
     ) -> Option<NpcCollision> {
-        let mover_index = self
-            .entries
-            .iter()
-            .position(|entry| entry.template.local_id == local_id)?;
+        let mover_index = self.entries.iter().position(|entry| entry.id() == id)?;
         let player = Occupant {
             current: context.player_position,
             previous: context.player_previous_position,

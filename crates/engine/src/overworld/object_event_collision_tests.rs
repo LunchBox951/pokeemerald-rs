@@ -245,8 +245,9 @@ fn admitted_rig(templates: Vec<assets::ObjectEvent>) -> Rig {
 }
 
 fn rig_collision(rig: &Rig, direction: Direction) -> Option<NpcCollision> {
+    let id = rig.collection.get(1).unwrap().id();
     rig.collection
-        .collision_in_direction(1, direction, None, &rig.context())
+        .collision_in_direction(id, direction, None, &rig.context())
 }
 
 #[test]
@@ -349,7 +350,7 @@ fn the_player_blocks_the_tile_it_stands_on_and_the_tile_it_is_leaving() {
 }
 
 #[test]
-fn an_unknown_local_id_is_refused_nothing() {
+fn an_unknown_id_is_refused_nothing() {
     let rig = admitted_rig(vec![template(
         1,
         20,
@@ -357,11 +358,55 @@ fn an_unknown_local_id_is_refused_nothing() {
         MovementType::FaceDown,
         NEVER_HIDDEN,
     )]);
+    let unknown = rig.collection.get(1).unwrap().id() + 1;
 
     assert_eq!(
         rig.collection
-            .collision_in_direction(9, East, None, &rig.context()),
+            .collision_in_direction(unknown, East, None, &rig.context()),
         None
+    );
+}
+
+#[test]
+fn a_carried_mover_is_not_confused_with_an_entered_map_entry_of_its_local_id() {
+    const DEPARTED: assets::MapId = assets::MapId("MAP_DEPARTED");
+    const ENTERED: assets::MapId = assets::MapId("MAP_ENTERED");
+    let mut rig = admitted_rig(vec![template(
+        1,
+        20,
+        20,
+        MovementType::FaceDown,
+        NEVER_HIDDEN,
+    )]);
+    rig.collection = rig.collection.carry_across_connection(
+        DEPARTED,
+        ENTERED,
+        crate::overworld::object_event_harness::leaked(vec![template(
+            1,
+            30,
+            30,
+            MovementType::FaceDown,
+            NEVER_HIDDEN,
+        )]),
+        (0, 0),
+    );
+    rig.terrain.set_wall((31, 30));
+    let carried = rig.collection.find(Some(DEPARTED), 1).unwrap();
+    assert_eq!(carried.state().position(), (20, 20));
+    let entered = rig.collection.find(None, 1).unwrap();
+    assert_eq!(entered.state().position(), (30, 30));
+
+    assert_eq!(
+        rig.collection
+            .collision_in_direction(carried.id(), East, None, &rig.context()),
+        None,
+        "the carried entry steps from (20, 20) onto open ground"
+    );
+    assert_eq!(
+        rig.collection
+            .collision_in_direction(entered.id(), East, None, &rig.context()),
+        Some(NpcCollision::Impassable),
+        "the entered map's entry faces the wall at (31, 30)"
     );
 }
 
@@ -549,5 +594,16 @@ fn adjudicator_an_unadmitted_object_blocks_no_player_step() {
             .map(|event| event.local_id),
         None,
         "upstream has no active object on (19, 20) to collide with"
+    );
+
+    let mut player = crate::overworld::PlayerState::new(PLAYER_HOME, FLOOR_ELEVATION, East);
+    let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+    assert_eq!(
+        player.step(Some(East), &runtime, &no_connections, &rig.event_data),
+        crate::overworld::StepOutcome::Advanced {
+            from: PLAYER_HOME,
+            to: (19, 20)
+        },
+        "the unadmitted object does not block the player's landing"
     );
 }
