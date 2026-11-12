@@ -668,10 +668,11 @@ mod tests {
         );
     }
 
-    /// A replacement that recycled the planted inode passes the identity
-    /// compare; only the sentinel tells it apart. The test keeps the directory
-    /// and its identity fixed and changes only the sentinel, so it reaches that
-    /// check on any filesystem.
+    /// Unix holds no handle, so a replacement that recycled the planted inode
+    /// passes the identity compare and only the sentinel tells it apart. The
+    /// test keeps the directory and its identity fixed and changes only the
+    /// sentinel, so it reaches that check on any filesystem.
+    #[cfg(unix)]
     #[test]
     fn planted_drop_leaves_a_directory_whose_identity_matches_but_sentinel_differs() {
         let path = std::env::temp_dir().join(format!(
@@ -691,6 +692,30 @@ mod tests {
             path.display()
         );
         assert!(reported.is_err(), "the kept directory went unreported");
+    }
+
+    /// Windows pins the planted directory with an open handle, so its file ID
+    /// cannot be recycled and the handle alone proves ownership: a changed
+    /// sentinel inside the same pinned directory does not make it foreign.
+    #[cfg(windows)]
+    #[test]
+    fn planted_drop_removes_a_pinned_directory_whose_sentinel_changed() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-pinned-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        populate(&path).unwrap();
+        let planted = Planted(vec![Planted::entry(&path)]);
+        std::fs::write(path.join(SENTINEL), "precious-theirs").unwrap();
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let left_behind = path.exists();
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(
+            reported.is_ok(),
+            "removing the pinned directory was reported"
+        );
+        assert!(!left_behind, "the pinned directory was not removed");
     }
 
     /// The identity read right after creation, not one read later from the
