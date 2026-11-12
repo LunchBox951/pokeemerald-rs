@@ -1,6 +1,5 @@
-//! The battle-start boundaries give the player's side its earned stat badges
-//! (`FLAG_BADGE01/03/05/07_GET`) before `battle::Battle` runs its opening
-//! Speed comparison (`src/battle_main.c:3852`-`:3861`, `:4639`-`:4645`).
+//! Battle starts stamp the earned stat badges before the opening Speed
+//! comparison (`src/battle_main.c:3852`-`:3861`).
 
 use battle::BadgeBoosts;
 use engine::overworld::wild_encounter::WildEncounter;
@@ -61,9 +60,6 @@ fn each_stat_badge_flag_reaches_its_own_boost() {
     }
 }
 
-/// The lead handed to the constructor already carries the badges, so the
-/// constructor's own tie draw reads them; attaching them to a built battle
-/// would be too late.
 #[test]
 fn the_lead_is_stamped_before_the_battle_is_built() {
     let mut phase = phase();

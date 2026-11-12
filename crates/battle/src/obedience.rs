@@ -46,8 +46,6 @@ pub struct PlayerObedience {
     trainer_name: [u8; PLAYER_NAME_BUF_LEN],
     /// `None` once badge 8 is held: every Pokémon obeys.
     limit: Option<u8>,
-    /// The stat badges (1, 3, 5, 7) the same save holds; none until
-    /// [`PlayerObedience::with_stat_badges`] sets them.
     stat_badges: BadgeBoosts,
 }
 
@@ -79,18 +77,14 @@ impl PlayerObedience {
         }
     }
 
-    /// Adds the stat badges the player holds, so the one save-derived context
-    /// the flow attaches at battle start carries them too
-    /// ([`crate::Battle::with_player_obedience`]). They are the damage and Speed
-    /// boosts of `ShouldGetStatBadgeBoost` and `GetWhoStrikesFirst`, not
-    /// obedience limits.
+    /// Adds the stat badges ([`crate::Battle::with_player_obedience`] applies
+    /// them); they are not obedience limits.
     #[must_use]
     pub const fn with_stat_badges(mut self, stat_badges: BadgeBoosts) -> Self {
         self.stat_badges = stat_badges;
         self
     }
 
-    /// The stat badges this context carries.
     #[must_use]
     pub const fn stat_badges(&self) -> BadgeBoosts {
         self.stat_badges

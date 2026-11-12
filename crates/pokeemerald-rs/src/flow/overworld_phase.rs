@@ -387,11 +387,8 @@ pub(crate) struct OverworldPhase {
 /// reads.
 const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
 
-/// `FLAG_BADGE01_GET`, `FLAG_BADGE03_GET`, `FLAG_BADGE05_GET` and
-/// `FLAG_BADGE07_GET` (`SYSTEM_FLAGS + 0x7/0x9/0xB/0xD`,
-/// `include/constants/flags.h:1359`-`:1365`): the badges whose 110% stat
-/// boost `CalculateBaseDamage` and `GetWhoStrikesFirst` read
-/// (`src/pokemon.c:3161`-`:3168`, `src/battle_main.c:4639`-`:4645`).
+/// `FLAG_BADGE01/03/05/07_GET` (`SYSTEM_FLAGS + 0x7/0x9/0xB/0xD`,
+/// `include/constants/flags.h:1359`-`:1365`): the stat badges.
 const STAT_BADGE_FLAGS: [u16; 4] = [0x867, 0x869, 0x86B, 0x86D];
 
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
@@ -417,10 +414,7 @@ impl OverworldPhase {
     /// the pre-PP obedience gate (`IsMonDisobedient`,
     /// `src/battle_util.c:3923`-`:4038`).
     ///
-    /// The same context carries the earned stat badges (1, 3, 5 and 7) for
-    /// `battle::Battle::with_player_obedience`; the lead and reserves already
-    /// took them in [`Self::stat_badges`] before the battle was built. An unset
-    /// or unreadable flag counts as not earned.
+    /// It also carries the stat badges; an unreadable flag counts as unearned.
     pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
         battle::PlayerObedience::new(
             u32::from_le_bytes(self.save2.player_trainer_id),
@@ -430,12 +424,9 @@ impl OverworldPhase {
         .with_stat_badges(self.stat_badges())
     }
 
-    /// The earned stat badges (1, 3, 5 and 7), for the lead and reserves a
-    /// battle start hands to `battle::Battle` (see
-    /// [`Self::classified_against_record`]) so the opening Speed comparison
-    /// already reads badge 3, as `TryDoEventsBeforeFirstTurn`'s
-    /// `GetWhoStrikesFirst` does (`src/battle_main.c:3852`-`:3861`, `:4639`-
-    /// `:4645`).
+    /// The earned stat badges, stamped on the lead and reserves before the
+    /// battle is built so the opening Speed comparison sees badge 3
+    /// (`src/battle_main.c:3852`-`:3861`, `:4639`-`:4645`).
     pub(super) fn stat_badges(&self) -> battle::BadgeBoosts {
         battle::BadgeBoosts::from_badges(self.read_badge_flags(STAT_BADGE_FLAGS))
     }

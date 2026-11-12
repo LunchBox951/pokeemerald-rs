@@ -412,11 +412,8 @@ pub struct BattlePokemon {
     /// separate count the battle's `gBattleMons` copy carries. Zero unless
     /// `status1` is [`Status1::BadPoisoned`], which seeds it.
     toxic_turns: u8,
-    /// The stat badges the side this battler fights on holds -- see
-    /// [`BattlePokemon::stat_badges`].
-    ///
-    /// Excluded from [`PartialEq`] (below): battle context, like the side
-    /// the mon fights on, not the mon's identity.
+    /// See [`BattlePokemon::stat_badges`]. Excluded from [`PartialEq`]
+    /// (below): battle context, not identity.
     stat_badges: BadgeBoosts,
     pending_move_learn: Option<PendingMoveLearn>,
 }
@@ -1168,9 +1165,7 @@ impl BattlePokemon {
     /// special Attack is returned raw: Thick Fat and Plus/Minus depend on the
     /// other battler, so callers apply them before the stage.
     ///
-    /// This is the badge-free read. Huge Power and the earned-badge boost both
-    /// sit ahead of Hustle and Guts upstream, so the damage paths read
-    /// [`BattlePokemon::damage_attacking_stat`] instead.
+    /// Badge-free; damage reads [`BattlePokemon::damage_attacking_stat`].
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         self.attacking_stat_with(category, false, BadgeBoosts::NONE)
@@ -1183,28 +1178,23 @@ impl BattlePokemon {
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
     /// Defense never changes.
     ///
-    /// This is the badge-free read; the damage paths read
-    /// [`BattlePokemon::damage_defending_stat`].
+    /// Badge-free; damage reads [`BattlePokemon::damage_defending_stat`].
     #[must_use]
     pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         self.defending_stat_with(category, BadgeBoosts::NONE)
     }
 
-    /// [`BattlePokemon::attacking_stat`] as `CalculateBaseDamage` reads it
-    /// for the attacker: raw Attack, then Huge Power or Pure Power doubling,
-    /// then this battler's [`BattlePokemon::stat_badges`] boost, then Hustle
-    /// and Guts (`pokeemerald/src/pokemon.c:3158`-`:3168`, `:3205`-`:3212`).
-    /// The stage is returned separately; Thick Fat and Plus/Minus, which read
-    /// the other battler, still belong to the caller.
+    /// [`BattlePokemon::attacking_stat`] in `CalculateBaseDamage`'s order:
+    /// Huge Power, then the badge, then Hustle and Guts
+    /// (`pokeemerald/src/pokemon.c:3158`-`:3168`, `:3205`-`:3212`). Thick Fat
+    /// and Plus/Minus read the other battler, so the caller applies them.
     #[must_use]
     pub fn damage_attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         self.attacking_stat_with(category, true, self.stat_badges)
     }
 
-    /// [`BattlePokemon::defending_stat`] as `CalculateBaseDamage` reads it
-    /// for the defender: raw Defense or Sp. Defense, then this battler's
-    /// [`BattlePokemon::stat_badges`] boost, then Marvel Scale
-    /// (`pokeemerald/src/pokemon.c:3163`-`:3168`, `:3213`-`:3214`).
+    /// [`BattlePokemon::defending_stat`] with the badge applied before Marvel
+    /// Scale (`pokeemerald/src/pokemon.c:3163`-`:3168`, `:3213`-`:3214`).
     #[must_use]
     pub fn damage_defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         self.defending_stat_with(category, self.stat_badges)
@@ -1255,24 +1245,17 @@ impl BattlePokemon {
         }
     }
 
-    /// The stat badges the side this battler fights on holds.
-    ///
-    /// Upstream gives the boost to whichever battler is on the player's side
-    /// (`ShouldGetStatBadgeBoost`, `pokeemerald/src/pokemon.c:3407`-`:3420`;
-    /// `pokeemerald/src/battle_main.c:4639`-`:4645`), so this is battle
-    /// context, not a stat: [`BattlePokemon::stats`] and
-    /// [`BattlePokemon::cached_stats`] never change. It is [`BadgeBoosts::NONE`]
-    /// until [`BattlePokemon::with_stat_badges`] sets it, and
-    /// [`crate::Battle`] clears it on every enemy battler and shares the
-    /// lead's value with the player's reserves.
+    /// The stat badges of the side this battler fights on: battle context that
+    /// never changes [`BattlePokemon::stats`] or [`BattlePokemon::cached_stats`]
+    /// (`pokeemerald/src/pokemon.c:3407`-`:3420`). [`crate::Battle`] clears it on
+    /// enemies and shares the lead's with the reserves.
     #[must_use]
     pub const fn stat_badges(&self) -> BadgeBoosts {
         self.stat_badges
     }
 
-    /// Sets [`BattlePokemon::stat_badges`]. Call it on the player's lead
-    /// before building a [`crate::Battle`] so the opening Speed comparison
-    /// already reads it.
+    /// Sets [`BattlePokemon::stat_badges`]; call it on the lead before
+    /// building a [`crate::Battle`] so the opening Speed comparison sees it.
     #[must_use]
     pub const fn with_stat_badges(mut self, badges: BadgeBoosts) -> Self {
         self.stat_badges = badges;
@@ -1301,8 +1284,6 @@ impl BattlePokemon {
     /// see [`BattlePokemon::effective_speed`]'s own doc.
     #[must_use]
     pub const fn speed_for_turn_order(&self) -> u32 {
-        // Stage ratio, then the Speed badge, then the paralysis quarter, each
-        // truncating on its own (`battle_main.c:4639`-`:4651`).
         let speed = self.stat_badges.boost_speed(self.effective_speed());
         if self.status1.is_paralysed() {
             speed / PARALYSIS_SPEED_DIVISOR

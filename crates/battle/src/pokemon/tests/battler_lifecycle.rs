@@ -494,8 +494,7 @@ fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
     assert_ne!(mon.speed_for_turn_order(), WRONG_QUARTER_FIRST_ORDER);
 }
 
-/// Speed 11 reads stage, then the Speed badge, then the paralysis quarter,
-/// each truncating on its own (`battle_main.c:4639`-`:4651`).
+/// Stage, then badge, then paralysis quarter (`battle_main.c:4639`-`:4651`).
 #[test]
 fn the_speed_badge_sits_between_the_stage_and_the_paralysis_quarter() {
     let dex = Dex::new();
@@ -531,9 +530,6 @@ fn the_speed_badge_sits_between_the_stage_and_the_paralysis_quarter() {
     assert_eq!(mon.cached_stats().speed, 11);
 }
 
-/// A damage read takes Huge Power, then the badge, then Hustle or Guts
-/// (`pokemon.c:3158`-`:3168`, `:3205`-`:3214`), and the plain accessors stay
-/// badge-free.
 #[test]
 fn the_damage_stat_reads_apply_the_badge_and_the_plain_accessors_do_not() {
     let dex = Dex::new();

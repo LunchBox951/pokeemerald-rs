@@ -1,33 +1,12 @@
-//! The earned-badge stat boosts of an ordinary single-player battle.
-//!
-//! Four gym badges lift one battle stat each by 10 %: badge 1 Attack, badge 3
-//! Speed, badge 5 Defense and badge 7 both special stats. Upstream applies
-//! them to the player's side only, as a truncating `110 * stat / 100`: inside
-//! `CalculateBaseDamage` for the four damage stats, after Huge Power and
-//! before the type-boosting held items and the Hustle, Guts, Marvel Scale,
-//! Thick Fat and Plus/Minus multipliers
-//! (`pokeemerald/src/pokemon.c:3161`-`:3168`), and inside `GetWhoStrikesFirst`
-//! for Speed, after the stage ratio and before Macho Brace and the paralysis
-//! quarter (`pokeemerald/src/battle_main.c:4639`-`:4651`, repeated for the
-//! second battler at `:4673`-`:4679`). The modifier never touches a stored
-//! stat: it exists only in those two reads.
-//!
-//! `ShouldGetStatBadgeBoost` (`pokemon.c:3407`-`:3420`) also refuses link,
-//! e-Reader, recorded-link and Frontier battles and Secret Base trainers, and
-//! `GetWhoStrikesFirst` refuses link, recorded-link and Frontier battles;
-//! none of those battle kinds exist in this engine, so the only gate left is
-//! which badges the caller hands over and which side the battler fights on.
-//! [`crate::Battle`] hands them to the player's side and clears every enemy
-//! battler.
+//! Earned-badge stat boosts: a truncating `110 * stat / 100` on the player
+//! side only (`pokeemerald/src/pokemon.c:3161`-`:3168`, `:3407`-`:3420`;
+//! `pokeemerald/src/battle_main.c:4639`-`:4645`). Link, Frontier and Secret
+//! Base exclusions name battle kinds this engine lacks.
 
-/// Percentage a held badge scales its stat to (`110 * stat / 100`).
 const BADGE_PERCENT: u64 = 110;
 const PERCENT_SCALE: u64 = 100;
 
 /// Which of the four stat badges the player holds.
-///
-/// [`BadgeBoosts::NONE`] is the default, so a battler that was never given a
-/// badge context reads every stat unchanged.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "four independent badge flags, one per boosted stat"

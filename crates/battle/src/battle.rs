@@ -220,12 +220,8 @@ fn initialize_turn_rng_state(
     random_turn_number
 }
 
-/// Settles which side holds the earned-badge stat boosts before anything
-/// reads Speed: the lead's [`BattlePokemon::stat_badges`] is the player
-/// side's, shared with every reserve that may be sent out, and no enemy
-/// battler ever holds any (`ShouldGetStatBadgeBoost`,
-/// `pokeemerald/src/pokemon.c:3407`-`:3420`; `GetWhoStrikesFirst`,
-/// `pokeemerald/src/battle_main.c:4639`-`:4645`).
+/// The lead's badges are the player side's: shared with the reserves, never
+/// held by an enemy (`pokeemerald/src/pokemon.c:3407`-`:3420`).
 fn assign_stat_badges<'a>(
     player: &mut BattlePokemon,
     player_reserves: &mut [BattlePokemon],
@@ -554,11 +550,8 @@ impl Battle {
     /// obedience gate runs for Pokémon of another original trainer
     /// (`IsMonDisobedient`, `src/battle_util.c:3923`-`:4038`).
     ///
-    /// The context also carries the player's stat badges
-    /// ([`crate::PlayerObedience::with_stat_badges`]); a context that holds
-    /// any hands them to the player side via
-    /// [`Battle::with_stat_badges`], and one that holds none leaves badges
-    /// already on the player's Pokémon alone.
+    /// A context holding stat badges applies them via
+    /// [`Battle::with_stat_badges`]; one holding none keeps the lead's own.
     #[must_use]
     pub fn with_player_obedience(mut self, obedience: crate::obedience::PlayerObedience) -> Self {
         let badges = obedience.stat_badges();
@@ -570,12 +563,9 @@ impl Battle {
         }
     }
 
-    /// Gives the player's side the earned-badge stat boosts
-    /// ([`BadgeBoosts`]) from here on: every damage read and every later
-    /// Speed comparison. Prefer [`BattlePokemon::with_stat_badges`] on the
-    /// lead before construction when the opening comparison must see them
-    /// too: [`Battle::new`] has already drawn it (a tie costs a draw), and
-    /// nothing here replays that draw.
+    /// Gives the player's side its [`BadgeBoosts`] from here on. The opening
+    /// Speed comparison, and its tie draw, already ran in the constructor: set
+    /// [`BattlePokemon::with_stat_badges`] on the lead beforehand to include it.
     #[must_use]
     pub fn with_stat_badges(mut self, badges: BadgeBoosts) -> Self {
         self.player.set_stat_badges(badges);

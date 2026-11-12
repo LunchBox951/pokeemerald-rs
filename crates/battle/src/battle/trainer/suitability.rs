@@ -185,8 +185,7 @@ fn stale_base_damage(
     let category = MoveCategory::for_type(move_type);
     let (attack_stat, attack_stage) = fainted.damage_attacking_stat(category);
     // Thick Fat halves raw Special Attack before stage scaling
-    // (`pokemon.c:3202-3204`), after Huge/Pure Power and the badge boost as in
-    // the trainer AI.
+    // (`pokemon.c:3202-3204`), after Huge/Pure Power as in the trainer AI.
     let attack_stat = thick_fat_special_attack(player.ability(), move_type, attack_stat);
     // Plus/Minus apply with the other active mon regardless of HP
     // (`pokemon.c:3207-3210`, `battle_util.c:3128-3137`).
@@ -432,8 +431,6 @@ mod tests {
         );
     }
 
-    /// The forced-replacement estimate defends with the player's boosted
-    /// Defense and Sp. Defense, like the real hit (`pokemon.c:3161`-`:3168`).
     #[test]
     fn stale_base_damage_reads_the_players_defense_badges() {
         use crate::badge_boosts::BadgeBoosts;

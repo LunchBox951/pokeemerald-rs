@@ -156,10 +156,7 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::damage_attacking_stat`] and
 //! [`pokemon::BattlePokemon::damage_defending_stat`] so every damage path
-//! inherits them, after the player side's earned-badge stat boost
-//! ([`badge_boosts::BadgeBoosts`]: badge 1 Attack, badge 5 Defense, badge 7
-//! both special stats, and badge 3 Speed in
-//! [`pokemon::BattlePokemon::speed_for_turn_order`]). [`ability::burn_halves_damage`] feeds the hit pipeline's,
+//! inherits them, after the earned-badge stat boost ([`badge_boosts`]). [`ability::burn_halves_damage`] feeds the hit pipeline's,
 //! the trainer AI estimate's and the forced-replacement selector's
 //! `attacker_burned` input, as does the confusion self-hit's: a burned attacker's physical damage halves unless
 //! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and

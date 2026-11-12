@@ -62,9 +62,7 @@ impl OverworldPhase {
                 && party::is_traded_record(record, owner_id, &self.save2.player_name)
         });
         let traded = traded || battler.is_traded_recipient();
-        // Every battle start routes the lead and its reserves through here, so
-        // this is where they take the player side's stat badges: before the
-        // constructor's opening Speed comparison and its tie draw.
+        // Stamped before the constructor's opening Speed comparison.
         battler
             .with_traded_recipient(traded)
             .with_stat_badges(self.stat_badges())

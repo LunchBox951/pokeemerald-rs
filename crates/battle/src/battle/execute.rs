@@ -784,8 +784,6 @@ impl Battle {
         } else {
             &self.enemy
         };
-        // The battler is both attacker and defender (`battle_util.c:2173`), so
-        // a player reads its Attack badge and its Defense badge together.
         let (attack_stat, attack_stage) = battler.damage_attacking_stat(MoveCategory::Physical);
         let (raw_defense, defense_stage) = battler.damage_defending_stat(MoveCategory::Physical);
         let defense_stat = if halves_defense {

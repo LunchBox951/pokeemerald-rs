@@ -731,8 +731,6 @@ fn estimated_damage(
         return Ok(MINIMUM_DAMAGE);
     };
     let category = MoveCategory::for_type(move_type);
-    // The same stat read as the real hit, badge included: the AI's simulated
-    // damage runs `CalculateBaseDamage` (`battle_script_commands.c:1306`-`:1318`).
     let (attack_stat, attack_stage) = attacker.damage_attacking_stat(category);
     // Upstream's `CalculateBaseDamage` halves raw Special Attack for Fire/Ice
     // against Thick Fat before stage scaling (`pokemon.c:3202-3204`); the AI
@@ -1359,10 +1357,8 @@ mod tests {
         assert!(latched > plain, "{latched} must exceed {plain}");
     }
 
-    /// `AI_CalcDmg` runs `CalculateBaseDamage` on the live battlers, so the
-    /// player's Defense (badge 5) and Sp. Defense (badge 7) badges shrink the
-    /// estimate and the enemy's Attack figure never grows
-    /// (`battle_script_commands.c:1306`-`:1318`, `pokemon.c:3161`-`:3168`).
+    /// `AI_CalcDmg` runs `CalculateBaseDamage` (`battle_script_commands.c:1306`
+    /// -`:1318`), so the player's Defense badges shrink the estimate.
     #[test]
     fn the_estimate_reads_the_players_defense_badges() {
         use crate::badge_boosts::BadgeBoosts;
@@ -1413,8 +1409,6 @@ mod tests {
             water_gun
         );
 
-        // An attacker that somehow carried an Attack badge would be boosted,
-        // so `Battle` clears every enemy battler's badges at construction.
         let boosted_enemy = enemy
             .clone()
             .with_stat_badges(BadgeBoosts::from_badges([true; 4]));

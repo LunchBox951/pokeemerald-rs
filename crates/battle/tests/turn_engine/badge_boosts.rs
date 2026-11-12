@@ -1,13 +1,5 @@
-//! Earned-badge stat boosts (S-6): badge 1 Attack, badge 3 Speed, badge 5
-//! Defense and badge 7 Sp. Attack and Sp. Defense, each a truncating
-//! `110 * stat / 100` on the player's side only.
-//!
-//! Upstream applies Attack, Defense and both special stats inside
-//! `CalculateBaseDamage` after Huge Power and before the Hustle, Guts and
-//! Marvel Scale multipliers (`pokeemerald/src/pokemon.c:3158`-`:3168`,
-//! `:3211`-`:3214`), and Speed inside `GetWhoStrikesFirst` after the stage
-//! ratio and before the paralysis quarter (`pokeemerald/src/battle_main.c:4639`-
-//! `:4651`). A mon keeps its stored stats: only the reads change.
+//! Earned-badge stat boosts (S-6): `pokeemerald/src/pokemon.c:3158`-`:3168`
+//! (damage stats) and `pokeemerald/src/battle_main.c:4639`-`:4651` (Speed).
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -30,8 +22,6 @@ const BADGE_5: [bool; 4] = [false, false, true, false];
 const BADGE_7: [bool; 4] = [false, false, false, true];
 const ALL_STAT_BADGES: [bool; 4] = [true; 4];
 
-/// A mon with every stat planted: max HP 1000 so nothing faints, then the
-/// five battle stats.
 fn planted(
     dex: &Dex,
     species: u16,
@@ -58,8 +48,6 @@ fn with_badges(mon: BattlePokemon, badges: [bool; 4]) -> BattlePokemon {
     mon.with_stat_badges(BadgeBoosts::from_badges(badges))
 }
 
-/// Damage of one hit with the variance draw at 100 % and critical hits
-/// suppressed, so the only draw is the roll.
 fn damage(dex: &Dex, move_id: MoveId, attacker: &BattlePokemon, defender: &BattlePokemon) -> u32 {
     let mut rng = SequenceRng::new([0]);
     let outcome = damage_core(dex, move_id, attacker, defender, true, &mut rng).unwrap();
@@ -70,10 +58,8 @@ fn damage(dex: &Dex, move_id: MoveId, attacker: &BattlePokemon, defender: &Battl
     damage
 }
 
-/// Abra (Psychic: no STAB on a Normal or Water move) at L50 hitting a Normal
-/// Zigzagoon, 101 in every relevant stat. Power 40 for both Pound and Water
-/// Gun: `((2 * 50 / 5 + 2) * 40 * atk / def) / 50 + 2`. No badge: 880 / 50 + 2
-/// = 19; Attack 111: 967 / 50 + 2 = 21; Defense 111: 800 / 50 + 2 = 18.
+/// L50, power 40, 101 in every stat: 19 plain, 21 at Attack 111, 18 at
+/// Defense 111.
 fn matrix_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -132,9 +118,7 @@ fn each_badge_boosts_only_the_stat_it_names() {
     }
 }
 
-/// `(110 * attack) / 100` truncates per stat, ahead of the stage scaling.
-/// Attack 105 -> 115; at L50 and power 40 vs Defense 101: 880 -> 22 * 40 * 115
-/// / 101 = 1002 / 50 = 20 + 2 = 22; the badge-free control is 20.
+/// Attack 105 -> 115 truncates before the formula: 22 against a control of 20.
 #[test]
 fn the_badge_factor_truncates_the_stat_before_the_damage_formula() {
     let dex = Dex::new();
@@ -161,11 +145,8 @@ fn the_badge_factor_truncates_the_stat_before_the_damage_formula() {
     assert_eq!(damage(&dex, MoveId::POUND, &boosted, &defender), 22);
 }
 
-/// Huge Power doubles Attack first (`pokemon.c:3158`-`:3159`), then the badge
-/// takes 110 % of the doubled stat (`:3161`): 105 -> 210 -> 231. Boosting
-/// first would give 115 -> 230. L100, Mega Kick (power 120) vs Defense 100:
-/// `(42 * 120 * 231 / 100) / 50 + 2 = 234`, against 233 for the wrong order
-/// and 213 with no badge.
+/// Huge Power first (105 -> 210 -> 231, damage 234); badge first would give
+/// 230 and 233. No badge: 213.
 #[test]
 fn the_attack_badge_applies_after_huge_power() {
     let dex = Dex::new();
@@ -194,9 +175,7 @@ fn the_attack_badge_applies_after_huge_power() {
     assert_eq!(damage(&dex, MoveId::MEGA_KICK, &boosted, &defender), 234);
 }
 
-/// Hustle's 150 % comes after the badge (`pokemon.c:3161`-`:3162`, `:3205`):
-/// Attack 11 -> 12 -> 18 (`22 * 40 * 18 / 101 = 156`, `/ 50 + 2 = 5`). Running
-/// the badge on the Hustle-adjusted 16 would give 17 and damage 4.
+/// Hustle follows the badge: 11 -> 12 -> 18 gives 5, not 16 -> 17 giving 4.
 #[test]
 fn the_attack_badge_applies_before_hustle() {
     let dex = Dex::new();
@@ -224,10 +203,8 @@ fn the_attack_badge_applies_before_hustle() {
     assert_eq!(damage(&dex, MoveId::POUND, &boosted, &defender), 5);
 }
 
-/// A statused Marvel Scale holder's Defense reads the badge first
-/// (`pokemon.c:3163`-`:3164`, `:3213`-`:3214`): 11 -> 12 -> 18 (`880 * 101 /
-/// 18 = 4937`, `/ 50 + 2 = 100`); the Marvel-Scale-first 16 -> 17 would give
-/// 106.
+/// Marvel Scale follows the badge: 11 -> 12 -> 18 gives 100, not 16 -> 17
+/// giving 106.
 #[test]
 fn the_defense_badge_applies_before_marvel_scale() {
     let dex = Dex::new();
@@ -302,8 +279,6 @@ fn player_hit_first(events: &[BattleEvent]) -> bool {
         .expect("a hit lands")
 }
 
-/// One turn with no tie draw: the constructor takes the turn number only, the
-/// turn takes its number, the wild pick and two four-draw Tackles.
 fn untied_turn(
     dex: &Dex,
     player: BattlePokemon,
@@ -344,10 +319,8 @@ fn a_speed_badge_that_breaks_a_tie_removes_its_draws() {
     assert_eq!(draws, 11);
 }
 
-/// The opening, action and end-turn comparisons each take their own draw when
-/// the badge's 110 meets the enemy's 110 exactly. The even action draw seats
-/// the player first and the odd one the enemy, independently of the
-/// end-turn draw.
+/// A badge-created tie costs an opening, action and end-turn draw; an even
+/// action draw seats the player first.
 #[test]
 fn a_speed_badge_that_creates_a_tie_adds_a_draw_to_each_comparison() {
     for (action_tie, expected_player_first) in [(0, true), (1, false)] {
@@ -403,9 +376,8 @@ fn poisoned(mut mon: BattlePokemon) -> BattlePokemon {
     mon
 }
 
-/// The end-turn pass rebuilds its order from the badge-boosted Speed
-/// (`battle_util.c:1199`-`:1210`): a created tie draws again, independently of
-/// the action-phase tie, and the two orders can disagree.
+/// The end-turn order is rebuilt from boosted Speed with its own tie draw
+/// (`battle_util.c:1199`-`:1210`), so it can disagree with the action order.
 #[test]
 fn the_residual_order_reads_the_badge_boosted_speed_with_its_own_tie_draw() {
     for (action_tie, end_turn_tie, hits, ticks) in [
@@ -442,8 +414,6 @@ fn the_residual_order_reads_the_badge_boosted_speed_with_its_own_tie_draw() {
     }
 }
 
-/// With the badge breaking the tie the player is first in both passes and the
-/// turn draws nothing for either comparison.
 #[test]
 fn a_badge_boosted_player_acts_and_ticks_first_without_any_tie_draw() {
     let dex = Dex::new();
@@ -456,8 +426,7 @@ fn a_badge_boosted_player_acts_and_ticks_first_without_any_tie_draw() {
     assert_eq!(draws, 11);
 }
 
-/// The enemy is never boosted, whatever the caller stamped on it: it is
-/// cleared at battle start, and its Speed does not outrun an equal player's.
+/// Whatever the caller stamped on the enemy is cleared at battle start.
 #[test]
 fn an_enemy_never_receives_stat_badges() {
     let dex = Dex::new();
@@ -516,8 +485,6 @@ fn the_players_reserves_share_the_leads_badges() {
     assert_eq!(held, vec![BadgeBoosts::from_badges(BADGE_1); 2]);
 }
 
-/// The flow's one attach point: the badges ride in on the player's
-/// obedience context and reach the battle's player side.
 #[test]
 fn the_player_obedience_context_carries_the_stat_badges() {
     let dex = Dex::new();
@@ -540,11 +507,8 @@ fn the_player_obedience_context_carries_the_stat_badges() {
     assert_eq!(battle.enemy().stat_badges(), BadgeBoosts::NONE);
 }
 
-/// A confused or disobedient battler hits itself with the same call, as both
-/// attacker and defender (`battle_util.c:2169`-`:2175`, `:4020`-`:4027`): the
-/// player's Attack and Defense badges both apply, the enemy's never do.
-/// L50, Pound-power 40, 101 / 101: 19 plain, 21 with the Attack badge, 18
-/// with the Defense badge and 19 with both (111 / 111).
+/// The self-hit is attacker and defender at once (`battle_util.c:2169`-`:2175`,
+/// `:4020`-`:4027`): 19 plain, 21 with Attack, 18 with Defense, 19 with both.
 #[test]
 fn a_players_confusion_self_hit_reads_its_attack_and_defense_badges() {
     for (badges, expected) in [
@@ -653,10 +617,8 @@ fn an_enemys_confusion_self_hit_ignores_stat_badges() {
     assert_eq!(self_hit, Some(19), "{events:?}");
 }
 
-/// `TryRunFromBattle` reads raw battle Speed (`battle_util.c:463`-`:466`):
-/// the Speed badge does not raise the escape odds. Raw 100 against 105:
-/// `100 * 128 / 105 + 30 = 151`; the badge-boosted 110 would give 164, which a
-/// roll of 155 would then beat.
+/// Escape reads raw Speed (`battle_util.c:463`-`:466`): 100 against 105 gives
+/// odds 151, so a roll of 155 fails; the boosted 110 would give 164.
 #[test]
 fn the_speed_badge_does_not_change_the_escape_odds() {
     let dex = Dex::new();
