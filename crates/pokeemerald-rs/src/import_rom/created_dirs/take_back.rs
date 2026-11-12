@@ -2,8 +2,11 @@
 //! removes a created level without trusting its mutable name.
 //!
 //! A level whose name still resolves to the identity captured at creation
-//! and that holds no entries is renamed (no-replace) into a quarantine: one
-//! private directory per rollback, made beside the outermost level rollback may take back, so it
+//! and that holds no entries is renamed (no-replace) into a quarantine, unless
+//! it lacks the owner's write bit, which moving a directory to another parent
+//! needs: such a level is unlinked by name in its pinned parent after the same
+//! identity check (see [`restore`]). The quarantine is one private directory per
+//! rollback, made beside the outermost level rollback may take back, so it
 //! is never inside a level it empties. A level on another filesystem than
 //! that quarantine (`EXDEV`, as behind a `..` into a mount) gets a
 //! quarantine of its own beside it, removed before the walk goes on; the
@@ -11,8 +14,10 @@
 //! further out claims a fresh one. In a
 //! quarantine the level is re-checked by identity and unlinked through the
 //! held quarantine, or put back (no-replace) under its name, or beside it
-//! as `<name>.restored-<n>`, if it is not ours or holds something. Every
-//! step that leaves a level standing says so on stderr.
+//! as `<name>.restored-<n>`, if it is not ours or holds something. A name
+//! too long for that suffix is cut short first, so the recovery name fits
+//! the 255-byte component limit. Every step that leaves a level standing
+//! says so on stderr.
 //!
 //! This module walks the levels; the steps live in its children:
 //!
@@ -65,11 +70,11 @@ use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 #[cfg(test)]
-pub(super) use report::located_beside;
+pub(super) use report::{located_beside, verified_location};
 use report::{warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{holds_this_level, is_this_level, take_back_into};
+use restore::{holds_this_level, is_this_level, take_back_into, take_back_unwritable_in_place};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -136,25 +141,20 @@ pub(super) fn undo_created_directories_with_capture_hooks(
         match looked_up {
             Ok((_, true)) => {
                 before_take();
+                // A level without owner write cannot be renamed into a
+                // quarantine, so it is not given one: it is unlinked in its
+                // parent, and needs no quarantine to be made first.
+                match take_back_unwritable_in_place(parent, dir) {
+                    Some(Outcome::Stopped) => break,
+                    Some(_) => continue,
+                    None => {}
+                }
                 // A level that holds entries is not moved at all: once in a
-                // quarantine, a crash would leave them hidden there.
-                match level_holds_entries(dir) {
-                    Ok(false) => {}
-                    Ok(true) => {
-                        leave_unmoved(
-                            parent,
-                            dir,
-                            "it holds entries",
-                            "it holds entries, so rollback did not move it into a cleanup directory",
-                        );
-                        break;
-                    }
-                    Err(err) => {
-                        let unlisted =
-                            format!("it could not be listed: {}", std::io::Error::from(err));
-                        leave_unmoved(parent, dir, &unlisted, &unlisted);
-                        break;
-                    }
+                // quarantine, a crash would leave them hidden there. The
+                // in-place unlink above moves nothing and removes only an
+                // empty level, so it needs no listing first.
+                if left_unmoved_as_occupied(parent, dir) {
+                    break;
                 }
                 if quarantine.is_none() {
                     quarantine = claim_quarantine(created, dir);
@@ -222,6 +222,29 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     }
     if let Some(held) = quarantine {
         remove_quarantine(&held, &mut || {});
+    }
+}
+
+/// Whether `dir` holds entries or could not be listed, in which case it is
+/// reported and left where it stands instead of being moved into a
+/// quarantine.
+fn left_unmoved_as_occupied(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
+    match level_holds_entries(dir) {
+        Ok(false) => false,
+        Ok(true) => {
+            leave_unmoved(
+                parent,
+                dir,
+                "it holds entries",
+                "it holds entries, so rollback did not move it into a cleanup directory",
+            );
+            true
+        }
+        Err(err) => {
+            let unlisted = format!("it could not be listed: {}", std::io::Error::from(err));
+            leave_unmoved(parent, dir, &unlisted, &unlisted);
+            true
+        }
     }
 }
 

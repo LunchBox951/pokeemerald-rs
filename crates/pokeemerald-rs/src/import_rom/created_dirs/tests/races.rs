@@ -213,15 +213,15 @@ fn a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there
             stderr.contains("but it is not the directory rollback made"),
             "stderr:\n{stderr}"
         );
-        // Only Linux and Android can tell a moved held level from a removed
-        // one and say where it went; elsewhere the warning is hedged
-        // (`Standing::Unknown`, #2576).
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        // Linux, Android and Apple can tell a moved held level from a
+        // removed one and say where it went; elsewhere the warning is
+        // hedged (`Standing::Unknown`).
+        #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
         {
             let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
             assert_names_marked_path(&stderr, warned, "moved to: ");
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
         assert!(
             stderr.contains(" is no longer under its name; if it was moved rather than removed"),
             "stderr:\n{stderr}"
@@ -276,15 +276,15 @@ fn a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_ther
             !stderr.contains("its contents remain in"),
             "stderr:\n{stderr}"
         );
-        // Only Linux and Android can tell a moved held level from a removed
-        // one and say where it went; elsewhere the warning is hedged
-        // (`Standing::Unknown`, #2576).
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        // Linux, Android and Apple can tell a moved held level from a
+        // removed one and say where it went; elsewhere the warning is
+        // hedged (`Standing::Unknown`).
+        #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
         {
             let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
             assert_names_marked_path(&stderr, warned, "moved to: ");
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
         assert!(
             stderr.contains(" is no longer under its name; if it was moved rather than removed"),
             "stderr:\n{stderr}"
