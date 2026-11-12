@@ -86,17 +86,29 @@ pub(super) const COOLDOWN: Duration = Duration::from_secs(5);
 /// How long a stream must stay healthy before a failure counts as new.
 pub(super) const STABLE_AFTER: Duration = Duration::from_secs(5);
 
-/// Discovery of the current OS default output.
+/// Discovery of the current OS default output, as the separate OS-facing
+/// calls it takes. Each can block, and none can be interrupted, so
+/// [`Transport::discover`] reads cancellation between them: a driver detached
+/// while one blocks makes no further call once it returns.
 pub(super) trait OutputHost: Send + 'static {
+    /// What the OS audio host is reached through, rebuilt for every discovery
+    /// so a restarted audio server is picked up instead of a dead connection
+    /// reused.
+    type Backend;
     type Device: OutputDevice;
 
-    /// The current default output as a stable identity plus the device, or
-    /// `None` when there is none. Called only from the transport's driver.
+    /// Connect to the OS audio host. Called only from the transport's driver.
+    fn backend(&mut self) -> Self::Backend;
+
+    /// The backend's current default output, or `None` when there is none.
+    fn default_device(&mut self, backend: &Self::Backend) -> Option<Self::Device>;
+
+    /// The stable identity of `device`.
     ///
     /// # Errors
     ///
-    /// A `cpal` failure to reach the host or the device.
-    fn default_output(&mut self) -> Result<Option<(String, Self::Device)>, cpal::Error>;
+    /// A `cpal` failure to reach the device.
+    fn device_id(&mut self, device: &Self::Device) -> Result<String, cpal::Error>;
 }
 
 struct Live<S> {
@@ -173,6 +185,9 @@ impl<H: OutputHost> Transport<H> {
         if self.live.is_some() {
             self.supervise(now);
         }
+        if self.cancelled() {
+            return now;
+        }
         if self.live.is_none() {
             if self.started_while_detached() || self.shared.running.load(Ordering::Acquire) {
                 self.stale_queue = true;
@@ -190,6 +205,22 @@ impl<H: OutputHost> Transport<H> {
         }
     }
 
+    /// Whether the owner is gone. Read after each blocking call: the driver
+    /// may have been detached while it blocked, and then it must start no
+    /// further OS call, publish nothing, and let its stream drop.
+    fn cancelled(&self) -> bool {
+        self.shared.shutdown.load(Ordering::Acquire)
+    }
+
+    /// [`Self::cancelled`] as an attach abandoned for [`Transport::connect`].
+    fn check_live(&self) -> Result<(), NotAttached> {
+        if self.cancelled() {
+            Err(NotAttached::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Whether `start` was called since the transport last looked, which
     /// with no stream attached means playback was meant to advance even if a
     /// `stop` has landed since.
@@ -200,10 +231,36 @@ impl<H: OutputHost> Transport<H> {
         started
     }
 
+    /// The current default output as a stable identity plus the device, or
+    /// `None` when there is none, found by the separate calls of
+    /// [`OutputHost`]. Cancellation is read after the host connection and
+    /// after the default query, so a driver detached in either call makes no
+    /// further one; a discovery cancelled there stops and returns `Ok(None)`.
+    /// The identity query is the last call, so nothing follows it to stop.
+    /// Whatever this returns, the caller reads [`Self::cancelled`] before
+    /// using it, never treating a cancelled `Ok(None)` as an absent output.
+    fn discover(&mut self) -> Discovered<H> {
+        let backend = self.host.backend();
+        if self.cancelled() {
+            return Ok(None);
+        }
+        let Some(device) = self.host.default_device(&backend) else {
+            return Ok(None);
+        };
+        if self.cancelled() {
+            return Ok(None);
+        }
+        let id = self.host.device_id(&device)?;
+        Ok(Some((id, device)))
+    }
+
     /// Re-discover the default while waiting out a retry delay, and attempt
     /// at once on a fresh burst when its identity changed.
     fn probe(&mut self, now: Duration) {
-        let found = self.host.default_output();
+        let found = self.discover();
+        if self.cancelled() {
+            return;
+        }
         // Scheduled from when the query returned, so a slow one cannot run
         // back to back.
         self.next_discovery = self.finished(now) + DISCOVERY_INTERVAL;
@@ -236,7 +293,10 @@ impl<H: OutputHost> Transport<H> {
             self.failures = 0;
         }
         if now >= self.next_discovery {
-            let found = self.host.default_output();
+            let found = self.discover();
+            if self.cancelled() {
+                return;
+            }
             self.next_discovery = self.finished(now) + DISCOVERY_INTERVAL;
             let Some(live) = self.live.as_ref() else {
                 return;
@@ -285,6 +345,9 @@ impl<H: OutputHost> Transport<H> {
             } else {
                 live.stream.pause()
             };
+            if self.shared.shutdown.load(Ordering::Acquire) {
+                return;
+            }
             // A loss raised after the check above, while this stream was
             // still playing, happened while started; latch it before a
             // concurrent `stop` clears `playing` or retires the stream.
@@ -328,7 +391,7 @@ impl<H: OutputHost> Transport<H> {
     }
 
     fn attempt(&mut self, now: Duration) {
-        let found = self.host.default_output();
+        let found = self.discover();
         self.attempt_with(now, found);
     }
 
@@ -336,6 +399,9 @@ impl<H: OutputHost> Transport<H> {
     /// whose identity differs from the last one observed starts a fresh
     /// burst.
     fn attempt_with(&mut self, now: Duration, found: Discovered<H>) {
+        if self.cancelled() {
+            return;
+        }
         self.next_discovery = now + DISCOVERY_INTERVAL;
         if let Ok(found) = &found {
             let id = found.as_ref().map(|(id, _)| id.as_str());
@@ -345,7 +411,10 @@ impl<H: OutputHost> Transport<H> {
             self.observed = Observed::Default(id.map(str::to_owned));
         }
         match self.connect(now, found) {
-            Ok(()) => {}
+            // Attached, or the owner is gone: a cancelled attempt publishes
+            // and schedules nothing, and the driver exits and drops what it
+            // built.
+            Ok(()) | Err(NotAttached::Cancelled) => {}
             // Nothing failed; decide the queue again for the new intent.
             Err(NotAttached::IntentChanged) => self.next_attempt = self.finished(now),
             Err(NotAttached::Failed(reason)) => {
@@ -363,7 +432,9 @@ impl<H: OutputHost> Transport<H> {
             Ok(None) => return Err(TransportFailure::NoOutput.into()),
             Err(err) => return Err(failure_of(&PlatformError::Audio(err)).into()),
         };
-        let config = negotiate(&device).map_err(|err| failure_of(&err))?;
+        let config = negotiate(&device);
+        self.check_live()?;
+        let config = config.map_err(|err| failure_of(&err))?;
         let mut consumer = self
             .producer
             .reclaim_consumer()
@@ -429,6 +500,7 @@ impl<H: OutputHost> Transport<H> {
         .map_err(|err| failure_of(&err))?;
         let settle_margin = source.settle_margin_frames();
         let health = Arc::new(StreamHealth::default());
+        self.check_live()?;
         let stream = build_stream(
             device,
             config,
@@ -436,8 +508,12 @@ impl<H: OutputHost> Transport<H> {
             Arc::clone(&self.shared.stream_errors),
             Arc::clone(&health),
             Arc::clone(&self.shared.playback_clock),
-        )
-        .map_err(|err| match err {
+        );
+        // A stream built for a dropped owner is released unplayed and
+        // unpublished, whether or not the build succeeded; dropping it
+        // returns the consumer to the producer.
+        self.check_live()?;
+        let stream = stream.map_err(|err| match err {
             // The device was found and negotiated, so a build that reports it
             // missing is a failed connection, not an absent output.
             PlatformError::Audio(_) => TransportFailure::ConnectFailed,
@@ -458,11 +534,14 @@ impl<H: OutputHost> Transport<H> {
 
         // A built stream is paused, so only a started transport plays it.
         if playing {
-            stream.play().map_err(|_| TransportFailure::ConnectFailed)?;
+            let played = stream.play();
+            self.check_live()?;
+            played.map_err(|_| TransportFailure::ConnectFailed)?;
             // A start that landed after the intent read is applied by this
             // stream too; only a first attach can get here with one.
             self.seen_starts = self.shared.starts.load(Ordering::Acquire);
         }
+        self.check_live()?;
         let done = self.finished(now);
         self.shared
             .device_sample_rate
@@ -542,6 +621,9 @@ enum NotAttached {
     /// Playback intent changed while a re-attaching stream was built; the
     /// attempt is repeated at once and counts as no failure.
     IntentChanged,
+    /// The owner dropped the output while this attempt blocked; nothing is
+    /// published, scheduled or counted.
+    Cancelled,
 }
 
 impl From<TransportFailure> for NotAttached {
@@ -564,7 +646,7 @@ impl Observed {
     }
 }
 
-/// What one [`OutputHost::default_output`] call returned.
+/// What one [`Transport::discover`] returned.
 type Discovered<H> = Result<Option<(String, <H as OutputHost>::Device)>, cpal::Error>;
 
 fn failure_of(err: &PlatformError) -> TransportFailure {

@@ -19,25 +19,30 @@ use super::{OutputHost, Shared, Transport, TransportState};
 pub(in crate::audio) struct CpalHost;
 
 impl OutputHost for CpalHost {
+    type Backend = cpal::Host;
     type Device = cpal::Device;
 
-    fn default_output(&mut self) -> Result<Option<(String, cpal::Device)>, cpal::Error> {
-        let host = cpal::default_host();
-        let Some(device) = host.default_output_device() else {
-            return Ok(None);
-        };
+    fn backend(&mut self) -> cpal::Host {
+        cpal::default_host()
+    }
+
+    fn default_device(&mut self, backend: &cpal::Host) -> Option<cpal::Device> {
+        backend.default_output_device()
+    }
+
+    fn device_id(&mut self, device: &cpal::Device) -> Result<String, cpal::Error> {
         // Only an absent default is `None`. A failed identity query (CoreAudio
         // reports a timed-out property read as `DeviceNotAvailable`) stays an
         // error: an attached stream ignores it, and an attempt still
         // classifies these kinds as `NoOutput`.
-        let id = device.id()?;
-        Ok(Some((id.to_string(), device)))
+        device.id().map(|id| id.to_string())
     }
 }
 
 /// The longest dropping a [`Worker`] waits for its driver to release the
-/// stream. Shutdown is seen only between transport steps, and no OS audio
-/// call can be interrupted, so a driver blocked in one is detached instead.
+/// stream. No OS audio call can be interrupted, so a driver blocked in one is
+/// detached instead; it sees shutdown when the call returns, before it starts
+/// another, and abandons any stream it built meanwhile unplayed.
 pub(in crate::audio) const SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
 
 /// The thread driving one [`Transport`]. Dropping it stops the driver and
@@ -72,6 +77,11 @@ impl Worker {
                     .with_clock(move || origin.elapsed());
                 while !driver_shared.shutdown.load(Ordering::Acquire) {
                     let next = transport.step(origin.elapsed());
+                    // A step that blocked while the output was dropped must
+                    // not sleep before releasing its stream.
+                    if driver_shared.shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
                     thread::park_timeout(next.saturating_sub(origin.elapsed()));
                 }
             })
