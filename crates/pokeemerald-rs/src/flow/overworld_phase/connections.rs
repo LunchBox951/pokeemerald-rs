@@ -8,7 +8,7 @@
 //! map-script effect.
 
 use assets::MapHeaderTable;
-use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
 };
@@ -594,12 +594,7 @@ pub(super) fn admit_object_events_at_map_load(
     player: &engine::overworld::PlayerState,
     event_data: &engine::event_data::EventData,
 ) {
-    let _ = objects.admit_on_map_load(&FrameContext {
-        player_position: player.position(),
-        event_data,
-        frozen: true,
-        player_dashing: false,
-    });
+    let _ = objects.admit_on_map_load(player.position(), event_data);
 }
 
 /// A saved-location landing: position, elevation, and warp-in facing.

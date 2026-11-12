@@ -46,12 +46,7 @@ pub(super) fn admitted_with(
     let mut objects =
         engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
     if let Some(first) = templates.first() {
-        let _ = objects.admit_on_map_load(&engine::overworld::object_event::FrameContext {
-            player_position: (i32::from(first.x), i32::from(first.y)),
-            event_data,
-            frozen: true,
-            player_dashing: false,
-        });
+        let _ = objects.admit_on_map_load((i32::from(first.x), i32::from(first.y)), event_data);
     }
     objects
 }

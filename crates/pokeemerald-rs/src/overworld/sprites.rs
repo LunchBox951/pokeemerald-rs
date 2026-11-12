@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use assets::pack::AssetPack;
 use assets::{LayoutGrid, ObjectEvent};
 use engine::event_data::EventData;
-use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, Palette, Tileset};
 
@@ -177,12 +177,7 @@ impl SceneSprites {
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
         let mut objects = self.seed_objects.clone();
-        let _ = objects.admit_on_map_load(&FrameContext {
-            player_position: player.position(),
-            event_data,
-            frozen: true,
-            player_dashing: false,
-        });
+        let _ = objects.admit_on_map_load(player.position(), event_data);
         self.live_entries(&objects, player, event_data, grass)
     }
 

@@ -587,6 +587,9 @@ fn a_carried_object_is_selected_with_the_map_it_was_carried_from() {
                 event_data: &event_data,
                 frozen: false,
                 player_dashing: false,
+                terrain: *runtime,
+                player_previous_position: STANDING,
+                player_elevation: ELEVATION,
             };
             let mut departed = ObjectEventCollection::from_templates(leaked(vec![object(
                 OBJECT_ID,

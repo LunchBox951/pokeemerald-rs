@@ -28,6 +28,10 @@ mod scheduler;
 pub use scheduler::FrameContext;
 use scheduler::Lifecycle;
 
+#[path = "object_event_collision.rs"]
+mod object_collision;
+pub use object_collision::{collision_in_direction, MovementRange, NpcCollision, Occupant};
+
 /// One authored object-event template paired with its live, mutable state.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveObjectEvent {
@@ -297,6 +301,45 @@ impl ObjectEventCollection {
                 && ey == y
                 && elevations_compatible(entry.state.elevation(), elevation)
         })
+    }
+
+    /// Iterates admitted entries that hold `(x, y, elevation)` for collision, by their *live*
+    /// current or previous tile, in declaration order.
+    ///
+    /// An unadmitted or despawned entry is skipped: upstream's scan visits only `active` objects
+    /// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4730-4733`).
+    ///
+    /// A walker holds the tile it is leaving until its step settles, so this is wider than
+    /// [`Self::object_events_at`], which identifies the object standing on a tile by its current
+    /// tile alone. Elevation matches as there (`DoesObjectCollideWithObjectAt`,
+    /// `event_object_movement.c:4724-4741`).
+    pub fn collision_objects_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter().filter(move |entry| {
+            let state = &entry.state;
+            entry.is_active()
+                && (state.position() == (x, y) || state.previous_position() == (x, y))
+                && elevations_compatible(state.elevation(), elevation)
+        })
+    }
+
+    /// Marks every entry admitted without running the scheduler, for tests that build a
+    /// collection by hand and then place its objects.
+    #[cfg(test)]
+    pub(crate) fn admit_all_for_test(&mut self) {
+        for entry in &mut self.entries {
+            entry.lifecycle = Lifecycle::Active {
+                sprite_slot: 0,
+                initial: entry.state.template_position(),
+                type_func_id: 0,
+                delay: 0,
+                scheduled: entry.state.movement_type(),
+            };
+        }
     }
 
     /// Iterates every entry in declaration order, the order upstream's
@@ -641,13 +684,7 @@ mod tests {
         let mut collection = ObjectEventCollection::from_templates(templates);
         assert!(collection.object_events_at(2, 2, 3).next().is_none());
 
-        let context = crate::overworld::object_event::FrameContext {
-            player_position: (2, 2),
-            event_data: &crate::event_data::EventData::new(),
-            frozen: true,
-            player_dashing: false,
-        };
-        let _ = collection.admit_on_map_load(&context);
+        let _ = collection.admit_on_map_load((2, 2), &crate::event_data::EventData::new());
         assert_eq!(
             collection
                 .object_events_at(2, 2, 3)
@@ -709,12 +746,16 @@ mod tests {
 
         /// One overworld frame with the player at `player`.
         fn frame(collection: &mut ObjectEventCollection, player: TilePos) {
+            let terrain = crate::overworld::object_event_harness::Terrain::flat();
             collection.run_frame(
                 &FrameContext {
                     player_position: player,
                     event_data: &EventData::new(),
                     frozen: false,
                     player_dashing: false,
+                    terrain: terrain.runtime(),
+                    player_previous_position: player,
+                    player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
                 },
                 &mut ScriptedRng::exhausted(),
             );

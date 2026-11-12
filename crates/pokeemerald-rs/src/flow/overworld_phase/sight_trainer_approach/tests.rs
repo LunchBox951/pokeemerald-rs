@@ -63,13 +63,23 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
     assert_eq!(trainer(&objects).position(), (10, 6));
     assert_eq!(trainer(&objects).previous_position(), (10, 5));
 
-    for _ in 1..WALK_FRAMES_PER_TILE {
+    for frame in 1..WALK_FRAMES_PER_TILE {
+        assert_eq!(
+            trainer(&objects).previous_position(),
+            (10, 5),
+            "frame {frame}: the source tile is held until the tile's last frame"
+        );
         approach.advance_movement(trainer_mut(&mut objects), player);
     }
     assert_eq!(
         trainer(&objects).position(),
         (10, 6),
         "still animating the first tile"
+    );
+    assert_eq!(
+        trainer(&objects).previous_position(),
+        (10, 6),
+        "the sixteenth frame shifts previous onto current"
     );
 
     // Frame 16 of that tile starts the second one.

@@ -185,7 +185,7 @@ fn tile_blocks_intermediate_sight(
         return true;
     }
     objects
-        .object_events_at(x, y, trainer_elevation)
+        .collision_objects_at(x, y, trainer_elevation)
         .next()
         .is_some()
 }
@@ -511,11 +511,10 @@ mod tests {
             !trainer_can_see_player(&live, &objects, &runtime, &player),
             "the admitted blocker still stands on the line"
         );
-        objects
-            .get_mut(2)
-            .unwrap()
-            .state_mut()
-            .walk(Direction::East);
+        // The blocker holds the tile it leaves until its step settles.
+        let blocker_state = objects.get_mut(2).unwrap().state_mut();
+        blocker_state.walk(Direction::East);
+        blocker_state.settle_previous_position();
         let live = *objects.get(1).unwrap();
         assert!(
             trainer_can_see_player(&live, &objects, &runtime, &player),
@@ -789,7 +788,30 @@ mod tests {
         assert!(!live_sees(vec![t, blocker], |_| {}, 2, &player));
         let off = |s: &mut crate::overworld::object_event::ObjectEventState| {
             s.walk(Direction::East);
+            s.settle_previous_position();
         };
         assert!(live_sees(vec![t, blocker], off, 2, &player));
+    }
+
+    #[test]
+    fn a_blocker_still_leaving_the_line_keeps_blocking_until_its_step_settles() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let mut blocker = trainer(5, 7, 3, MovementType::FaceDown, "0");
+        blocker.local_id = 2;
+        blocker.trainer_type = TrainerType::None;
+        let player = player_at(5, 8, 3);
+        let mid_step = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.begin_normal_walk(Direction::East);
+        };
+        let settled = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.begin_normal_walk(Direction::East);
+            while !s.advance_step() {}
+        };
+
+        assert!(
+            !live_sees(vec![t, blocker], mid_step, 2, &player),
+            "the walker still holds (5, 7), as `GetCollisionFlagsAtCoords` sees it"
+        );
+        assert!(live_sees(vec![t, blocker], settled, 2, &player));
     }
 }
