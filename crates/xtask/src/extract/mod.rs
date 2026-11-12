@@ -116,6 +116,8 @@ mod error;
 mod evolution_scene;
 mod field_effect;
 mod field_message;
+#[cfg(test)]
+mod fixture_guard;
 mod fonts;
 pub mod inflate;
 mod interface;

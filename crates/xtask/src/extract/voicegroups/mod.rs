@@ -206,6 +206,9 @@ mod tests {
     use crate::extract::owned_fixture::OwnedDir;
     use pack_format::PackWriter;
 
+    /// A fixture's `OwnedDir` prefix, its former `line!()` limit, and its test.
+    type Fixture = (&'static str, Option<usize>, fn());
+
     const REFERENCE_VOICEGROUP_SOURCE_COUNT: usize = 195;
     const TITLE_DECLARED_SLOT_COUNT: usize = 89;
     const RS_DRUMSET_FIRST_DECLARED_SLOT: usize = 36;
@@ -564,6 +567,52 @@ mod tests {
                 super::VoiceGroupError::UnindexedLinkOrderFile(path),
             ) => assert_eq!(path, "ghost.inc"),
             other => panic!("expected UnindexedLinkOrderFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voicegroup_fixtures_ignore_everything_planted_at_their_former_and_candidate_names() {
+        // The link-order fixtures formerly appended `line!()`, so every line
+        // of this file is a name one of them could have had.
+        let lines = include_str!("mod.rs").lines().count();
+        let fixtures: [Fixture; 6] = [
+            (
+                "pokeemerald-rs-voicegroup-duplicate-label-test",
+                None,
+                two_inc_files_declaring_the_same_label_are_rejected,
+            ),
+            (
+                "pokeemerald-rs-voicegroup-link-order-test",
+                Some(lines),
+                link_order_successors_returns_every_file_after_top_label_in_order,
+            ),
+            (
+                "pokeemerald-rs-voicegroup-link-order-last-test",
+                Some(lines),
+                link_order_successors_is_empty_when_top_label_is_last,
+            ),
+            (
+                "pokeemerald-rs-voicegroup-link-order-barrier-test",
+                Some(lines),
+                link_order_successors_stop_at_a_foreign_include_barrier,
+            ),
+            (
+                "pokeemerald-rs-voicegroup-link-order-unlinked-test",
+                Some(lines),
+                link_order_successors_is_empty_when_top_label_is_unlinked,
+            ),
+            (
+                "pokeemerald-rs-voicegroup-link-order-unindexed-test",
+                Some(lines),
+                link_order_successors_rejects_an_unindexed_linked_file,
+            ),
+        ];
+        for (prefix, former_line_limit, fixture) in fixtures {
+            crate::extract::fixture_guard::assert_fixture_ignores_planted_names(
+                prefix,
+                former_line_limit,
+                fixture,
+            );
         }
     }
 }
