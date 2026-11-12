@@ -11,7 +11,7 @@ use crate::{BattleAnimationCatalog, PokedexData};
 use super::{invalid, AssetPack, ConsumerConstraint, EntryKind, PackProblem, RequiredAsset};
 
 impl AssetPack {
-    pub(super) fn validate_schemas(&self) -> Result<(), PackProblem> {
+    pub(super) fn validate_schemas(&self, required: &[RequiredAsset]) -> Result<(), PackProblem> {
         let mut groups = BTreeSet::new();
         for entry in &self.entries {
             let id = entry.id.as_str();
@@ -40,7 +40,8 @@ impl AssetPack {
                         | "battle-message/table"
                 )
             {
-                self.validate_payload(id, &mut groups)?;
+                let is_required = required.iter().any(|asset| asset.id == id);
+                self.validate_payload(id, is_required, &mut groups)?;
             }
         }
         let mut checked = BTreeSet::new();
@@ -128,12 +129,24 @@ impl AssetPack {
         Ok(())
     }
 
-    fn validate_payload(&self, id: &str, groups: &mut BTreeSet<String>) -> Result<(), PackProblem> {
+    /// Songs the game does not play may name a voicegroup the pack does not
+    /// carry yet: the checkout extractor writes every checkpoint song but only
+    /// the title's voicegroups. A required song's voicegroup must be present;
+    /// any present voicegroup is checked.
+    fn validate_payload(
+        &self,
+        id: &str,
+        is_required: bool,
+        groups: &mut BTreeSet<String>,
+    ) -> Result<(), PackProblem> {
         let bytes = self.raw(id).map_err(|err| invalid(id, err))?;
         if id.starts_with("audio/song/") {
             let song = Song::decode(bytes).map_err(|err| invalid(id, err))?;
-            self.require_raw_reference(&song.voicegroup().0)?;
-            groups.insert(song.voicegroup().0.clone());
+            let group = &song.voicegroup().0;
+            if is_required || self.find(group).is_ok() {
+                self.require_raw_reference(group)?;
+                groups.insert(group.clone());
+            }
         } else if id.starts_with("audio/voicegroup/") {
             groups.insert(id.to_owned());
         } else if id.starts_with("audio/sample/") {

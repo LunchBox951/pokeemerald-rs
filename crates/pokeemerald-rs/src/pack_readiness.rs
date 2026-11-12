@@ -31,14 +31,19 @@ impl Requirements {
         required
     }
 
+    /// Domains no game screen reads yet stay optional. The keypad-icon sheet
+    /// and the battle textbox are required because NEW GAME's speech, the
+    /// field dialogs, and the first battle's text load them.
     fn add_roots(&mut self, roots: &Roots) {
         for image in roots
             .title_screen
             .images
             .iter()
             .chain(roots.sprites.sheets)
+            .chain(roots.font_images)
             .chain(roots.text_window.images)
             .chain(roots.bag.images)
+            .chain(roots.battle_interface.images)
         {
             self.image(image);
         }
@@ -50,10 +55,17 @@ impl Requirements {
             .chain(roots.text_window.palettes)
             .chain(roots.interface.palettes)
             .chain(roots.bag.palettes)
+            .chain(roots.battle_interface.palettes)
         {
             self.palette(palette);
         }
-        for blob in roots.title_screen.tilemaps.iter().chain(roots.bag.raws) {
+        for blob in roots
+            .title_screen
+            .tilemaps
+            .iter()
+            .chain(roots.bag.raws)
+            .chain(roots.battle_interface.tilemaps)
+        {
             self.blob(blob);
         }
         for tileset in roots.tilesets {

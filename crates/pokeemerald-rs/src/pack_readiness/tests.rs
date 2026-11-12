@@ -113,6 +113,12 @@ fn missing_gameplay_assets_block_boot_before_a_save_is_opened() {
         "sprite/mom",
         "bag/item-icon/image/poke_ball",
         "audio/song/mus_title",
+        // NEW GAME's speech, the field dialogs, and the start menu read it.
+        "font/keypad_icons",
+        // The first battle's text opens on it.
+        "battle-interface/image/textbox",
+        "battle-interface/palette/textbox",
+        "battle-interface/raw/textbox_map",
     ] {
         let bytes = synthetic_pack(Some(id));
         let media = Media::new(&bytes);
@@ -128,6 +134,53 @@ fn missing_gameplay_assets_block_boot_before_a_save_is_opened() {
         assert!(!save.exists());
         assert_eq!(std::fs::read(media.pack()).unwrap(), bytes);
     }
+}
+
+#[test]
+fn the_compatible_pack_supplies_new_game_and_first_battle_assets() {
+    let bytes = synthetic_pack(None);
+    let media = Media::new(&bytes);
+    let pack = load_ready_pack(&media.pack()).unwrap();
+    crate::intro::IntroScene::from_pack_with_options(
+        &pack,
+        crate::new_game::NewGameOptions::DEFAULT,
+    )
+    .expect("NEW GAME's speech loads from a ready pack");
+    crate::battle_narration::BattleMessageLayer::from_pack(&pack, 0)
+        .expect("the first battle's text loads from a ready pack");
+}
+
+#[test]
+fn an_unplayed_song_naming_an_unextracted_voicegroup_still_boots() {
+    // The checkout extractor writes every checkpoint song but only the title's
+    // voicegroups, so `mus_birch_lab` names a group the pack lacks.
+    let compatible = synthetic_pack(None);
+    let mut writer = PackWriter::new();
+    for entry in pack_format::parse_directory(&compatible).unwrap() {
+        let payload = compatible[entry.offset..entry.offset + entry.length].to_vec();
+        writer.push(PackEntry {
+            id: entry.id,
+            kind: entry.kind,
+            payload,
+        });
+    }
+    writer.push(PackEntry {
+        id: "audio/song/mus_birch_lab".into(),
+        kind: EntryKind::Raw,
+        payload: Song::new(
+            VoiceGroupId("audio/voicegroup/birch_lab".into()),
+            assets::MusicPlayerId(0),
+            0,
+            None,
+            vec![],
+        )
+        .unwrap()
+        .encode(),
+    });
+    let bytes = writer.finish().unwrap();
+    let media = Media::new(&bytes);
+    let save = media.directory.join("save.sav");
+    assert!(crate::App::new_headless_real_at(&media.pack(), &save).is_ok());
 }
 
 #[test]

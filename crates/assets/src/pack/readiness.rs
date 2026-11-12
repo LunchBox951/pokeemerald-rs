@@ -68,7 +68,7 @@ impl AssetPack {
         })?;
         let pack = Self { bytes, entries };
         pack.validate_required(required).map_err(fail)?;
-        pack.validate_schemas().map_err(fail)?;
+        pack.validate_schemas(required).map_err(fail)?;
         pack.validate_consumers(required).map_err(fail)?;
         Ok(pack)
     }

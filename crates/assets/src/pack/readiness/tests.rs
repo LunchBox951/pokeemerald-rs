@@ -153,24 +153,70 @@ fn malformed_payload_is_rejected_even_outside_the_required_inventory() {
     assert_eq!(std::fs::read(&pack.0).unwrap(), bytes);
 }
 
-#[test]
-fn missing_referenced_voicegroup_is_incomplete() {
-    let song = crate::Song::new(
-        crate::VoiceGroupId("audio/voicegroup/missing".into()),
+fn song_naming(voicegroup: &str) -> Vec<u8> {
+    crate::Song::new(
+        crate::VoiceGroupId(voicegroup.into()),
         crate::MusicPlayerId(0),
         0,
         None,
         vec![],
     )
-    .unwrap();
+    .unwrap()
+    .encode()
+}
+
+#[test]
+fn missing_referenced_voicegroup_is_incomplete() {
     let pack = ScratchPack::new(&pack_with(vec![pack_format::raw_entry(
         "audio/song/test".into(),
-        song.encode(),
+        song_naming("audio/voicegroup/missing"),
     )]));
+    let required = [RequiredAsset {
+        id: "audio/song/test".into(),
+        kind: EntryKind::Raw,
+        byte_len: None,
+        consumer: None,
+    }];
     assert_eq!(
-        AssetPack::load_ready(&pack.0, &[]).unwrap_err().problem(),
+        AssetPack::load_ready(&pack.0, &required)
+            .unwrap_err()
+            .problem(),
         &PackProblem::MissingAsset("audio/voicegroup/missing".into())
     );
+}
+
+#[test]
+fn an_unplayed_song_may_name_a_voicegroup_the_pack_does_not_carry_yet() {
+    let bytes = pack_with(vec![pack_format::raw_entry(
+        "audio/song/test".into(),
+        song_naming("audio/voicegroup/not_extracted"),
+    )]);
+    let pack = ScratchPack::new(&bytes);
+    assert_eq!(AssetPack::load_ready(&pack.0, &[]).unwrap().bytes(), bytes);
+}
+
+#[test]
+fn an_unplayed_song_still_decodes_and_its_present_voicegroup_is_checked() {
+    let malformed_song = ScratchPack::new(&pack_with(vec![pack_format::raw_entry(
+        "audio/song/test".into(),
+        vec![0xff],
+    )]));
+    assert!(matches!(
+        AssetPack::load_ready(&malformed_song.0, &[]).unwrap_err().problem(),
+        PackProblem::InvalidAsset { id, .. } if id == "audio/song/test"
+    ));
+    drop(malformed_song);
+    let malformed_group = ScratchPack::new(&pack_with(vec![
+        pack_format::raw_entry(
+            "audio/song/test".into(),
+            song_naming("audio/voicegroup/test"),
+        ),
+        pack_format::raw_entry("audio/voicegroup/test".into(), vec![0xff]),
+    ]));
+    assert!(matches!(
+        AssetPack::load_ready(&malformed_group.0, &[]).unwrap_err().problem(),
+        PackProblem::InvalidAsset { id, .. } if id == "audio/voicegroup/test"
+    ));
 }
 
 #[test]
