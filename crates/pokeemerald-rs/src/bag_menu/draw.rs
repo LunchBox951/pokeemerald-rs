@@ -8,6 +8,7 @@ use crate::palette_overlay::stage_overlay;
 
 use super::chrome::width_of;
 use super::labels;
+use super::sprite::Flip;
 use super::swap::ItemSwap;
 use super::{BagScreen, BagScreenResult, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
@@ -139,7 +140,8 @@ impl BagScreen {
         }
         let current = self.pocket_index();
         obj(&mut base, &|fb| {
-            self.chrome.draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current]);
+            self.chrome
+                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current], self.shake.angle());
         });
         bg(&mut base, &|fb| {
             self.draw_pocket_indicators(fb, current);
@@ -151,6 +153,9 @@ impl BagScreen {
             self.draw_selection_text(fb);
             if let Some(grid) = self.menu.context_grid() {
                 self.draw_context(fb, &grid);
+            }
+            if let Some(toss) = &self.toss {
+                self.draw_toss_window(fb, toss);
             }
         });
         obj(&mut base, &|fb| {
@@ -231,10 +236,11 @@ impl BagScreen {
         let bob = BAG_BOB_START + 1 + i32::from(ticks);
         if bob <= 0 {
             let origin = (BAG_ORIGIN.0, BAG_ORIGIN.1 + bob);
-            self.chrome.draw_bag(fb, origin, BAG_CLOSED_FRAME);
+            self.chrome
+                .draw_bag(fb, origin, BAG_CLOSED_FRAME, self.shake.angle());
         } else {
             self.chrome
-                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[destination]);
+                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[destination], self.shake.angle());
         }
     }
 
@@ -310,11 +316,12 @@ impl BagScreen {
         }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
         let arrow = self.chrome.normal_text(SELECTOR_ARROW);
-        let cursor_colors = if self.menu.context_grid().is_some() || self.chose_to_close() {
-            self.chrome.gray_cursor_colors()
-        } else {
-            colors
-        };
+        let cursor_colors =
+            if self.menu.context_grid().is_some() || self.toss.is_some() || self.chose_to_close() {
+                self.chrome.gray_cursor_colors()
+            } else {
+                colors
+            };
         draw_glyphs(
             fb,
             LIST_ORIGIN,
@@ -394,6 +401,7 @@ impl BagScreen {
         let item = self
             .swap()
             .map(|swap| swap.item)
+            .or_else(|| self.toss.map(|toss| toss.selection.item))
             .or_else(|| self.highlighted_item());
         if let Some(icon) = self.chrome.icon(item) {
             icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
@@ -416,6 +424,12 @@ impl BagScreen {
                 .get(swap.item)
                 .map_or("?", |data| data.name);
             self.draw_description(fb, &labels::move_prompt(name));
+            return;
+        }
+        if let Some(toss) = &self.toss {
+            // The prompt keeps the row's icon and prints in the description
+            // window (`item_menu.c:1810-1835`).
+            self.draw_description(fb, &Self::toss_message(toss));
             return;
         }
         let item = self.highlighted_item();
@@ -528,7 +542,7 @@ selected.",
             let frame_row = if sprite == 0 { 0 } else { SWAP_LINE_BODY_ROW };
             self.chrome
                 .swap_line_sheet()
-                .draw_frame(fb, (left, top), frame_row, false);
+                .draw_frame(fb, (left, top), frame_row, Flip::NONE);
         }
     }
 
@@ -562,7 +576,7 @@ selected.",
 }
 
 /// Draws `glyphs` at a window-local `offset`, clipped to the window.
-fn draw_glyphs(
+pub(super) fn draw_glyphs(
     fb: &mut Framebuffer,
     window_origin: (i32, i32),
     window_size: (i32, i32),

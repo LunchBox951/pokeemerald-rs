@@ -11,9 +11,10 @@ use rendering::{
 
 use super::super::pack_fixture::{
     bag_frame_color, icon_color, ARROW_FAR, BACKGROUND, BAG_TEXT, BALL_A, GRAY_CURSOR_SHADOW,
-    SWAP_END,
+    SWAP_END, TEXT, WINDOW_FILL,
 };
 use super::super::{BagScreen, BagScreenMode, BagScreenResult, BagScreenTick};
+use super::toss::{choose_toss, open_ok, shown, QUANTITY, YES_NO};
 use super::{
     at, frame_of, idle, open_screen, painted, press, sample_bag, switch_for, BAG_PIXEL,
     DESCRIPTION_Y, ICON_PIXEL, LIST_X, LIST_Y, ROW,
@@ -49,8 +50,8 @@ fn long_bag() -> Bag {
 }
 
 /// Every presentation the screen has: browsing, a context menu, a pocket
-/// switch at several ages, a swap in progress, a scrolling list, and a
-/// closed screen.
+/// switch at several ages, a swap in progress, a scrolling list, a closed
+/// screen, and every stage of the TOSS prompt.
 fn screens() -> Vec<(&'static str, BagScreen)> {
     let fresh = || open_screen(BagScreenMode::Field, &sample_bag());
     let mut context = fresh();
@@ -70,6 +71,14 @@ fn screens() -> Vec<(&'static str, BagScreen)> {
         ("scrolling", open_screen(BagScreenMode::Field, &long_bag())),
         ("closed", closed),
     ];
+    for (label, advances) in [("toss quantity", 0), ("toss confirm", 1), ("toss done", 2)] {
+        let mut tossing = fresh();
+        choose_toss(&mut tossing);
+        for _ in 0..advances {
+            open_ok(&mut tossing, Buttons::A);
+        }
+        screens.push((label, tossing));
+    }
     for ticks in [0, 7, 16] {
         let mut switching = fresh();
         switch_for(&mut switching, Buttons::LEFT, ticks);
@@ -164,6 +173,44 @@ fn each_bank_stages_only_its_own_graphics() {
         !shows(&compose(&scrolling, obj_only), ARROW_FAR),
         "arrows are OBJ"
     );
+}
+
+#[test]
+fn toss_windows_and_messages_are_bg_while_the_item_icon_is_obj() {
+    let black = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
+    let (bg, obj) = (black.bg_blend(), black.obj_blend());
+    let mut screen = open_screen(BagScreenMode::Field, &sample_bag());
+    choose_toss(&mut screen);
+    for window in [Some(QUANTITY), Some(YES_NO), None] {
+        let by_bg = compose(
+            &screen,
+            PaletteStage {
+                bg: Some(&bg),
+                obj: None,
+            },
+        );
+        let by_obj = compose(
+            &screen,
+            PaletteStage {
+                bg: None,
+                obj: Some(&obj),
+            },
+        );
+        let description = (3, DESCRIPTION_Y + 1, 100, 48);
+        assert!(!shown(&by_bg, description, BAG_TEXT));
+        assert!(shown(&by_obj, description, BAG_TEXT));
+        assert_eq!(at(&by_bg, ICON_PIXEL.0, ICON_PIXEL.1), icon_color("potion"));
+        assert_eq!(at(&by_obj, ICON_PIXEL.0, ICON_PIXEL.1), BLACK);
+        if let Some(rect) = window {
+            assert!(!shown(&by_bg, rect, TEXT));
+            assert!(shown(&by_obj, rect, TEXT));
+            assert!(!shown(&by_bg, rect, WINDOW_FILL));
+            assert!(shown(&by_obj, rect, WINDOW_FILL));
+        }
+        if window.is_some() {
+            open_ok(&mut screen, Buttons::A);
+        }
+    }
 }
 
 #[test]
