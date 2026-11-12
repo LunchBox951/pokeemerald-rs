@@ -8,6 +8,9 @@ use super::{
 };
 use crate::Scene;
 
+/// A build identity no checkout of this repository can have.
+const SOURCE: &str = "0123456789abcdef0123456789abcdef01234567-dirty";
+
 const WINDOW_FRAME_GREEN_BGR555: u16 = 0x03E0;
 const MAIN_MENU_BACKGROUND_BGR555: u16 = 0x4104;
 const REPLACEMENT_BACKGROUND_BGR555: u16 = 0x001F;
@@ -421,6 +424,157 @@ fn git_sha_is_none_for_a_path_with_no_git_repo() {
 }
 
 #[test]
+fn git_sha_is_none_for_a_directory_inside_another_repository() {
+    // A source tarball unpacked inside someone else's checkout must not take
+    // that checkout's commit as its own.
+    let outer = scratch_path("outer-repo");
+    let inner = outer.join("unpacked-source");
+    std::fs::create_dir_all(&inner).unwrap();
+    let guard = ScratchGuard(outer.clone());
+    init_committed_repo(&outer, b"outer");
+    assert!(git_sha(&outer).is_some());
+    assert!(git_sha(&inner).is_none());
+    drop(guard);
+}
+
+#[test]
+fn a_capture_carries_the_build_identity_it_is_given_not_the_checkouts() {
+    let (pack_path, _pack_guard) = write_pack("build-identity");
+    let pack = AssetPack::load(&pack_path).unwrap();
+    let output_dir = scratch_path("build-identity-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+
+    let report = capture_loaded(
+        Scene::MainMenuNewGame,
+        &pack,
+        &output_dir,
+        SOURCE,
+        || Ok(()),
+    )
+    .unwrap();
+
+    assert_eq!(report.git_sha, SOURCE);
+    let meta = std::fs::read_to_string(&report.meta_path).unwrap();
+    assert!(meta.contains(&format!("git_sha: {SOURCE}\n")), "{meta}");
+    drop(out_guard);
+}
+
+/// What the real `build.rs` prints for a checkout, compiled and run as Cargo
+/// would run it.
+struct BuildScriptRun {
+    identity: String,
+    rerun_paths: Vec<PathBuf>,
+}
+
+fn run_build_script(
+    binary: &std::path::Path,
+    checkout: &std::path::Path,
+    path_env: Option<&std::path::Path>,
+) -> BuildScriptRun {
+    let out_dir = checkout.parent().unwrap().join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let mut command = std::process::Command::new(binary);
+    command
+        .env("CARGO_MANIFEST_DIR", checkout.join("crates").join("xtask"))
+        .env("OUT_DIR", &out_dir)
+        .env("PROFILE", "debug");
+    if let Some(path) = path_env {
+        command.env("PATH", path);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "build.rs must never fail the build"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let identity = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("cargo::rustc-env=XTASK_SOURCE_IDENTITY="))
+        .expect("build.rs must always emit an identity")
+        .to_owned();
+    let rerun_paths = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("cargo::rerun-if-changed="))
+        .map(PathBuf::from)
+        .collect();
+    BuildScriptRun {
+        identity,
+        rerun_paths,
+    }
+}
+
+#[test]
+fn rebuilding_after_the_checkout_changes_never_keeps_the_stale_identity() {
+    let root = scratch_path("build-script-root");
+    let _guard = ScratchGuard(root.clone());
+    let checkout = root.join("checkout");
+    init_committed_repo(&checkout, b"one");
+    std::fs::create_dir_all(checkout.join("crates").join("xtask")).unwrap();
+
+    let binary = root.join("build-script");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let compiled = std::process::Command::new(rustc)
+        .args(["--edition", "2021", "--crate-name", "build_script", "-o"])
+        .arg(&binary)
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let clean = run_build_script(&binary, &checkout, None);
+    assert_eq!(
+        Some(clean.identity.clone()),
+        git_sha(&checkout),
+        "a clean checkout builds with its bare commit"
+    );
+    assert!(!clean.identity.ends_with("-dirty"), "{}", clean.identity);
+
+    // The binary built from this dirty tree is the one that must say so.
+    std::fs::write(checkout.join("tracked.txt"), b"two").unwrap();
+    let dirty = run_build_script(&binary, &checkout, None);
+    assert_eq!(dirty.identity, format!("{}-dirty", clean.identity));
+
+    // Restoring the checkout cannot relabel that earlier build; a fresh run
+    // must, so the rerun check below must hold.
+    std::fs::write(checkout.join("tracked.txt"), b"one").unwrap();
+    let restored = run_build_script(&binary, &checkout, None);
+    assert_eq!(restored.identity, clean.identity);
+    assert_ne!(restored.identity, dirty.identity);
+
+    for run in [&clean, &dirty, &restored] {
+        assert!(
+            !run.rerun_paths.is_empty() && run.rerun_paths.iter().all(|path| !path.exists()),
+            "only a watched path that never exists reruns build.rs on every invocation: {:?}",
+            run.rerun_paths
+        );
+    }
+
+    let no_git = root.join("no-git-bin");
+    std::fs::create_dir_all(&no_git).unwrap();
+    assert_eq!(
+        run_build_script(&binary, &checkout, Some(&no_git)).identity,
+        "unknown",
+        "a build without git must still succeed and say it cannot name its source"
+    );
+}
+
+#[test]
+fn the_recorder_reports_the_identity_embedded_when_it_was_built() {
+    let (pack_path, _pack_guard) = write_pack("embedded-identity");
+    let output_dir = scratch_path("embedded-identity-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+
+    let report = run_with_paths(Scene::MainMenuNewGame, &pack_path, &output_dir).unwrap();
+
+    assert_eq!(report.git_sha, env!("XTASK_SOURCE_IDENTITY"));
+    drop(out_guard);
+}
+
+#[test]
 fn render_meta_has_the_documented_fixed_field_order() {
     let text = render_meta(
         Scene::Title,
@@ -544,7 +698,14 @@ fn replacing_the_pack_path_cannot_change_loaded_pack_provenance() {
 
     let output_dir = scratch_path("loaded-pack-provenance-out");
     let out_guard = ScratchGuard(output_dir.clone());
-    let report = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let report = capture_loaded(
+        Scene::MainMenuNewGame,
+        &pack,
+        &output_dir,
+        SOURCE,
+        || Ok(()),
+    )
+    .unwrap();
     let rgb = std::fs::read(&report.rgb_path).unwrap();
 
     assert_eq!(
@@ -574,21 +735,34 @@ fn failure_after_rgb_staging_preserves_the_visible_generation() {
             "injected failure".to_owned(),
         ))
     };
-    let err =
-        capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, injected_failure).unwrap_err();
+    let err = capture_loaded(
+        Scene::MainMenuNewGame,
+        &pack,
+        &output_dir,
+        SOURCE,
+        injected_failure,
+    )
+    .unwrap_err();
     assert!(matches!(err, RecordSnapshotError::Write(_, _)), "{err}");
     assert!(
         visible_generation(&output_dir, Scene::MainMenuNewGame).is_none(),
         "an initial failure before the commit point must publish no generation"
     );
 
-    let previous = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let previous = capture_loaded(
+        Scene::MainMenuNewGame,
+        &pack,
+        &output_dir,
+        SOURCE,
+        || Ok(()),
+    )
+    .unwrap();
     let pointer_path = output_dir.join("main-menu-new-game.generation");
     let previous_pointer = std::fs::read(&pointer_path).unwrap();
     let previous_rgb = std::fs::read(&previous.rgb_path).unwrap();
     let previous_meta = std::fs::read(&previous.meta_path).unwrap();
 
-    let err = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || {
+    let err = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, SOURCE, || {
         Err(RecordSnapshotError::Write(
             output_dir.join("injected-after-rgb-again"),
             "injected failure".to_owned(),
