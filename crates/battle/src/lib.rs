@@ -154,9 +154,12 @@
 //! multiply, in the real damage path and the trainer AI's estimate alike.
 //! [`ability::guts_attack`] and [`ability::marvel_scale_defense`] read
 //! primary status the same way, applied inside
-//! [`pokemon::BattlePokemon::attacking_stat`] and
-//! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them. [`ability::burn_halves_damage`] feeds the hit pipeline's,
+//! [`pokemon::BattlePokemon::damage_attacking_stat`] and
+//! [`pokemon::BattlePokemon::damage_defending_stat`] so every damage path
+//! inherits them, after the player side's earned-badge stat boost
+//! ([`badge_boosts::BadgeBoosts`]: badge 1 Attack, badge 5 Defense, badge 7
+//! both special stats, and badge 3 Speed in
+//! [`pokemon::BattlePokemon::speed_for_turn_order`]). [`ability::burn_halves_damage`] feeds the hit pipeline's,
 //! the trainer AI estimate's and the forced-replacement selector's
 //! `attacker_burned` input, as does the confusion self-hit's: a burned attacker's physical damage halves unless
 //! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and
@@ -275,6 +278,7 @@
 pub mod ability;
 pub mod accuracy;
 pub mod attract;
+pub mod badge_boosts;
 pub mod battle;
 pub mod confuse;
 pub mod critical;
@@ -312,6 +316,7 @@ pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
 pub use attract::{
     draws_love_immobility, is_attract_effect, resolve_attract_move, AttractOutcome, EFFECT_ATTRACT,
 };
+pub use badge_boosts::BadgeBoosts;
 pub use battle::admission::ensure_participant_admissible;
 pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{

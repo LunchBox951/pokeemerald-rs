@@ -731,8 +731,9 @@ fn estimated_damage(
         return Ok(MINIMUM_DAMAGE);
     };
     let category = MoveCategory::for_type(move_type);
-    let (attack_stat, attack_stage) = attacker.attacking_stat(category);
-    let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
+    // The same stat read as the real hit, badge included: the AI's simulated
+    // damage runs `CalculateBaseDamage` (`battle_script_commands.c:1306`-`:1318`).
+    let (attack_stat, attack_stage) = attacker.damage_attacking_stat(category);
     // Upstream's `CalculateBaseDamage` halves raw Special Attack for Fire/Ice
     // against Thick Fat before stage scaling (`pokemon.c:3202-3204`); the AI
     // estimates every populated slot, depleted or not.
@@ -746,7 +747,7 @@ fn estimated_damage(
         category,
         attack_stat,
     );
-    let (defense_stat, defense_stage) = defender.defending_stat(category);
+    let (defense_stat, defense_stage) = defender.damage_defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
         power: u32::from(move_data.power),
@@ -1356,6 +1357,71 @@ mod tests {
             estimated_damage(&dex, MoveId::FLAME_WHEEL, &enemy, &player, PERCENT_SCALE).unwrap();
 
         assert!(latched > plain, "{latched} must exceed {plain}");
+    }
+
+    /// `AI_CalcDmg` runs `CalculateBaseDamage` on the live battlers, so the
+    /// player's Defense (badge 5) and Sp. Defense (badge 7) badges shrink the
+    /// estimate and the enemy's Attack figure never grows
+    /// (`battle_script_commands.c:1306`-`:1318`, `pokemon.c:3161`-`:3168`).
+    #[test]
+    fn the_estimate_reads_the_players_defense_badges() {
+        use crate::badge_boosts::BadgeBoosts;
+
+        let dex = Dex::new();
+        let planted = |species, moves| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                50,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .expect("test Pokemon must be dex-resident")
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: 101,
+                    defense: 101,
+                    speed: 101,
+                    sp_attack: 101,
+                    sp_defense: 101,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(MUDKIP, vec![MoveId::POUND, MoveId::WATER_GUN]);
+        let player = planted(TORCHIC, vec![SCRATCH]);
+        let plain = |move_id| estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+        let badged = |move_id, badges: [bool; 4]| {
+            let player = player
+                .clone()
+                .with_stat_badges(BadgeBoosts::from_badges(badges));
+            estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE)
+        };
+        let pound = plain(MoveId::POUND).unwrap();
+        let water_gun = plain(MoveId::WATER_GUN).unwrap();
+
+        assert!(badged(MoveId::POUND, [false, false, true, false]).unwrap() < pound);
+        assert_eq!(
+            badged(MoveId::POUND, [true, true, false, true]).unwrap(),
+            pound
+        );
+        assert!(badged(MoveId::WATER_GUN, [false, false, false, true]).unwrap() < water_gun);
+        assert_eq!(
+            badged(MoveId::WATER_GUN, [true, true, true, false]).unwrap(),
+            water_gun
+        );
+
+        // An attacker that somehow carried an Attack badge would be boosted,
+        // so `Battle` clears every enemy battler's badges at construction.
+        let boosted_enemy = enemy
+            .clone()
+            .with_stat_badges(BadgeBoosts::from_badges([true; 4]));
+        assert!(
+            estimated_damage(&dex, MoveId::POUND, &boosted_enemy, &player, PERCENT_SCALE).unwrap()
+                > pound
+        );
     }
 
     /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty

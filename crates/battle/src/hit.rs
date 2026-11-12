@@ -10,8 +10,8 @@
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
 use crate::ability::{
-    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
-    suppresses_critical_hits, thick_fat_special_attack,
+    burn_halves_damage, pinch_boosts_power, plus_minus_special_attack, suppresses_critical_hits,
+    thick_fat_special_attack,
 };
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
@@ -291,19 +291,19 @@ fn damage_input(
     is_critical: bool,
 ) -> DamageInput {
     let move_category = MoveCategory::for_type(move_type);
-    let (raw_attack, attack_stage) = attacker.attacking_stat(move_category);
-    let ability_adjusted_attack = thick_fat_special_attack(
-        defender.ability(),
-        move_type,
-        huge_power_attack(attacker.ability(), move_category, raw_attack),
-    );
+    // Huge Power, then the attacker's Attack or Sp. Attack badge, then Hustle
+    // and Guts, all ahead of Thick Fat and Plus/Minus (`pokemon.c:3158`-`:3168`,
+    // `:3202`-`:3212`).
+    let (raw_attack, attack_stage) = attacker.damage_attacking_stat(move_category);
+    let ability_adjusted_attack =
+        thick_fat_special_attack(defender.ability(), move_type, raw_attack);
     let ability_adjusted_attack = plus_minus_special_attack(
         attacker.ability(),
         defender.ability(),
         move_category,
         ability_adjusted_attack,
     );
-    let (defense, defense_stage) = defender.defending_stat(move_category);
+    let (defense, defense_stage) = defender.damage_defending_stat(move_category);
     let (attack_stage, defense_stage) =
         crit_adjusted_stages(attack_stage, defense_stage, is_critical);
 
