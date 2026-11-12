@@ -85,6 +85,7 @@ impl PlayerObedience {
         self
     }
 
+    /// The stat badges this context hands to the player's side.
     #[must_use]
     pub const fn stat_badges(&self) -> BadgeBoosts {
         self.stat_badges
