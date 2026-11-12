@@ -106,7 +106,8 @@ fn with(world: &SharedWorld) -> std::sync::MutexGuard<'_, World> {
 
 struct FakeHost(SharedWorld);
 
-struct FakeDevice(SharedWorld);
+/// A discovered fake device and the identity the default had when it was found.
+struct FakeDevice(SharedWorld, String);
 
 struct FakeStream(SharedWorld, usize);
 
@@ -142,11 +143,11 @@ impl OutputHost for FakeHost {
             hook(&mut w);
         }
         w.discovery_threads.push(std::thread::current().id());
-        w.default.as_ref()?;
-        Some(FakeDevice(Arc::clone(&self.0)))
+        let id = w.default.clone()?;
+        Some(FakeDevice(Arc::clone(&self.0), id))
     }
 
-    fn device_id(&mut self, _: &FakeDevice) -> Result<String, cpal::Error> {
+    fn device_id(&mut self, device: &FakeDevice) -> Result<String, cpal::Error> {
         let block = with(&self.0).block_id.take();
         if let Some(block) = block {
             let _ = block.recv();
@@ -157,7 +158,7 @@ impl OutputHost for FakeHost {
         if let Some(hook) = w.during_id.take() {
             hook(&mut w);
         }
-        Ok(w.default.clone().expect("a device was found"))
+        Ok(device.1.clone())
     }
 }
 
