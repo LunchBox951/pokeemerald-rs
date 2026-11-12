@@ -135,6 +135,10 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -142,7 +146,7 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "defeat reports the faint and the loss -- and no ExpGained: \
          exp is the winner's, and the player lost"
@@ -187,7 +191,7 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+            .any(|e| matches!(e, BattleEvent::ExpGained { .. })),
         "a MAX_LEVEL player gains no exp and sees no exp event: {events:?}"
     );
     assert_eq!(
@@ -324,6 +328,10 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -334,7 +342,7 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
             BattleEvent::PlayerSentOut {
                 species: SpeciesId(7),
                 reserves_remaining: 0,
-            },
+            }
         ],
         "a healthy reserve replaces the fainted active instead of an \
          Ended event: {events:?}"
@@ -376,6 +384,11 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
     let mut battle =
         Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
             .unwrap();
+    assert_eq!(
+        battle.player_position(),
+        0,
+        "the starting active member leads"
+    );
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -385,6 +398,11 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
             reserves_remaining: 0,
         }),
         "fixture sanity: the second Rattata replaced the first: {events:?}"
+    );
+    assert_eq!(
+        battle.player_position(),
+        1,
+        "the active member is the second one in party order"
     );
     assert_eq!(battle.player().current_hp(), reserve_max_hp);
 
@@ -473,6 +491,10 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -480,7 +502,7 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "no usable reserve still ends the battle: {events:?}"
     );
@@ -685,7 +707,7 @@ fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+            .any(|e| matches!(e, BattleEvent::ExpGained { .. })),
         "a zero-HP recipient is skipped before the exp string: {events:?}"
     );
     assert_eq!(
@@ -697,5 +719,126 @@ fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
         battle.player().evs(),
         evs_before,
         "`MonGainEVs` is inside the HP-guarded branch"
+    );
+}
+
+/// Upstream's `BattleScript_LearnedNewMove` prints PKMNLEARNEDMOVE when a
+/// free slot takes the level-up move, so the award must report it in event
+/// order: after the experience line, before the battle's end.
+#[test]
+fn a_wild_knockouts_free_slot_learn_is_reported_as_an_event() {
+    const TORCHIC: u16 = 280;
+    const PECK_LEARN_LEVEL: u8 = 16;
+
+    let dex = Dex::new();
+    let mut player = max_iv_mon(
+        &dex,
+        TORCHIC,
+        15,
+        vec![MoveId::SCRATCH, MoveId::GROWL, TACKLE],
+    );
+    let growth_rate = dex.species(player.species()).unwrap().growth_rate;
+    let peck_level_experience =
+        assets::experience_for_level(growth_rate, PECK_LEARN_LEVEL).unwrap();
+    assert!(player
+        .apply_experience(&dex, peck_level_experience - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([MAX_ROLL; 7]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(battle.player().level(), PECK_LEARN_LEVEL);
+    assert!(
+        battle
+            .player()
+            .moves()
+            .iter()
+            .any(|slot| slot.move_id == MoveId::PECK),
+        "Peck fills the free fourth slot"
+    );
+    let tail = &events[events.len() - 3..];
+    assert!(
+        matches!(
+            tail,
+            [
+                BattleEvent::ExpGained { .. },
+                BattleEvent::MoveLearned {
+                    move_id: MoveId::PECK
+                },
+                BattleEvent::Ended(BattleOutcome::PlayerWon),
+            ]
+        ),
+        "the learn follows the experience line and precedes the end: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::MoveLearnPrompt { .. })),
+        "a free slot never asks: {events:?}"
+    );
+}
+
+/// `BattleScript_TryLearnMoveLoop` walks a level's entries in table order:
+/// free slots take the first entries without asking, then the first entry
+/// that finds the moveset full opens the question, all after the experience
+/// line.
+#[test]
+fn a_wild_knockouts_free_slot_learns_precede_the_prompt_in_learnset_order() {
+    use battle::MoveLearnDecision;
+
+    const WYNAUT: u16 = 360;
+    const COUNTER: MoveId = MoveId::COUNTER;
+    const MIRROR_COAT: MoveId = MoveId::MIRROR_COAT;
+    const SAFEGUARD: MoveId = MoveId::SAFEGUARD;
+    const DESTINY_BOND: MoveId = MoveId::DESTINY_BOND;
+
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(WYNAUT)).unwrap().growth_rate;
+    let level_15 = assets::experience_for_level(growth_rate, 15).unwrap();
+    let mut player = max_iv_mon(&dex, WYNAUT, 14, vec![MoveId::SCRATCH]);
+    assert!(player
+        .apply_experience(&dex, level_15 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([MAX_ROLL; 7]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let tail = &events[events.len() - 5..];
+    assert!(
+        matches!(
+            tail,
+            [
+                BattleEvent::ExpGained { .. },
+                BattleEvent::MoveLearned { move_id: first },
+                BattleEvent::MoveLearned { move_id: second },
+                BattleEvent::MoveLearned { move_id: third },
+                BattleEvent::MoveLearnPrompt { move_id: asked },
+            ] if (*first, *second, *third, *asked)
+                == (COUNTER, MIRROR_COAT, SAFEGUARD, DESTINY_BOND)
+        ),
+        "three free slots take the entries in order, the fourth asks: {events:?}"
+    );
+
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined {
+                move_id: DESTINY_BOND
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
     );
 }

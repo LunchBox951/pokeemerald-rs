@@ -31,7 +31,7 @@ fn wild_knockout(lead: battle::BattlePokemon, lead_ot_id: u32) -> (u32, u8) {
             .take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(&mut rng))
             .expect("turn");
         for event in events {
-            if let BattleEvent::ExpGained(exp) = event {
+            if let BattleEvent::ExpGained { amount: exp, .. } = event {
                 gained = Some(exp);
             }
         }

@@ -7,7 +7,7 @@ use assets::MapId;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
-use super::super::test_support::pressed;
+use super::super::test_support::{admitted_objects, pressed};
 use super::super::{OverworldPhase, SyntheticStartMenu};
 use super::support::*;
 use crate::flow::lead_screen::loaded_holding;
@@ -69,9 +69,9 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; Isabelle's (Rollout) does not, so her id
+    // Rhett's party constructs; the Headbutt party does not, so its id
     // stands in for the refusal at Rhett's cone.
-    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     refused.step(pressed(Buttons::START));
     assert!(
         refused.sight_approach.is_none(),
@@ -91,10 +91,10 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (Isabelle's
-/// Rollout at Rhett's cone, the trigger's own "Refusals cost nothing,
-/// forever"), an unported ability
-/// (Miguel's Cute Charm, same), and a double battle refused before construction is even
+/// All three refusal shapes are covered: an unimplemented moveset (the Headbutt
+/// party at Rhett's cone, the trigger's own "Refusals cost nothing,
+/// forever"), another unimplemented moveset
+/// (Miguel's Sing, same), and a double battle refused before construction is even
 /// attempted (Amy, `trainer_data_wants_double_battle`).
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
@@ -103,18 +103,19 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (ax, ay) = AMY_TILE;
     let cases = [
         (
-            "Isabelle at Rhett's cone (unimplemented moveset)",
+            "the Headbutt party at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
-        ("Miguel (unported ability)", (mx + 2, my)),
+        ("Miguel (unimplemented moveset)", (mx + 2, my)),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.set_fresh_lead_for_test(overwhelming_lead());
-        if name.starts_with("Isabelle") {
-            // Rhett's party constructs; Isabelle's refuses.
-            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+        if name.starts_with("the Headbutt") {
+            // Rhett's party constructs; the Headbutt party refuses.
+            phase.synthetic_sight_trainer =
+                Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
         }
         let before = phase.rng.state();
         for frame in 0..FRAMES_STANDING_STILL {
@@ -241,13 +242,13 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
 }
 
 /// The player-side item refusal, end to end through the trigger: Rhett's party constructs
-/// for an ordinary lead (the Nugget control), so only the loaded Oran Berry stops the
+/// for an ordinary lead (the Nugget control), so only the loaded Sitrus Berry stops the
 /// approach -- before any draw, with the lead left in the party.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_draw() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    let lead = loaded_holding(&overwhelming_lead(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&overwhelming_lead(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     let before = phase.rng.state();
 
@@ -271,10 +272,29 @@ fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_
     );
 }
 
+/// After the take, the Sitrus Berry lead that Rhett's approach refused is accepted.
+#[test]
+fn taking_a_refused_item_lets_the_sight_trainer_approach_start() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.set_fresh_lead_for_test(loaded_holding(&overwhelming_lead(), ItemId::SITRUS_BERRY));
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::SITRUS_BERRY))
+    );
+
+    phase.step(ButtonState::new());
+
+    assert!(
+        phase.sight_approach.is_some(),
+        "the approach starts once the item is off"
+    );
+}
+
 // -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------
 
 /// Miguel's cone reaches, but his real party refuses to construct -- his
-/// Skitty's selected Cute Charm, ahead of its Attract and its Oran Berry --
+/// Skitty's Sing, since Cute Charm is no longer the stopping ability --
 /// so no battle starts, the lead is untouched, and the refusal draws nothing
 /// (the pre-flight runs before any RNG draw,
 /// `crate::flow::npc_trainer_battle`'s own docs).
@@ -289,7 +309,7 @@ fn miguels_party_refuses_to_construct() {
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
-        "Miguel's party must refuse to construct (unmodelled ability, move and item)"
+        "Miguel's party must refuse to construct (unmodelled move)"
     );
     assert!(
         phase.lead_for_test().is_some(),
@@ -395,24 +415,32 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         .map_events()
         .object_events
         .iter()
-        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event");
+    let objects = admitted_objects(
+        scene.map_events().object_events,
+        &player,
+        &engine::event_data::EventData::new(),
+    );
     assert!(
         engine::overworld::trainer_can_see_player(
-            rhett,
+            objects
+                .get(rhett.local_id)
+                .expect("the collection seeds Rhett's entry"),
+            &objects,
             &scene.runtime(),
             &player,
-            &engine::event_data::EventData::new(),
         ),
         "Rhett's real cone must reach a player standing one tile south of him over real \
          terrain -- including the final tile's own collision/impassability arms"
     );
 
-    let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
+    let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source)
+        .with_private_object_event_rng();
     phase.set_fresh_lead_for_test(overwhelming_lead());
-    // Rhett's party constructs; Isabelle's refuses, so her id stands in at
-    // Rhett's real cone.
-    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
+    // Rhett's party constructs; the Headbutt party refuses, so its id stands
+    // in at Rhett's real cone.
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     let before = phase.rng.state();
 
     for frame in 0..FRAMES_STANDING_STILL {

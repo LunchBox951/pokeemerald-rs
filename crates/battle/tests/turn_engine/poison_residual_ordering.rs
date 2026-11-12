@@ -363,7 +363,7 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, BattleEvent::ExpGained(_))),
+            .any(|event| matches!(event, BattleEvent::ExpGained { .. })),
         "the knockout still pays out: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));

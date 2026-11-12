@@ -8,7 +8,7 @@ use engine::overworld::wild_encounter::WildEncounter;
 use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, WildBattle};
 
 /// Route 101's slot-0 land table entry -- the same fightable wild species
 /// `crate::flow::wild_encounter::test_support::WURMPLE` names.
@@ -83,7 +83,7 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
         slot: 0,
     }));
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the healthy trailing member must fight, not be refused as fainted");
     };
     assert_eq!(battle.player().species(), selected_species);
@@ -152,7 +152,7 @@ fn a_won_trainer_battle_merges_write_back_into_the_selected_slot() {
         if !phase.is_rival_battle_active() {
             break;
         }
-        phase.advance_active_battle_frame();
+        phase.advance_active_battle_frame(platform::ButtonState::default());
     }
     assert_eq!(
         phase.rival_battle_outcome,
@@ -572,7 +572,7 @@ fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
         slot: 0,
     }));
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the healthy lead must fight");
     };
     assert_eq!(battle.enemy().nature(), battle::Nature::Hardy);
@@ -601,4 +601,23 @@ fn white_out_reselection_over_a_lent_lead_installs_a_borrowable_healed_replaceme
     let flushed = phase.save1.player_party[0];
     assert_eq!(flushed.hp, flushed.max_hp, "the healed lead is what saves");
     assert_ne!(flushed.hp, 0);
+}
+
+#[test]
+fn an_all_fainted_party_refuses_a_wild_battle_before_any_draw() {
+    let mut phase = continued_phase_with_trailing_member(&fainted_starter());
+    let before = phase.rng.state();
+
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+
+    assert!(!phase.is_wild_battle_active());
+    assert_eq!(
+        phase.rng.state(),
+        before,
+        "a refused fainted lead draws nothing"
+    );
 }

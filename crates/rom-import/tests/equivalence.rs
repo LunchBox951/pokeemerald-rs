@@ -32,13 +32,12 @@
 //!   here instead of shipping a pack with a hole in it. A domain slice adds
 //!   its prefix when it lands.
 //!
-//! [`staged_cry_ids`] names the one domain under a complete prefix whose ROM
-//! producer has not landed: the species-cry table and exactly the
-//! [`CRY_TABLE_LEN`] distinct samples it names, read from the checkout's own
-//! table. Only those ids are not required of the ROM backend; any other
-//! `audio/` id, including a stray one under the cry prefixes, stays required.
-//! The staging fails as soon as the ROM backend writes any staged id, so the
-//! producer's slice must remove it. Every other `audio/` id stays compared.
+//! The species cries are under the complete `audio/` prefix like every other
+//! sample: the table and the samples it names are required of the ROM backend,
+//! and [`the_cries_are_named_by_id`] pins them by the table's own contents so
+//! a cry both backends drop together still fails.
+//! Every `audio/voicegroup/` and `audio/sample/` id is compared; the songs are
+//! pinned by [`ROM_IMPORTED_SONG_IDS`], not claimed by prefix.
 //!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
@@ -70,7 +69,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
-    "audio/",
+    "audio/voicegroup/",
+    "audio/sample/",
     "trainer-pic/",
     "trainer/",
     "battle-message/",
@@ -78,10 +78,48 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-anim/",
     "bag/",
     "starter-chooser/",
+    "pokemon/",
     "opening-scene/",
     "evolution-scene/",
     "poke-ball/",
+    "naming-screen/",
+    "party-menu/",
 ];
+
+/// The text printer's page-prompt arrow, by id: `interface/` is a complete
+/// prefix, but a sheet both backends drop together would pass it.
+const DOWN_ARROW_IDS: [&str; 1] = ["interface/image/down_arrow"];
+
+/// The species whose static battler art both backends must carry: the
+/// starters, then the checkpoint's other eleven Pokémon.
+const BATTLER_SPECIES: [&str; 14] = [
+    "treecko",
+    "torchic",
+    "mudkip",
+    "poochyena",
+    "mightyena",
+    "wurmple",
+    "silcoon",
+    "beautifly",
+    "cascoon",
+    "dustox",
+    "zigzagoon",
+    "linoone",
+    "wingull",
+    "pelipper",
+];
+
+/// The only song the ROM backend imports, by id: its song root is the profile's lone
+/// `mus_title` entry. The checkout pack also carries every other checkpoint song, so
+/// `audio/song/` is not in [`COMPLETE_PREFIXES`]; a dropped title still fails by this id.
+const ROM_IMPORTED_SONG_IDS: [&str; 1] = ["audio/song/mus_title"];
+
+/// Whether the ROM backend claims every checkout entry with this id.
+fn is_claimed_complete(id: &str) -> bool {
+    COMPLETE_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
 
 /// The battle textbox and menu text entries, the thirteen health-box elements
 /// in `gHealthboxElementsGfxTable` order, the battle bar, the singles
@@ -116,54 +154,21 @@ const BATTLE_INTERFACE_IDS: [&str; 24] = [
     "battle-interface/palette/ball_display",
 ];
 
-/// The checkout ids under a [`COMPLETE_PREFIXES`] entry whose ROM producer
-/// (#1853) has not landed, read from the checkout's `audio/cry/table`
-/// payload: the table itself and exactly the samples it names.
-///
-/// This is staging, not a reviewed difference. The set is pinned to
-/// `1 + CRY_TABLE_LEN` ids, so a table that repeats or drops a sample fails
-/// instead of widening or narrowing the exemption, and the main test fails
-/// once the ROM backend writes any of them, so the producer's slice removes
-/// the staging and the cry ids are then required like every other `audio/`
-/// id.
-///
-/// # Errors
-///
-/// A description of why the payload cannot define the staged set.
-fn staged_cry_ids(table_payload: &[u8]) -> Result<BTreeSet<String>, String> {
-    let table = CryTable::decode(table_payload)
-        .map_err(|err| format!("{CRY_TABLE_PACK_ID} does not decode: {err}"))?;
-    let mut staged: BTreeSet<String> = table
-        .samples()
+/// Every battler entry, named by id so entries both backends drop together
+/// still fail: front, back, then normal and shiny palette per species.
+fn battler_ids() -> Vec<String> {
+    BATTLER_SPECIES
         .iter()
-        .map(|SampleId(id)| id.clone())
-        .collect();
-    if staged.len() != CRY_TABLE_LEN {
-        return Err(format!(
-            "{CRY_TABLE_PACK_ID} names {} distinct samples, not {CRY_TABLE_LEN}",
-            staged.len()
-        ));
-    }
-    staged.insert(CRY_TABLE_PACK_ID.to_owned());
-    Ok(staged)
+        .flat_map(|name| {
+            [
+                format!("pokemon/{name}/front"),
+                format!("pokemon/{name}/back"),
+                format!("pokemon/{name}/palette/normal"),
+                format!("pokemon/{name}/palette/shiny"),
+            ]
+        })
+        .collect()
 }
-
-/// The starters' static battler entries: 12 ids the ROM backend must write
-/// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
-const STARTER_BATTLER_IDS: [&str; 12] = [
-    "pokemon/treecko/front",
-    "pokemon/treecko/back",
-    "pokemon/treecko/palette/normal",
-    "pokemon/treecko/palette/shiny",
-    "pokemon/torchic/front",
-    "pokemon/torchic/back",
-    "pokemon/torchic/palette/normal",
-    "pokemon/torchic/palette/shiny",
-    "pokemon/mudkip/front",
-    "pokemon/mudkip/back",
-    "pokemon/mudkip/palette/normal",
-    "pokemon/mudkip/palette/shiny",
-];
 
 /// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
 /// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
@@ -240,6 +245,27 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/raw/bg_outer",
 ];
 
+/// The party menu's fourteen pack ids, named independently of the checkout
+/// extractor and of the profile: three sheets, three palettes, the
+/// background screen, five slot panels, and two buttons. `party-menu/` is a
+/// complete prefix, but a record both backends drop together would pass it.
+const PARTY_MENU_IDS: [&str; 14] = [
+    "party-menu/image/bg",
+    "party-menu/image/pokeball",
+    "party-menu/image/hold_icons",
+    "party-menu/palette/bg",
+    "party-menu/palette/pokeball",
+    "party-menu/palette/hold_icons",
+    "party-menu/raw/bg",
+    "party-menu/raw/slot_main",
+    "party-menu/raw/slot_main_no_hp",
+    "party-menu/raw/slot_wide",
+    "party-menu/raw/slot_wide_no_hp",
+    "party-menu/raw/slot_wide_empty",
+    "party-menu/raw/confirm_button",
+    "party-menu/raw/cancel_button",
+];
+
 /// The Birch-speech portraits: the front image and palette of Brendan and of
 /// May. Named by id so portraits both backends drop together still fail.
 const TRAINER_PORTRAIT_IDS: [&str; 4] = [
@@ -277,6 +303,30 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
 /// pass `(test-ratchet)`.
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
 
+/// A difference line for each of `ids` the ROM backend did not write.
+fn missing_imported<V>(ids: &[&str], imported: &BTreeMap<String, V>) -> Vec<String> {
+    ids.iter()
+        .filter(|id| !imported.contains_key(**id))
+        .map(|id| format!("{id}: the ROM backend wrote no such entry"))
+        .collect()
+}
+
+#[test]
+fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
+    assert!(is_claimed_complete("audio/voicegroup/title"));
+    assert!(is_claimed_complete(
+        "audio/sample/direct-sound/sc88pro_trumpet_60"
+    ));
+    for id in ROM_IMPORTED_SONG_IDS {
+        assert!(
+            !is_claimed_complete(id),
+            "{id} is pinned by id, not by prefix"
+        );
+    }
+    assert!(!is_claimed_complete("audio/song/se_select"));
+    assert!(!is_claimed_complete("audio/song/mus_vs_wild"));
+}
+
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
 fn the_rom_backend_matches_the_checkout_pack() {
@@ -308,22 +358,6 @@ fn the_rom_backend_matches_the_checkout_pack() {
     let reviewed: BTreeMap<&str, &str> = REVIEWED_DIFFERENCES.iter().copied().collect();
     let mut differences = Vec::new();
 
-    let table = checkout
-        .get(CRY_TABLE_PACK_ID)
-        .unwrap_or_else(|| panic!("the checkout pack has no {CRY_TABLE_PACK_ID}"));
-    let staged = staged_cry_ids(&checkout_bytes[table.offset..table.offset + table.length])
-        .unwrap_or_else(|err| panic!("the checkout pack: {err}"));
-    for id in &staged {
-        if !checkout.contains_key(id) {
-            differences.push(format!("{id}: the checkout pack wrote no such entry"));
-        }
-        if imported.contains_key(id) {
-            differences.push(format!(
-                "{id}: the ROM backend now writes this staged cry id; remove the staging (#1853)"
-            ));
-        }
-    }
-
     for (id, entry) in &imported {
         if let Some(reason) = reviewed.get(id.as_str()) {
             eprintln!("reviewed difference: {id}: {reason}");
@@ -339,11 +373,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     for id in checkout.keys() {
-        let claimed = COMPLETE_PREFIXES
-            .iter()
-            .any(|prefix| id.starts_with(prefix));
-        if claimed
-            && !staged.contains(id)
+        if is_claimed_complete(id)
             && !imported.contains_key(id)
             && !reviewed.contains_key(id.as_str())
         {
@@ -351,13 +381,18 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `pokemon/` is not a complete prefix while only the starters exist, so
-    // their entries are pinned by id: a dropped root fails here.
-    for id in STARTER_BATTLER_IDS {
-        if !imported.contains_key(id) {
-            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+    for (what, bytes, ids) in [
+        ("the ROM backend", &rom_bytes, &imported),
+        ("the checkout pack", &checkout_bytes, &checkout),
+    ] {
+        if let Err(problem) = the_cries_are_named_by_id(bytes, ids) {
+            differences.push(format!("{what}: {problem}"));
         }
     }
+
+    // `audio/song/` is not a complete prefix, so the imported songs are
+    // pinned by id too (`ROM_IMPORTED_SONG_IDS`).
+    differences.extend(missing_imported(&ROM_IMPORTED_SONG_IDS, &imported));
 
     // `battle-interface/` is not a complete prefix, so the textbox, element,
     // battle-bar, frame, shadow, and ball-palette entries are pinned by id.
@@ -368,11 +403,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     // Named by id so a payload both backends drop together still fails.
-    let pinned: Vec<String> = checkpoint_payload_ids()
+    let pinned: Vec<String> = battler_ids()
         .into_iter()
+        .chain(checkpoint_payload_ids())
         .chain(EVOLUTION_SCENE_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_PORTRAIT_IDS.into_iter().map(str::to_owned))
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
+        .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
+        .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -518,48 +556,162 @@ fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
     assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
 }
 
-/// A cry table payload naming `samples` in order.
-fn cry_table_payload(samples: Vec<String>) -> Vec<u8> {
-    CryTable::new(samples.into_iter().map(SampleId).collect())
-        .expect("a valid cry table")
-        .encode()
-}
-
-/// The staged set is the table and exactly the samples it names; no other id
-/// under a cry prefix, and no instrument sample, is staged.
+/// Every party-menu graphic resolves through the typed accessor from both
+/// packs and is equal. The accessor validates each shape, so a ROM import that
+/// wrote a different raster, palette length, or map width fails here as well
+/// as in the byte comparison.
 #[test]
-fn only_the_cry_table_and_its_samples_are_staged() {
-    let samples: Vec<String> = (0..CRY_TABLE_LEN)
-        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
-        .collect();
-    let staged = staged_cry_ids(&cry_table_payload(samples)).expect("388 distinct samples");
-    assert_eq!(staged.len(), CRY_TABLE_LEN + 1);
-    for id in ["audio/cry/table", "audio/sample/direct-sound/cry/c0"] {
-        assert!(staged.contains(id), "{id}");
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_party_menu_handle_is_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
     }
-    for id in [
-        "audio/cry/table_reverse",
-        "audio/sample/direct-sound/cry/unnamed",
-        "audio/sample/direct-sound/sc88pro_flute",
-        "audio/sample/direct-sound/cryptic",
-        "audio/sample/programmable-wave/01",
-        "audio/voicegroup/title",
-        "audio/song/mus_title",
-        "title/image/pokemon_logo",
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-party-menu-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+    let imported = assets::AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = assets::AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let ours = imported.party_menu().expect("the imported party menu");
+    let theirs = checkout.party_menu().expect("the checkout party menu");
+
+    let (a, b) = (&ours.background.sheet, &theirs.background.sheet);
+    assert_eq!((a.width, a.height, a.bit_depth), (8, 62 * 8, 4));
+    assert_eq!(
+        (a.width, a.height, a.bit_depth, a.pixels),
+        (b.width, b.height, b.bit_depth, b.pixels)
+    );
+    assert_eq!(ours.background.palette.color_count, 11 * 16);
+    assert!(ours
+        .background
+        .palette
+        .colors()
+        .eq(theirs.background.palette.colors()));
+    assert_eq!(ours.background.tilemap, theirs.background.tilemap);
+    for (name, ours, theirs, size) in [
+        ("Poké Ball", &ours.poke_ball, &theirs.poke_ball, (32, 64)),
+        ("held item", &ours.held_item, &theirs.held_item, (8, 16)),
     ] {
-        assert!(!staged.contains(id), "{id}");
+        let (a, b) = (&ours.image, &theirs.image);
+        assert_eq!(
+            (a.width, a.height, a.bit_depth),
+            (size.0, size.1, 4),
+            "{name}"
+        );
+        assert_eq!(
+            (a.width, a.height, a.bit_depth, a.pixels),
+            (b.width, b.height, b.bit_depth, b.pixels),
+            "{name}"
+        );
+        assert_eq!(ours.palette.color_count, 16, "{name}");
+        assert!(ours.palette.colors().eq(theirs.palette.colors()), "{name}");
+    }
+    assert_eq!(ours.slots, theirs.slots);
+    assert_eq!(ours.confirm_button, theirs.confirm_button);
+    assert_eq!(ours.cancel_button, theirs.cancel_button);
+    // The five panels and two buttons are different maps, not one repeated.
+    for (index, slot) in ours.slots.iter().enumerate() {
+        assert!(
+            ours.slots[index + 1..].iter().all(|other| other != slot),
+            "slot {index} repeats"
+        );
+    }
+    assert_ne!(ours.confirm_button, ours.cancel_button);
+    eprintln!("party-menu record equal through both backends");
+}
+
+/// The down arrow resolves through the typed accessor from both packs, and
+/// all four frames are equal. The accessor validates the sheet's shape, so a
+/// ROM import that wrote the wrong raster fails here as well as in the byte
+/// comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-down-arrow-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let from_rom = imported
+        .text_printer_down_arrow()
+        .expect("the imported pack's down arrow");
+    let from_checkout = checkout
+        .text_printer_down_arrow()
+        .expect("the checkout pack's down arrow");
+    let _ = std::fs::remove_file(imported_path);
+
+    for index in 0..4 {
+        let (rom_frame, checkout_frame) = (from_rom.frame(index), from_checkout.frame(index));
+        assert_eq!(
+            (rom_frame.width, rom_frame.height),
+            (8, 16),
+            "frame {index}"
+        );
+        assert!(
+            rom_frame.pixels.iter().any(|&pixel| pixel != 0),
+            "frame {index} is blank"
+        );
+        assert_eq!(rom_frame.pixels, checkout_frame.pixels, "frame {index}");
     }
 }
 
-/// A table that repeats a sample cannot shrink the pinned staged count.
-#[test]
-fn a_cry_table_with_a_repeated_sample_does_not_define_the_staged_set() {
-    let mut samples: Vec<String> = (0..CRY_TABLE_LEN)
-        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
-        .collect();
-    samples[1] = samples[0].clone();
-    let err = staged_cry_ids(&cry_table_payload(samples)).unwrap_err();
-    assert!(err.contains("387 distinct samples"), "{err}");
+/// The cries, named by id: the `audio/cry/table` entry, exactly
+/// [`CRY_TABLE_LEN`] distinct samples in the table, and an entry for each.
+///
+/// # Errors
+///
+/// A description of what the pack is missing.
+fn the_cries_are_named_by_id(
+    pack: &[u8],
+    entries: &BTreeMap<String, DirectoryEntry>,
+) -> Result<(), String> {
+    let table = entries
+        .get(CRY_TABLE_PACK_ID)
+        .ok_or_else(|| format!("no {CRY_TABLE_PACK_ID} entry"))?;
+    let table = CryTable::decode(&pack[table.offset..table.offset + table.length])
+        .map_err(|err| format!("{CRY_TABLE_PACK_ID} does not decode: {err}"))?;
+    let named: BTreeSet<&SampleId> = table.samples().iter().collect();
+    if named.len() != CRY_TABLE_LEN {
+        return Err(format!(
+            "{CRY_TABLE_PACK_ID} names {} distinct samples, not {CRY_TABLE_LEN}",
+            named.len()
+        ));
+    }
+    match named.iter().find(|SampleId(id)| !entries.contains_key(id)) {
+        Some(SampleId(id)) => Err(format!("no {id} entry for a sample the table names")),
+        None => Ok(()),
+    }
 }
 
 /// The pinned battle-interface ids are exactly the profile's roots, with the
@@ -673,6 +825,130 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
                 .any(|prefix| id.starts_with(prefix)),
             "{id} must stay pinned by id, not claimed by a prefix"
         );
+    }
+}
+
+/// The profile's naming-screen roots are exactly the checkout manifest's 26
+/// ids, so the complete `naming-screen/` prefix cannot pass by both backends
+/// dropping the same entry.
+#[test]
+fn the_naming_screen_profile_roots_are_the_manifest_ids() {
+    const SHEETS: [&str; 15] = [
+        "menu",
+        "page_swap_frame",
+        "back_button",
+        "ok_button",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "cursor",
+        "cursor_squished",
+        "cursor_filled",
+        "page_swap_button",
+        "input_arrow",
+        "underscore",
+        "pc_icon_off",
+        "pc_icon_on",
+    ];
+    const PALETTES: [&str; 7] = [
+        "menu",
+        "page_swap_upper",
+        "page_swap_lower",
+        "page_swap_others",
+        "buttons",
+        "cursor",
+        "keyboard",
+    ];
+    const TILEMAPS: [&str; 4] = [
+        "background",
+        "keyboard_upper",
+        "keyboard_lower",
+        "keyboard_symbols",
+    ];
+    let mut expected: Vec<String> = SHEETS
+        .iter()
+        .map(|stem| format!("naming-screen/image/{stem}"))
+        .chain(
+            PALETTES
+                .iter()
+                .map(|stem| format!("naming-screen/palette/{stem}")),
+        )
+        .chain(
+            TILEMAPS
+                .iter()
+                .map(|stem| format!("naming-screen/raw/{stem}")),
+        )
+        .collect();
+    expected.sort_unstable();
+    let roots = &rom_import::EMERALD_US_REV0.roots.naming_screen;
+    let mut profiled: Vec<String> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .map(str::to_owned)
+        .collect();
+    profiled.sort_unstable();
+    assert_eq!(profiled, expected);
+}
+
+/// The profile's party-menu roots are exactly the 14 pinned ids, with the
+/// encodings and shapes upstream stores, so the complete `party-menu/` prefix
+/// cannot pass by both backends dropping the same entry.
+#[test]
+fn the_party_menu_profile_roots_are_the_pinned_ids() {
+    use rom_import::Encoding::{Lz77, Raw};
+    let roots = &rom_import::EMERALD_US_REV0.roots.party_menu;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut expected = PARTY_MENU_IDS;
+    expected.sort_unstable();
+    assert_eq!(profiled, expected);
+
+    let image = |id: &str| {
+        let root = roots.images.iter().find(|root| root.id == id).unwrap();
+        (
+            root.encoding,
+            root.width,
+            root.height,
+            root.tile_count,
+            root.rom_bit_depth,
+            root.pack_bit_depth,
+        )
+    };
+    // The background is cut to its first 62 tiles by `-num_tiles 62`.
+    assert_eq!(image("party-menu/image/bg"), (Lz77, 8, 62 * 8, 62, 4, 4));
+    assert_eq!(image("party-menu/image/pokeball"), (Lz77, 32, 64, 32, 4, 4));
+    assert_eq!(image("party-menu/image/hold_icons"), (Raw, 8, 16, 2, 4, 4));
+    let palette = |id: &str| {
+        let root = roots.palettes.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.color_count)
+    };
+    assert_eq!(palette("party-menu/palette/bg"), (Lz77, 11 * 16));
+    assert_eq!(palette("party-menu/palette/pokeball"), (Lz77, 16));
+    assert_eq!(palette("party-menu/palette/hold_icons"), (Raw, 16));
+    let map = |id: &str| {
+        let root = roots.tilemaps.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.len)
+    };
+    assert_eq!(map("party-menu/raw/bg"), (Lz77, 32 * 32 * 2));
+    for (id, len) in [
+        ("slot_main", 10 * 7),
+        ("slot_main_no_hp", 10 * 7),
+        ("slot_wide", 18 * 3),
+        ("slot_wide_no_hp", 18 * 3),
+        ("slot_wide_empty", 18 * 3),
+        ("confirm_button", 7 * 2 * 2),
+        ("cancel_button", 7 * 2 * 2),
+    ] {
+        assert_eq!(map(&format!("party-menu/raw/{id}")), (Raw, len), "{id}");
     }
 }
 

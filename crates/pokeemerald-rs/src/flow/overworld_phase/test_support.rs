@@ -25,6 +25,31 @@ pub(super) const VAR_ROUTE101_STATE: u16 = 0x4060;
 /// An event-flag store with nothing hidden.
 pub(super) const NO_FLAGS: EventData = EventData::new();
 
+/// Gives the scheduler one camera update, as a hide flag the test just changed needs: clearing a
+/// flag spawns nothing while the camera is still (`UpdateObjectEventsForCameraUpdate` runs on a
+/// camera move, `field_camera.c:413-416`). The player steps one tile aside for an idle frame and is
+/// put back exactly as it was.
+pub(super) fn run_camera_update(phase: &mut OverworldPhase) {
+    let home = phase.player;
+    let (x, y) = home.position();
+    phase.player = PlayerState::new((x + 1, y), 3, Direction::South);
+    phase.step(ButtonState::new());
+    phase.player = home;
+}
+
+/// `templates` seeded and admitted through map load's pass for a player standing at `player`, with
+/// `event_data` as the flags.
+pub(super) fn admitted_objects(
+    templates: &'static [assets::ObjectEvent],
+    player: &PlayerState,
+    event_data: &EventData,
+) -> engine::overworld::object_event::ObjectEventCollection {
+    let mut objects =
+        engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
+    super::connections::admit_object_events_at_map_load(&mut objects, player, event_data);
+    objects
+}
+
 /// A map resolver under which no map is connected.
 pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
     None
@@ -127,6 +152,7 @@ fn runtime_with_connections(
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
+        map_scripts: None,
         connections,
     }));
     let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
@@ -374,7 +400,6 @@ const LITTLEROOT_MOM_OBJECT_INDEX: usize = 3;
 const LITTLEROOT_HOUSE_EVENT_TILE: (i16, i16) = (5, 8);
 const LITTLEROOT_HOUSE_SCENE_TILE: (u16, u16) = (5, 8);
 const LITTLEROOT_HOUSE_PRESS_TILE: (i32, i32) = (5, 9);
-const NULL_EVENT_SCRIPT: &str = "0x0";
 
 /// A phase with Mom standing on Brendan's-house door tile in Littleroot Town,
 /// an `MB_ANIMATED_DOOR` on a synthetic scene like [`littleroot_lab_door_scene`].
@@ -396,7 +421,7 @@ pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
         "fixture precondition: Mom stands on the house door tile"
     );
     assert_ne!(
-        mom.script, NULL_EVENT_SCRIPT,
+        mom.script, None,
         "fixture precondition: Mom has a real script, so A interacts"
     );
 
@@ -544,13 +569,12 @@ pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase 
 /// Lead construction and inspection for tests, so a test never names the
 /// `LoadedLead` directly (see [`super::lead_owner`]).
 impl OverworldPhase {
-    /// Installs `battler` as an unbacked lead (slot 0, no hidden HP).
+    /// Installs `battler` as an unbacked lead (slot 0).
     pub(in crate::flow) fn set_fresh_lead_for_test(&mut self, battler: battle::BattlePokemon) {
         self.install_fresh_lead(battler);
     }
 
-    /// Files `record` in `slot` and installs `battler` as its lead, measuring
-    /// the hidden-HP offset against that same pair. The party count and every
+    /// Files `record` in `slot` and installs `battler` as its lead. The party count and every
     /// other record are left as they were.
     pub(in crate::flow) fn set_backed_lead_for_test(
         &mut self,
@@ -560,10 +584,7 @@ impl OverworldPhase {
     ) {
         self.save1.player_party[slot] = record;
         self.lead = Some(crate::party::LoadedLead::backed_for_test(
-            &battle::Dex::new(),
-            slot,
-            battler,
-            record,
+            slot, battler, record,
         ));
         self.undecodable_lead_retained = false;
     }

@@ -104,13 +104,17 @@ impl BagScreen {
         }
     }
 
-    /// Whether the list's pair exists: not during a pocket switch or a context
-    /// menu, which destroy it (`item_menu.c:1262,1328`). A screen closed by
-    /// leaving the list keeps it, as it stays the fade source until the host
+    /// Whether the list's pair exists: not during a pocket switch, a context
+    /// menu or the TOSS prompt, which destroy it (`item_menu.c:1262,1328`).
+    /// A screen closed by leaving the list keeps it, as it stays the fade
+    /// source until the host
     /// drops the screen (`Task_FadeAndCloseBagMenu`, `item_menu.c:1074-1099`);
     /// one closed by a choice has lost it already (`item_menu.c:1262`).
     pub(super) fn arrows_exist(&self) -> bool {
-        self.switch.is_none() && self.menu.context_grid().is_none() && !self.chose_to_close()
+        self.switch.is_none()
+            && self.toss.is_none()
+            && self.menu.context_grid().is_none()
+            && !self.chose_to_close()
     }
 
     /// Whether the pocket-switch pair exists: whenever the list's does, less
