@@ -198,16 +198,31 @@ impl OverworldPhase {
         overworld::OverworldScene,
         ObjectEventCollection,
     )> {
+        let (event_data, scene) = self.stage_scene(map, &[])?;
+        let object_events = seed_object_events(&scene);
+        Some((event_data, scene, object_events))
+    }
+
+    /// [`Self::stage_transition`] without the live object events, for the crossing, whose
+    /// collection carries the departed visit's entries rather than starting over.
+    ///
+    /// `carried` are the templates of the live objects the scene keeps; it binds their
+    /// sprites beside its own events'.
+    fn stage_scene(
+        &self,
+        map: assets::MapId,
+        carried: &[&'static assets::ObjectEvent],
+    ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
-        let scene = overworld::load_room_from_source(
+        let scene = overworld::load_room_carrying_from_source(
             &self.pack_source,
             map,
             self.save2.player_gender.into(),
             &event_data,
+            carried,
         )
         .ok()?;
-        let object_events = seed_object_events(&scene);
-        Some((event_data, scene, object_events))
+        Some((event_data, scene))
     }
 
     /// Executes a resolved [`engine::overworld::WarpTrigger::Resolved`]
@@ -277,6 +292,11 @@ impl OverworldPhase {
         // start over on entry to a new map via warp.
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
         // `src/overworld.c:850`): a warp's first four steps roll no wild
         // encounter.
@@ -355,6 +375,11 @@ impl OverworldPhase {
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
@@ -431,6 +456,11 @@ impl OverworldPhase {
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         self.wild.restart_immunity_steps();
         self.save1.location = destination;
         self.save1.pos = engine::save::Coords16 { x, y };
@@ -467,7 +497,18 @@ impl OverworldPhase {
     /// If `to_map`'s header can't be resolved or its room can't be loaded,
     /// logs, touches nothing, and returns `false` so the caller can restore
     /// the pre-step stance. Returns `true` on a completed rebind.
-    pub(super) fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) -> bool {
+    ///
+    /// `shift` is the departed-to-entered tile translation the player's own
+    /// step went through; the live object events still in view follow it
+    /// ([`ObjectEventCollection::carry_across_connection`]), and so do the live
+    /// tall-grass effects of the player and of those objects. Unlike a warp, no
+    /// freshly seeded collection replaces the departed one.
+    pub(super) fn cross_connection(
+        &mut self,
+        to_map: assets::MapId,
+        to_position: TilePos,
+        shift: (i32, i32),
+    ) -> bool {
         let Ok(header) = MapHeaderTable::new().header(to_map) else {
             eprintln!(
                 "connection: unknown destination map {to_map:?} -- staying on the departed \
@@ -475,8 +516,15 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(to_map)
-        else {
+        // The scene binds the sprites of every object it keeps, which its own events' need not
+        // cover.
+        let carried: Vec<&'static assets::ObjectEvent> = self
+            .object_events
+            .iter()
+            .filter(|entry| entry.is_active())
+            .map(engine::overworld::object_event::LiveObjectEvent::template)
+            .collect();
+        let Some((transitioned_event_data, mut scene)) = self.stage_scene(to_map, &carried) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -485,6 +533,21 @@ impl OverworldPhase {
         };
 
         assert_scene_owns_map(&scene, to_map);
+        // The departed visit's active objects stay live, shifted into the entered map's
+        // coordinates (`LoadMapFromCameraTransition` leaves them in place). The entered map's
+        // templates enter unadmitted, and the next frame's camera update spawns before it
+        // removes, as `UpdateObjectEventsForCameraUpdate` does
+        // (`event_object_movement.c:2217-2222`). Built whole before anything is assigned, so a
+        // refused rebind above touched nothing.
+        let object_events = self.object_events.carry_across_connection(
+            self.map_id,
+            to_map,
+            scene.map_events().object_events,
+            shift,
+        );
+        // The still-live rustles, the player's and those of the objects just kept, follow the
+        // camera into the entered map's coordinates (`field_effect_helpers.c:325-330`).
+        scene.carry_tall_grass_from(&self.scene, shift, &object_events);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;
@@ -494,6 +557,11 @@ impl OverworldPhase {
         self.pending_landing = Some(to_position);
         self.pending_turn = None;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
         // `src/overworld.c:800`).
         self.wild.restart_immunity_steps();
@@ -514,7 +582,21 @@ impl OverworldPhase {
 /// Upstream initialises them per map load (`event_object_movement.c:1287-1330`)
 /// and replaces them on a map change (`:1645-1673`).
 pub(super) fn seed_object_events(scene: &overworld::OverworldScene) -> ObjectEventCollection {
-    ObjectEventCollection::from_templates(scene.map_events().object_events)
+    let mut objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
+    scene.update_object_elevations(&mut objects);
+    objects
+}
+
+/// Runs map load's admission pass over `objects` for a player standing at `player`, so the
+/// first frame's collision, interaction, and sight queries see the spawned objects, as
+/// `TrySpawnObjectEvents` runs at map load before any frame (`overworld.c:2163`). Call it once
+/// the destination's event data is committed: a hide flag is read at admission.
+pub(super) fn admit_object_events_at_map_load(
+    objects: &mut ObjectEventCollection,
+    player: &engine::overworld::PlayerState,
+    event_data: &engine::event_data::EventData,
+) {
+    let _ = objects.admit_on_map_load(player.position(), event_data);
 }
 
 /// A saved-location landing: position, elevation, and warp-in facing.

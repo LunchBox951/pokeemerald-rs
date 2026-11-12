@@ -30,24 +30,26 @@
 //!   gen-rom-profile` into [`profiles::bpee_rev0`]. It covers every asset
 //!   domain the pack holds: tilesets and their animations, the title
 //!   screen, object-event sprites, map layouts, fonts, text windows,
-//!   interface palettes, and `MUS_TITLE`'s audio tree.
+//!   interface art, and `MUS_TITLE`'s audio tree.
 //! - [`Sha1`] is a hand-rolled FIPS 180-4 implementation, because the hash
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
 //! - `domains` holds one reader per asset domain. Every graphics domain is
 //!   wired: the title screen (`title/image/*`, `title/raw/*`,
-//!   `title/palette/*`), the interface palettes (`interface/palette/*`),
+//!   `title/palette/*`), the interface art (`interface/image/*`, `interface/palette/*`),
 //!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
 //!   tables, animation frames), the map layouts (`layout/*`: metatile grids
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
 //!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
-//!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
+//!   decoded from `gbagfx`'s `.latfont` layout) and the keypad icon sheet
+//!   (`font/keypad_icons`), and the text windows
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
 //!   evolution scene's background and sparkle (`evolution-scene/*`), the
 //!   battle textbox with the two menu text palettes (`battle-interface/*`), the
+//!   naming screen's sheets, palettes and tilemaps (`naming-screen/*`), the
 //!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
 //!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
 //!   battlers (`trainer/*`: the same front pictures again, the uncompressed
@@ -59,7 +61,9 @@
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
 //!   `assets`' own schema encoders, and `MUS_TITLE` itself
 //!   (`audio/song/*`), decoded from the engine's track byte-code into
-//!   `assets::Song` events. A domain that has a ROM struct behind
+//!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
+//!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to
+//!   PCM). A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
@@ -104,7 +108,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use domains::audio::decode_voicegroup_payload;
+pub use domains::audio::{decode_cry_payloads, decode_voicegroup_payload};
 pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
@@ -117,6 +121,7 @@ pub use domains::battle_messages::{
 };
 pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
 pub use domains::song::decode_song_payload;
+pub use domains::sprites::palette_table as sprite_palette_table;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use one_line::{OneLine, OneLinePath, OneLineText};
@@ -128,11 +133,12 @@ pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
-    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot,
-    MapLayoutRoot, OpeningSceneRoots, PaletteRoot, PokeBallRoot, PokeBallRoots, Roots, SampleRoot,
-    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
+    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
+    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};

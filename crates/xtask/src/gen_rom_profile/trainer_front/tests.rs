@@ -286,6 +286,31 @@ fn a_palette_stored_twice_takes_the_copy_its_table_row_names() {
 }
 
 #[test]
+fn a_palette_named_by_its_row_after_sixteen_lower_copies_is_still_found() {
+    // Sixteen stray copies of each palette fill the ordinary search cap
+    // below the copy the table row names.
+    let mut fixture = base_fixture();
+    for index in 0..TRAINER_FRONT_PICS.len() {
+        for copy in 0..16usize {
+            fixture = fixture.write(
+                STRAY_PALETTE as usize + (index * 16 + copy) * 0x100,
+                &lz77_literals(&colour_bytes(index)),
+            );
+        }
+    }
+    let rom = fixture.finish();
+    let report = located("trainer-front-seventeen", &rom, entries()).expect("located");
+    for (index, pic) in TRAINER_FRONT_PICS.iter().enumerate() {
+        let line = report
+            .iter()
+            .find(|line| line.id == pic.palette_id)
+            .expect("a report line");
+        assert_eq!(line.addr, BUS + palette_at(index));
+        assert_eq!(line.resolution, Resolution::StructDerived);
+    }
+}
+
+#[test]
 fn art_the_rom_lacks_is_not_found() {
     for (label, id, addr) in [
         ("image", TRAINER_FRONT_PICS[0].image_id, image_at(0)),

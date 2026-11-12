@@ -154,6 +154,15 @@ impl ReportLine {
     }
 }
 
+/// The interface images and palettes.
+#[derive(Debug, Clone)]
+pub struct InterfacePlan {
+    /// Every `interface/image/*` sheet.
+    pub images: Vec<ImagePlan>,
+    /// Every `interface/palette/*` bank.
+    pub palettes: Vec<PalettePlan>,
+}
+
 /// An image root, owned.
 #[derive(Debug, Clone)]
 pub struct ImagePlan {
@@ -368,6 +377,17 @@ pub struct SamplePlan {
     pub data_len: u32,
 }
 
+/// The species cry tables and their samples, owned.
+#[derive(Debug, Clone)]
+pub struct CryPlan {
+    /// `gCryTable`.
+    pub normal: u32,
+    /// `gCryTable_Reverse`.
+    pub reverse: u32,
+    /// Every cry sample in table order. `data_len` is the decoded count.
+    pub samples: Vec<SamplePlan>,
+}
+
 /// The audio roots, owned.
 #[derive(Debug, Clone)]
 pub struct AudioPlan {
@@ -384,6 +404,8 @@ pub struct AudioPlan {
     pub direct_sound: Vec<SamplePlan>,
     /// Every CGB programmable-wave table.
     pub programmable_wave: Vec<SamplePlan>,
+    /// The species cries, or `None` for a pack that holds none.
+    pub cry: Option<CryPlan>,
 }
 
 /// One special battle-message template's root, owned.
@@ -607,6 +629,28 @@ pub struct BattleInterfacePlan {
     pub battle_bar: BlobPlan,
 }
 
+/// The naming screen's sheets, palettes, and tilemaps, owned.
+#[derive(Debug, Clone)]
+pub struct NamingScreenPlan {
+    /// Every `naming-screen/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `naming-screen/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `naming-screen/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
+/// The party menu's sheets, palettes, and maps, owned.
+#[derive(Debug, Clone)]
+pub struct PartyMenuPlan {
+    /// Every `party-menu/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `party-menu/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `party-menu/raw/*` map root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -620,10 +664,12 @@ pub struct ProfilePlan {
     pub layouts: Vec<MapLayoutPlan>,
     /// The Latin glyph sheets.
     pub fonts: Vec<FontPlan>,
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: Vec<ImagePlan>,
     /// Text-window frames and palettes.
     pub text_window: TextWindowPlan,
-    /// Interface palettes.
-    pub interface: Vec<PalettePlan>,
+    /// Interface images and palettes.
+    pub interface: InterfacePlan,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioPlan,
     /// The battle-message token table.
@@ -642,7 +688,11 @@ pub struct ProfilePlan {
     pub evolution_scene: EvolutionScenePlan,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfacePlan,
-    /// The starters' static battler art.
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenPlan,
+    /// The party menu's sheets, palettes, and maps.
+    pub party_menu: PartyMenuPlan,
+    /// The static battler art.
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
