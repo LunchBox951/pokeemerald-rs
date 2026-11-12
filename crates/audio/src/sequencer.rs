@@ -381,17 +381,38 @@ impl Sequencer {
 
     /// Whether every track has ended, all voices have decayed to silence, and
     /// the master-mix reverb tail has drained.
+    ///
+    /// A completion policy over finite tails ([`Self::is_sounding`]): a wave
+    /// note's held sample keeps mixing after this returns `true`, which
+    /// [`Self::is_silent`] reports.
     #[must_use]
     pub fn is_finished(&self) -> bool {
         self.tracks.iter().all(|t| t.ended) && !self.is_sounding()
     }
 
-    /// Whether mixing another frame still produces sound with no track
-    /// ticking: a voice an ended track left in release, or delayed samples
-    /// the master-mix reverb ring still holds.
+    /// Whether mixing another frame still produces a finite tail with no
+    /// track ticking: a voice an ended track left in release, an unsettled
+    /// noise latch, or delayed samples the master-mix reverb ring still holds.
+    ///
+    /// A vacated wave slot's held sample is excluded on purpose. It is a
+    /// constant level the hardware presents until a retrigger or a route write
+    /// replaces it (`mgba/src/gb/audio.c:246-253,768-774`), so it never decays
+    /// and counting it would make [`Self::is_finished`] and callers that render
+    /// out a tail (`MusicPlayer::tail_sounding`) wait forever. Callers that
+    /// need the literal answer use [`Self::is_silent`].
     #[must_use]
     pub fn is_sounding(&self) -> bool {
         !self.mixer.is_idle() || self.mixer.has_pending_reverb()
+    }
+
+    /// A snapshot of the mixer: whether another frame would render only zeros
+    /// without advancing tracks (a track's next event can still start a note):
+    /// no finite tail
+    /// ([`Self::is_sounding`]) and no held wave sample
+    /// ([`Mixer::has_held_wave_output`]).
+    #[must_use]
+    pub fn is_silent(&self) -> bool {
+        self.mixer.is_silent()
     }
 
     /// Whether a fade's terminal step has paused this sequencer
