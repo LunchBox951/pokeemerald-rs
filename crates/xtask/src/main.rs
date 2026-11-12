@@ -37,6 +37,26 @@ mod rom_build;
 mod scenario;
 mod staging_names;
 
+/// Names the directory `record-snapshot` publishes its generations into
+/// instead of `<repo root>/snapshots/`.
+///
+/// It exists so a test of the real dispatch path can record into scratch
+/// storage rather than add a generation to a developer's checkout, which it
+/// could not put back (publication never removes the generation it
+/// supersedes). The pack read is unaffected: it stays the checkout pack.
+#[cfg(feature = "scenes")]
+const SNAPSHOT_DIR_ENV: &str = "POKEEMERALD_SNAPSHOT_DIR";
+
+/// The override directory, or `None` for the default output directory.
+///
+/// An empty value counts as unset, as `$POKEEMERALD_PACK` does.
+#[cfg(feature = "scenes")]
+fn snapshot_output_dir(value: Option<OsString>) -> Option<std::path::PathBuf> {
+    value
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -50,7 +70,9 @@ commands:
                      check its compiled outputs (developer-only)
   record-snapshot --scene <name>
                      record a deterministic frame capture; <name> is
-                     title | main-menu-new-game | main-menu-option
+                     title | main-menu-new-game | main-menu-option;
+                     $POKEEMERALD_SNAPSHOT_DIR, when set and non-empty,
+                     replaces the default snapshots/ output directory
   scenario --name <name> [--rom <path>]
                      run a scripted gameplay scenario; <name> is
                      boot-to-main-menu | boot-to-first-fight
@@ -650,8 +672,15 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
         }
         #[cfg(feature = "scenes")]
         Command::RecordSnapshot { scene } => {
-            let report = record_snapshot::run(*scene)
-                .map_err(|err| XtaskError::RecordSnapshotFailed(err.to_string()))?;
+            let report = match snapshot_output_dir(std::env::var_os(SNAPSHOT_DIR_ENV)) {
+                Some(dir) => record_snapshot::run_with_paths(
+                    *scene,
+                    &extract::repo_root().join(extract::OUTPUT_RELATIVE_PATH),
+                    &dir,
+                ),
+                None => record_snapshot::run(*scene),
+            }
+            .map_err(|err| XtaskError::RecordSnapshotFailed(err.to_string()))?;
             println!(
                 "recorded `{}` snapshot ({} byte(s)) to {} (+ {}); rgb hash {}, pack hash {}, git sha {}",
                 scene.name(),
@@ -1553,6 +1582,17 @@ mod tests {
     // -- that full path is `record_snapshot`'s own ignored real-pack test.
     // The probe is `AssetPack::repo_pack_path()`, the path `record_snapshot::
     // run` reads, not `default_path()`, which `$POKEEMERALD_PACK` can move.
+    #[test]
+    #[cfg(feature = "scenes")]
+    fn snapshot_output_dir_override_ignores_unset_and_empty() {
+        assert_eq!(super::snapshot_output_dir(None), None);
+        assert_eq!(super::snapshot_output_dir(Some(OsString::new())), None);
+        assert_eq!(
+            super::snapshot_output_dir(Some(OsString::from("/scratch/snaps"))),
+            Some(std::path::PathBuf::from("/scratch/snaps"))
+        );
+    }
+
     #[test]
     #[cfg(feature = "scenes")]
     fn record_snapshot_dispatch_fails_closed_without_a_pack() {
