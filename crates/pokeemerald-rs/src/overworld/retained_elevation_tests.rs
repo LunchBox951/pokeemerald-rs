@@ -260,3 +260,43 @@ fn finishing_a_walk_off_a_multi_level_cell_draws_at_the_destinations_priority() 
         frame(&reference_scene, &seeded(&reference_scene))
     );
 }
+
+/// A sight trainer's walk-up ends each tile with `ShiftStillObjectEventCoords` and the
+/// finish-step update (`event_object_movement.c:5116-5125`, `:8119-8132`), and the trainer-see
+/// task starts the next tile only afterwards (`trainer_see.c:490-505`), so every intermediate
+/// tile settles on `(dest, dest)` before the next tile's begin-step update. The NPC leaves a
+/// multi-level cell onto 5, then onto a transition cell: it keeps 5 (priority 2), not the
+/// authored 4 (priority 1) that skipping the intermediate finish would leave.
+#[test]
+fn consecutive_walked_tiles_each_settle_before_the_next_through_compose_live() {
+    let scene = scene(
+        &[((1, 1), MULTI_LEVEL), ((2, 1), 5), ((3, 1), TRANSITION)],
+        1,
+        4,
+    );
+    let mut objects = seeded(&scene);
+    assert_eq!(
+        pair(&objects),
+        (4, 4),
+        "a multi-level spawn cell is skipped"
+    );
+
+    // Tile one: begin step, then the finish step on `(dest, dest)`.
+    walk_east(&scene, &mut objects);
+    assert_eq!(pair(&objects), (4, 4));
+    let state = objects.get_mut(1).unwrap().state_mut();
+    state.settle_previous_position();
+    scene.update_object_elevation(state);
+    assert_eq!(pair(&objects), (5, 5));
+
+    // Tile two begins onto the transition cell, which keeps tile one's 5.
+    walk_east(&scene, &mut objects);
+    assert_eq!(pair(&objects), (TRANSITION, 5));
+    assert_eq!(npc_priority(&scene, &objects), 2);
+
+    let reference_scene = scene_reference(&[((3, 1), 5)], 3, 5);
+    assert_eq!(
+        frame(&scene, &objects),
+        frame(&reference_scene, &seeded(&reference_scene))
+    );
+}

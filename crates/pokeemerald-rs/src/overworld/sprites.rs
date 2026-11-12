@@ -181,6 +181,12 @@ impl SceneSprites {
         self.cell_elevations.update_all(objects);
     }
 
+    /// Settles one object's elevations on the cells it stands on, for a caller that
+    /// runs a finish-step update between frames ([`Self::update_object_elevations`]).
+    pub(super) fn update_object_elevation(&self, state: &mut ObjectEventState) {
+        self.cell_elevations.update(state);
+    }
+
     /// [`Self::live_entries`] over the template-seeded state.
     #[must_use]
     pub(super) fn entries(

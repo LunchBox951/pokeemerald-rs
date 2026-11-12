@@ -262,7 +262,21 @@ impl SightApproach {
     /// is also the frame the first walked tile is committed on, and
     /// the frame the last tile's animation ends on is also the frame the
     /// trainer turns to the player.
-    fn advance_movement(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
+    ///
+    /// `settle` is the finish-step elevation update
+    /// (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`), which the driver
+    /// supplies because only the scene holds the cell grid. It runs as each walked tile ends,
+    /// after the trainer's previous tile is settled and before the next tile begins: upstream
+    /// finishes a tile in `AnimateSprites` and starts the next one only on the following
+    /// frame's trainer-see task (`trainer_see.c:490-505`), so each intermediate tile reads
+    /// `(dest, dest)` ahead of the next tile's begin-step update. This port chains both into
+    /// one frame, so the next tile's begin must not run ahead of it.
+    fn advance_movement(
+        &mut self,
+        trainer: &mut ObjectEventState,
+        player_position: TilePos,
+        mut settle: impl FnMut(&mut ObjectEventState),
+    ) {
         match self.stage {
             ApproachStage::ExclamationIcon { frames_left } => {
                 let frames_left = frames_left.saturating_sub(1);
@@ -286,6 +300,7 @@ impl SightApproach {
                     // `ShiftStillObjectEventCoords`
                     // (`event_object_movement.c:5116-5125`).
                     trainer.settle_previous_position();
+                    settle(trainer);
                     if tiles_left > 0 {
                         self.begin_tile(trainer, tiles_left - 1);
                     } else {

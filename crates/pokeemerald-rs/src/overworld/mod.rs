@@ -651,6 +651,13 @@ impl OverworldScene {
         self.sprites.update_object_elevations(objects);
     }
 
+    /// [`Self::update_object_elevations`] for one object: the finish-step update
+    /// (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`) a driver
+    /// that ends one walked tile and begins the next in a single frame runs between them.
+    pub fn update_object_elevation(&self, state: &mut engine::overworld::ObjectEventState) {
+        self.sprites.update_object_elevation(state);
+    }
+
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
     /// tile, facing, and retained elevation instead of the scene's authored
     /// templates, under `palette` as [`Self::compose_staged`] applies it.
