@@ -389,40 +389,40 @@ fn a_deep_rollback_takes_back_every_level_and_its_quarantine() {
 }
 
 #[cfg(target_os = "linux")]
+use crate::import_rom::tests::{
+    create_fresh_dir_named, other_device_dir, other_device_dir_among, require_other_device_dir,
+};
+
+#[cfg(target_os = "linux")]
 #[test]
 fn a_level_on_another_filesystem_is_taken_back_through_a_quarantine_beside_it() {
     // `new/../m/more`: `new` is made in the base directory, then `m`, a
-    // symlink to a directory on /dev/shm, is descended through and `more`
+    // symlink to a directory on another filesystem, is descended through and `more`
     // is made there. A rename of `more` into the quarantine beside `new`
     // fails with EXDEV; `more` must be taken back through a quarantine on
     // its own filesystem, and `new` still through the shared one.
     use std::os::unix::fs::MetadataExt as _;
-    let shm = std::path::Path::new("/dev/shm");
     let dir = TempDir::new("cross-device");
-    let Ok(shm_meta) = fs::metadata(shm) else {
-        panic!("this test needs /dev/shm");
-    };
+    let elsewhere = require_other_device_dir(&dir.path, "cross-device");
+    let other = elsewhere.path.clone();
     assert_ne!(
-        shm_meta.dev(),
+        fs::metadata(&other).unwrap().dev(),
         fs::metadata(&dir.path).unwrap().dev(),
-        "this test needs /dev/shm on another filesystem than the temp dir"
+        "the scratch directory must be on another filesystem than the temp dir"
     );
-    let other = shm.join(format!(
-        "pokeemerald-rs-cross-device-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&other).unwrap();
     std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
     let target = dir.join("new").join("..").join("m").join("more");
     let created = super::create_directories(&target).unwrap();
-    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+    assert!(
+        other.join("more").is_dir(),
+        "more was made on the other device"
+    );
 
     super::undo_created_directories(&created);
 
     let on_shm = entry_names(&other);
     let in_base = entry_names(&dir.path);
-    fs::remove_dir_all(&other).unwrap();
-    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert!(on_shm.is_empty(), "left on the other device: {on_shm:?}");
     assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
 }
 
@@ -440,25 +440,21 @@ fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
         );
         return;
     }
-    let shm = std::path::Path::new("/dev/shm");
     let dir = TempDir::new("cross-device-pressure");
-    let Ok(shm_meta) = fs::metadata(shm) else {
-        panic!("this test needs /dev/shm");
-    };
+    let elsewhere = require_other_device_dir(&dir.path, "cross-device-pressure");
+    let other = elsewhere.path.clone();
     assert_ne!(
-        shm_meta.dev(),
+        fs::metadata(&other).unwrap().dev(),
         fs::metadata(&dir.path).unwrap().dev(),
-        "this test needs /dev/shm on another filesystem than the temp dir"
+        "the scratch directory must be on another filesystem than the temp dir"
     );
-    let other = shm.join(format!(
-        "pokeemerald-rs-cross-device-pressure-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&other).unwrap();
     std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
     let target = dir.join("new").join("..").join("m").join("more");
     let created = super::create_directories(&target).unwrap();
-    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+    assert!(
+        other.join("more").is_dir(),
+        "more was made on the other device"
+    );
 
     let mut fillers = None;
     super::take_back::undo_created_directories_with_hooks(&created, &mut || {
@@ -470,7 +466,170 @@ fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
 
     let on_shm = entry_names(&other);
     let in_base = entry_names(&dir.path);
-    fs::remove_dir_all(&other).unwrap();
-    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert!(on_shm.is_empty(), "left on the other device: {on_shm:?}");
     assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_other_device_directory_is_never_on_the_fixture_roots_device() {
+    use std::os::unix::fs::MetadataExt as _;
+    // Whatever the temp directory is, and whether or not /dev/shm is the
+    // base, a directory handed back must really differ from the base's device.
+    let temp = TempDir::new("other-device-selection");
+    for base in [temp.path.as_path(), std::path::Path::new("/dev/shm")] {
+        let Some(elsewhere) = other_device_dir(base, "other-device-selection") else {
+            continue;
+        };
+        assert_ne!(
+            fs::metadata(&elsewhere.path).unwrap().dev(),
+            fs::metadata(base).unwrap().dev(),
+            "{} is on {}'s filesystem",
+            elsewhere.path.display(),
+            base.display()
+        );
+        assert!(elsewhere.path.is_dir());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_candidate_on_the_fixture_roots_device_is_passed_over() {
+    // The base, a directory inside it, and a missing path all share the
+    // base's device or have none: none is elsewhere, so nothing is made. This
+    // is the `TMPDIR=/dev/shm` case, where every candidate on the same
+    // filesystem as the fixture root must be passed over.
+    let temp = TempDir::new("candidate-skipping");
+    let inside = temp.join("inside");
+    fs::create_dir(&inside).unwrap();
+    let candidates = [
+        temp.path.clone(),
+        inside.clone(),
+        std::path::PathBuf::from("/nonexistent-pokeemerald-rs"),
+    ];
+    let found = other_device_dir_among(&temp.path, "candidate-skipping", &candidates);
+    assert!(found.is_none(), "{:?}", found.map(|dir| dir.path.clone()));
+    assert_eq!(entry_names(&temp.path), ["inside"]);
+    assert!(entry_names(&inside).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_relative_candidate_is_handed_back_as_an_absolute_path() {
+    use std::os::unix::fs::MetadataExt as _;
+    // A fixture symlinks to the directory it gets, so a relative candidate
+    // (a relative `CARGO_TARGET_DIR`) must come back absolute. The candidate
+    // is the test's own writable directory, reached from the working
+    // directory by climbing to the root, and the base is a filesystem that
+    // differs from it (/proc is on no disk filesystem, /dev/shm usually not
+    // the temp dir's).
+    let temp = TempDir::new("relative-candidate");
+    let temp_dev = fs::metadata(&temp.path).unwrap().dev();
+    let Some(base) = ["/dev/shm", "/proc"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .find(|base| fs::metadata(base).is_ok_and(|meta| meta.dev() != temp_dev))
+    else {
+        eprintln!("skipping: no base directory off the temp dir's filesystem");
+        return;
+    };
+    let cwd = std::env::current_dir().unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for _ in cwd.components().skip(1) {
+        relative.push("..");
+    }
+    relative.push(temp.path.strip_prefix("/").unwrap());
+    assert!(relative.is_relative());
+    assert_eq!(
+        fs::canonicalize(&relative).unwrap(),
+        fs::canonicalize(&temp.path).unwrap()
+    );
+
+    let found = other_device_dir_among(base, "relative-candidate", &[relative])
+        .expect("the temp dir is on another device than the base");
+
+    assert!(found.path.is_absolute(), "{:?}", found.path);
+    assert!(found.path.is_dir());
+    assert!(
+        fs::canonicalize(&found.path)
+            .unwrap()
+            .starts_with(fs::canonicalize(&temp.path).unwrap()),
+        "{:?}",
+        found.path
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stale_directory_at_the_predictable_path_is_not_deleted() {
+    // The directory a helper makes must never be one somebody else already
+    // owns: plant a directory holding a file at every PID-and-counter name
+    // a predictable scheme would pick, and none may lose its contents.
+    let temp = TempDir::new("stale-predictable");
+    let mut planted = Vec::new();
+    for counter in 0..64 {
+        let stale = temp.join(&format!(
+            "pokeemerald-rs-other-device-stale-predictable-{}-{counter}",
+            std::process::id()
+        ));
+        fs::create_dir(&stale).unwrap();
+        let keep = stale.join("keep");
+        fs::write(&keep, b"somebody else's").unwrap();
+        planted.push(keep);
+    }
+    // /proc is on no disk filesystem, so the temp dir is "another device".
+    let found = other_device_dir_among(
+        std::path::Path::new("/proc"),
+        "stale-predictable",
+        std::slice::from_ref(&temp.path),
+    )
+    .expect("the temp dir is on another device than /proc");
+
+    for keep in &planted {
+        assert!(keep.is_file(), "{} was deleted", keep.display());
+    }
+    assert!(found.path.starts_with(&temp.path), "{:?}", found.path);
+    assert!(entry_names(&found.path).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_same_device_candidate_is_skipped_for_a_later_writable_other_device_one() {
+    use std::os::unix::fs::MetadataExt as _;
+    let base = TempDir::new("skip-then-choose");
+    let inside = base.join("inside");
+    fs::create_dir(&inside).unwrap();
+    let elsewhere = require_other_device_dir(&base.path, "skip-then-choose-target");
+    let candidates = [base.path.clone(), inside.clone(), elsewhere.path.clone()];
+
+    let found = other_device_dir_among(&base.path, "skip-then-choose", &candidates)
+        .expect("the third candidate is writable and on another device");
+
+    assert!(found.path.starts_with(&elsewhere.path), "{:?}", found.path);
+    assert_ne!(
+        fs::metadata(&found.path).unwrap().dev(),
+        fs::metadata(&base.path).unwrap().dev()
+    );
+    assert_eq!(entry_names(&base.path), ["inside"]);
+    assert!(entry_names(&inside).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_taken_name_is_passed_over_and_its_contents_are_kept() {
+    let temp = TempDir::new("taken-name");
+    let taken = temp.join("a");
+    fs::create_dir(&taken).unwrap();
+    fs::write(taken.join("keep"), b"somebody else's").unwrap();
+
+    let made = create_fresh_dir_named(&temp.path, |attempt| {
+        if attempt < 2 { "a" } else { "b" }.to_owned()
+    })
+    .expect("the third name is free");
+
+    assert_eq!(made, temp.join("b"));
+    assert!(taken.join("keep").is_file());
+    // Every name taken: no directory is made and none is disturbed.
+    assert_eq!(create_fresh_dir_named(&temp.path, |_| "a".to_owned()), None);
+    assert!(taken.join("keep").is_file());
 }
