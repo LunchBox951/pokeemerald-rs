@@ -30159,7 +30159,10 @@
     "src/data/lilycove_lady.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All tables in src/data/lilycove_lady.h (:1-468) extracted to assets::lilycove_lady::LilycoveLadyData: the 16 nine-word quizzes with answers and prizes (:22-288, QuizLadyQuiz; Easy Chat words kept as numeric u16 encodings, EC_MOVE2 and EC_EMPTY_WORD included), the six Favor requests with item lists ending in ITEM_NONE and prizes (:291-431, FavorLadyRequest), the five Contest Lady category records (:434-468, ContestLadyRecord: Pokémon name, category word, contest name, species, sprite) and the Lady and Pokémon OBJ_EVENT_GFX_* sprite IDs (:5-19) as numeric u16. The gText_FavorLady_*, gText_ContestLady_* and gText_*Contest strings (src/strings.c:615-619, :1595-1611) are transcribed as the record text. Quiz, Favor and Contest Lady selection, save state and record mixing (src/lilycove_lady.c) are not modelled.",
+      "rust_target": "crates/assets/src/lilycove_lady.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/object_events/base_oam.h": {
       "artifacts": {
