@@ -4,16 +4,17 @@
 //! (`TrySpawnObjectEvents`, `event_object_movement.c:1645-1673`, delegating
 //! to `InitObjectEventStateFromTemplate`, `:1287-1330`).
 //! [`ObjectEventCollection`] instead seeds every template unconditionally
-//! and once; hide-flag and spawn-window admission stay query-time concerns
-//! of [`super::visible_object_event_at`] and [`super::object_event_is_in_view`].
+//! and once, as an unadmitted entry.
 //!
 //! A seamless map-connection crossing does not reset the collection:
 //! [`ObjectEventCollection::carry_across_connection`] keeps the departed visit's active entries, shifted into the entered
 //! map's coordinates, and seeds the entered map's templates beside them for the scheduler to admit.
 //!
 //! The per-frame scheduler ([`ObjectEventCollection::run_frame`]) is the one place that applies
-//! upstream's spawn window and `frozen` gate: an entry is *active* once the scheduler admits it, and
-//! only active entries run their movement type.
+//! upstream's spawn window, the template hide flag at spawn time, and the `frozen` gate: an entry
+//! is *active* once the scheduler admits it, and only active entries run their movement type and
+//! answer position queries ([`ObjectEventCollection::object_events_at`]). A flag that changes
+//! afterwards neither admits nor retires an entry.
 
 use assets::{MapId, ObjectEvent};
 
@@ -276,8 +277,10 @@ impl ObjectEventCollection {
         }
     }
 
-    /// Iterates entries at `(x, y, elevation)` by *live* position, in
-    /// declaration order.
+    /// Iterates the *active* entries at `(x, y, elevation)` by *live* position, in
+    /// declaration order: an entry the scheduler has not admitted, or has retired, has no
+    /// object, as `GetObjectEventIdByPosition` scans only active `gObjectEvents` slots.
+    /// A hide flag is not read here; the scheduler applied it at admission.
     ///
     /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
     /// delegates here when a collection is bound; unbound, it scans authored
@@ -293,7 +296,10 @@ impl ObjectEventCollection {
     ) -> impl Iterator<Item = &LiveObjectEvent> {
         self.entries.iter().filter(move |entry| {
             let (ex, ey) = entry.state.position();
-            ex == x && ey == y && elevations_compatible(entry.state.elevation(), elevation)
+            entry.is_active()
+                && ex == x
+                && ey == y
+                && elevations_compatible(entry.state.elevation(), elevation)
         })
     }
 
@@ -347,6 +353,7 @@ impl ObjectEventCollection {
 mod tests {
     use super::*;
     use crate::overworld::direction::Direction;
+    use crate::overworld::object_event_harness::{admitted, template, Rig};
     use assets::{MovementType, TrainerType};
 
     fn object(local_id: u8, x: i16, y: i16, elevation: u8) -> ObjectEvent {
@@ -422,7 +429,7 @@ mod tests {
             object(1, 5, 5, 3),
             object(2, 6, 6, crate::overworld::collision::ELEVATION_TRANSITION),
         ]);
-        let collection = ObjectEventCollection::from_templates(templates);
+        let collection = admitted(templates, (5, 5));
 
         assert!(
             collection.object_events_at(5, 5, 4).next().is_none(),
@@ -449,7 +456,7 @@ mod tests {
     #[test]
     fn object_events_at_uses_live_positions_and_preserves_declaration_order() {
         let templates = leaked(vec![object(1, 0, 0, 3), object(2, 5, 5, 3)]);
-        let mut collection = ObjectEventCollection::from_templates(templates);
+        let mut collection = admitted(templates, (2, 2));
 
         for _ in 0..5 {
             collection
@@ -603,6 +610,112 @@ mod tests {
             MovementType::FaceRight,
             "the override affects only the live state's own template snapshot, \
              never the authored template this entry was seeded from"
+        );
+    }
+
+    const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM";
+
+    fn hide_flag() -> u16 {
+        assets::object_event_flags::resolve(HIDE).unwrap()
+    }
+
+    fn ids_at(rig: &Rig, x: i32, y: i32) -> Vec<u8> {
+        rig.collection
+            .object_events_at(x, y, 3)
+            .map(|entry| entry.template().local_id)
+            .collect()
+    }
+
+    #[test]
+    fn object_events_at_skips_entries_the_scheduler_has_not_admitted_or_has_retired() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, "0")], (50, 50));
+        assert_eq!(ids_at(&rig, 2, 2), Vec::<u8>::new(), "seeded, never ticked");
+        rig.tick(1);
+        assert_eq!(
+            ids_at(&rig, 2, 2),
+            Vec::<u8>::new(),
+            "out of the spawn window"
+        );
+
+        rig.player = (2, 2);
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![1], "admitted once in the window");
+
+        rig.player = (50, 50);
+        rig.tick(1);
+        assert!(!rig.collection.get(1).unwrap().is_active());
+        assert_eq!(
+            ids_at(&rig, 2, 2),
+            Vec::<u8>::new(),
+            "retired outside the view"
+        );
+    }
+
+    #[test]
+    fn a_hide_flag_cleared_while_the_camera_is_still_leaves_the_entry_out_of_the_query() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(1);
+        rig.event_data.flag_clear(hide_flag()).unwrap();
+        rig.tick(10);
+        assert_eq!(ids_at(&rig, 2, 2), Vec::<u8>::new());
+
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(
+            ids_at(&rig, 2, 2),
+            vec![1],
+            "the next camera update admits it"
+        );
+    }
+
+    #[test]
+    fn a_hide_flag_set_after_admission_leaves_the_entry_in_the_query() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.tick(1);
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(10);
+        assert_eq!(ids_at(&rig, 2, 2), vec![1]);
+    }
+
+    #[test]
+    fn map_load_admission_makes_in_window_entries_queryable_before_any_frame_runs() {
+        let templates = leaked(vec![object(1, 2, 2, 3), object(2, 40, 40, 3)]);
+        let mut collection = ObjectEventCollection::from_templates(templates);
+        assert!(collection.object_events_at(2, 2, 3).next().is_none());
+
+        let _ = collection.admit_on_map_load((2, 2), &crate::event_data::EventData::new());
+        assert_eq!(
+            collection
+                .object_events_at(2, 2, 3)
+                .map(|entry| entry.template().local_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert!(
+            collection.object_events_at(40, 40, 3).next().is_none(),
+            "outside the spawn window"
+        );
+    }
+
+    #[test]
+    fn a_script_removal_retires_an_admitted_entry_whatever_its_flag() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![1]);
+
+        assert!(rig.collection.remove_by_local_id(1));
+        assert_eq!(ids_at(&rig, 2, 2), Vec::<u8>::new());
+        assert!(!rig.collection.remove_by_local_id(1), "already retired");
+        assert!(!rig.collection.remove_by_local_id(9), "no such local id");
+
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(
+            ids_at(&rig, 2, 2),
+            Vec::<u8>::new(),
+            "the set flag keeps it gone"
         );
     }
 

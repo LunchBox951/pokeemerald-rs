@@ -126,11 +126,11 @@ fn admitting_on_map_load_runs_no_callback_and_leaves_the_first_frame_one_callbac
         player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
     };
     assert!(
-        collection.admit_on_map_load(&context),
+        collection.admit_on_map_load(context.player_position, context.event_data),
         "the first call admits"
     );
     assert!(
-        !collection.admit_on_map_load(&context),
+        !collection.admit_on_map_load(context.player_position, context.event_data),
         "a later call does not"
     );
     assert!(collection.get(1).unwrap().is_active());

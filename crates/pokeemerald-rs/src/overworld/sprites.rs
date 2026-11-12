@@ -167,7 +167,8 @@ impl SceneSprites {
         self.cell_elevations.settled(tile, elevation)
     }
 
-    /// [`Self::live_entries`] over the template-seeded state.
+    /// [`Self::live_entries`] over the template-seeded state, admitted as map load would admit
+    /// it for `player` under `event_data`.
     #[must_use]
     pub(super) fn entries(
         &self,
@@ -175,7 +176,9 @@ impl SceneSprites {
         event_data: &EventData,
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
-        self.live_entries(&self.seed_objects, player, event_data, grass)
+        let mut objects = self.seed_objects.clone();
+        let _ = objects.admit_on_map_load(player.position(), event_data);
+        self.live_entries(&objects, player, event_data, grass)
     }
 
     /// Lists the player first, then NPCs in `objects` order, then the tall-grass

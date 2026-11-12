@@ -1,6 +1,6 @@
 //! Object-event visibility, spatial queries, initial facing, and live state.
 //!
-//! The visibility/spatial queries read the runtime's bound live collection
+//! The visibility/spatial queries read the admitted entries of the runtime's bound live collection
 //! ([`MapRuntime::with_object_events`]) by live position and elevation, and
 //! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
@@ -77,6 +77,11 @@ pub fn tile_is_in_view(tile: (i32, i32), player_position: (i32, i32)) -> bool {
 }
 
 /// Returns the first visible object at a tile and elevation, in declaration order.
+///
+/// With a bound live collection every result is already an admitted object, so `event_data` is
+/// not consulted: the scheduler applied the hide flag at admission, and a flag set later leaves
+/// the object where it is. An unbound runtime scans authored templates and filters them by
+/// their current hide flag.
 #[must_use]
 pub fn visible_object_event_at<'a>(
     runtime: &MapRuntime<'a>,
@@ -85,9 +90,10 @@ pub fn visible_object_event_at<'a>(
     elevation: u8,
     event_data: &EventData,
 ) -> Option<&'a ObjectEvent> {
+    let admitted = runtime.has_live_object_events();
     runtime
         .object_events_at(x, y, elevation)
-        .find(|event| object_event_is_visible(event, event_data))
+        .find(|event| admitted || object_event_is_visible(event, event_data))
 }
 
 /// Returns the first visible object that blocks a step onto a tile and elevation, in declaration
@@ -95,6 +101,8 @@ pub fn visible_object_event_at<'a>(
 /// `event_object_movement.c:4724-4741`).
 ///
 /// [`visible_object_event_at`] identifies the object *on* a tile instead, for interaction.
+/// The hide flag is read as there: only for an unbound runtime, since a bound collection's
+/// scheduler applied it at admission.
 #[must_use]
 pub fn blocking_object_event_at<'a>(
     runtime: &MapRuntime<'a>,
@@ -103,9 +111,10 @@ pub fn blocking_object_event_at<'a>(
     elevation: u8,
     event_data: &EventData,
 ) -> Option<&'a ObjectEvent> {
+    let admitted = runtime.has_live_object_events();
     runtime
         .collision_objects_at(x, y, elevation)
-        .find(|event| object_event_is_visible(event, event_data))
+        .find(|event| admitted || object_event_is_visible(event, event_data))
 }
 
 /// The tile an interaction targets, with the elevation every lookup at it uses.
@@ -460,6 +469,7 @@ impl ObjectEventState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overworld::object_event_harness::{admit, admitted, template, Rig};
     use assets::{
         BattleScene, CoordEvent, MapConnection, MapEvents, MapHeader, MapId, MapLayout, MapType,
         MetatileAttributeTable, MetatileCell, MusicId, RegionMapSectionId, TrainerType, Weather,
@@ -727,7 +737,7 @@ mod tests {
         templates: &'static [ObjectEvent],
         moves: &[(u8, Direction)],
     ) -> &'static ObjectEventCollection {
-        let mut collection = ObjectEventCollection::from_templates(templates);
+        let mut collection = admitted(templates, (2, 2));
         for &(id, direction) in moves {
             collection.get_mut(id).unwrap().state_mut().walk(direction);
         }
@@ -775,40 +785,41 @@ mod tests {
     }
 
     #[test]
-    fn live_stacks_keep_declaration_order_and_hide_flags_filter_inside_the_search() {
+    fn live_stacks_keep_declaration_order_and_a_hidden_entry_is_never_admitted_into_one() {
+        const RIVAL: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM";
         let grid_bytes = flat_grid_bytes(5, 5);
         let templates: &'static [ObjectEvent] = Box::leak(Box::new([
-            object(
-                9,
-                1,
-                2,
-                3,
-                "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
-            ),
+            object(9, 1, 2, 3, RIVAL),
             object(2, 4, 2, 3, "0"),
         ]));
         let events = events_with(templates);
-        let live = live_collection(
-            templates,
-            &[
+        let stacked = |hidden: bool| -> &'static ObjectEventCollection {
+            let mut data = EventData::new();
+            if hidden {
+                data.flag_set(assets::object_event_flags::resolve(RIVAL).unwrap())
+                    .unwrap();
+            }
+            let mut collection = ObjectEventCollection::from_templates(templates);
+            admit(&mut collection, (2, 2), &data);
+            for (id, direction) in [
                 (9, Direction::East),
                 (9, Direction::East),
                 (2, Direction::West),
-            ],
-        );
-        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
-        let hide = assets::object_event_flags::resolve(
-            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
-        )
-        .unwrap();
-        let mut data = EventData::new();
-        let visible =
-            |data: &EventData| visible_object_event_at(&runtime, 3, 2, 3, data).map(|o| o.local_id);
+            ] {
+                collection.get_mut(id).unwrap().state_mut().walk(direction);
+            }
+            Box::leak(Box::new(collection))
+        };
+        let ids = |live: &'static ObjectEventCollection| {
+            let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+            (
+                ids_at(&runtime, 3, 2, 3),
+                visible_object_event_at(&runtime, 3, 2, 3, &EventData::new()).map(|o| o.local_id),
+            )
+        };
 
-        assert_eq!(ids_at(&runtime, 3, 2, 3), vec![9, 2]);
-        assert_eq!(visible(&data), Some(9));
-        data.flag_set(hide).unwrap();
-        assert_eq!(visible(&data), Some(2));
+        assert_eq!(ids(stacked(false)), (vec![9, 2], Some(9)));
+        assert_eq!(ids(stacked(true)), (vec![2], Some(2)));
     }
 
     #[test]
@@ -816,7 +827,7 @@ mod tests {
         let grid_bytes = flat_grid_bytes(5, 5);
         let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 2, 3, "0")]));
         let events = events_with(templates);
-        let mut collection = ObjectEventCollection::from_templates(templates);
+        let mut collection = admitted(templates, (2, 2));
         let state = collection.get_mut(9).unwrap().state_mut();
         state.walk(Direction::East);
         state.elevation = 5;
@@ -826,6 +837,60 @@ mod tests {
         assert_eq!(ids_at(&runtime, 3, 2, 3), Vec::<u8>::new());
         assert_eq!(ids_at(&runtime, 3, 2, 5), vec![9]);
         assert_eq!(ids_at(&runtime, 3, 2, 0), vec![9]);
+    }
+
+    const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM";
+
+    fn hide_flag() -> u16 {
+        assets::object_event_flags::resolve(HIDE).unwrap()
+    }
+
+    /// The `Rig`'s lone entry (local id 1 at (2, 2)) as the runtime's bound collection, queried
+    /// through [`visible_object_event_at`].
+    fn visible_in_rig(rig: &Rig) -> Option<u8> {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] =
+            std::slice::from_ref(rig.collection.get(1).unwrap().template());
+        let events = events_with(templates);
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(&rig.collection);
+        visible_object_event_at(&runtime, 2, 2, 3, &rig.event_data).map(|o| o.local_id)
+    }
+
+    #[test]
+    fn an_unadmitted_object_is_not_query_visible_after_its_hide_flag_clears() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(1);
+        rig.event_data.flag_clear(hide_flag()).unwrap();
+        rig.tick(10);
+        assert!(
+            !rig.collection.get(1).unwrap().is_active(),
+            "the camera never moved, so the scheduler never admitted it"
+        );
+        assert_eq!(visible_in_rig(&rig), None);
+
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(
+            visible_in_rig(&rig),
+            Some(1),
+            "the next camera update admits it"
+        );
+    }
+
+    #[test]
+    fn an_admitted_object_stays_query_visible_after_its_hide_flag_is_set() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.tick(1);
+        assert_eq!(visible_in_rig(&rig), Some(1));
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(10);
+        assert!(rig.collection.get(1).unwrap().is_active());
+        assert_eq!(
+            visible_in_rig(&rig),
+            Some(1),
+            "only a script's removal retires it, not the flag"
+        );
     }
 
     #[test]

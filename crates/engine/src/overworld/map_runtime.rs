@@ -101,6 +101,13 @@ impl<'a> MapRuntime<'a> {
         self
     }
 
+    /// Returns whether a live object-event collection is bound
+    /// ([`Self::with_object_events`]).
+    #[must_use]
+    pub const fn has_live_object_events(&self) -> bool {
+        self.object_events.is_some()
+    }
+
     /// Returns the bound map id.
     #[must_use]
     pub const fn id(&self) -> MapId {
@@ -169,12 +176,14 @@ impl<'a> MapRuntime<'a> {
     ///
     /// With a bound collection ([`Self::with_object_events`]) the position
     /// and elevation are each object's live ones and every result is its
-    /// authored template, whose own coordinates are not current; a bound
-    /// collection never falls back to authored coordinates. Unbound, the
-    /// authored coordinates are scanned. Either the event or query elevation
-    /// may be [`super::collision::ELEVATION_TRANSITION`]. This query does not
-    /// filter hidden templates; [`super::object_event::visible_object_event_at`]
-    /// composes visibility with the ordered scan.
+    /// authored template, whose own coordinates are not current; only entries
+    /// the scheduler has admitted are scanned, and a bound collection never
+    /// falls back to authored coordinates. Unbound, the authored coordinates
+    /// are scanned. Either the event or query elevation may be
+    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not read
+    /// hide flags; [`super::object_event::visible_object_event_at`] applies
+    /// them to the unbound scan, as the bound scheduler applied them at
+    /// admission.
     pub fn object_events_at(
         &self,
         x: i32,
