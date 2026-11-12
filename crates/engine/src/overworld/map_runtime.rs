@@ -215,7 +215,8 @@ impl<'a> MapRuntime<'a> {
     /// its collision counterpart (`DoesObjectCollideWithObjectAt`,
     /// `event_object_movement.c:4724-4741`). Elevation matching, the bound-collection rule and
     /// hidden templates are as there; an unbound template never moves, so it holds one tile.
-    /// [`super::object_event::blocking_object_event_at`] composes visibility with this scan.
+    /// [`super::object_event::blocking_object_event_at`] adds the hide-flag filter an unbound
+    /// scan needs; a bound collection's scheduler applied the flag at admission.
     pub fn collision_objects_at(
         &self,
         x: i32,

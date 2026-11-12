@@ -96,7 +96,7 @@ pub fn visible_object_event_at<'a>(
         .find(|event| admitted || object_event_is_visible(event, event_data))
 }
 
-/// Returns the first visible object that blocks a step onto a tile and elevation, in declaration
+/// Returns the first object that blocks a step onto a tile and elevation, in declaration
 /// order: one standing on the tile, or one still leaving it (`DoesObjectCollideWithObjectAt`,
 /// `event_object_movement.c:4724-4741`).
 ///
