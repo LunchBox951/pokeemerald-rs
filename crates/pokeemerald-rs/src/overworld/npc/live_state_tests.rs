@@ -1,6 +1,6 @@
 //! Object events draw from live state, not authored templates.
 
-use super::test_support::{object, open_runtime, DEFAULT_ELEVATION};
+use super::test_support::{admitted, admitted_with, object, open_runtime, DEFAULT_ELEVATION};
 use super::*;
 use assets::MovementType;
 use engine::overworld::object_event::ObjectEventCollection;
@@ -16,7 +16,7 @@ fn bindings() -> HashMap<&'static str, SpriteBinding> {
 }
 
 fn collection(events: Vec<ObjectEvent>) -> ObjectEventCollection {
-    ObjectEventCollection::from_templates(Box::leak(events.into_boxed_slice()))
+    admitted(Box::leak(events.into_boxed_slice()))
 }
 
 fn mom(x: i16, y: i16, movement: MovementType) -> ObjectEvent {
@@ -126,13 +126,46 @@ fn the_spawn_window_follows_the_live_tile() {
 }
 
 #[test]
-fn the_template_hide_flag_still_hides_a_live_entry() {
+fn the_template_hide_flag_keeps_an_entry_unadmitted_and_so_undrawn() {
     let mut hidden = mom(7, 5, MovementType::FaceDown);
     hidden.flag = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM";
-    let objects = collection(vec![hidden]);
     let mut data = EventData::new();
     data.flag_set(super::test_support::HIDE_BRENDAN_BEDROOM_RIVAL)
         .unwrap();
+    let objects = admitted_with(Box::leak(vec![hidden].into_boxed_slice()), &data);
     let drawn = oam_entries(&objects, &bindings(), &player_at((5, 5)), &data);
+    assert!(drawn.is_empty());
+}
+
+/// Upstream consults the hide flag only when it spawns the object
+/// (`TrySpawnObjectEvents`, `event_object_movement.c:1645-1673`): a flag set later leaves the
+/// sprite until `removeobject` deactivates the object (`:1383-1397`).
+#[test]
+fn a_flag_set_after_admission_keeps_the_sprite_until_the_object_is_removed() {
+    let mut shown = mom(7, 5, MovementType::FaceDown);
+    shown.flag = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM";
+    let mut objects = admitted(Box::leak(vec![shown].into_boxed_slice()));
+    let mut data = EventData::new();
+    let player = player_at((5, 5));
+    assert_eq!(oam_entries(&objects, &bindings(), &player, &data).len(), 1);
+
+    data.flag_set(super::test_support::HIDE_BRENDAN_BEDROOM_RIVAL)
+        .unwrap();
+    assert_eq!(
+        oam_entries(&objects, &bindings(), &player, &data).len(),
+        1,
+        "the admitted object keeps its sprite"
+    );
+
+    assert!(objects.remove_by_local_id(1));
+    assert!(oam_entries(&objects, &bindings(), &player, &data).is_empty());
+}
+
+#[test]
+fn an_unadmitted_object_is_not_drawn_even_with_its_flag_clear() {
+    let objects = ObjectEventCollection::from_templates(Box::leak(
+        vec![mom(7, 5, MovementType::FaceDown)].into_boxed_slice(),
+    ));
+    let drawn = oam_entries(&objects, &bindings(), &player_at((5, 5)), &EventData::new());
     assert!(drawn.is_empty());
 }

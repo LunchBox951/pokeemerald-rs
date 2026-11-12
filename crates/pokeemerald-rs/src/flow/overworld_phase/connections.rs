@@ -8,7 +8,7 @@
 //! map-script effect.
 
 use assets::MapHeaderTable;
-use engine::overworld::object_event::ObjectEventCollection;
+use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
 };
@@ -292,6 +292,11 @@ impl OverworldPhase {
         // start over on entry to a new map via warp.
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
         // `src/overworld.c:850`): a warp's first four steps roll no wild
         // encounter.
@@ -370,6 +375,11 @@ impl OverworldPhase {
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
@@ -446,6 +456,11 @@ impl OverworldPhase {
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         self.wild.restart_immunity_steps();
         self.save1.location = destination;
         self.save1.pos = engine::save::Coords16 { x, y };
@@ -542,6 +557,11 @@ impl OverworldPhase {
         self.pending_landing = Some(to_position);
         self.pending_turn = None;
         self.save1.event_data = transitioned_event_data;
+        admit_object_events_at_map_load(
+            &mut self.object_events,
+            &self.player,
+            &self.save1.event_data,
+        );
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
         // `src/overworld.c:800`).
         self.wild.restart_immunity_steps();
@@ -563,6 +583,23 @@ impl OverworldPhase {
 /// and replaces them on a map change (`:1645-1673`).
 pub(super) fn seed_object_events(scene: &overworld::OverworldScene) -> ObjectEventCollection {
     ObjectEventCollection::from_templates(scene.map_events().object_events)
+}
+
+/// Runs map load's admission pass over `objects` for a player standing at `player`, so the
+/// first frame's collision, interaction, and sight queries see the spawned objects, as
+/// `TrySpawnObjectEvents` runs at map load before any frame (`overworld.c:2163`). Call it once
+/// the destination's event data is committed: a hide flag is read at admission.
+pub(super) fn admit_object_events_at_map_load(
+    objects: &mut ObjectEventCollection,
+    player: &engine::overworld::PlayerState,
+    event_data: &engine::event_data::EventData,
+) {
+    let _ = objects.admit_on_map_load(&FrameContext {
+        player_position: player.position(),
+        event_data,
+        frozen: true,
+        player_dashing: false,
+    });
 }
 
 /// A saved-location landing: position, elevation, and warp-in facing.

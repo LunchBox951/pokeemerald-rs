@@ -108,15 +108,35 @@ impl ObjectEventCollection {
 
     /// Admits the entries already in view, once per collection, as map load's
     /// `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`); a later call does
-    /// nothing. No callback runs. A caller whose first input can end the map's visit, a
-    /// connection crossing, calls this first so the crossing finds the objects upstream already
-    /// holds ([`Self::carry_across_connection`]). Returns whether this call did the admission.
+    /// nothing. No callback runs, and `context.frozen` is not read.
+    ///
+    /// Position queries return only admitted entries, so a caller that seeds or replaces a
+    /// collection calls this at map load, before its first [`Self::run_frame`]; a connection
+    /// crossing then finds the objects upstream already holds
+    /// ([`Self::carry_across_connection`]). Returns whether this call did the admission.
     pub fn admit_on_map_load(&mut self, context: &FrameContext<'_>) -> bool {
         let first = self.reconciled_at.is_none();
         if first {
             self.reconcile_with_view(context);
         }
         first
+    }
+
+    /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
+    /// `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
+    /// `event_object_movement.c:1383-1397`): position queries stop returning it until a later
+    /// admission pass spawns it again. The script verb's `FlagSet` of the object's hide flag is
+    /// the caller's, so that later pass does not respawn it. Returns whether an active entry was
+    /// retired.
+    pub fn remove_by_local_id(&mut self, local_id: u8) -> bool {
+        let Some(entry) = self.get_mut(local_id) else {
+            return false;
+        };
+        let was_active = entry.lifecycle.is_active();
+        if was_active {
+            entry.lifecycle = Lifecycle::Despawned;
+        }
+        was_active
     }
 
     /// Spawns every in-window, unhidden entry in template order, then removes every active entry
