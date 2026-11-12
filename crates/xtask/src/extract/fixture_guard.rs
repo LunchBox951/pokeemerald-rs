@@ -178,10 +178,10 @@ impl Planted {
             path: path.to_path_buf(),
             identity,
             handle,
-            sentinel: if !is_dir {
-                None
-            } else {
+            sentinel: if is_dir {
                 planted.map(str::to_owned).or_else(|| sentinel_of(path))
+            } else {
+                None
             },
             created_by_failed_plant: false,
         }
