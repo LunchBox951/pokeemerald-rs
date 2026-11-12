@@ -354,8 +354,13 @@ const MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD: &str =
 /// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
 /// follows a symlink at `path`, so a planted link cannot redirect the write
 /// onto its target. A stale occupant is unlinked (the entry itself, never
-/// what it points to) and the claim retried once.
-pub(super) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+/// what it points to) and the claim retried once. Returns the creating
+/// handle, which `pack_test_support::ScratchPack::adopt` keeps to own the
+/// entry through cleanup.
+pub(super) fn write_scratch_exclusive(
+    path: &std::path::Path,
+    bytes: impl AsRef<[u8]>,
+) -> std::fs::File {
     use std::io::Write as _;
     let mut file = None;
     for _ in 0..2 {
@@ -374,9 +379,10 @@ pub(super) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<
             Err(e) => panic!("the scratch directory is writable: {e}"),
         }
     }
-    file.expect("the scratch path is exclusively creatable")
-        .write_all(bytes.as_ref())
+    let mut file = file.expect("the scratch path is exclusively creatable");
+    file.write_all(bytes.as_ref())
         .expect("the scratch pack is writable");
+    file
 }
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding a

@@ -14,11 +14,16 @@ fn scratch_pack_path(label: &str, saved_text_speed: u8) -> std::path::PathBuf {
 }
 
 /// Exclusively creates the test's scratch pack (never following a planted
-/// symlink) and returns its path.
-fn claim_scratch_pack(label: &str, saved_text_speed: u8, bytes: &[u8]) -> std::path::PathBuf {
+/// symlink) and returns the guard that owns it: dropping the guard removes the
+/// pack only while its path still names the file created here.
+fn claim_scratch_pack(
+    label: &str,
+    saved_text_speed: u8,
+    bytes: &[u8],
+) -> crate::pack_test_support::ScratchPack {
     let path = scratch_pack_path(label, saved_text_speed);
-    crate::flow::tests::write_scratch_exclusive(&path, bytes);
-    path
+    let file = crate::flow::tests::write_scratch_exclusive(&path, bytes);
+    crate::pack_test_support::ScratchPack::adopt(&path, file)
 }
 
 /// A field-dialog interaction repairs an out-of-range saved
@@ -107,11 +112,11 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
-        let path = claim_scratch_pack("field-dialog", saved_text_speed, &pack_bytes_blob);
+        let pack = claim_scratch_pack("field-dialog", saved_text_speed, &pack_bytes_blob);
         // `PackSource::Test` needs a `'static` path; leaked once per call,
         // reclaimed only when the test process exits (test-only, matches
         // this crate's own `Box::leak`-for-`'static`-fixtures idiom).
-        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+        let leaked_path = pack.leaked_path();
 
         // One tile east of Mom, facing west -- directly adjacent (this
         // file's other Mom-interaction tests' own fixture notes).
@@ -142,7 +147,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
             }
         }
 
-        let _ = std::fs::remove_file(&path);
+        drop(pack);
         frame
     };
 
@@ -202,11 +207,11 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
-        let path = claim_scratch_pack("sight-trainer-intro", saved_text_speed, &pack_bytes_blob);
+        let pack = claim_scratch_pack("sight-trainer-intro", saved_text_speed, &pack_bytes_blob);
         // `PackSource::Test` needs a `'static` path; leaked once per call,
         // reclaimed only when the test process exits (this file's own
         // Mom-dialog text-speed test uses the identical idiom).
-        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+        let leaked_path = pack.leaked_path();
 
         let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
         phase.pack_source = PackSource::Test(leaked_path);
@@ -240,7 +245,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
             }
         }
 
-        let _ = std::fs::remove_file(&path);
+        drop(pack);
         print_frame
     };
 
@@ -265,5 +270,17 @@ fn the_dialog_pacing_scratch_packs_never_follow_a_planted_symlink() {
         crate::flow::tests::assert_planted_symlink_untouched(&path, bytes, || {
             claim_scratch_pack(label, 2, bytes)
         });
+    }
+}
+
+/// A file that replaces either dialog-pacing test's scratch pack before its
+/// cleanup runs must not be unlinked by it.
+#[cfg(unix)]
+#[test]
+fn the_dialog_pacing_scratch_packs_spare_a_replacement_at_their_path() {
+    for label in ["field-dialog", "sight-trainer-intro"] {
+        crate::pack_test_support::assert_scratch_pack_cleanup_spares_a_replacement(
+            claim_scratch_pack(label, 2, b"scratch pack bytes"),
+        );
     }
 }

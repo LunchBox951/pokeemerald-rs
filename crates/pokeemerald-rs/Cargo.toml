@@ -62,6 +62,12 @@ rom-import = { path = "../rom-import" }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
+# Workspace-local, not an external crate: `win-fs` owns the one `windows-sys` use. The scratch
+# pack guard (`pack_test_support::ScratchPack`) reads a created pack's Windows file identity from
+# it, so its cleanup can tell the pack from a replacement.
+[target.'cfg(windows)'.dev-dependencies]
+win-fs = { path = "../win-fs" }
+
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
 # (mirrors `engine`'s `Cargo.toml`): `main_menu`/`intro`'s unit tests build

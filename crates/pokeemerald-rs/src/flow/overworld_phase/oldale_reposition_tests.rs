@@ -421,20 +421,27 @@ fn failed_warp_preserves_live_object_event_edits() {
     );
 }
 
+/// An Oldale layout pack with the three NPC sheets, owned by the returned guard: it removes
+/// the pack on drop only while the path still names the file created here.
+fn oldale_pack(label: &str) -> crate::pack_test_support::ScratchPack {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let file = crate::overworld::test_support::write_oldale_layout_pack(
+        &path,
+        &["girl_3", "mart_employee", "maniac"],
+    );
+    crate::pack_test_support::ScratchPack::adopt(&path, file)
+}
+
 #[test]
 fn successful_warp_and_connection_replace_live_object_events() {
     use crate::pack_source::PackSource;
 
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-live-object-events-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    crate::overworld::test_support::write_oldale_layout_pack(
-        &path,
-        &["girl_3", "mart_employee", "maniac"],
-    );
-    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let pack = oldale_pack("live-object-events");
+    let leaked_path = pack.leaked_path();
 
     let walk_footprints_man = |phase: &mut OverworldPhase| {
         let local_id = phase
@@ -485,7 +492,7 @@ fn successful_warp_and_connection_replace_live_object_events() {
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
     assert_replaced(&phase, local_id, "the connection crossing");
 
-    let _ = std::fs::remove_file(&path);
+    drop(pack);
 }
 
 #[test]
@@ -522,16 +529,8 @@ fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
     for flag in [FLAG_ADVENTURE_STARTED, FLAG_RECEIVED_POTION_OLDALE] {
         assert!(saved.block1.event_data.flag_get(flag).unwrap());
     }
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-oldale-continue-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    crate::overworld::test_support::write_oldale_layout_pack(
-        &path,
-        &["girl_3", "mart_employee", "maniac"],
-    );
-    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let pack = oldale_pack("oldale-continue");
+    let leaked_path = pack.leaked_path();
     let resumed = OverworldPhase::continue_saved_game(
         PackSource::Test(leaked_path),
         saved.block1,
@@ -567,7 +566,7 @@ fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
         );
     }
 
-    let _ = std::fs::remove_file(&path);
+    drop(pack);
 }
 
 /// The scene's runtime answers from the placement it loaded with, not from
@@ -593,4 +592,14 @@ fn the_scene_runtime_answers_from_oldales_repositioned_events() {
         !std::ptr::eq(runtime.events().object_events, generated.object_events),
         "and those are the visit's repositioned placement, not the generated set"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_oldale_pack_cleanup_spares_a_replacement_at_its_path() {
+    for label in ["live-object-events", "oldale-continue"] {
+        crate::pack_test_support::assert_scratch_pack_cleanup_spares_a_replacement(oldale_pack(
+            label,
+        ));
+    }
 }
