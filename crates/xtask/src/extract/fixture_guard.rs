@@ -100,9 +100,12 @@ struct PlantedEntry {
     /// so passes the identity compare) is left alone unless it also copied the
     /// sentinel. A symlink has none; a directory with neither is never removed.
     sentinel: Option<String>,
-    /// Set for a name the plant created and then failed on, before it could
-    /// write a sentinel. It is removed only if empty, so a populated
-    /// replacement swapped in meanwhile is reported and kept.
+    /// Set for a name the plant created and then failed to populate. Its
+    /// `identity` was read right after the guard created it, so the entry is
+    /// touched only while that device and inode are still at the path, and
+    /// then with `remove_dir` alone (which refuses a directory holding
+    /// anything). For such an entry `sentinel` is the content the failed
+    /// write was to leave, never read from disk.
     created_by_failed_plant: bool,
 }
 
@@ -122,15 +125,50 @@ struct Planted(Vec<PlantedEntry>);
 
 impl Planted {
     fn entry(path: &Path) -> PlantedEntry {
-        Self::entry_planted(path, None)
+        Self::entry_planted(path, None, None)
     }
 
-    /// `planted` is the sentinel content the plant wrote. A directory that
-    /// does not hold it is a replacement swapped in after the plant: it is
-    /// recorded without an identity, so it is reported and never removed.
-    fn entry_planted(path: &Path, planted: Option<&str>) -> PlantedEntry {
-        let swapped = planted.is_some_and(|planted| sentinel_of(path).as_deref() != Some(planted));
-        let identity = identity_of(path).ok().flatten().filter(|_| !swapped);
+    /// A name whose creation identity could not be read: it can never be told
+    /// from a replacement, so it is reported and never removed.
+    fn entry_unproven(path: &Path) -> PlantedEntry {
+        PlantedEntry {
+            path: path.to_path_buf(),
+            identity: None,
+            handle: None,
+            sentinel: None,
+            created_by_failed_plant: false,
+        }
+    }
+
+    /// A name the guard created and failed to populate. `created` is the
+    /// identity read right after the creation; a racer's replacement carries
+    /// another one and is left alone. `intended` is the sentinel content the
+    /// failed write was to leave.
+    fn entry_failed(path: &Path, created: Option<Identity>, intended: String) -> PlantedEntry {
+        PlantedEntry {
+            path: path.to_path_buf(),
+            identity: created,
+            handle: None,
+            sentinel: Some(intended),
+            created_by_failed_plant: true,
+        }
+    }
+
+    /// `planted` is the sentinel content the plant wrote and `created` the
+    /// identity read right after the guard created the name (`None` reads it
+    /// from the path now, for an entry whose creation was not observed). A
+    /// directory that does not hold the sentinel, or whose identity is not
+    /// `created`, is a replacement swapped in after the plant: it is recorded
+    /// without an identity, so it is reported and never removed.
+    fn entry_planted(
+        path: &Path,
+        planted: Option<&str>,
+        created: Option<&Identity>,
+    ) -> PlantedEntry {
+        let current = identity_of(path).ok().flatten();
+        let swapped = planted.is_some_and(|planted| sentinel_of(path).as_deref() != Some(planted))
+            || created.is_some_and(|created| current.as_ref() != Some(created));
+        let identity = current.filter(|_| !swapped);
         let is_dir = identity.as_ref().is_some_and(|identity| identity.is_dir);
         #[cfg(windows)]
         let handle = identity.as_ref().and_then(|identity| pin(path, identity));
@@ -140,7 +178,11 @@ impl Planted {
             path: path.to_path_buf(),
             identity,
             handle,
-            sentinel: if is_dir { sentinel_of(path) } else { None },
+            sentinel: if !is_dir {
+                None
+            } else {
+                planted.map(str::to_owned).or_else(|| sentinel_of(path))
+            },
             created_by_failed_plant: false,
         }
     }
@@ -172,14 +214,13 @@ impl Drop for Planted {
                     // on Windows.
                     drop(entry.handle.take());
                     let removed = if entry.created_by_failed_plant {
-                        // Only an empty directory, or one holding just an
-                        // empty sentinel (a write that failed before writing
-                        // anything): a replacement with any content is not
-                        // adopted and its sentinel is never deleted.
-                        let sentinel = path.join(SENTINEL);
-                        if std::fs::metadata(&sentinel).is_ok_and(|m| m.len() == 0) {
-                            let _ = std::fs::remove_file(&sentinel);
-                        }
+                        // The identity matched, so this is the directory the
+                        // guard created unless a racer's reused its inode.
+                        // Only a sentinel holding exactly the content this
+                        // plant was writing is deleted. An empty or partial
+                        // one cannot be told from a racer's, so it is kept
+                        // and the directory is reported instead.
+                        remove_own_sentinel(path, entry.sentinel.as_deref());
                         std::fs::remove_dir(path)
                     } else if current.is_dir {
                         std::fs::remove_dir_all(path)
@@ -207,6 +248,20 @@ impl Drop for Planted {
     }
 }
 
+/// Deletes `dir`'s sentinel if it is a regular file holding exactly
+/// `intended`, the unique content only this plant could have written. Any
+/// other content, empty or partial included, may be a racer's and is kept.
+fn remove_own_sentinel(dir: &Path, intended: Option<&str>) {
+    let Some(intended) = intended else { return };
+    let sentinel = dir.join(SENTINEL);
+    let is_file = std::fs::symlink_metadata(&sentinel).is_ok_and(|m| m.file_type().is_file());
+    let ours =
+        is_file && std::fs::read_to_string(&sentinel).is_ok_and(|content| content == intended);
+    if ours {
+        let _ = std::fs::remove_file(&sentinel);
+    }
+}
+
 /// Every name a predictable-path fixture could have used, plus the first
 /// `OwnedDir` candidates.
 fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
@@ -223,42 +278,48 @@ fn names(prefix: &str, line_limit: Option<usize>) -> Vec<PathBuf> {
 /// A name held by a concurrent run of the same fixture is waited for, so the
 /// guard owns every name before the fixture runs. `on_wait` runs each time a
 /// name is found held.
+///
+/// `create` must claim the name exclusively (failing with `AlreadyExists`
+/// when it is taken). Ownership starts when it succeeds: the identity is read
+/// then, so a failed `populate` removes only the entry still carrying that
+/// identity. Absence before the plant and a failed plant prove nothing. The
+/// `&str` `populate` gets is the sentinel content to write.
 fn plant_all(
     prefix: &str,
     names: &[PathBuf],
-    plant: impl Fn(&Path) -> io::Result<Option<String>>,
+    create: impl Fn(&Path) -> io::Result<()>,
+    populate: impl Fn(&Path, &str) -> io::Result<Option<String>>,
     on_wait: &dyn Fn(),
 ) -> Planted {
     let mut planted = Planted(Vec::new());
     let deadline = Instant::now() + PLANT_WAIT;
     for path in names {
         loop {
-            let absent =
-                std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
-            match plant(path) {
-                Ok(sentinel) => {
-                    planted
-                        .0
-                        .push(Planted::entry_planted(path, sentinel.as_deref()));
+            match create(path) {
+                Ok(()) => {
+                    let created = identity_of(path).ok().flatten();
+                    let intended = fresh_sentinel(path);
+                    match populate(path, &intended) {
+                        Ok(sentinel) => planted.0.push(match created.as_ref() {
+                            Some(created) => {
+                                Planted::entry_planted(path, sentinel.as_deref(), Some(created))
+                            }
+                            None => Planted::entry_unproven(path),
+                        }),
+                        Err(e) => {
+                            planted
+                                .0
+                                .push(Planted::entry_failed(path, created, intended));
+                            panic!("{prefix}: cannot plant {}: {e}", path.display());
+                        }
+                    }
                     break;
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline => {
                     on_wait();
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                Err(e) => {
-                    // A name free before the plant and taken after it is the
-                    // guard's even though the plant failed; record it for cleanup.
-                    if absent
-                        && e.kind() != io::ErrorKind::AlreadyExists
-                        && std::fs::symlink_metadata(path).is_ok()
-                    {
-                        let mut entry = Planted::entry(path);
-                        entry.created_by_failed_plant = true;
-                        planted.0.push(entry);
-                    }
-                    panic!("{prefix}: cannot plant {}: {e}", path.display());
-                }
+                Err(e) => panic!("{prefix}: cannot plant {}: {e}", path.display()),
             }
         }
     }
@@ -291,8 +352,12 @@ fn fresh_sentinel(dir: &Path) -> String {
 /// Writes the sentinel and returns its content.
 fn populate(dir: &Path) -> io::Result<String> {
     let content = fresh_sentinel(dir);
-    std::fs::write(dir.join(SENTINEL), &content)?;
+    write_sentinel(dir, &content)?;
     Ok(content)
+}
+
+fn write_sentinel(dir: &Path, content: &str) -> io::Result<()> {
+    std::fs::write(dir.join(SENTINEL), content)
 }
 
 fn sentinel_of(dir: &Path) -> Option<String> {
@@ -342,10 +407,8 @@ fn assert_fixture_ignores_planted_names_observing(
     let dirs = plant_all(
         prefix,
         &names,
-        |path| {
-            std::fs::create_dir(path)?;
-            populate(path).map(Some)
-        },
+        |path| std::fs::create_dir(path),
+        |path, content| write_sentinel(path, content).map(|()| Some(content.to_owned())),
         on_wait,
     );
     fixture();
@@ -364,11 +427,12 @@ fn assert_fixture_ignores_planted_names_observing(
     #[cfg(unix)]
     {
         let victim = OwnedDir::create("pokeemerald-rs-fixture-guard-victim").unwrap();
-        populate(victim.path()).unwrap();
+        let victim_sentinel = populate(victim.path()).unwrap();
         let links = plant_all(
             prefix,
             &names,
-            |path| std::os::unix::fs::symlink(victim.path(), path).map(|()| None),
+            |path| std::os::unix::fs::symlink(victim.path(), path),
+            |_, _| Ok(None),
             on_wait,
         );
         fixture();
@@ -378,7 +442,7 @@ fn assert_fixture_ignores_planted_names_observing(
             .filter(|e| std::fs::read_link(&e.path).ok().as_deref() != Some(victim.path()))
             .map(|e| e.path.clone())
             .collect();
-        let victim_untouched = untouched(victim.path());
+        let victim_untouched = untouched_as(victim.path(), Some(&victim_sentinel));
         assert!(
             removed.is_empty(),
             "{prefix}: fixture removed or replaced symlinks it never created: {removed:?}"
@@ -494,8 +558,8 @@ mod tests {
             plant_all(
                 "failed-plant-swap",
                 &names,
-                |p| {
-                    std::fs::create_dir(p)?;
+                |p| std::fs::create_dir(p),
+                |p, _| {
                     std::fs::remove_dir(p).unwrap();
                     std::fs::create_dir(p).unwrap();
                     std::fs::write(p.join(SENTINEL), "theirs").unwrap();
@@ -512,6 +576,66 @@ mod tests {
             Some("theirs"),
             "cleanup deleted the racer's sentinel"
         );
+    }
+
+    /// Same race with an empty sentinel: the racer's directory is
+    /// indistinguishable from a half-written plant by content, so it is the
+    /// identity captured at creation that must keep the guard off it.
+    #[test]
+    fn a_replacement_with_an_empty_sentinel_swapped_in_during_a_failed_plant_survives() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-failed-plant-empty-swap-{}",
+            std::process::id()
+        ));
+        let names = vec![path.clone()];
+        let result = std::panic::catch_unwind(|| {
+            plant_all(
+                "failed-plant-empty-swap",
+                &names,
+                |p| std::fs::create_dir(p),
+                |p, _| {
+                    std::fs::remove_dir(p).unwrap();
+                    std::fs::create_dir(p).unwrap();
+                    std::fs::write(p.join(SENTINEL), "").unwrap();
+                    Err::<Option<String>, _>(io::Error::from(io::ErrorKind::PermissionDenied))
+                },
+                &|| {},
+            )
+        });
+        let survived = path.is_dir() && sentinel_of(&path).as_deref() == Some("");
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(result.is_err(), "plant_all did not panic");
+        assert!(
+            survived,
+            "cleanup deleted the racer's directory or its empty sentinel"
+        );
+    }
+
+    /// The guard's own sentinel, written in full before the plant failed, is
+    /// cleaned up with the directory it created.
+    #[test]
+    fn plant_all_removes_its_own_sentinel_after_a_failed_plant() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-own-sentinel-{}",
+            std::process::id()
+        ));
+        let names = vec![path.clone()];
+        let result = std::panic::catch_unwind(|| {
+            plant_all(
+                "own-sentinel",
+                &names,
+                |p| std::fs::create_dir(p),
+                |p, content| {
+                    std::fs::write(p.join(SENTINEL), content).unwrap();
+                    Err::<Option<String>, _>(io::Error::other("injected late failure"))
+                },
+                &|| {},
+            )
+        });
+        let left_behind = path.exists();
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(result.is_err(), "plant_all did not panic");
+        assert!(!left_behind, "plant_all left its own sentinel");
     }
 
     #[cfg(unix)]
@@ -544,12 +668,12 @@ mod tests {
         );
     }
 
-    /// The replacement taking the freed inode is the case a bare identity
-    /// compare cannot tell apart.
-    #[cfg(unix)]
+    /// A replacement that recycled the planted inode passes the identity
+    /// compare; only the sentinel tells it apart. The test keeps the directory
+    /// and its identity fixed and changes only the sentinel, so it reaches that
+    /// check on any filesystem.
     #[test]
-    fn planted_drop_leaves_a_replacement_that_recycled_the_inode() {
-        use std::os::unix::fs::MetadataExt as _;
+    fn planted_drop_leaves_a_directory_whose_identity_matches_but_sentinel_differs() {
         let path = std::env::temp_dir().join(format!(
             "pokeemerald-rs-fixture-guard-recycled-{}",
             std::process::id()
@@ -557,20 +681,45 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         populate(&path).unwrap();
         let planted = Planted(vec![Planted::entry(&path)]);
-        let before = std::fs::symlink_metadata(&path).unwrap().ino();
-        std::fs::remove_dir_all(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
-        populate(&path).unwrap();
-        let after = std::fs::symlink_metadata(&path).unwrap().ino();
-        eprintln!("planted inode {before}, replacement inode {after}");
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
-        let survived = untouched(&path);
+        std::fs::write(path.join(SENTINEL), "precious-theirs").unwrap();
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let survived = sentinel_of(&path).as_deref() == Some("precious-theirs");
         let _ = std::fs::remove_dir_all(&path);
         assert!(
             survived,
-            "Planted::drop deleted an unrelated directory at {}",
+            "Planted::drop deleted a directory with another sentinel at {}",
             path.display()
         );
+        assert!(reported.is_err(), "the kept directory went unreported");
+    }
+
+    /// The identity read right after creation, not one read later from the
+    /// path, decides whether a directory is the one planted: a replacement
+    /// that already holds the planted sentinel is still not adopted.
+    #[test]
+    fn a_replacement_that_copied_the_sentinel_does_not_match_the_creation_identity() {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-fixture-guard-copied-sentinel-{}",
+            std::process::id()
+        ));
+        let aside = path.with_extension("aside");
+        std::fs::create_dir(&path).unwrap();
+        let content = populate(&path).unwrap();
+        let created = identity_of(&path).unwrap().unwrap();
+        std::fs::rename(&path, &aside).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join(SENTINEL), &content).unwrap();
+        let planted = Planted(vec![Planted::entry_planted(
+            &path,
+            Some(&content),
+            Some(&created),
+        )]);
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
+        let survived = untouched_as(&path, Some(&content));
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&aside);
+        assert!(survived, "the replacement was adopted and deleted");
+        assert!(reported.is_err(), "the replacement went unreported");
     }
 
     /// A populated directory swapped in between the plant and the guard's
@@ -586,7 +735,11 @@ mod tests {
         std::fs::remove_dir_all(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         populate(&path).unwrap();
-        let planted = Planted(vec![Planted::entry_planted(&path, Some(&planted_sentinel))]);
+        let planted = Planted(vec![Planted::entry_planted(
+            &path,
+            Some(&planted_sentinel),
+            None,
+        )]);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(planted)));
         let survived = untouched(&path);
         let _ = std::fs::remove_dir_all(&path);
@@ -608,10 +761,8 @@ mod tests {
             plant_all(
                 "populate-fails",
                 &names,
-                |p| {
-                    std::fs::create_dir(p)?;
-                    Err::<Option<String>, _>(io::Error::other("injected population failure"))
-                },
+                |p| std::fs::create_dir(p),
+                |_, _| Err::<Option<String>, _>(io::Error::other("injected population failure")),
                 &|| {},
             )
         });
