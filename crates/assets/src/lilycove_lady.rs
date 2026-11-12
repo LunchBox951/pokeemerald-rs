@@ -909,8 +909,8 @@ mod tests {
     #[test]
     fn quiz_move_words_use_the_second_move_group() {
         let data = LilycoveLadyData::new();
-        assert_eq!(data.quiz(5).unwrap().question[3], (19 << 9) | 93);
-        assert_eq!(data.quiz(7).unwrap().question[2], (19 << 9) | 335);
+        assert_eq!(data.quiz(5).unwrap().question[3], (19 << 9) | 0x5D);
+        assert_eq!(data.quiz(7).unwrap().question[2], (19 << 9) | 0x14F);
     }
 
     #[test]
