@@ -37,13 +37,15 @@
 //! the import owns. The residuals of each step are documented with it, in
 //! [`restore`] and [`quarantine`].
 //!
-//! Rollback is also not crash-safe, but only for a level that gains entries
-//! in the instant between [`occupied`]'s listing and the rename: a level that
-//! holds entries when listed is left where it is, never moved. A process
-//! killed after an empty level was renamed into its quarantine and before it
-//! was removed leaves it at `.undo-<hex>/level` with no warning, and no later
-//! run looks for it. That level holds data only if another writer filled it,
-//! or swapped in its own directory, in that window.
+//! Rollback is also not crash-safe. A level that holds entries when
+//! [`occupied`] lists it is left where it is, never moved; but a process
+//! killed after a level was renamed into its quarantine and before it was
+//! removed or put back leaves it at `.undo-<hex>/level` with no warning, and
+//! no later run looks for it. That capture holds data only if another writer
+//! acted from the listing until that kill: filling the level before the
+//! rename, filling it after the rename through a descriptor or working
+//! directory it already held inside it, or swapping its own directory in
+//! under the name, which the rename then captures in the level's place.
 
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
@@ -69,12 +71,12 @@ use occupied::level_holds_entries;
 use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
+use report::{level_location, warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use report::{located_beside, verified_location};
-use report::{warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{holds_this_level, is_this_level, take_back_into, take_back_unwritable_in_place};
+use restore::{is_this_level, take_back_into, take_back_unwritable_in_place};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -251,14 +253,24 @@ fn left_unmoved_as_occupied(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
 /// Reports that `dir` is not moved because of `state` (it holds entries, or
 /// could not be listed). The check read the held original, so if another
 /// writer moved it since the name was validated, it is reported where it
-/// stands now, not under its old name. `in_place` is the reason given when
-/// the original is still at its name.
+/// stands now, not under its old name, and a name left vacant is said to be
+/// vacant rather than taken. `in_place` is the reason given when the
+/// original is still at its name.
 fn leave_unmoved(parent: &OwnedFd, dir: &CreatedDirectory, state: &str, in_place: &str) {
-    match holds_this_level(parent.as_fd(), &dir.name, dir) {
+    let looked_up = rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
+        .and_then(|stat| is_this_level(dir, &stat));
+    match looked_up {
         Ok(true) => warn_left_standing(
             dir,
             format_args!("{in_place}; the levels above it are left too"),
         ),
+        Err(err) if err == rustix::io::Errno::NOENT => {
+            eprintln!(
+                "warning: {} is no longer under its name, and the directory rollback made for it was not taken back ({state}); the levels above it are left too",
+                OneLinePath(&level_location(dir))
+            );
+            warn_if_moved_away(dir);
+        }
         Ok(false) => {
             warn_left_standing(
                 dir,

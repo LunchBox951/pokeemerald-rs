@@ -383,6 +383,43 @@ fn a_moved_level_that_gained_contents_is_reported_where_it_went() {
     mark_path("original at: ", &moved);
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_moved_level_that_gained_contents_leaving_its_name_vacant_is_reported_as_vacant() {
+    // The level is moved away after validation and gains contents, and
+    // nothing retakes its name: the warning says the name is vacant rather
+    // than that another entry has taken it, and names where the level went.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::races::a_moved_level_that_gained_contents_leaving_its_name_vacant_is_reported_as_vacant",
+        );
+        assert!(
+            stderr.contains(
+                "/new is no longer under its name, and the directory rollback made for it was not taken back (it holds entries); the levels above it are left too"
+            ),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("another entry has taken its name"),
+            "a vacant name was reported taken; stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "original at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-moved-vacant");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&level, &moved).unwrap();
+        fs::write(moved.join("keep"), b"x").unwrap();
+    });
+    assert!(moved.join("keep").is_file() && !level.exists());
+    assert_eq!(entry_names(&dir.path), ["original"]);
+    mark_path("original at: ", &moved);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_level_that_cannot_be_listed_is_left_in_place_unmoved() {
@@ -562,6 +599,13 @@ fn a_moved_level_whose_listing_fails_is_reported_where_it_went() {
         assert!(
             stderr.contains("it could not be listed"),
             "listing did not fail; stderr:\n{stderr}"
+        );
+        // Nothing retook the name, so it is reported vacant, not taken.
+        assert!(
+            stderr.contains(
+                "/new is no longer under its name, and the directory rollback made for it was not taken back (it could not be listed"
+            ) && !stderr.contains("another entry has taken its name"),
+            "stderr:\n{stderr}"
         );
         let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
         assert_names_marked_path(&stderr, warned, "original at: ");

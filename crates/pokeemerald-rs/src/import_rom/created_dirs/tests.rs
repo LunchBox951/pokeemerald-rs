@@ -74,8 +74,8 @@ fn rerun_alone_for_stderr(test_path: &str) -> String {
 /// [`rerun_alone_for_stderr`] with the child's soft `RLIMIT_NOFILE` lowered
 /// to 64, for a test that fills its descriptor table with
 /// [`fill_descriptor_table_leaving`] and so must not do so in the shared
-/// test process.
-#[cfg(unix)]
+/// test process. Only the Linux and Android race tests need it.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn rerun_alone_for_stderr_under_descriptor_pressure(test_path: &str) -> String {
     let exe = std::env::current_exe().unwrap();
     let output = std::process::Command::new("bash")

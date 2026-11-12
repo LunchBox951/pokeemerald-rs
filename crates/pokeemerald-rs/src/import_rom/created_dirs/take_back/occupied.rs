@@ -4,10 +4,11 @@
 //!
 //! # Accepted residuals
 //!
-//! - A writer that fills the level after this listing and before the rename
-//!   still gets it moved, and a crash in that window leaves it hidden at
-//!   `.undo-<hex>/level`; the capture is then re-checked and put back as
-//!   usual when the process lives.
+//! - A writer that fills the level after this listing still gets it moved:
+//!   before the rename, or after it through a descriptor or working
+//!   directory already inside the level. A crash before the capture is
+//!   removed or put back leaves it hidden at `.undo-<hex>/level`; the
+//!   capture is re-checked and put back as usual when the process lives.
 //! - A listing that fails, for want of a free descriptor or otherwise, is no
 //!   verdict that the level is empty: it is reported and leaves the level
 //!   standing, unmoved.
