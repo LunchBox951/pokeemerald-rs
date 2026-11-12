@@ -30006,7 +30006,10 @@
     "src/data/easy_chat/easy_chat_group_trainer.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEasyChatGroup_Trainer (src/data/easy_chat/easy_chat_group_trainer.h:29-192) and the 27 gEasyChatWord_* texts (lines 1-27) extracted to assets::easy_chat::TrainerGroup keyed by TrainerWordIndex (EC_WORD_I_CHOOSE_YOU..EC_WORD_EMERALD, include/constants/easy_chat.h:56-82): text, alphabeticalOrder permutation and the enabled flag per row, with the six disabled words (RED, GREEN, FLAME, GOLD, LEAF, SILVER) preserved. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
+      "rust_target": "crates/assets/src/easy_chat.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/easy_chat/easy_chat_group_trendy_saying.h": {
       "category": "code.header",

@@ -8,7 +8,8 @@
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the species/move/ability display text
-//! (see [`species_names`], [`move_names`], [`abilities`]), the experience
+//! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
+//! Chat vocabulary group (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
@@ -42,6 +43,7 @@ pub mod battle_anim;
 pub mod battle_moves;
 pub mod bundled_overworld;
 pub mod decorations;
+pub mod easy_chat;
 pub mod egg_moves;
 pub mod error;
 pub mod event_scripts;
@@ -81,6 +83,9 @@ pub use audio::{
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
+pub use easy_chat::{
+    EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
 };
 pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
