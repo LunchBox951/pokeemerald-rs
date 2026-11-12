@@ -46,6 +46,9 @@ impl OverworldPhase {
             .object_events
             .admit_on_map_load(self.player.position(), &self.save1.event_data);
         if admitted_now || self.scene.object_admission_pending() {
+            // The pass reads each admitted object's retained elevation, which no frame has
+            // settled yet for an entry seeded this visit.
+            self.scene.update_object_elevations(&mut self.object_events);
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
         }
@@ -70,6 +73,7 @@ impl OverworldPhase {
         // movement. A scene's first frame also seeds again after the scheduler, so an object
         // its camera update admits on that frame, as a crossing's does, gets its pass then.
         let first_frame = self.scene.take_object_admission_pending();
+        self.scene.update_object_elevations(&mut self.object_events);
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
         let context = frame_context(
@@ -86,6 +90,9 @@ impl OverworldPhase {
         }
         #[cfg(not(test))]
         self.object_events.run_frame(&context, &mut self.rng);
+        // Movement and respawns have changed tiles; settle their elevations
+        // before the begin-step pass and the frame's rendering read them.
+        self.scene.update_object_elevations(&mut self.object_events);
         if first_frame {
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);

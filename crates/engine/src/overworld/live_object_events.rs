@@ -150,6 +150,12 @@ impl ObjectEventCollection {
         self.entries.iter()
     }
 
+    /// Iterates entries mutably in declaration order, visiting each entry even when a local id
+    /// repeats.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LiveObjectEvent> {
+        self.entries.iter_mut()
+    }
+
     /// Returns the entry whose template declares `local_id`, or the first
     /// such entry in declaration order if `local_id` repeats, matching
     /// upstream's linear scan (`GetObjectEventIdByLocalId`,
@@ -1069,13 +1075,10 @@ mod tests {
             let away =
                 rig.collection
                     .carry_across_connection(DEPARTED, ENTERED, leaked(vec![]), SHIFT);
-            let after = leaked(vec![template(
-                1,
-                5,
-                9,
-                MovementType::FaceLeft,
-                NEVER_HIDDEN,
-            )]);
+            let after = leaked(vec![ObjectEvent {
+                elevation: 4,
+                ..template(1, 5, 9, MovementType::FaceLeft, NEVER_HIDDEN)
+            }]);
             let mut back =
                 away.carry_across_connection(ENTERED, DEPARTED, after, (-SHIFT.0, -SHIFT.1));
 
@@ -1100,6 +1103,14 @@ mod tests {
                 "respawned at the reloaded template's tile"
             );
             assert_eq!(respawned.state().movement_type(), MovementType::FaceLeft);
+            assert_eq!(
+                (
+                    respawned.state().elevation(),
+                    respawned.state().previous_elevation()
+                ),
+                (4, 4),
+                "respawned at the reloaded template's elevation"
+            );
         }
 
         #[test]
