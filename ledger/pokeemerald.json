@@ -31130,7 +31130,10 @@
     "src/data/text/ribbon_descriptions.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 25 gRibbonDescriptionPointers rows (src/data/text/ribbon_descriptions.h:21-47, CHAMPION_RIBBON through EFFORT_RIBBON) extracted as RibbonDescriptionTable, each with its two description lines from the gRibbonDescriptionPart1_*/Part2_* strings (:1-19), in upstream's category and rank order; the gift ribbons (src/data/text/gift_ribbon_descriptions.h) and the src/pokenav_ribbons_summary.c rendering are not modelled",
+      "rust_target": "crates/assets/src/ribbon_descriptions.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/species_names.h": {
       "category": "code.header",
