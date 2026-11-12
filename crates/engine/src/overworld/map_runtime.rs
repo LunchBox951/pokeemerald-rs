@@ -198,6 +198,20 @@ impl<'a> MapRuntime<'a> {
         live.into_iter().flatten().chain(authored)
     }
 
+    /// Returns the map `template`'s live entry was carried out of by a connection crossing
+    /// ([`LiveObjectEvent::carried_from`]), or `None` for an entry of this map, an unbound
+    /// runtime, or a template no bound entry was seeded from.
+    ///
+    /// Entries are told apart by template identity, not value: a collection never holds two
+    /// entries over one template, because an object already live is not spawned a second time.
+    #[must_use]
+    pub fn carried_from(&self, template: &ObjectEvent) -> Option<MapId> {
+        self.object_events?
+            .iter()
+            .find(|entry| std::ptr::eq(entry.template(), template))?
+            .carried_from()
+    }
+
     /// Returns the first warp at `(x, y, elevation)`.
     ///
     /// A stored [`super::collision::ELEVATION_TRANSITION`] matches any query
