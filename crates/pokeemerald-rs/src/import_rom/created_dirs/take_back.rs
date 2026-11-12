@@ -14,8 +14,10 @@
 //! further out claims a fresh one. In a
 //! quarantine the level is re-checked by identity and unlinked through the
 //! held quarantine, or put back (no-replace) under its name, or beside it
-//! as `<name>.restored-<n>`, if it is not ours or holds something. Every
-//! step that leaves a level standing says so on stderr.
+//! as `<name>.restored-<n>`, if it is not ours or holds something. A name
+//! too long for that suffix is cut short first, so the recovery name fits
+//! the 255-byte component limit. Every step that leaves a level standing
+//! says so on stderr.
 //!
 //! This module walks the levels; the steps live in its children:
 //!
