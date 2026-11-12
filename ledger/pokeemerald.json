@@ -31434,7 +31434,7 @@
           "status": "stubbed"
         },
         "GetCollisionInDirection": {
-          "reason": "The destination is the mover's current tile plus the direction's delta (:4650-4657), checked with object_event_collision::collision_in_direction, which takes checked arithmetic and refuses a tile outside i32 as impassable. ObjectEventCollection::collision_in_direction resolves the mover by local id and supplies the other admitted entries and the player. No movement type calls it yet.",
+          "reason": "The destination is the mover's current tile plus the direction's delta (:4650-4657), checked with object_event_collision::collision_in_direction, which takes checked arithmetic and refuses a tile outside i32 as impassable. ObjectEventCollection::collision_in_direction resolves the mover by its LiveObjectEvent::id, as upstream passes the moving object itself, so a carried entry and an entered-map entry that share a local id after a connection crossing are not confused; it supplies the other admitted entries and the player. No movement type calls it yet.",
           "rust_target": "crates/engine/src/overworld/object_event_collision.rs",
           "spec": "S-5",
           "status": "stubbed"
