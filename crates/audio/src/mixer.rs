@@ -263,7 +263,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.tick_gate();
             }
         }
@@ -290,7 +290,9 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
+                voice.track() == Some(track)
+                    && voice.is_end_tie_eligible()
+                    && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
 
@@ -325,8 +327,11 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track && !voice.is_stopping() {
-                voice.note_off();
+            if voice.track() == Some(track) {
+                if !voice.is_stopping() {
+                    voice.note_off();
+                }
+                voice.detach_track();
             }
         }
     }
@@ -344,7 +349,7 @@ impl Mixer {
         }
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
-                if voice.track() == track {
+                if voice.track() == Some(track) {
                     Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
                     *slot = None;
                 }
@@ -373,7 +378,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
@@ -387,7 +392,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_pitch(key_m, pit_m);
             }
         }

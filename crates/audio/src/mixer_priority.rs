@@ -330,3 +330,126 @@ fn a_cgb_note_only_contends_for_its_own_hardware_channel() {
     assert!(mixer.add_cgb_voice(square2));
     assert_eq!(mixer.voice_count(), 2);
 }
+
+#[test]
+fn a_finished_track_gives_up_its_released_cgb_voices_too() {
+    // `ply_fine` nulls every channel's track pointer (`RealClearChain`,
+    // m4a_1.s:744-745), CGB channels included, so a later `TrackStop` on the
+    // same track no longer reaches the release tail.
+    let mut mixer = Mixer::default();
+    let slot = CgbChannelNumber::Square1.slot();
+    assert!(mixer.add_voice(voice(1, u8::MAX, 50)));
+    assert!(mixer.add_cgb_voice(cgb_voice(1, u8::MAX, 60)));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+
+    mixer.release_track(1);
+    mixer.stop_track(1);
+
+    assert!(
+        mixer.direct_sound_slots[0].is_some(),
+        "the released DirectSound tail survives stop_track"
+    );
+    assert!(
+        mixer.cgb_voices()[slot].is_some(),
+        "the released CGB tail must survive stop_track like the DirectSound one"
+    );
+}
+
+#[test]
+fn a_released_cgb_voice_is_detached_even_when_it_was_already_stopping() {
+    let mut mixer = Mixer::default();
+    let slot = CgbChannelNumber::Square1.slot();
+    assert!(mixer.add_cgb_voice(cgb_voice(1, u8::MAX, 60)));
+    mixer.note_off_track(1, 60);
+    assert!(mixer.cgb_voices()[slot].as_ref().unwrap().is_stopping());
+
+    mixer.release_track(1);
+
+    assert_eq!(mixer.cgb_voices()[slot].as_ref().unwrap().track(), None);
+}
+
+#[test]
+fn a_reused_track_id_does_not_stop_a_released_cgb_tail() {
+    // The track that took over id 1 owns only its own CGB voice; stopping it
+    // leaves the previous song's release tail on another hardware channel.
+    let mut mixer = Mixer::default();
+    let old_slot = CgbChannelNumber::Square1.slot();
+    let new_slot = CgbChannelNumber::Square2.slot();
+    assert!(mixer.add_cgb_voice(cgb_voice(1, u8::MAX, 60)));
+    mixer.release_track(1);
+    let square2 = CgbVoice::square(
+        CgbChannelNumber::Square2,
+        2,
+        None,
+        CgbAdsr::flat(),
+        70,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        70,
+        1,
+        0,
+        0,
+        0,
+    );
+    assert!(mixer.add_cgb_voice(square2));
+
+    mixer.stop_track(1);
+
+    assert!(mixer.cgb_voices()[new_slot].is_none());
+    assert!(mixer.cgb_voices()[old_slot].is_some());
+}
+
+#[test]
+fn track_volume_and_pitch_changes_do_not_reach_a_released_cgb_tail() {
+    let render = |retune: bool| {
+        let mut mixer = Mixer::default();
+        let slow_release = CgbAdsr {
+            release: 7,
+            ..CgbAdsr::flat()
+        };
+        let voice = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            None,
+            slow_release,
+            60,
+            0,
+            FULL_TRACK_VOLUME,
+            FULL_TRACK_VOLUME,
+            TEST_VELOCITY,
+            TIED_GATE_TIME,
+            60,
+            1,
+            0,
+            0,
+            0,
+        );
+        assert!(mixer.add_cgb_voice(voice));
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        mixer.release_track(1);
+        if retune {
+            mixer.set_track_volume(1, 0, 0);
+            mixer.set_track_pitch(1, 12, 0);
+        }
+        let mut tail = Vec::new();
+        for _ in 0..3 {
+            mixer.mix_frame(&mut out);
+            tail.extend_from_slice(&out);
+        }
+        tail
+    };
+    let unchanged = render(false);
+    assert!(
+        unchanged.iter().any(|sample| *sample != 0.0),
+        "the release tail must still be sounding"
+    );
+    assert!(
+        render(true) == unchanged,
+        "a track volume or pitch change altered the released tail"
+    );
+}

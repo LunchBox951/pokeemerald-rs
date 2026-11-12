@@ -148,7 +148,8 @@ impl DacCorrection {
 
 #[derive(Clone, Copy, Debug)]
 struct VoiceIdentity {
-    track: usize,
+    /// The owning track, or `None` once `detach_track` has run.
+    track: Option<usize>,
     played_key: u8,
     pitch_key: u8,
     note_on_ordinal: u64,
@@ -158,7 +159,7 @@ struct VoiceIdentity {
 impl VoiceIdentity {
     fn new(track: usize, played_key: u8) -> Self {
         Self {
-            track,
+            track: Some(track),
             played_key,
             pitch_key: played_key,
             note_on_ordinal: 0,
@@ -512,10 +513,17 @@ impl CgbVoice {
         self.channel
     }
 
-    /// Return the owning track index.
+    /// Return the owning track index, or `None` once `detach_track` has run.
     #[must_use]
-    pub fn track(&self) -> usize {
+    pub fn track(&self) -> Option<usize> {
         self.identity.track
+    }
+
+    /// Clear allocation ownership so no later track-keyed operation reaches
+    /// this voice's release tail (`RealClearChain`, `m4a_1.s:744-745`, which
+    /// clears the track of CGB channels as well as DirectSound ones).
+    pub(crate) fn detach_track(&mut self) {
+        self.identity.track = None;
     }
 
     /// Return the played MIDI key used for tie matching.
