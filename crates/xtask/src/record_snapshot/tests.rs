@@ -8,6 +8,9 @@ use super::{
 };
 use crate::Scene;
 
+/// A build identity no checkout of this repository can have.
+const SOURCE: &str = "0123456789abcdef0123456789abcdef01234567-dirty";
+
 const WINDOW_FRAME_GREEN_BGR555: u16 = 0x03E0;
 const MAIN_MENU_BACKGROUND_BGR555: u16 = 0x4104;
 const REPLACEMENT_BACKGROUND_BGR555: u16 = 0x001F;
@@ -421,6 +424,48 @@ fn git_sha_is_none_for_a_path_with_no_git_repo() {
 }
 
 #[test]
+fn git_sha_is_none_for_a_directory_inside_another_repository() {
+    // A source tarball unpacked inside someone else's checkout must not take
+    // that checkout's commit as its own.
+    let outer = scratch_path("outer-repo");
+    let inner = outer.join("unpacked-source");
+    std::fs::create_dir_all(&inner).unwrap();
+    let guard = ScratchGuard(outer.clone());
+    init_committed_repo(&outer, b"outer");
+    assert!(git_sha(&outer).is_some());
+    assert!(git_sha(&inner).is_none());
+    drop(guard);
+}
+
+#[test]
+fn a_capture_carries_the_build_identity_it_is_given_not_the_checkouts() {
+    let (pack_path, _pack_guard) = write_pack("build-identity");
+    let pack = AssetPack::load(&pack_path).unwrap();
+    let output_dir = scratch_path("build-identity-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+
+    let report = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, SOURCE, || Ok(()))
+        .unwrap();
+
+    assert_eq!(report.git_sha, SOURCE);
+    let meta = std::fs::read_to_string(&report.meta_path).unwrap();
+    assert!(meta.contains(&format!("git_sha: {SOURCE}\n")), "{meta}");
+    drop(out_guard);
+}
+
+#[test]
+fn the_recorder_reports_the_identity_embedded_when_it_was_built() {
+    let (pack_path, _pack_guard) = write_pack("embedded-identity");
+    let output_dir = scratch_path("embedded-identity-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+
+    let report = run_with_paths(Scene::MainMenuNewGame, &pack_path, &output_dir).unwrap();
+
+    assert_eq!(report.git_sha, env!("XTASK_SOURCE_IDENTITY"));
+    drop(out_guard);
+}
+
+#[test]
 fn render_meta_has_the_documented_fixed_field_order() {
     let text = render_meta(
         Scene::Title,
@@ -544,7 +589,7 @@ fn replacing_the_pack_path_cannot_change_loaded_pack_provenance() {
 
     let output_dir = scratch_path("loaded-pack-provenance-out");
     let out_guard = ScratchGuard(output_dir.clone());
-    let report = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let report = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, SOURCE, || Ok(())).unwrap();
     let rgb = std::fs::read(&report.rgb_path).unwrap();
 
     assert_eq!(
@@ -575,20 +620,26 @@ fn failure_after_rgb_staging_preserves_the_visible_generation() {
         ))
     };
     let err =
-        capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, injected_failure).unwrap_err();
+        capture_loaded(
+        Scene::MainMenuNewGame,
+        &pack,
+        &output_dir,
+        SOURCE,
+        injected_failure,
+    ).unwrap_err();
     assert!(matches!(err, RecordSnapshotError::Write(_, _)), "{err}");
     assert!(
         visible_generation(&output_dir, Scene::MainMenuNewGame).is_none(),
         "an initial failure before the commit point must publish no generation"
     );
 
-    let previous = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let previous = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, SOURCE, || Ok(())).unwrap();
     let pointer_path = output_dir.join("main-menu-new-game.generation");
     let previous_pointer = std::fs::read(&pointer_path).unwrap();
     let previous_rgb = std::fs::read(&previous.rgb_path).unwrap();
     let previous_meta = std::fs::read(&previous.meta_path).unwrap();
 
-    let err = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || {
+    let err = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, SOURCE, || {
         Err(RecordSnapshotError::Write(
             output_dir.join("injected-after-rgb-again"),
             "injected failure".to_owned(),

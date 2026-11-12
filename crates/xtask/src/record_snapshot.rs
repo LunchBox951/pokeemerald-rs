@@ -3,8 +3,9 @@
 //! A capture publishes an immutable generation containing `<scene>.rgb` and
 //! `<scene>.meta`, then atomically replaces `<scene>.generation` to make both
 //! payloads visible together. Clean captures are reproducible for the same
-//! commit, retained asset pack, scene, and implied inputs. Dirty captures only
-//! identify their commit with a `-dirty` suffix.
+//! commit, retained asset pack, scene, and implied inputs. The commit is the one
+//! this binary was built from, not the checkout it runs in; dirty captures only
+//! identify it with a `-dirty` suffix.
 //!
 //! The FNV-1a hashes locate changes in the RGB payload and retained pack. Only
 //! exact byte comparison establishes equality.
@@ -19,6 +20,8 @@ use pokeemerald_rs::title::{TitleScene, TitleSceneError};
 use crate::Scene;
 
 mod directory;
+#[cfg(test)]
+mod source_identity;
 mod staging;
 
 #[cfg(windows)]
@@ -26,6 +29,8 @@ use directory::claim_promoted_dir;
 #[cfg(all(test, any(unix, windows)))]
 use directory::claim_staged_dir;
 use directory::{claim_output_dir, OutputDirClaim, StagedDirClaim};
+#[cfg(test)]
+use source_identity::{git_command, git_output, git_sha};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -100,7 +105,8 @@ pub struct Report {
     pub rgb_hash: String,
     /// Lowercase FNV-1a hash of the retained pack bytes.
     pub pack_hash: String,
-    /// Source commit with an optional `-dirty` suffix, or `"unknown"`.
+    /// Commit this binary was built from with an optional `-dirty` suffix, or
+    /// `"unknown"` when the build could not establish it.
     pub git_sha: String,
 }
 
@@ -135,13 +141,20 @@ pub fn run_with_paths(
     output_dir: &Path,
 ) -> Result<Report, RecordSnapshotError> {
     let pack = AssetPack::load(pack_path)?;
-    capture_loaded(scene, &pack, output_dir, || Ok(()))
+    capture_loaded(scene, &pack, output_dir, BUILT_FROM, || Ok(()))
 }
+
+/// The checkout identity `build.rs` read while compiling this binary.
+///
+/// The running checkout may since have moved or been edited, so it cannot
+/// describe the code that renders the pixels.
+const BUILT_FROM: &str = env!("XTASK_SOURCE_IDENTITY");
 
 fn capture_loaded<F>(
     scene: Scene,
     pack: &AssetPack,
     output_dir: &Path,
+    built_from: &str,
     after_rgb_staged: F,
 ) -> Result<Report, RecordSnapshotError>
 where
@@ -150,12 +163,11 @@ where
     let (rgb_bytes, inputs) = compose(scene, pack)?;
     let rgb_hash = format!("{:016x}", fnv1a64(&rgb_bytes));
     let pack_hash = format!("{:016x}", fnv1a64(pack.bytes()));
-    let git_sha = git_sha(&crate::extract::repo_root()).unwrap_or_else(|| "unknown".to_owned());
 
     std::fs::create_dir_all(output_dir)
         .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
 
-    let meta = render_meta(scene, &inputs, &rgb_hash, &pack_hash, &git_sha);
+    let meta = render_meta(scene, &inputs, &rgb_hash, &pack_hash, built_from);
     let (rgb_path, meta_path) = publish_generation(
         scene,
         output_dir,
@@ -170,7 +182,7 @@ where
         payload_len: rgb_bytes.len(),
         rgb_hash,
         pack_hash,
-        git_sha,
+        git_sha: built_from.to_owned(),
     })
 }
 
@@ -560,86 +572,6 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(PRIME);
     }
     hash
-}
-
-fn git_sha(repo_root: &Path) -> Option<String> {
-    let sha = git_output(repo_root, &["rev-parse", "HEAD"])?;
-    let sha = sha.trim();
-    if sha.is_empty() {
-        return None;
-    }
-    let worktree_dirty_or_unknown = git_output(repo_root, &["status", "--porcelain"])
-        .is_none_or(|status| !status.trim().is_empty())
-        || has_hidden_index_entries(repo_root);
-    if worktree_dirty_or_unknown {
-        Some(format!("{sha}-dirty"))
-    } else {
-        Some(sha.to_owned())
-    }
-}
-
-/// Whether the index hides tracked files from `git status`, or cannot be read.
-///
-/// Assume-unchanged (lowercase tag in `git ls-files -v`) and skip-worktree
-/// (`S`) entries make `git status --porcelain` blind to edits of tracked files
-/// that Cargo still compiles, so an empty status cannot show such a tree is
-/// clean. The ROM-build checkout verifier rejects the same entries.
-fn has_hidden_index_entries(repo_root: &Path) -> bool {
-    git_output(repo_root, &["ls-files", "-v"]).is_none_or(|listing| {
-        listing
-            .lines()
-            .any(|line| line.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S'))
-    })
-}
-
-/// Git variables that redirect which repository, worktree, index, object
-/// store, or configuration a command reads. Inherited from a caller such as a
-/// git hook, they would attribute a capture to another repository.
-const GIT_ROUTING_ENV: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_NAMESPACE",
-    "GIT_PREFIX",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_GRAFT_FILE",
-    "GIT_SHALLOW_FILE",
-    "GIT_NO_REPLACE_OBJECTS",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_CONFIG",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT",
-];
-
-/// A `git -C <repo_root>` command isolated from inherited repository routing.
-fn git_command(repo_root: &Path) -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    command.arg("-C").arg(repo_root);
-    for name in GIT_ROUTING_ENV {
-        command.env_remove(name);
-    }
-    // `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` are numbered.
-    for (name, _) in std::env::vars_os() {
-        let numbered_config = name.to_str().is_some_and(|name| {
-            name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_")
-        });
-        if numbered_config {
-            command.env_remove(name);
-        }
-    }
-    command
-}
-
-fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
-    let output = git_command(repo_root).args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
 }
 
 #[cfg(test)]
