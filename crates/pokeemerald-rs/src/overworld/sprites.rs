@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
-use assets::LayoutGrid;
+use assets::{LayoutGrid, ObjectEvent};
 use engine::event_data::EventData;
 use engine::overworld::object_event::{FrameContext, ObjectEventCollection};
 use engine::overworld::PlayerState;
@@ -101,14 +101,20 @@ impl SceneSprites {
         pack: &AssetPack,
         player: PlayerCharacter,
         events: &assets::MapEvents,
+        carried: &[&'static ObjectEvent],
         grid: &LayoutGrid<'_>,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let sprite_image = pack.sprite(player.sprite_path())?;
         let palette_ref = pack.sprite_palette(player.palette_name())?;
         let mut bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
-        let bindings =
-            npc::resolve_bindings(pack, player, events.object_events, &mut bytes, event_data)?;
+        let bindings = npc::resolve_bindings(
+            pack,
+            player,
+            events.object_events.iter().chain(carried.iter().copied()),
+            &mut bytes,
+            event_data,
+        )?;
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a scene contains only a small number of NPC sheets"
@@ -171,7 +177,7 @@ impl SceneSprites {
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
         let mut objects = self.seed_objects.clone();
-        objects.admit_for_map_load(&FrameContext {
+        let _ = objects.admit_on_map_load(&FrameContext {
             player_position: player.position(),
             event_data,
             frozen: true,

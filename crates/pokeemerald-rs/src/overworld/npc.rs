@@ -329,7 +329,7 @@ struct WantedSheet {
 pub(super) fn resolve_bindings(
     pack: &AssetPack,
     player: PlayerCharacter,
-    object_events: &'static [ObjectEvent],
+    object_events: impl IntoIterator<Item = &'static ObjectEvent>,
     sprite_bytes: &mut Vec<u8>,
     event_data: &EventData,
 ) -> Result<HashMap<&'static str, SpriteBinding>, OverworldSceneError> {

@@ -88,14 +88,14 @@ impl ObjectEventCollection {
     /// The window is reconciled when `player_position` differs from the tile it last was, as
     /// `UpdateObjectEventsForCameraUpdate` runs only on a camera tile delta
     /// (`field_camera.c:413-416`), so a hide flag cleared while the camera is still admits
-    /// nothing until the next move. The first call also admits the entries already in view before
-    /// any callback runs, as map load's `TrySpawnObjectEvents` does ahead of the first frame
-    /// (`overworld.c:2163`). An entry the camera pass admits first runs on the following frame.
+    /// nothing until the next move. The first call admits the entries already in view before any
+    /// callback runs, unless [`Self::admit_on_map_load`] has. An entry the camera pass admits
+    /// first runs on the following frame.
     ///
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
     /// sprite-slot order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
-        self.admit_for_map_load(context);
+        let _ = self.admit_on_map_load(context);
         if !context.frozen {
             for index in self.active_indices_in_sprite_slot_order() {
                 self.entries[index].run_movement_type(context, rng);
@@ -106,16 +106,20 @@ impl ObjectEventCollection {
         }
     }
 
-    /// Runs map load's admission pass if no pass has run yet: spawns every in-window, unhidden
-    /// entry, as `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`).
+    /// Admits the entries already in view, once per collection, as map load's
+    /// `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`); a later call does
+    /// nothing. No callback runs, and `context.frozen` is not read.
     ///
-    /// Position queries return only admitted entries, so a caller that queries before its first
-    /// [`Self::run_frame`] calls this at map load. Later calls do nothing, and `context.frozen` is
-    /// not read.
-    pub fn admit_for_map_load(&mut self, context: &FrameContext<'_>) {
-        if self.reconciled_at.is_none() {
+    /// Position queries return only admitted entries, so a caller that seeds or replaces a
+    /// collection calls this at map load, before its first [`Self::run_frame`]; a connection
+    /// crossing then finds the objects upstream already holds
+    /// ([`Self::carry_across_connection`]). Returns whether this call did the admission.
+    pub fn admit_on_map_load(&mut self, context: &FrameContext<'_>) -> bool {
+        let first = self.reconciled_at.is_none();
+        if first {
             self.reconcile_with_view(context);
         }
+        first
     }
 
     /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
@@ -149,6 +153,10 @@ impl ObjectEventCollection {
         for entry in &mut self.entries {
             entry.remove_if_outside_view(context);
         }
+        // A removed carried entry has no template left to respawn from: it ceases to exist.
+        self.entries.retain(|entry| {
+            entry.carried_from.is_none() || entry.lifecycle != Lifecycle::Despawned
+        });
     }
 
     /// The lowest slot no active entry holds: the first index at which the sorted held slots
@@ -198,7 +206,7 @@ impl LiveObjectEvent {
         };
     }
 
-    fn remove_if_outside_view(&mut self, context: &FrameContext<'_>) {
+    pub(super) fn remove_if_outside_view(&mut self, context: &FrameContext<'_>) {
         let Lifecycle::Active { initial, .. } = self.lifecycle else {
             return;
         };

@@ -181,8 +181,10 @@ pub(crate) struct OverworldPhase {
     pub(super) map_id: assets::MapId,
     /// Live object events for the current map visit, seeded from the same
     /// resolved events the scene simulates
-    /// ([`connections::seed_object_events`]) and replaced only by a
-    /// completed map transition.
+    /// ([`connections::seed_object_events`]) and replaced by a warp; a
+    /// connection crossing instead carries the in-view entries forward beside
+    /// the entered map's seeds
+    /// ([`ObjectEventCollection::carry_across_connection`]).
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
@@ -379,6 +381,12 @@ pub(crate) struct OverworldPhase {
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
 }
 
+/// `FLAG_BADGE02_GET`, `FLAG_BADGE04_GET`, `FLAG_BADGE06_GET` and
+/// `FLAG_BADGE08_GET` (`SYSTEM_FLAGS + 0x8/0xA/0xC/0xE`,
+/// `include/constants/flags.h:1360`-`:1366`): the badges `IsMonDisobedient`
+/// reads.
+const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
+
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
 /// answers every header, event, and collision query the phase makes, so a
 /// scene from another room would silently run `map`'s scripts over the wrong
@@ -397,6 +405,20 @@ pub(super) fn assert_scene_owns_map(scene: &OverworldScene, map: assets::MapId) 
 }
 
 impl OverworldPhase {
+    /// The player's identity and badge limit for the battle-start boundaries
+    /// that hand party members into `battle::Battle`, so traded Pokémon hit
+    /// the pre-PP obedience gate (`IsMonDisobedient`,
+    /// `src/battle_util.c:3923`-`:4038`).
+    pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
+        let badges =
+            OBEDIENCE_BADGE_FLAGS.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false));
+        battle::PlayerObedience::new(
+            u32::from_le_bytes(self.save2.player_trainer_id),
+            self.save2.player_name,
+            badges,
+        )
+    }
+
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
     /// rather than default (module docs on [`Self::new`]).
@@ -933,6 +955,17 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
+    /// Whether the player's standing field state closes `FieldGetPlayerInput`'s
+    /// button block: a forced landing's tile-centre frame
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), or a Secret
+    /// Base mat sequence, whose spin holds `LockPlayerFieldControls` and whose
+    /// jump is never tile-centre or at rest (`field_player_avatar.c:1587-1594,
+    /// 1640`, `field_control_avatar.c:95-113`, `overworld.c:1445-1447`).
+    #[must_use]
+    pub(super) fn field_input_closed(&self) -> bool {
+        self.player.field_input_suppressed() || self.player.forced_mat().is_some()
+    }
+
     /// Restart the field's animations on return to the field.
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
@@ -1024,6 +1057,8 @@ mod animation_tick_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
+mod connection_live_objects_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod cute_charm_slot_zero_tests;
@@ -1069,7 +1104,11 @@ mod lead_owner_tests;
 #[cfg(test)]
 mod live_first_battle_tests;
 #[cfg(test)]
+mod mat_field_input_gate_tests;
+#[cfg(test)]
 mod mom_faceplayer_tests;
+#[cfg(test)]
+mod obedience_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
