@@ -496,6 +496,15 @@ mod tests {
         event_data
             .flag_set(assets::object_event_flags::resolve(HIDE).unwrap())
             .unwrap();
+        // The scheduler reads the set flag on a frame whose camera move reconciles the view; the
+        // sight query takes no flags of its own, so this pass is the only reader there is.
+        admit(&mut objects, (5, 8), &event_data);
+        assert!(
+            [1, 2]
+                .iter()
+                .all(|&local_id| objects.get(local_id).unwrap().is_active()),
+            "the reconciling frame retired neither flagged entry"
+        );
         let live = *objects.get(1).unwrap();
         let player = player_at(5, 8, 3);
         assert!(
