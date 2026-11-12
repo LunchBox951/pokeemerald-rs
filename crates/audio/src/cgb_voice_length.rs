@@ -260,7 +260,7 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
 }
 
 fn wave(adsr: CgbAdsr, length: u8) -> CgbVoice {
-    wave_voice_with_adsr(adsr, false, TestNote::default()).with_length(length)
+    wave_voice_with_adsr(adsr, false, TestNote::unmodulated()).with_length(length)
 }
 
 /// Raw wave length 240 loads `256 - 240 = 16` into `NR31` (`mgba/src/gb/audio.c:255-258`);
@@ -337,7 +337,7 @@ fn a_tied_wave_is_not_retriggered_by_later_writes_after_its_count() {
     // they revive a square's.
     let write = |voice: &mut CgbVoice, rig: &mut Rig| -> Vec<StereoAcc> {
         let mut rendered = run(rig, voice, 2);
-        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.set_track_volume(MAX_TRACK_VOLUME, MAX_TRACK_VOLUME);
         voice.set_track_pitch(0, 0);
         rendered.extend(run(rig, voice, TIED_FRAMES - 2));
         rendered

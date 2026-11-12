@@ -32,7 +32,9 @@ pub mod pp_bonuses;
 mod tests;
 
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
-pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use learn::{
+    ExperienceAward, LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn,
+};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// Maximum number of moves a Pokémon can know.
@@ -173,7 +175,9 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
+    /// Remaining PP. A battler built in-process holds at most
+    /// [`BattlePokemon::max_pp`]; one adopted from a save may hold more
+    /// ([`BattlePokemon::with_saved_pp`]).
     pub pp: u8,
 }
 
@@ -366,6 +370,12 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// Raw game-text OT name with its terminator; `None` when the boundary
+    /// that built this Pokémon never recorded one.
+    ///
+    /// Excluded from [`PartialEq`] (below): the save encoder does not write
+    /// it back, so a reloaded Pokémon differs only in this provenance.
+    original_trainer_name: Option<[u8; 8]>,
     /// Whether the save owner is not this Pokémon's original trainer
     /// (`IsTradedMon`, `pokeemerald/src/pokemon.c:6602-6609`). Decided at the
     /// save boundary, which alone sees the owner's name and id; battle only
@@ -417,6 +427,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            original_trainer_name: _,
             traded_recipient,
             held_item,
             types,
@@ -552,6 +563,7 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            original_trainer_name: None,
             traded_recipient: false,
             held_item: ItemId::NONE,
             types: base.types,
@@ -587,6 +599,23 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
+        Ok(self)
+    }
+
+    /// Adopts a saved record's remaining PP for one move slot exactly as
+    /// stored, even above [`BattlePokemon::max_pp`]; upstream provenance is
+    /// in the `party` module docs ("Move PP"). Spending
+    /// ([`BattlePokemon::deduct_pp`]) counts down from the stored value and
+    /// [`BattlePokemon::heal`] restores the maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty.
+    pub fn with_saved_pp(mut self, index: usize, pp: u8) -> Result<Self, BattleError> {
+        self.moves
+            .get_mut(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?
+            .pp = pp;
         Ok(self)
     }
 
@@ -706,6 +735,27 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_original_trainer_id(mut self, original_trainer_id: u32) -> Self {
         self.original_trainer_id = original_trainer_id;
+        self
+    }
+
+    /// The original trainer's raw game-text name, terminator appended
+    /// (`GetBoxMonData(MON_DATA_OT_NAME)`), when recorded.
+    #[must_use]
+    pub const fn original_trainer_name(&self) -> Option<&[u8; 8]> {
+        self.original_trainer_name.as_ref()
+    }
+
+    /// Records the original trainer's seven saved name bytes; the eighth
+    /// buffer byte is the terminator `GetBoxMonData` appends.
+    #[must_use]
+    pub const fn with_original_trainer_name(mut self, saved_name: [u8; 7]) -> Self {
+        let mut name = [crate::obedience::TEXT_EOS; 8];
+        let mut index = 0;
+        while index < 7 {
+            name[index] = saved_name[index];
+            index += 1;
+        }
+        self.original_trainer_name = Some(name);
         self
     }
 
@@ -955,11 +1005,33 @@ impl BattlePokemon {
         dex: &Dex,
         amount: u32,
     ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        Ok(self.apply_experience_reporting(dex, amount)?.pending)
+    }
+
+    /// Applies an award exactly like [`BattlePokemon::apply_experience`] and
+    /// also reports the moves a free slot took without asking, in learning
+    /// order, so the caller can announce each one before any prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
+    /// decision is already pending.
+    #[must_use = "the report carries the open move prompt and the moves \
+                  learned without asking"]
+    pub fn apply_experience_reporting(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<ExperienceAward, BattleError> {
         if let Some(pending) = self.pending_move_learn {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
+        let mut learned = Vec::new();
+        self.pending_move_learn = self.advance_experience(dex, amount, &mut learned);
+        Ok(ExperienceAward {
+            pending: self.pending_move_learn,
+            learned,
+        })
     }
 
     /// Adopts a loaded experience total verbatim, without moving the level or
