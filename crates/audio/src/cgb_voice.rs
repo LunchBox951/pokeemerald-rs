@@ -864,6 +864,11 @@ impl CgbVoice {
             if !self.envelope.is_active() {
                 break;
             }
+            // The frame event runs a playing square to its timestamp before the
+            // sweep and length clocks, so a length expiry latches the duty level
+            // as it stood ahead of a coincident sweep retune
+            // (`mgba/src/gb/audio.c:657-691`).
+            let expiry_latch = self.expiry_square_latch(lengths.peek() == Some(&sample_offset));
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
                 if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
@@ -887,7 +892,7 @@ impl CgbVoice {
                 // (`mgba/src/gb/audio.c:768-774`), which its one-sample-late
                 // output has not reached yet.
                 self.oscillator.defer_idle_samples(1);
-                if let Some(held) = self.oscillator.held_wave_contribution() {
+                if let Some(held) = self.oscillator.held_wave_contribution().or(expiry_latch) {
                     self.last_contribution = held;
                 }
             } else {
