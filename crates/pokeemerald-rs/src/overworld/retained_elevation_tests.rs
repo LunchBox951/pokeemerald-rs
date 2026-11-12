@@ -77,6 +77,8 @@ fn scene(cells: &[((u16, u16), u8)], npc_x: i16, template: u8) -> OverworldScene
 
 fn seeded(scene: &OverworldScene) -> ObjectEventCollection {
     let mut objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
+    // Only an admitted object is drawn; map load admits the ones in view of the player.
+    let _ = objects.admit_on_map_load(PLAYER_TILE, &EventData::new());
     scene.update_object_elevations(&mut objects);
     objects
 }

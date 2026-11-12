@@ -5,14 +5,15 @@
 
 use engine::event_data::EventData;
 use engine::overworld::object_event::FrameContext;
-use engine::overworld::PlayerState;
+use engine::overworld::{MapRuntime, PlayerState};
 
 use super::OverworldPhase;
 
 /// What one overworld frame lets the object-event scheduler see of the player and the flags.
-const fn frame_context<'a>(
+fn frame_context<'a>(
     player: &PlayerState,
     event_data: &'a EventData,
+    terrain: MapRuntime<'a>,
     frozen: bool,
 ) -> FrameContext<'a> {
     FrameContext {
@@ -20,6 +21,9 @@ const fn frame_context<'a>(
         event_data,
         frozen,
         player_dashing: player.dashing(),
+        terrain,
+        player_previous_position: player.previous_position(),
+        player_elevation: player.elevation(),
     }
 }
 
@@ -35,10 +39,15 @@ impl OverworldPhase {
     /// carry no effect for the object to bring along. No object has moved yet, so the pass finds
     /// the tile it would find after the frame's input.
     pub(super) fn admit_object_events_on_map_load(&mut self) {
-        let context = frame_context(&self.player, &self.save1.event_data, false);
-        if self.object_events.admit_on_map_load(&context) {
+        // A warp, a continue, or a new game has already admitted the collection as it seeded it
+        // (`connections::admit_object_events_at_map_load`), so this call's own admission is not
+        // the only sign of a first frame: the scene's pending first object frame is the other.
+        let admitted_now = self
+            .object_events
+            .admit_on_map_load(self.player.position(), &self.save1.event_data);
+        if admitted_now || self.scene.object_admission_pending() {
             // The pass reads each admitted object's retained elevation, which no frame has
-            // settled yet for an entry the crossing seeded unadmitted.
+            // settled yet for an entry seeded this visit.
             self.scene.update_object_elevations(&mut self.object_events);
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
@@ -67,7 +76,12 @@ impl OverworldPhase {
         self.scene.update_object_elevations(&mut self.object_events);
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
-        let context = frame_context(&self.player, &self.save1.event_data, frozen);
+        let context = frame_context(
+            &self.player,
+            &self.save1.event_data,
+            self.scene.runtime(),
+            frozen,
+        );
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
             self.object_events.run_frame(&context, scratch);

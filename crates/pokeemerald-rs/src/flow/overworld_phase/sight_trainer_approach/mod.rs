@@ -291,9 +291,13 @@ impl SightApproach {
                 frames_left,
             } => {
                 if frames_left > 0 {
+                    let frames_left = frames_left - 1;
+                    if frames_left == 0 {
+                        trainer.settle_previous_position();
+                    }
                     self.stage = ApproachStage::WalkUp {
                         tiles_left,
-                        frames_left: frames_left - 1,
+                        frames_left,
                     };
                 } else {
                     // `UpdateMovementNormal` ends every walked tile with

@@ -291,7 +291,7 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
     clippy::too_many_lines,
     reason = "one pack and two sibling transitions; splitting would re-set-up the pack"
 )]
-fn a_warp_reseeds_unadmitted_authored_facing_and_a_crossing_keeps_the_live_visit() {
+fn a_warp_reseeds_and_admits_only_objects_in_view_and_a_crossing_keeps_the_live_visit() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -328,9 +328,16 @@ fn a_warp_reseeds_unadmitted_authored_facing_and_a_crossing_keeps_the_live_visit
         assert_eq!(phase.map_id, OLDALE_TOWN, "{what} completed");
         for template in phase.scene.map_events().object_events {
             let entry = phase.object_events.get(template.local_id).unwrap();
-            assert!(
-                !entry.is_active(),
-                "{what}: local {} is unscheduled",
+            // Map load's admission pass spawns the unhidden objects inside the spawn window of
+            // the arrival tile (`TrySpawnObjectEvents`, `overworld.c:2163`), and no others.
+            assert_eq!(
+                entry.is_active(),
+                engine::overworld::object_event_is_in_view(template, phase.player.position())
+                    && engine::overworld::object_event_is_visible(
+                        template,
+                        &phase.save1.event_data
+                    ),
+                "{what}: local {} is admitted exactly when it is in view and unhidden",
                 template.local_id
             );
             assert_eq!(
