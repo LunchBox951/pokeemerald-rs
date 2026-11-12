@@ -31161,6 +31161,20 @@
       "status": "pending"
     },
     "src/data/trade.h": {
+      "artifacts": {
+        "sIngameTradeMail": {
+          "reason": "All three sIngameTradeMail messages (src/data/trade.h:1053-1085) ported as nine numeric Easy Chat word IDs each; encoding follows include/constants/easy_chat.h:1116-1121 including internal species IDs and group 21 for EC_POKEMON_NATIONAL(MEOWTH). The zero-padded tenth slot is omitted because GetInGameTradeMail (src/trade.c:4597-4602) copies only MAIL_WORDS_COUNT=9. Mail construction and other src/trade.c runtime behavior remain pending.",
+          "rust_target": "crates/assets/src/ingame_trades.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sIngameTrades": {
+          "reason": "All four sIngameTrades records (src/data/trade.h:985-1051; struct src/trade.c:150-164; IDs include/constants/trade.h:8-11) ported with stable offer IDs, requested/offered species, nickname, IVs in HP/Atk/Def/Speed/SpAtk/SpDef order, ability selection, OT ID/name/gender, personality, contest conditions in Cool/Beauty/Cute/Smart/Tough order, held item, sheen and optional mail; mailNum -1 maps to no mail. The rest of src/data/trade.h (link-menu and trade-animation graphics, tilemaps, text, templates, shared data) is pending, and src/trade.c runtime behavior (Pokemon construction, specials, animation, save transaction) is not ported.",
+          "rust_target": "crates/assets/src/ingame_trades.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
