@@ -581,7 +581,7 @@ fn a_stale_directory_at_the_predictable_path_is_not_deleted() {
     let found = other_device_dir_among(
         std::path::Path::new("/proc"),
         "stale-predictable",
-        &[temp.path.clone()],
+        std::slice::from_ref(&temp.path),
     )
     .expect("the temp dir is on another device than /proc");
 
