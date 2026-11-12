@@ -296,7 +296,9 @@ fn background_banner_entry_and_title_draw_from_their_palettes() {
     assert_eq!(at(&frame, 230, 8), pal_color(pal::TEXT_WINDOW, 15));
     assert_eq!(at(&frame, 10, 1), pal_color(pal::TEXT_WINDOW, 1));
     assert_eq!(at(&frame, 11, 1), pal_color(pal::TEXT_WINDOW, 2));
-    assert_eq!(at(&frame, 2, 1), pal_color(pal::TEXT_WINDOW, 15));
+    // `{DPAD_NONE}` marks its top-left pixel with index 3 (the keypad icon
+    // copies window indices unchanged, so index 3 is not the text shadow).
+    assert_eq!(at(&frame, 2, 1), pal_color(pal::TEXT_WINDOW, 3));
     // The title's text starts at (72, 33) in the default font colours.
     assert_eq!(at(&frame, 72, 33), pal_color(pal::KEYBOARD, 2));
     assert_eq!(at(&frame, 73, 33), pal_color(pal::KEYBOARD, 3));
@@ -517,6 +519,7 @@ fn a_pack_missing_an_entry_names_it() {
         "sprite/palette/may",
         "font/normal/glyphs",
         "font/small/glyphs",
+        "font/keypad_icons",
     ] {
         let pack = fixture::load("missing", fixture::entries_without(id));
         let err = NamingScene::from_pack(&pack).unwrap_err();
@@ -527,14 +530,74 @@ fn a_pack_missing_an_entry_names_it() {
     }
 }
 
-/// The checkout's extracted pack draws every page, both avatars, and the
-/// initial arrangement with production assets.
 #[test]
-#[ignore = "needs a local pack extracted by `cargo xtask extract`"]
-fn production_pack_draws_every_page_and_avatar() {
-    let pack = AssetPack::load_repo().expect("the checkout pack loads");
+fn the_controls_string_decodes_to_its_icons_words_and_spaces() {
+    let chars = |text: &str| text.chars().map(Token::Char).collect::<Vec<_>>();
+    let mut expected = vec![Token::KeypadIcon(12)];
+    expected.extend(chars("MOVE  "));
+    expected.push(Token::KeypadIcon(0));
+    expected.extend(chars("OK  "));
+    expected.push(Token::KeypadIcon(1));
+    expected.extend(chars("BACK"));
+    expected.push(Token::End);
+    assert_eq!(banner_tokens().unwrap(), expected);
+}
+
+/// The banner's three keypad icons are 8x12 sheet rectangles at the cursor
+/// the printer reaches: `{DPAD_NONE}` at x 2, `{A_BUTTON}` at 36 and
+/// `{B_BUTTON}` at 60, all at y 1 (`PrintControls` at (2, 1)). Index 0 leaves
+/// the window fill and every other index names a window colour directly.
+#[test]
+fn the_banner_draws_its_keypad_icons_from_the_sheet() {
+    let frame = frame(
+        &scene(),
+        PageSelection::initial(),
+        &resting(NamingAvatar::Brendan),
+    );
+    let window = |index| pal_color(pal::TEXT_WINDOW, index);
+    for (x, y, index) in [
+        // DPAD_NONE: top-left 3, bottom-right 9, transparent beside them.
+        (2, 1, 3),
+        (9, 12, 9),
+        (3, 1, 15),
+        (2, 2, 15),
+        // A_BUTTON: top-left 3, bottom-right 9; the stray mark one row below
+        // the icon's twelve rows stays out.
+        (36, 1, 3),
+        (43, 12, 9),
+        (37, 1, 15),
+        (36, 13, 15),
+        // B_BUTTON: 1 then 2 along the top row.
+        (60, 1, 1),
+        (61, 1, 2),
+        (62, 1, 15),
+    ] {
+        assert_eq!(at(&frame, x, y), window(index), "banner pixel ({x}, {y})");
+    }
+}
+
+/// A sheet that is not 128x32 is refused instead of drawing a blank banner.
+#[test]
+fn a_misshapen_keypad_sheet_is_refused() {
+    let mut entries = fixture::entries_without("font/keypad_icons");
+    entries.push(
+        pack_format::image_entry("font/keypad_icons".into(), 64, 32, 4, vec![0; 64 * 32]).unwrap(),
+    );
+    let pack = fixture::load("keypad-shape", entries);
+    assert!(matches!(
+        NamingScene::from_pack(&pack),
+        Err(NamingSceneError::Font(
+            assets::AssetError::KeypadSheetWrongShape(..)
+        ))
+    ));
+}
+
+/// Every page, both avatars, and the initial arrangement draw with
+/// production assets from `pack`, and the banner's keypad icons match the
+/// upstream sheet.
+fn assert_pack_draws_every_page_and_avatar(pack: &AssetPack) {
     let handle = pack.naming_screen().expect("the pack has naming art");
-    let scene = NamingScene::from_pack(&pack).expect("the production scene builds");
+    let scene = NamingScene::from_pack(pack).expect("the production scene builds");
     let mut frames = Vec::new();
     for page in ALL_PAGES {
         let selection = PageSelection::new(page, KeyboardLayer::Bg1);
@@ -570,4 +633,116 @@ fn production_pack_draws_every_page_and_avatar() {
         frames[0].pixels(),
         "the cursor draws"
     );
+
+    // The banner's icons, read off the upstream sheet: window index 1 is the
+    // glyph body, 2 its shadow, 3 a recoloured pixel, and 15 the fill.
+    let banner = frame(
+        &scene,
+        PageSelection::initial(),
+        &resting(NamingAvatar::Brendan),
+    );
+    let window = |index: usize| {
+        Bgr555::from_raw(handle.text_window_palette.color(index).expect("colour")).to_rgb888()
+    };
+    for (x, y, index) in [
+        (4, 5, 1),
+        (5, 5, 1),
+        (6, 5, 1),
+        (7, 5, 2),
+        (2, 5, 15),
+        (3, 5, 15),
+        (8, 5, 15),
+        (9, 5, 15),
+        (37, 5, 1),
+        (41, 5, 1),
+        (42, 5, 2),
+        (36, 5, 15),
+        (43, 5, 15),
+        (61, 5, 1),
+        (65, 5, 1),
+        (66, 5, 2),
+        (60, 5, 15),
+        (67, 5, 15),
+        (62, 6, 2),
+        (63, 6, 2),
+        (67, 6, 2),
+        (64, 6, 3),
+        (60, 6, 1),
+        (61, 6, 1),
+        (65, 6, 1),
+        (66, 6, 1),
+        (4, 12, 2),
+        (7, 12, 2),
+        (5, 13, 15),
+    ] {
+        assert_eq!(
+            at(&banner, x, y),
+            window(index),
+            "banner pixel ({x}, {y}) is window colour {index}"
+        );
+    }
+}
+
+/// The checkout's extracted pack draws every page with production assets.
+#[test]
+#[ignore = "needs a local pack extracted by `cargo xtask extract`"]
+fn production_pack_draws_every_page_and_avatar() {
+    assert_pack_draws_every_page_and_avatar(
+        &AssetPack::load_repo().expect("the checkout pack loads"),
+    );
+}
+
+/// Removes the imported scratch pack when dropped, even if a test panics.
+struct ImportedScratch(std::path::PathBuf);
+
+impl Drop for ImportedScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The pack imported from the supported ROM the environment names, or `None`
+/// when no ROM is configured.
+fn rom_imported_pack() -> Option<AssetPack> {
+    let rom = std::env::var_os("POKEEMERALD_ROM").filter(|value| !value.is_empty())?;
+    let bytes =
+        rom_import::import_to_bytes(std::path::Path::new(&rom)).expect("the ROM import succeeds");
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-naming-imported-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::pack_test_support::write_scratch_exclusive(&path, bytes);
+    let _cleanup = ImportedScratch(path.clone());
+    Some(AssetPack::load(&path).expect("the imported pack loads"))
+}
+
+/// The ROM-imported pack draws every page with the same art assertions, and
+/// every page on every layer, for both avatars, with and without the cursor,
+/// matches the checkout-built pack pixel for pixel.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a local pack extracted by `cargo xtask extract`"]
+fn rom_imported_pack_draws_every_page_like_the_checkout_pack() {
+    let Some(imported) = rom_imported_pack() else {
+        eprintln!("skipped: set POKEEMERALD_ROM to a supported ROM to run this");
+        return;
+    };
+    let checkout = AssetPack::load_repo().expect("the checkout pack loads");
+    assert_pack_draws_every_page_and_avatar(&imported);
+    let imported = NamingScene::from_pack(&imported).expect("the imported scene builds");
+    let checkout = NamingScene::from_pack(&checkout).expect("the checkout scene builds");
+    for page in ALL_PAGES {
+        for layer in [KeyboardLayer::Bg1, KeyboardLayer::Bg2] {
+            let selection = PageSelection::new(page, layer);
+            for avatar in [NamingAvatar::Brendan, NamingAvatar::May] {
+                for visuals in [resting(avatar), NamingVisuals::player(avatar, 7)] {
+                    assert_eq!(
+                        frame(&imported, selection, &visuals).pixels(),
+                        frame(&checkout, selection, &visuals).pixels(),
+                        "{page:?} on {layer:?}, {avatar:?}"
+                    );
+                }
+            }
+        }
+    }
 }
