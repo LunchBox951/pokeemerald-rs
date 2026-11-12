@@ -17,10 +17,14 @@ use super::ScenarioError;
 mod hold;
 
 use hold::open_hold;
+#[cfg(any(unix, windows))]
+use hold::remove_contents;
+#[cfg(windows)]
+use hold::require_unique_file_ids;
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 use hold::restore_owner_access_with;
 #[cfg(unix)]
-use hold::{is_empty, remove_contents, restore_private_mode};
+use hold::{is_empty, restore_private_mode};
 
 const PACK_FILE_NAME: &str = "pokeemerald.pack";
 const SAVE_FILE_NAME: &str = "pokeemerald.sav";
@@ -74,7 +78,20 @@ impl PackSelection {
 /// fresh open of the pathname with the held handle's file identity (sharing
 /// without `FILE_SHARE_DELETE` also keeps the directory from being renamed
 /// away), but Windows has no handle-relative create here, so a swap between
-/// that check and the following pathname operation remains possible there.
+/// that check and the following pathname operation remains possible there for
+/// a write. Windows refuses a scratch volume without stable file IDs (FAT,
+/// exFAT) when it claims the directory, before anything is written, and
+/// cleanup checks again before it removes anything: only there is a file ID a
+/// stable identity rather than a directory-entry slot a replacement can reuse.
+/// Windows cleanup opens each listed child by name under its held parent and
+/// deletes it only through a handle whose 128-bit file ID matches the
+/// listing, so a child swapped in under the root is refused as on Unix.
+/// `OpenFileById` is not used because it sits behind `windows-sys`'s
+/// `Win32_Security` feature, outside the approved surface. The open hold is
+/// also a descendant handle of every ancestor of the scratch directory, and
+/// NTFS refuses to rename a directory with an open handle in its subtree;
+/// the Windows test `a_held_scratch_directory_keeps_its_parent_from_being_renamed`
+/// asserts that.
 ///
 /// Residuals on every platform: the engine reopens the pack and save by
 /// pathname after [`Session::start`]'s check, so a swap after that check is not
@@ -85,10 +102,8 @@ impl PackSelection {
 /// `rustix` features do not include), and under a umask that withholds owner
 /// bits Linux restores the mode in that same instant through an `O_PATH` pin,
 /// while other Unixes refuse the directory (#2475); and
-/// both remove the (emptied) root with a pathname `rmdir` after the check
-/// (Windows empties it by pathname under the hold, so a subdirectory swapped
-/// in under the root is not refused there as it is on Unix), so a root
-/// replacement that wins that instant loses only if it is empty, never its
+/// both remove the (emptied) root with a pathname `rmdir` after the check,
+/// so a root replacement that wins that instant loses only if it is empty, never its
 /// contents.
 #[derive(Debug)]
 struct Scratch {
@@ -122,6 +137,19 @@ impl Scratch {
     /// replacement that lands between `create_dir` and this open is therefore
     /// adopted only if it is itself an empty private directory.
     fn claim(path: PathBuf) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        let require_volume = require_unique_file_ids;
+        #[cfg(not(windows))]
+        let require_volume = |_: &std::fs::File| Ok(());
+        Self::claim_with(path, require_volume)
+    }
+
+    /// [`Self::claim`] with the scratch volume's check injected, so a test can
+    /// refuse the volume. Only Windows checks the volume (see [`Scratch`]).
+    fn claim_with(
+        path: PathBuf,
+        require_volume: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
         let hold = open_hold(&path)?;
         let mut scratch = Self {
             path,
@@ -133,6 +161,15 @@ impl Scratch {
         if let Err(error) = proven {
             // Never let `Drop` clean up a directory that was not proven ours.
             scratch.hold = None;
+            return Err(error);
+        }
+        // Refuse an unsupported volume before anything is written, rather
+        // than leave the session's media behind at drop. The directory is
+        // proven ours and still empty, so it goes with the same empty-only
+        // `remove_dir` that ends a normal cleanup.
+        if let Err(error) = scratch.hold().and_then(require_volume) {
+            scratch.hold = None;
+            let _ = std::fs::remove_dir(&scratch.path);
             return Err(error);
         }
         Ok(scratch)
@@ -250,21 +287,9 @@ impl Scratch {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::FileTypeExt as _;
             // The hold shares no delete access, so while the contents go the
-            // root can be neither renamed away nor replaced; a link is removed,
-            // never followed.
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                let kind = entry.file_type()?;
-                if kind.is_symlink_dir() {
-                    std::fs::remove_dir(entry.path())?;
-                } else if kind.is_dir() {
-                    std::fs::remove_dir_all(entry.path())?;
-                } else {
-                    std::fs::remove_file(entry.path())?;
-                }
-            }
+            // root can be neither renamed away nor replaced.
+            remove_contents(self.hold()?, path, &mut |_| {})?;
             // The hold denies deleting the root itself, so it is released for
             // an empty-only `remove_dir`: a replacement that wins that instant
             // loses at most itself if it is empty, never its contents.

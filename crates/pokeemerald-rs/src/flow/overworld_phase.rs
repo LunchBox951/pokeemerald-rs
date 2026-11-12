@@ -33,6 +33,7 @@
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
+use platform::ButtonState;
 use std::cell::OnceCell;
 
 use crate::game_save::SaveLineage;
@@ -44,6 +45,7 @@ pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod connections;
+mod escalator_arrival;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -51,12 +53,15 @@ mod frame;
 mod input;
 mod interaction;
 mod lead_owner;
+mod live_battle_text;
+mod object_events;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
 mod step;
+mod take_item_message;
 mod white_out;
 mod wild_battle;
 
@@ -176,8 +181,10 @@ pub(crate) struct OverworldPhase {
     pub(super) map_id: assets::MapId,
     /// Live object events for the current map visit, seeded from the same
     /// resolved events the scene simulates
-    /// ([`connections::seed_object_events`]) and replaced only by a
-    /// completed map transition.
+    /// ([`connections::seed_object_events`]) and replaced by a warp; a
+    /// connection crossing instead carries the in-view entries forward beside
+    /// the entered map's seeds
+    /// ([`ObjectEventCollection::carry_across_connection`]).
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
@@ -189,6 +196,13 @@ pub(crate) struct OverworldPhase {
     /// Feeds only the wild-encounter gate -- never the positional
     /// coord/warp consumers `pending_landing` feeds.
     pending_turn: Option<TilePos>,
+    /// An escalator warp just landed and its arrival's east step is still
+    /// due ([`escalator_arrival`]); consumed by the next field frame.
+    escalator_arrival_walk: Option<engine::overworld::Direction>,
+    /// The tile the arrival's east step is walking onto, until its landing is
+    /// consumed: that landing is held movement, not a took-step
+    /// ([`escalator_arrival`]).
+    escalator_walk_off_landing: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -278,6 +292,13 @@ pub(crate) struct OverworldPhase {
     /// [`Self::advance_active_battle_frame`] drives whichever variant's own
     /// driver one turn per frame.
     pub(super) active_battle: Option<ActiveBattle>,
+    /// The text sequencer of the battle in [`Self::active_battle`], when the
+    /// battle plays its text ([`live_battle_text`]). A battle without one
+    /// resolves a whole turn per frame.
+    battle_sequence: Option<crate::flow::battle_sequence::BattleSequence>,
+    /// Test-only: whether battles play their text; see [`live_battle_text::BattleText`].
+    #[cfg(test)]
+    pub(in crate::flow) battle_text: live_battle_text::BattleText,
     /// `gDifferentSaveFile` (`pokeemerald/src/new_game.c:55`): whether the
     /// next SAVE must still ask the different-save-file WARNING, instead
     /// of the ordinary already-saved question.
@@ -326,6 +347,13 @@ pub(crate) struct OverworldPhase {
     /// drive a cone that claims its trigger frame through [`Self::step`].
     #[cfg(test)]
     pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
+    /// Test-only: a private stream the object-event scheduler draws from instead of
+    /// [`Self::rng`], so a test that pins the field stream's exact state around some other
+    /// system (a wild roll, a sight trainer, a first battle) is not moved by the random-facing
+    /// NPCs in view ([`Self::with_private_object_event_rng`]); `None` is production's single
+    /// shared stream.
+    #[cfg(test)]
+    pub(in crate::flow) object_event_rng: Option<engine::rng::Rng>,
     /// The terminal result of the most recently completed Route 101
     /// scripted first battle. Cleared when a new attempt starts and set
     /// only when its driver reports a real [`battle::BattleOutcome`], so an
@@ -353,6 +381,12 @@ pub(crate) struct OverworldPhase {
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
 }
 
+/// `FLAG_BADGE02_GET`, `FLAG_BADGE04_GET`, `FLAG_BADGE06_GET` and
+/// `FLAG_BADGE08_GET` (`SYSTEM_FLAGS + 0x8/0xA/0xC/0xE`,
+/// `include/constants/flags.h:1360`-`:1366`): the badges `IsMonDisobedient`
+/// reads.
+const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
+
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
 /// answers every header, event, and collision query the phase makes, so a
 /// scene from another room would silently run `map`'s scripts over the wrong
@@ -371,6 +405,20 @@ pub(super) fn assert_scene_owns_map(scene: &OverworldScene, map: assets::MapId) 
 }
 
 impl OverworldPhase {
+    /// The player's identity and badge limit for the battle-start boundaries
+    /// that hand party members into `battle::Battle`, so traded Pokémon hit
+    /// the pre-PP obedience gate (`IsMonDisobedient`,
+    /// `src/battle_util.c:3923`-`:4038`).
+    pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
+        let badges =
+            OBEDIENCE_BADGE_FLAGS.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false));
+        battle::PlayerObedience::new(
+            u32::from_le_bytes(self.save2.player_trainer_id),
+            self.save2.player_name,
+            badges,
+        )
+    }
+
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
     /// rather than default (module docs on [`Self::new`]).
@@ -599,6 +647,8 @@ impl OverworldPhase {
             save2: block2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -614,6 +664,9 @@ impl OverworldPhase {
             lead: None,
             undecodable_lead_retained: false,
             active_battle: None,
+            battle_sequence: None,
+            #[cfg(test)]
+            battle_text: live_battle_text::BattleText::Skipped,
             different_save_file: false,
             new_game_session: false,
             start_menu: None,
@@ -622,6 +675,8 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
+            #[cfg(test)]
+            object_event_rng: None,
             first_battle_outcome: None,
             rival_battle_outcome: None,
             sight_trainer_battle_outcome: None,
@@ -661,6 +716,11 @@ impl OverworldPhase {
         // which poll the on-frame map script like any other frame, so this
         // runs here too rather than only on a map transition.
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut phase.save1.event_data);
+        connections::admit_object_events_at_map_load(
+            &mut phase.object_events,
+            &phase.player,
+            &phase.save1.event_data,
+        );
         phase
     }
 
@@ -677,14 +737,12 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        Self::new(
-            scene.in_room_for_test(map_id),
+        Self::for_test_with_source(
+            scene,
             map_id,
             player,
             dialog,
             crate::pack_source::PackSource::Runtime,
-            new_game::NewGameOptions::DEFAULT,
-            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -712,6 +770,16 @@ impl OverworldPhase {
         )
     }
 
+    /// Test-only: gives the object-event scheduler a private stream, for a test that pins the
+    /// field stream's exact state around some other system (a wild roll, a sight trainer, a
+    /// first battle) and so must not be moved by the random-facing NPCs in view. The test
+    /// then no longer observes the scheduler's own draws.
+    #[cfg(test)]
+    pub(super) fn with_private_object_event_rng(mut self) -> Self {
+        self.object_event_rng = Some(engine::rng::Rng::new(0));
+        self
+    }
+
     /// Build a new overworld run. New-game initialization consumes exactly
     /// one RNG draw, for the trainer id's high half -- the low half is the
     /// seed itself, not a second draw
@@ -737,7 +805,12 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene);
+        let mut object_events = connections::seed_object_events(&scene);
+        connections::admit_object_events_at_map_load(
+            &mut object_events,
+            &player,
+            &save1.event_data,
+        );
         Self {
             scene,
             player,
@@ -747,6 +820,8 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             pending_turn: None,
+            escalator_arrival_walk: None,
+            escalator_walk_off_landing: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -758,6 +833,9 @@ impl OverworldPhase {
             lead: None,
             undecodable_lead_retained: false,
             active_battle: None,
+            battle_sequence: None,
+            #[cfg(test)]
+            battle_text: live_battle_text::BattleText::Skipped,
             different_save_file: true,
             new_game_session: true,
             start_menu: None,
@@ -766,6 +844,8 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
+            #[cfg(test)]
+            object_event_rng: None,
             first_battle_outcome: None,
             rival_battle_outcome: None,
             sight_trainer_battle_outcome: None,
@@ -875,6 +955,17 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
+    /// Whether the player's standing field state closes `FieldGetPlayerInput`'s
+    /// button block: a forced landing's tile-centre frame
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), or a Secret
+    /// Base mat sequence, whose spin holds `LockPlayerFieldControls` and whose
+    /// jump is never tile-centre or at rest (`field_player_avatar.c:1587-1594,
+    /// 1640`, `field_control_avatar.c:95-113`, `overworld.c:1445-1447`).
+    #[must_use]
+    pub(super) fn field_input_closed(&self) -> bool {
+        self.player.field_input_suppressed() || self.player.forced_mat().is_some()
+    }
+
     /// Restart the field's animations on return to the field.
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
@@ -892,9 +983,10 @@ impl OverworldPhase {
     }
 
     /// Play one frame of whichever battle currently owns the overworld
-    /// frame, if any -- the one place any battle's turn is driven. Returns
-    /// whether a battle owned this frame.
-    pub(super) fn advance_active_battle_frame(&mut self) -> bool {
+    /// frame, if any -- the one place any battle's turn is driven. `buttons`
+    /// is this frame's input, which a battle that plays its text answers
+    /// prompts with. Returns whether a battle owned this frame.
+    pub(super) fn advance_active_battle_frame(&mut self, buttons: ButtonState) -> bool {
         let Some(active) = self.active_battle.take() else {
             return false;
         };
@@ -903,7 +995,7 @@ impl OverworldPhase {
         self.clear_poison_step_counter();
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
-            ActiveBattle::First(battle) => self.advance_first_battle_frame(battle),
+            ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
             ActiveBattle::Rival { battle, trainer_id } => {
                 self.advance_route103_rival_battle_frame(battle, trainer_id)
             }
@@ -965,6 +1057,8 @@ mod animation_tick_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
+mod connection_live_objects_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod cute_charm_slot_zero_tests;
@@ -986,6 +1080,9 @@ mod field_poison_tests;
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
+/// Fixed-facing object events driven by the production frame.
+#[cfg(test)]
+mod fixed_facing_tests;
 #[cfg(test)]
 mod forced_landing_field_input_gate_tests;
 #[cfg(test)]
@@ -1002,8 +1099,16 @@ mod landing_call_arrow_elevation_tests;
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
 mod lead_owner_tests;
+/// The first battle against the real battle text: a turn or the result cannot
+/// overtake the text before it.
+#[cfg(test)]
+mod live_first_battle_tests;
+#[cfg(test)]
+mod mat_field_input_gate_tests;
 #[cfg(test)]
 mod mom_faceplayer_tests;
+#[cfg(test)]
+mod obedience_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
@@ -1011,6 +1116,9 @@ mod oldale_reposition_tests;
 mod opponent_ot_id_tests;
 #[cfg(test)]
 mod pre_movement_arrow_elevation_tests;
+/// Random-facing object events driven by the production frame.
+#[cfg(test)]
+mod random_facing_tests;
 #[cfg(test)]
 mod route103_rival_driver_tests;
 #[cfg(test)]

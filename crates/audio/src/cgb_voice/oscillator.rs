@@ -65,12 +65,12 @@ impl Oscillator {
     /// The first pass's `NRx1` store, as the byte the length counter loads
     /// from. A square sums its duty into the byte and re-selects the duty from
     /// the result ([`SquareChannel::write_nrx1`]); noise stores the raw length
-    /// byte; wave has no such store and returns `None`.
-    pub(super) fn write_nrx1(&mut self, length_register: u8) -> Option<u8> {
+    /// byte; wave stores the whole byte as the 8-bit `NR31` length, with no
+    /// duty bits to re-select.
+    pub(super) fn write_nrx1(&mut self, length_register: u8) -> u8 {
         match self {
-            Self::Square(square) => Some(square.write_nrx1(length_register)),
-            Self::Noise(_) => Some(length_register),
-            Self::Wave { .. } => None,
+            Self::Square(square) => square.write_nrx1(length_register),
+            Self::Noise(_) | Self::Wave { .. } => length_register,
         }
     }
 
@@ -273,7 +273,8 @@ mod nr32_attenuation_tests {
     #[test]
     fn full_volume_keeps_the_centered_nibble() {
         assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
-        assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
+        // Levels past the table read `gClockTable`, which mutes (`cgb_voice.rs`).
+        assert_eq!(render(0, 31), 0);
     }
 }
 

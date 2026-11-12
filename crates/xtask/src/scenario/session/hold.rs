@@ -254,6 +254,76 @@ pub(super) fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
+/// Empties `dir` (held as `dir`, named by `dir_path`) through handles, the
+/// Windows counterpart of the Unix `remove_contents`, and removes nothing on a
+/// volume [`require_unique_file_ids`] refuses. [`Scratch`](super::Scratch)
+/// owns the contract: why each entry's 128-bit file ID is verified, why the
+/// volume must have stable IDs, and why `OpenFileById` is not used.
+#[cfg(windows)]
+pub(super) fn remove_contents(
+    dir: &std::fs::File,
+    dir_path: &Path,
+    before_remove: &mut dyn FnMut(&std::ffi::OsStr),
+) -> std::io::Result<()> {
+    remove_contents_with(dir, dir_path, &require_unique_file_ids, before_remove)
+}
+
+/// [`remove_contents`] with the volume check injected, so a test can refuse
+/// the volume.
+#[cfg(windows)]
+pub(super) fn remove_contents_with(
+    dir: &std::fs::File,
+    dir_path: &Path,
+    require_volume: &dyn Fn(&std::fs::File) -> std::io::Result<()>,
+    before_remove: &mut dyn FnMut(&std::ffi::OsStr),
+) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_LIST_DIRECTORY: u32 = 0x1;
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    require_volume(dir)?;
+    for entry in win_fs::list_directory_by_file_id(dir)? {
+        // A test seam: the instant between the listing and the open.
+        before_remove(&entry.name);
+        let child_path = dir_path.join(&entry.name);
+        let child = std::fs::OpenOptions::new()
+            .access_mode(DELETE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
+            .share_mode(SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&child_path)?;
+        if win_fs::wide_file_id(&child)? != entry.file_id {
+            return Err(std::io::Error::other(
+                "a scratch entry was replaced during cleanup",
+            ));
+        }
+        if entry.is_real_directory() {
+            remove_contents_with(&child, &child_path, require_volume, before_remove)?;
+        }
+        // The entry goes when this handle closes (or, after the legacy
+        // fallback, when the last handle to it closes).
+        win_fs::delete_through_handle_ignoring_read_only(&child)?;
+        drop(child);
+    }
+    Ok(())
+}
+
+/// Refuses a volume that cannot open a file by its ID
+/// ([`win_fs::volume_supports_open_by_file_id`]); [`Scratch`](super::Scratch)
+/// says why, and when the claim and cleanup run this.
+#[cfg(windows)]
+pub(super) fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
+    if !win_fs::volume_supports_open_by_file_id(dir)? {
+        return Err(std::io::Error::other(
+            "the scratch volume has no stable file IDs to verify cleanup against (FAT or \
+             exFAT); point TEMP at an NTFS or ReFS volume",
+        ));
+    }
+    Ok(())
+}
+
 /// Empties `dir` through its descriptor: every entry is unlinked relative to
 /// its held parent and subdirectories are opened `NOFOLLOW`, so no pathname
 /// is ever re-resolved and a symlink is unlinked, not followed. Each entry

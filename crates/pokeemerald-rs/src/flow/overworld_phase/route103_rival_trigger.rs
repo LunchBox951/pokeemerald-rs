@@ -67,10 +67,12 @@
 //!    (`pokeemerald/src/event_object_movement.c:1389-1397`) -- i.e. setting
 //!    the object's own hide flag, `FLAG_HIDE_ROUTE_103_RIVAL`. That one
 //!    line is [`advance_route103_rival_battle_frame`]'s job on
-//!    [`battle::BattleOutcome::PlayerWon`]: the object stops being spawned
-//!    at all from then on (`crate::overworld::npc`'s hide-flag gate, shared
-//!    with every other `FLAG_HIDE_*` object event), matching upstream's own
-//!    observable result without a `removeobject`-the-verb to reimplement.
+//!    [`battle::BattleOutcome::PlayerWon`], together with retiring the live
+//!    entry (`RemoveObjectEvent`'s `active = FALSE`, ported as
+//!    `ObjectEventCollection::remove_by_local_id`): the object leaves every
+//!    position query at once, and the set flag keeps the scheduler from
+//!    spawning it again (the hide-flag check at admission, shared with every
+//!    other `FLAG_HIDE_*` object event).
 //!    The other seven lines are **not** modelled: `VAR_BIRCH_LAB_STATE`,
 //!    `FLAG_DEFEATED_RIVAL_ROUTE103`, `VAR_OLDALE_RIVAL_STATE`, and
 //!    `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL`/`FLAG_HIDE_OLDALE_TOWN_RIVAL`
@@ -192,6 +194,10 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `Route103_EventScript_RivalEnd`'s `removeobject` actually performs
 /// (module docs).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+/// `LOCALID_ROUTE103_RIVAL` (`data/maps/Route103/map.json`, `local_id` 2): the object
+/// `removeobject` retires.
+const RIVAL_LOCAL_ID: u8 = 2;
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): base of the
 /// per-trainer defeated-flag range `SetBattledTrainersFlags` writes
@@ -364,6 +370,7 @@ impl OverworldPhase {
         let trainer = route103_rival::route103_rival_for(rival, starter);
         match npc_trainer_battle::start_npc_trainer_battle(lead.clone(), trainer, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Rival {
                     battle,
                     trainer_id: trainer,
@@ -420,6 +427,9 @@ impl OverworldPhase {
                          the rival may remain interactable"
                     );
                 }
+                // `removeobject` also deactivates the object, and the scheduler does not retire an
+                // admitted entry for its flag (`event_object_movement.c:1383-1397`).
+                self.object_events.remove_by_local_id(RIVAL_LOCAL_ID);
                 if let Err(error) = self
                     .save1
                     .event_data

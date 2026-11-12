@@ -500,7 +500,11 @@ impl Mixer {
         for (index, idle) in self.idle_cgb_hardware.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
                 if let Some(hardware) = idle {
-                    hardware.render_idle_hardware(&mut self.mix_buffer, &self.clocks.sweep);
+                    hardware.render_idle_hardware(
+                        &mut self.mix_buffer,
+                        &self.clocks.sweep,
+                        &self.clocks.length,
+                    );
                 }
             }
         }

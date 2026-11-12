@@ -1,15 +1,16 @@
-//! Per-battler move history, Perish Song and Truant state.
+//! Per-battler move history, Perish Song, Truant and multi-turn lock state.
 //!
 //! Upstream keeps these in arrays indexed by battler (`gLastLandedMoves`,
-//! `gLastHitBy`, `gStatuses3[].perishSongTimer`,
-//! `gDisableStructs[].truantCounter`) that `SwitchInClearSetData` and
-//! `FaintClearSetData` reset, so they belong to the battler's occupancy
-//! of the field and not to a party member. None of it reaches a save.
+//! `gLastHitBy`, `gStatuses3[].perishSongTimer`, `gLockedMoves`,
+//! `gDisableStructs[].rolloutTimer`, `gDisableStructs[].truantCounter`) that
+//! `SwitchInClearSetData` and `FaintClearSetData` reset, so they belong to the
+//! battler's occupancy of the field and not to a party member. None of it
+//! reaches a save.
 
 use assets::MoveId;
 
 /// One of the two battlers in a single battle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BattlerSide {
     /// The player's active battler.
     Player,
@@ -54,12 +55,25 @@ pub enum LastLandedMove {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerishSongTurns(pub u8);
 
+/// A multi-turn lock on a battler's selection: `gLockedMoves[battler]` with
+/// `STATUS2_MULTIPLETURNS` set, and the `rolloutTimer` that counts it down
+/// (`Cmd_rolloutdamagecalculation`, `src/battle_script_commands.c:8547`-
+/// `:8557`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MoveLock {
+    /// The move the battler is forced to select.
+    pub(super) move_id: MoveId,
+    /// Attempts left before the lock releases; always at least one.
+    pub(super) attempts_left: u8,
+}
+
 /// Everything the battle remembers about one battler's time on the field.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BattlerState {
     last_landed_move: LastLandedMove,
     last_hitter: Option<BattlerSide>,
     perish_song: Option<PerishSongTurns>,
+    move_lock: Option<MoveLock>,
     truant_loafing: bool,
 }
 
@@ -81,6 +95,41 @@ impl BattlerState {
     #[must_use]
     pub const fn perish_song(&self) -> Option<PerishSongTurns> {
         self.perish_song
+    }
+
+    /// Returns the move this battler is forced to select, or `None` when its
+    /// selection is free (`STATUS2_MULTIPLETURNS`, `gLockedMoves`).
+    #[must_use]
+    pub const fn locked_move(&self) -> Option<MoveId> {
+        match self.move_lock {
+            Some(lock) => Some(lock.move_id),
+            None => None,
+        }
+    }
+
+    /// Returns the attempts left on the lock (`rolloutTimer`), or `None`
+    /// when the battler is not locked.
+    #[must_use]
+    pub const fn lock_attempts_left(&self) -> Option<u8> {
+        match self.move_lock {
+            Some(lock) => Some(lock.attempts_left),
+            None => None,
+        }
+    }
+
+    /// Installs or advances the lock after a successful attempt. A lock whose
+    /// remaining attempts reach zero is released.
+    pub(super) fn set_move_lock(&mut self, lock: Option<MoveLock>) {
+        self.move_lock = lock;
+    }
+
+    /// `CancelMultiTurnMoves` (`src/battle_util.c:877`-`:887`): the one seam
+    /// that releases a lock early. A failed attempt, a Truant loafing turn,
+    /// a full-paralysis or confusion self-hit cancellation and an accepted
+    /// sleep all end here. Defense Curl and ordinary confusion are separate
+    /// state and stay.
+    pub(super) fn cancel_multi_turn_moves(&mut self) {
+        self.move_lock = None;
     }
 
     /// Whether this occupant's Truant counter (`gDisableStructs[].truantCounter`)

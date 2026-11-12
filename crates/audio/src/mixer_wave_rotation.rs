@@ -19,7 +19,7 @@ const RAMP_RAM: [u8; 16] = [
 ];
 
 fn wave_voice(id: &str, samples: [i8; 32]) -> CgbVoice {
-    routed_wave_voice(id, samples, FULL_TRACK_VOLUME, FULL_TRACK_VOLUME)
+    routed_wave_voice(id, samples, MAX_TRACK_VOLUME, MAX_TRACK_VOLUME)
 }
 
 fn routed_wave_voice(id: &str, samples: [i8; 32], vol_mr: u8, vol_ml: u8) -> CgbVoice {
@@ -171,7 +171,7 @@ fn a_stopped_wave_slot_keeps_emitting_its_held_sample() {
 #[test]
 fn a_retired_wave_slot_holds_its_sample_on_the_committed_route_only() {
     let mut continued = Mixer::new(MAX_MASTER_VOLUME, 1);
-    assert!(continued.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), FULL_TRACK_VOLUME, 0)));
+    assert!(continued.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), MAX_TRACK_VOLUME, 0)));
     frame(&mut continued);
     let held = frame(&mut continued)[..2].to_vec();
     assert_eq!(held[0].to_bits(), 0, "sanity: the left side is not routed");
@@ -182,7 +182,7 @@ fn a_retired_wave_slot_holds_its_sample_on_the_committed_route_only() {
     );
 
     let mut stopped = Mixer::new(MAX_MASTER_VOLUME, 1);
-    assert!(stopped.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), FULL_TRACK_VOLUME, 0)));
+    assert!(stopped.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), MAX_TRACK_VOLUME, 0)));
     frame(&mut stopped);
     stopped.stop_track(TRACK);
     assert_frame_holds(&frame(&mut stopped), &held);
@@ -315,4 +315,76 @@ fn a_held_wave_level_routed_to_no_side_is_silent() {
     assert!(idle.iter().all(|&s| s == 0.0), "sanity: nothing is routed");
     assert!(!mixer.has_held_wave_output());
     assert!(mixer.is_silent());
+}
+
+/// A replacement that retires on its first pass jumps through `oscillator_off`
+/// past the `CGB_CHANNEL_MO_VOL` NR51 write (`m4a.c:1053-1056,1205-1208`), so
+/// the predecessor's held sample stays on the predecessor's route.
+#[test]
+fn a_first_pass_retiring_wave_replacement_keeps_the_predecessor_route() {
+    let mut continued = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(continued.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), 0, MAX_TRACK_VOLUME)));
+    frame(&mut continued);
+    let held = frame(&mut continued)[..2].to_vec();
+    assert_ne!(
+        held[0].to_bits(),
+        0,
+        "sanity: the left side carries the nibble"
+    );
+    assert_eq!(held[1].to_bits(), 0, "sanity: the right side is not routed");
+
+    let mut replaced = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(replaced.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), 0, MAX_TRACK_VOLUME)));
+    frame(&mut replaced);
+    let retiring = CgbVoice::wave(
+        Arc::from("ramp-a"),
+        ramp(),
+        CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        },
+        false,
+        KEY,
+        0,
+        0,
+        0,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        KEY,
+        TRACK,
+        0,
+        0,
+        0,
+    );
+    assert!(replaced.add_cgb_voice(retiring));
+    let out = frame(&mut replaced);
+    assert_eq!(
+        replaced.voice_count(),
+        0,
+        "sanity: the replacement retired on its first pass"
+    );
+    assert_frame_holds(&out, &held);
+}
+
+/// A replacement that survives its first pass reaches the `CGB_CHANNEL_MO_VOL`
+/// NR51 write (`m4a.c:1081-1082,1205-1208`), so its own route replaces the
+/// predecessor's.
+#[test]
+fn a_surviving_wave_replacement_commits_its_own_route() {
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(mixer.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), 0, MAX_TRACK_VOLUME)));
+    frame(&mut mixer);
+    assert!(mixer.add_cgb_voice(routed_wave_voice("ramp-a", ramp(), MAX_TRACK_VOLUME, 0)));
+    let out = frame(&mut mixer);
+    assert_eq!(mixer.voice_count(), 1, "sanity: the replacement survived");
+    assert!(
+        out.chunks_exact(2).all(|pair| pair[0].to_bits() == 0),
+        "the predecessor's left route is replaced"
+    );
+    assert!(
+        out.chunks_exact(2).any(|pair| pair[1] != 0.0),
+        "the replacement sounds on its own right route"
+    );
 }
