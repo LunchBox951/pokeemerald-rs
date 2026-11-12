@@ -181,17 +181,42 @@ impl SnapshotsRestore {
         );
     }
 
-    /// The `title.generation-*` directories directly under `dir`.
-    fn generation_names(dir: &Path) -> Vec<String> {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Vec::new();
+    /// The `title.generation-*` directories directly under `dir`; none when
+    /// `dir` does not exist.
+    ///
+    /// # Errors
+    ///
+    /// When the directory or one of its entries cannot be read: a partial
+    /// listing would record a generation as absent that a publisher already
+    /// promoted.
+    fn list_generations(dir: &Path) -> Result<Vec<String>, String> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(format!("cannot list {}: {error}", dir.display())),
         };
-        entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| name.starts_with("title.generation-"))
-            .collect()
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("cannot list {}: {error}", dir.display()))?;
+            let kind = entry
+                .file_type()
+                .map_err(|error| format!("cannot stat {}: {error}", entry.path().display()))?;
+            if let Ok(name) = entry.file_name().into_string() {
+                if kind.is_dir() && name.starts_with("title.generation-") {
+                    names.push(name);
+                }
+            }
+        }
+        Ok(names)
+    }
+
+    /// [`Self::list_generations`] for a baseline.
+    ///
+    /// # Panics
+    ///
+    /// When the listing fails, before any child can publish.
+    fn generation_names(dir: &Path) -> Vec<String> {
+        Self::list_generations(dir).unwrap_or_else(|why| panic!("{why}"))
     }
 
     /// Re-reads the pointer and generations a restore would put back; call it
@@ -208,6 +233,32 @@ impl SnapshotsRestore {
             .clone_from(&fresh.generations_before);
     }
 
+    /// Refreshes the baseline, then runs `child` only when that baseline can
+    /// be restored after it.
+    ///
+    /// The publishing child replaces the pointer atomically and leaves no
+    /// trace of the one it replaced, so a baseline that
+    /// [`Self::baseline_unprovable`] rejects at cleanup could not be put back:
+    /// cleanup would keep the child's pointer and change the developer's
+    /// selected snapshot. The check therefore runs before the child can
+    /// publish anything.
+    ///
+    /// # Errors
+    ///
+    /// The reason the baseline is unprovable; `child` has not run and nothing
+    /// was published.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::refresh_baseline`].
+    fn run_child_if_restorable<T>(&mut self, child: impl FnOnce() -> T) -> Result<T, String> {
+        self.refresh_baseline();
+        match self.baseline_unprovable() {
+            Some(why) => Err(why),
+            None => Ok(child()),
+        }
+    }
+
     /// A generation neither present at the baseline nor this guard's own.
     ///
     /// Its publisher may have replaced the baseline pointer before the
@@ -215,9 +266,13 @@ impl SnapshotsRestore {
     /// the directory alone does not show it, since a failed publish
     /// retains its generation (`record_snapshot.rs` `report_retained_directory`).
     fn foreign_generation_since_baseline(&self) -> Option<String> {
-        Self::generation_names(&self.dir).into_iter().find(|name| {
-            !self.generations_before.contains(name) && !self.own_generations.contains(name)
-        })
+        match Self::list_generations(&self.dir) {
+            // An unreadable listing cannot rule a publisher out: keep the child's pointer.
+            Err(why) => Some(why),
+            Ok(names) => names.into_iter().find(|name| {
+                !self.generations_before.contains(name) && !self.own_generations.contains(name)
+            }),
+        }
     }
 
     /// A baseline generation the baseline pointer did not name, or the
@@ -496,9 +551,22 @@ fn record_snapshot_reads_the_checkout_pack_even_with_a_missing_override() {
         checkout_pack().display()
     );
     let mut restore = SnapshotsRestore::capture();
-    // Only a publisher landing during the child's run is then unaccounted for.
-    restore.refresh_baseline();
-    let output = run_xtask(&["record-snapshot", "--scene", "title"], MISSING_PACK);
+    // The refresh leaves only a publisher landing during the child's run
+    // unaccounted for. A baseline the cleanup could not put back fails here,
+    // before the child publishes and moves the developer's pointer.
+    let output = restore
+        .run_child_if_restorable(|| {
+            run_xtask(&["record-snapshot", "--scene", "title"], MISSING_PACK)
+        })
+        .unwrap_or_else(|why| {
+            panic!(
+                "refusing to run record-snapshot against {}: {why}. Cleanup could not restore \
+                 the selected snapshot after a publish, so nothing was published. Leave only the \
+                 generation `title.generation` names under that directory (move older or failed \
+                 generations aside), then rerun.",
+                restore.dir.display()
+            )
+        });
     restore.own_generation_from_stdout(&String::from_utf8_lossy(&output.stdout));
     assert_succeeds(&output, "record-snapshot");
     assert!(
@@ -963,4 +1031,78 @@ fn adjudicator2_restore_does_not_discard_a_publisher_promoted_before_the_baselin
          (errors {errors:?}, pointer {:?})",
         String::from_utf8_lossy(&pointer)
     );
+}
+
+/// Publishes `generation` the way the `record-snapshot` child does: its
+/// directory first, then the pointer.
+fn publish_as_child(dir: &Path, generation: &str) {
+    std::fs::create_dir(dir.join(generation)).expect("child generation");
+    std::fs::write(dir.join("title.generation"), format!("{generation}\n")).expect("child pointer");
+}
+
+/// Adjudicator 3: two retained generations A and B with the pointer on B and
+/// no concurrent publisher. `baseline_unprovable` rejects that baseline at
+/// cleanup, so cleanup would keep the child's pointer C and leave the
+/// developer's selected snapshot changed. The child must not run at all.
+#[test]
+fn adjudicator3_retained_generations_do_not_leave_the_childs_pointer_selected() {
+    let dir = scratch_snapshots("retained-generations");
+    std::fs::create_dir(dir.join("title.generation-1-0")).expect("A generation");
+    std::fs::create_dir(dir.join("title.generation-2-0")).expect("B generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-2-0\n").expect("pointer B");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let mut child_ran = false;
+    let outcome = restore.run_child_if_restorable(|| {
+        child_ran = true;
+        publish_as_child(&dir, "title.generation-77-0");
+    });
+    let why = outcome.expect_err("an unrestorable baseline must be refused");
+    assert!(why.contains("title.generation-1-0"), "{why}");
+    assert!(
+        !child_ran,
+        "the child must not run against an unrestorable baseline"
+    );
+    drop(restore);
+    let pointer = std::fs::read(dir.join("title.generation")).expect("pointer");
+    let names = SnapshotsRestore::generation_names(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        pointer, b"title.generation-2-0\n",
+        "the developer's selected snapshot must not change"
+    );
+    assert_eq!(names.len(), 2, "no generation was published: {names:?}");
+}
+
+/// A provable baseline still runs the child and restores the developer's
+/// pointer afterwards.
+#[test]
+fn a_restorable_baseline_runs_the_child_and_restores_the_pointer() {
+    let dir = scratch_snapshots("restorable-baseline");
+    std::fs::create_dir(dir.join("title.generation-2-0")).expect("B generation");
+    std::fs::write(dir.join("title.generation"), b"title.generation-2-0\n").expect("pointer B");
+    let mut restore = SnapshotsRestore::capture_in(dir.clone());
+    let own = dir.join("title.generation-77-0");
+    restore
+        .run_child_if_restorable(|| publish_as_child(&dir, "title.generation-77-0"))
+        .expect("a single named generation is restorable");
+    restore.own_generation_from_stdout(&success_line(&own));
+    drop(restore);
+    let pointer = std::fs::read(dir.join("title.generation")).expect("pointer");
+    let child_left = own.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(pointer, b"title.generation-2-0\n");
+    assert!(!child_left, "the child's own generation is removed");
+}
+
+/// A snapshots path that cannot be listed (here a file, not a directory) is
+/// not an empty baseline: capture refuses before any child could publish.
+#[test]
+fn snapshots_capture_refuses_an_unlistable_directory() {
+    let dir = scratch_snapshots("unlistable");
+    let file = dir.join("not-a-directory");
+    std::fs::write(&file, b"x").expect("file");
+    let listed = SnapshotsRestore::list_generations(&file);
+    let _ = std::fs::remove_dir_all(&dir);
+    let why = listed.expect_err("a listing failure must not read as an empty directory");
+    assert!(why.contains("cannot list"), "{why}");
 }
