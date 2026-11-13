@@ -118,10 +118,24 @@ impl CgbVoice {
     pub(super) fn clock_length(&mut self) {
         if self.length.clock() {
             self.length_stopped = true;
-            if self.hardware_muted {
+            if self.hardware_muted && !self.sweep_held {
                 self.last_contribution = 0;
             }
         }
+    }
+
+    /// The latch a square would hold if its length clock at this sample stops
+    /// it. `GBAudioUpdateFrame` runs channels 1 and 2 to the frame-event
+    /// timestamp while they still play, so `_updateSquareSample` re-latches the
+    /// duty level before the length clock clears `playing`
+    /// (`mgba/src/gb/audio.c:649-657,493-512,678-684`). Read it without
+    /// stepping: the sample's deferred idle time still steps the phase. `None`
+    /// unless a length clock is due at a rendering square.
+    pub(super) fn expiry_square_latch(&mut self, clock_due: bool) -> Option<i32> {
+        if !clock_due || self.length_stopped || self.hardware_muted {
+            return None;
+        }
+        self.oscillator.square_held_contribution(self.frame_gain)
     }
 
     /// Inherit the counter and enable bit of the voice this one replaces on the
