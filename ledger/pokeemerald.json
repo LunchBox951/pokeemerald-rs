@@ -29101,6 +29101,14 @@
       "status": "pending"
     },
     "src/battle_pyramid.c": {
+      "artifacts": {
+        "PyramidWildMon": {
+          "reason": "src/battle_pyramid.c:45-51 struct PyramidWildMon and :102 ABILITY_RANDOM (2), modelled as PyramidWildMon with a species, a mode-tagged PyramidWildLevel, a PyramidAbilitySelector and four MoveIds. Only this record shape and selector constant are modelled; the rest of the file (GenerateBattlePyramidWildMon at :1344-1401, floors, items, trainers) stays pending under the parent row.",
+          "rust_target": "crates/assets/src/battle_pyramid_wild_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29827,12 +29835,18 @@
     "src/data/battle_frontier/battle_pyramid_level_50_wild_mons.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "src/data/battle_frontier/battle_pyramid_level_50_wild_mons.h:1-1063. All 20 rounds (sLevel50WildMons_Round1 to Round20, 8 records each, in sLevel50WildMonPointers order) transcribed as the Level 50 roster, each record's species, lvl (a PyramidMonLevel, a level in 1..=100), abilityNum (a PyramidAbilitySelector: 0, 1, or ABILITY_RANDOM) and four moves, behind pyramid_wild_mon/pyramid_round lookups that reject an out-of-range round or slot. Pinned record by record by unit tests and by an ignored test that re-parses this header. NOT modelled: GenerateBattlePyramidWildMon and its RNG, ability and move assignment, floors, items, and trainers.",
+      "rust_target": "crates/assets/src/battle_pyramid_wild_mons.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/battle_frontier/battle_pyramid_open_level_wild_mons.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "src/data/battle_frontier/battle_pyramid_open_level_wild_mons.h:1-1063. All 20 rounds (sOpenLevelWildMons_Round1 to Round20, 8 records each, in sOpenLevelWildMonPointers order) transcribed as the Open Level roster; lvl is kept as a PyramidLevelOffset, the amount GenerateBattlePyramidWildMon subtracts from the facility level (src/battle_pyramid.c:1370-1371), a different type from the Level 50 PyramidMonLevel so an offset cannot be read as a level. abilityNum is a PyramidAbilitySelector, and two records (round 6, slots 4 and 5) select the second ability here where the Level 50 header selects ABILITY_RANDOM. Pinned record by record by unit tests and by an ignored test that re-parses this header. NOT modelled: GenerateBattlePyramidWildMon and its RNG, ability and move assignment, floors, items, and trainers.",
+      "rust_target": "crates/assets/src/battle_pyramid_wild_mons.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/battle_frontier/battle_tent.h": {
       "category": "code.header",
