@@ -3,6 +3,7 @@
 //! `isFirstTurn` counter that gates it (`src/battle_main.c:3051,3220,3312,4875`).
 
 use crate::common::{max_iv_mon, SequenceRng};
+use assets::items::ItemId;
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::stat_stage::StatStage;
@@ -198,6 +199,35 @@ fn a_holder_boosts_before_its_own_poison_tick() {
             BattleEvent::HurtByPoison {
                 by_player: true,
                 damage: poison_residual_damage(max_hp),
+            },
+        ],
+        "{events:?}"
+    );
+    rng.assert_exhausted();
+}
+
+/// `ENDTURN_ABILITIES` precedes `ENDTURN_ITEMS1` (`src/battle_util.c:1494`-`:1502`).
+#[test]
+fn a_holder_boosts_before_its_own_berry_heal() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, NINJASK, 10, vec![SPLASH]).with_held_item(ItemId::ORAN_BERRY);
+    player.apply_damage(player.current_hp() - player.stats().max_hp / 2);
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 30, vec![SPLASH]);
+
+    let mut rng = SequenceRng::new([0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        &events[4..],
+        &[
+            boosted(true, 1),
+            BattleEvent::ItemRestoredHealth {
+                by_player: true,
+                item: ItemId::ORAN_BERRY,
+                healed: 10,
             },
         ],
         "{events:?}"
