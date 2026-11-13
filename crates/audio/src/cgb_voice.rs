@@ -575,6 +575,19 @@ impl CgbVoice {
         }
     }
 
+    /// Whether the idle slot is a wave channel whose held sample is nonzero
+    /// and still routed to an output side, so every idle frame keeps mixing it
+    /// (`render_idle_hardware`'s doc). Unlike a noise latch, nothing the idle
+    /// slot does ever settles it: only a retrigger or a route write ends it
+    /// (`mgba/src/gb/audio.c:246-253,399-403,768-774`).
+    pub(crate) fn holds_wave_output(&self) -> bool {
+        self.routing.is_routed()
+            && self
+                .oscillator
+                .held_wave_contribution()
+                .is_some_and(|contribution| contribution != 0)
+    }
+
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
     /// and emits its latch (`mgba/src/gb/audio.c:606-641,782`), a square keeps
     /// its duty running, and a wave stops clocking but keeps emitting its held
@@ -851,6 +864,11 @@ impl CgbVoice {
             if !self.envelope.is_active() {
                 break;
             }
+            // The frame event runs a playing square to its timestamp before the
+            // sweep and length clocks, so a length expiry latches the duty level
+            // as it stood ahead of a coincident sweep retune
+            // (`mgba/src/gb/audio.c:657-691`).
+            let expiry_latch = self.expiry_square_latch(lengths.peek() == Some(&sample_offset));
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
                 if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
@@ -874,7 +892,7 @@ impl CgbVoice {
                 // (`mgba/src/gb/audio.c:768-774`), which its one-sample-late
                 // output has not reached yet.
                 self.oscillator.defer_idle_samples(1);
-                if let Some(held) = self.oscillator.held_wave_contribution() {
+                if let Some(held) = self.oscillator.held_wave_contribution().or(expiry_latch) {
                     self.last_contribution = held;
                 }
             } else {

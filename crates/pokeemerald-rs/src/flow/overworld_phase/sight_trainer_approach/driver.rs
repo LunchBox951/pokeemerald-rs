@@ -148,7 +148,10 @@ impl OverworldPhase {
                     &mut self.sight_approach,
                     self.object_events.get_mut(local_id),
                 ) {
-                    approach.advance_movement(live.state_mut(), player_position);
+                    let scene = &self.scene;
+                    approach.advance_movement(live.state_mut(), player_position, |state| {
+                        scene.update_object_elevation(state);
+                    });
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }
