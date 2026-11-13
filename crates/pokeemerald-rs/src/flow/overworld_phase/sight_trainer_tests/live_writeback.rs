@@ -373,7 +373,7 @@ fn an_approach_walks_the_carried_trainer_and_not_the_entered_maps_namesake() {
         phase
             .object_events
             .get(LOCAL_ID)
-            .is_some_and(|entry| entry.is_active()),
+            .is_some_and(engine::overworld::object_event::LiveObjectEvent::is_active),
         "setup: the departed visit admitted the trainer"
     );
     phase.object_events =
@@ -400,7 +400,10 @@ fn an_approach_walks_the_carried_trainer_and_not_the_entered_maps_namesake() {
 
     seed_approach_for(&mut phase, LOCAL_ID, Some(DEPARTED), 2);
     assert_eq!(
-        phase.sight_approach.as_ref().and_then(|a| a.carried_from()),
+        phase
+            .sight_approach
+            .as_ref()
+            .and_then(super::super::sight_trainer_approach::SightApproach::carried_from),
         Some(DEPARTED)
     );
     for _ in 0..300 {
