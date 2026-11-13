@@ -22,6 +22,8 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 mod failed_restore;
+#[cfg(target_os = "linux")]
+mod mode_put_back;
 
 /// `a/b`, created, with `b` (the last level, as when its owner-access
 /// restore failed) left at `mode`.
