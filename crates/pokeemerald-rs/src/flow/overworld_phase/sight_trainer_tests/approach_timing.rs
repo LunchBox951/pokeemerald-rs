@@ -647,16 +647,17 @@ fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
     assert_eq!((trainer.elevation(), trainer.previous_elevation()), (0, 5));
 }
 
-/// A zero-tile approach settles the trainer's previous tile when it faces the
-/// player (`MOVEMENT_ACTION_FACE_PLAYER` -> `FaceDirection` ->
-/// `ShiftStillObjectEventCoords`, `event_object_movement.c:5048-5056,2162-2165,
-/// 6181-6189`). Rhett has been walked off a tall-grass tile and still records
+/// A zero-tile approach settles the trainer's previous tile as the icon goes up
+/// (`TrainerExclamationMark`'s held face-direction movement, `trainer_see.c:
+/// 465-466`, -> `FaceDirection` -> `ShiftStillObjectEventCoords`,
+/// `event_object_movement.c:5048-5068,2162-2165`). Rhett has been walked off a tall-grass tile and still records
 /// it as his previous one, which keeps the grass effect there alive
 /// (`UpdateTallGrassFieldEffect` retires it only once neither of its owner's
-/// tiles is the effect's, `field_effect_helpers.c:332-355`); the face action
-/// must retire that effect while the intro is still waiting, not leave it up.
+/// tiles is the effect's, `field_effect_helpers.c:332-355`); the icon's
+/// face action must retire that effect while the icon is still up, not
+/// leave it up.
 #[test]
-fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_through_the_intro() {
+fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes_up() {
     use engine::overworld::metatile_behavior::MB_TALL_GRASS;
 
     const GROUND: u8 = 3;
@@ -700,27 +701,43 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_through_the_intr
     assert_eq!(rhett(&mut phase).position(), RHETT_TILE);
     assert_eq!(rhett(&mut phase).previous_position(), (rx, ry - 1));
     seed_approach(&mut phase, 0);
-    for _ in 0..LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES {
-        phase.step(ButtonState::new());
-        assert_eq!(
-            phase.scene.tall_grass_effect_count(),
-            1,
-            "the departed tile's effect stands until the face action"
-        );
-    }
-    // The face stage, its wait, and the followup frame, all before the speech.
-    for _ in 0..3 {
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "setup: the departed tile's effect stands before the icon"
+    );
+    // The lock handoff's frame is the one the icon goes up on: the trainer's
+    // held face-direction movement settles the previous tile right there.
+    for _ in 0..LOCK_HANDOFF_AT_REST {
         phase.step(ButtonState::new());
     }
-    assert!(phase.sight_approach.is_some(), "the intro is still open");
+    phase.step(ButtonState::new());
     assert_eq!(
         approaching_trainer(&phase).previous_position(),
         RHETT_TILE,
-        "the face action settled the previous tile"
+        "the icon's face-direction movement settled the previous tile"
     );
+    // The effect has left its owner (`owner_moved`) and then runs out its
+    // settled animation (`field_effect_helpers.c:340-355`): a handful of
+    // frames, all well inside the sixty-frame icon.
+    for _ in 0..20 {
+        phase.step(ButtonState::new());
+    }
     assert_eq!(
         phase.scene.tall_grass_effect_count(),
         0,
-        "the departed tile's grass effect retires while the intro waits"
+        "the departed tile's grass effect retires while the icon is still up"
     );
+    assert_eq!(approaching_trainer(&phase).position(), RHETT_TILE);
+    // The rest of the icon, the face stage and its wait, stopping before the
+    // speech opens: the approach is still running and nothing is held again.
+    for _ in 0..EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES + 2 - 20 {
+        phase.step(ButtonState::new());
+    }
+    assert!(
+        phase.sight_approach.is_some(),
+        "the approach is still running"
+    );
+    assert_eq!(approaching_trainer(&phase).previous_position(), RHETT_TILE);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 }

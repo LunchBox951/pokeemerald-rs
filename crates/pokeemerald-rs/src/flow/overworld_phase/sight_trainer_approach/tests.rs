@@ -127,6 +127,26 @@ fn an_adjacent_trainer_walks_nothing() {
     );
 }
 
+/// `TrainerExclamationMark` holds a face-direction movement on the trainer as the
+/// icon goes up, and `FaceDirection` ends in `ShiftStillObjectEventCoords`
+/// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`): a
+/// trainer recording a stale previous tile has it settled when the icon starts.
+#[test]
+fn the_exclamation_mark_settles_a_stale_previous_tile() {
+    let (_, mut objects) = approaching_from((10, 4), Direction::South, 0);
+    let _ = objects.admit_on_map_load((10, 6), &engine::event_data::EventData::new());
+    trainer_mut(&mut objects).walk(Direction::South);
+    assert_eq!(trainer(&objects).previous_position(), (10, 4));
+    SightApproach::exclamation_mark(trainer_mut(&mut objects));
+    assert_eq!(trainer(&objects).position(), (10, 5));
+    assert_eq!(trainer(&objects).previous_position(), (10, 5));
+    assert_eq!(trainer(&objects).facing(), Direction::South);
+    assert!(
+        objects.collision_objects_at(10, 4, 3).next().is_none(),
+        "the vacated tile is no longer held for collision"
+    );
+}
+
 /// `MOVEMENT_ACTION_FACE_PLAYER` goes through `FaceDirection`, which ends in
 /// `ShiftStillObjectEventCoords` (`event_object_movement.c:5048-5056,2162-2165,
 /// 6181-6189`): a zero-tile approach commits no tile of its own, but its face
