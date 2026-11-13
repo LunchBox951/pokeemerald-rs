@@ -67,6 +67,7 @@ pub(super) use hooks::{
     take_back_level_capture_check_failing, take_back_level_held_stat_failing,
     take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
     take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
+    warn_mode_left_held_stat_failing, warn_mode_left_unlocated,
 };
 #[cfg(all(test, target_os = "linux"))]
 pub(super) use occupied::SetHeldMode;
@@ -200,7 +201,7 @@ fn undo_created_directories_setting_modes(
                             in_quarantine,
                         ),
                     };
-                warn_mode_left(parent, dir, listing.mode_left);
+                warn_mode_left(parent, dir, listing.mode_left, went_on);
                 if !went_on {
                     break;
                 }
@@ -283,26 +284,68 @@ fn take_back_through_quarantine<'a>(
 }
 
 /// Reports that `dir`'s mode, changed so its owner could list it, could not
-/// be put back, if the level still stands; one that was removed needs no
-/// report. It is named where it stands now when that is known, else under
-/// its name while that name still holds it.
-fn warn_mode_left(parent: &OwnedFd, dir: &CreatedDirectory, mode_left: Option<ModeLeft>) {
+/// be put back, unless the level is gone. `taken_back` is whether rollback
+/// took the level back; see [`report_mode_left`].
+fn warn_mode_left(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    mode_left: Option<ModeLeft>,
+    taken_back: bool,
+) {
+    report_mode_left(parent, dir, mode_left, taken_back, standing(dir));
+}
+
+/// [`warn_mode_left`] with `standing` as what the held original's
+/// examination said, so a test can say what `/proc` or an `fstat` could
+/// not. Only [`Standing::Gone`] proves removal, so only it is silent, but
+/// for a level rollback took back where the platform cannot tell a removed
+/// directory from a moved one ([`Standing::Unknown`]), as its in-place
+/// unlink also treats it. The level is named where it stands now when that
+/// is known, else under its name while that name still holds it; a name it
+/// no longer holds is worded as [`report_moved_away`] words it, the level
+/// certainly elsewhere when it is still linked and possibly so otherwise.
+fn report_mode_left(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    mode_left: Option<ModeLeft>,
+    taken_back: bool,
+    standing: Standing,
+) {
     let Some(ModeLeft { found, error }) = mode_left else {
         return;
     };
-    let at = match standing(dir) {
-        Standing::Gone => return,
-        Standing::Linked(Some(path)) => path,
-        _ => match holds_this_level(parent.as_fd(), &dir.name, dir) {
-            Ok(false) => return,
-            _ => level_location(dir),
-        },
-    };
-    eprintln!(
-        "warning: {} keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o{:03o}: {error}",
-        OneLinePath(&at),
+    let keeps = format!(
+        "keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o{:03o}: {error}",
         found.bits()
     );
+    let level = level_location(dir);
+    let at_name = holds_this_level(parent.as_fd(), &dir.name, dir);
+    match (standing, at_name) {
+        (Standing::Gone, _) => {}
+        (Standing::Linked(Some(now)), _) => {
+            eprintln!("warning: {} {keeps}", OneLinePath(&now));
+        }
+        (_, Ok(true)) => eprintln!("warning: {} {keeps}", OneLinePath(&level)),
+        (Standing::Unknown, Ok(false)) if taken_back => {}
+        (Standing::Linked(None), Ok(false)) => eprintln!(
+            "warning: {} was moved away before rollback could take it back; the directory rollback made is left elsewhere and {keeps}",
+            OneLinePath(&level)
+        ),
+        (Standing::Unknown, Ok(false)) => eprintln!(
+            "warning: {} is no longer under its name; if it was moved rather than removed, the directory rollback made is left elsewhere and {keeps}",
+            OneLinePath(&level)
+        ),
+        (Standing::Unexamined(err), Ok(false)) => eprintln!(
+            "warning: {} is no longer under its name, and the directory rollback made for it could not be examined: {}; if it was moved rather than removed, it is left elsewhere and {keeps}",
+            OneLinePath(&level),
+            std::io::Error::from(err)
+        ),
+        (_, Err(err)) => eprintln!(
+            "warning: {} could not be examined under its name: {}; the directory rollback made for it, wherever it stands, {keeps}",
+            OneLinePath(&level),
+            std::io::Error::from(err)
+        ),
+    }
 }
 
 /// `None` when `dir` lists empty, so it goes through the quarantine.
