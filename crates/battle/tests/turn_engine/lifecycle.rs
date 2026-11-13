@@ -549,10 +549,11 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
     let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]);
 
     // battle start, turn number, enemy's Tackle pick (not forced, so it
-    // draws a slot), then the player's forced Struggle: accuracy, crit,
+    // draws a slot), then the player's forced Struggle: its `GetMoveTarget`
+    // draw (`battle_util.c:100`-`:105`; 1 selects the enemy), accuracy, crit,
     // damage roll -- no effect-chance draw and no selection draw for a
     // forced pick (`a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn`).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+    let mut rng = SequenceRng::new([0, 0, 0, crate::common::STRUGGLE_TARGET_ENEMY, 0, 1, 0]);
     let mut battle =
         Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
             .unwrap();
