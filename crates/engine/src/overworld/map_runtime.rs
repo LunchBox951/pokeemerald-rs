@@ -101,6 +101,13 @@ impl<'a> MapRuntime<'a> {
         self
     }
 
+    /// Returns whether a live object-event collection is bound
+    /// ([`Self::with_object_events`]).
+    #[must_use]
+    pub const fn has_live_object_events(&self) -> bool {
+        self.object_events.is_some()
+    }
+
     /// Returns the bound map id.
     #[must_use]
     pub const fn id(&self) -> MapId {
@@ -164,16 +171,19 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns object events at `(x, y, elevation)` in declaration order.
+    /// Returns object events at `(x, y, elevation)` in declaration order, identifying each by
+    /// its current tile alone; [`Self::collision_objects_at`] also holds the tile a walker leaves.
     ///
     /// With a bound collection ([`Self::with_object_events`]) the position
     /// and elevation are each object's live ones and every result is its
-    /// authored template, whose own coordinates are not current; a bound
-    /// collection never falls back to authored coordinates. Unbound, the
-    /// authored coordinates are scanned. Either the event or query elevation
-    /// may be [`super::collision::ELEVATION_TRANSITION`]. This query does not
-    /// filter hidden templates; [`super::object_event::visible_object_event_at`]
-    /// composes visibility with the ordered scan.
+    /// authored template, whose own coordinates are not current; only entries
+    /// the scheduler has admitted are scanned, and a bound collection never
+    /// falls back to authored coordinates. Unbound, the authored coordinates
+    /// are scanned. Either the event or query elevation may be
+    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not read
+    /// hide flags; [`super::object_event::visible_object_event_at`] applies
+    /// them to the unbound scan, as the bound scheduler applied them at
+    /// admission.
     pub fn object_events_at(
         &self,
         x: i32,
@@ -183,6 +193,39 @@ impl<'a> MapRuntime<'a> {
         let live = self.object_events.map(|events| {
             events
                 .object_events_at(x, y, elevation)
+                .map(LiveObjectEvent::template)
+        });
+        let authored = if self.object_events.is_none() {
+            self.events.object_events
+        } else {
+            &[]
+        };
+        let authored = authored.iter().filter(move |o| {
+            i32::from(o.x) == x
+                && i32::from(o.y) == y
+                && super::collision::elevations_compatible(o.elevation, elevation)
+        });
+        live.into_iter().flatten().chain(authored)
+    }
+
+    /// Returns object events that hold `(x, y, elevation)` for collision: those on the tile and
+    /// those still leaving it, in declaration order.
+    ///
+    /// [`Self::object_events_at`] is the identification query (current tile only); this one is
+    /// its collision counterpart (`DoesObjectCollideWithObjectAt`,
+    /// `event_object_movement.c:4724-4741`). Elevation matching, the bound-collection rule and
+    /// hidden templates are as there; an unbound template never moves, so it holds one tile.
+    /// [`super::object_event::blocking_object_event_at`] adds the hide-flag filter an unbound
+    /// scan needs; a bound collection's scheduler applied the flag at admission.
+    pub fn collision_objects_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &'static ObjectEvent> + 'a {
+        let live = self.object_events.map(|events| {
+            events
+                .collision_objects_at(x, y, elevation)
                 .map(LiveObjectEvent::template)
         });
         let authored = if self.object_events.is_none() {

@@ -596,30 +596,42 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     pos: (u16, u16),
     elevation: u8,
 ) -> super::OverworldScene {
+    synthetic_scene_with_cell_elevations(width, height, &[(pos, elevation)])
+}
+
+/// [`synthetic_scene`], but each listed cell carries its own elevation instead
+/// of the fixture's uniform ground elevation.
+pub(crate) fn synthetic_scene_with_cell_elevations(
+    width: u16,
+    height: u16,
+    cells: &[((u16, u16), u8)],
+) -> super::OverworldScene {
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
-    assert!(
-        pos.0 < width && pos.1 < height,
-        "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
-    );
-    let cell = assets::MetatileCell {
-        metatile_id: 0,
-        collision: 0,
-        elevation,
-    }
-    .pack();
     let grid = entries
         .iter_mut()
         .find(|e| e.id == "layout/map_test/map")
         .expect("the general fixture always fabricates its own layout entry");
-    let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
-    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    for &(pos, elevation) in cells {
+        assert!(
+            pos.0 < width && pos.1 < height,
+            "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
+        );
+        let cell = assets::MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
     synthetic_scene_result(
         write_synthetic_pack(entries),
         "gTileset_General",
         width,
         height,
     )
-    .expect("synthetic pack with an elevated cell should decode cleanly")
+    .expect("synthetic pack with elevated cells should decode cleanly")
 }
 
 pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(

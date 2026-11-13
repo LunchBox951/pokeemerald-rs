@@ -19,8 +19,9 @@ use engine::bag_menu::LinkRestriction;
 const BALL_BOX: (usize, usize) = (7, 7);
 /// The pocket-name window less its first tile: the fixture's glyphs fill
 /// their whole 16-pixel cell, so a name parked just off the left edge bleeds
-/// a few columns into it.
-const POCKET_NAME: (usize, usize, usize, usize) = (40, 8, 56, 16);
+/// a few columns into it. It also stops short of the right arrow's sprite,
+/// which starts at column 92.
+const POCKET_NAME: (usize, usize, usize, usize) = (40, 8, 52, 16);
 const WIPE_X: usize = 14 * 8 + 1;
 const WIPE_Y: usize = 2 * 8;
 

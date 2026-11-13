@@ -23,6 +23,7 @@
 use assets::MovementType;
 
 use crate::event_data::EventData;
+use crate::overworld::map_runtime::MapRuntime;
 use crate::overworld::object_event::{object_event_is_visible, tile_is_in_view};
 use crate::overworld::player::TilePos;
 use crate::rng::RandomSource;
@@ -79,6 +80,14 @@ pub struct FrameContext<'a> {
     /// waking early to the player running nearby (`ObjectEventIsTrainerAndCloseToPlayer`,
     /// `:2643`).
     pub player_dashing: bool,
+    /// The map's cells and metatile behaviours, for an object's step to be checked against
+    /// (`GetCollisionAtCoords`). Unbound: other objects come from the collection itself.
+    pub terrain: MapRuntime<'a>,
+    /// The tile the player is leaving, `gObjectEvents[0].previousCoords`; equal to
+    /// `player_position` while the player stands still.
+    pub player_previous_position: TilePos,
+    /// The player's collision elevation, `gObjectEvents[0].currentElevation`.
+    pub player_elevation: u8,
 }
 
 impl ObjectEventCollection {
@@ -95,43 +104,64 @@ impl ObjectEventCollection {
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
     /// sprite-slot order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
-        let _ = self.admit_on_map_load(context);
+        let _ = self.admit_on_map_load(context.player_position, context.event_data);
         if !context.frozen {
             for index in self.active_indices_in_sprite_slot_order() {
                 self.entries[index].run_movement_type(context, rng);
             }
         }
         if self.reconciled_at != Some(context.player_position) {
-            self.reconcile_with_view(context);
+            self.reconcile_with_view(context.player_position, context.event_data);
         }
     }
 
     /// Admits the entries already in view, once per collection, as map load's
     /// `TrySpawnObjectEvents` does before the first frame (`overworld.c:2163`); a later call does
-    /// nothing. No callback runs. A caller whose first input can end the map's visit, a
-    /// connection crossing, calls this first so the crossing finds the objects upstream already
-    /// holds ([`Self::carry_across_connection`]). Returns whether this call did the admission.
-    pub fn admit_on_map_load(&mut self, context: &FrameContext<'_>) -> bool {
+    /// nothing. No callback runs. Admission reads the player's tile and the hide flags alone, so
+    /// a map load needs no frame context.
+    ///
+    /// Position queries return only admitted entries, so a caller that seeds or replaces a
+    /// collection calls this at map load, before its first [`Self::run_frame`]; a connection
+    /// crossing then finds the objects upstream already holds
+    /// ([`Self::carry_across_connection`]). Returns whether this call did the admission.
+    pub fn admit_on_map_load(&mut self, player_position: TilePos, event_data: &EventData) -> bool {
         let first = self.reconciled_at.is_none();
         if first {
-            self.reconcile_with_view(context);
+            self.reconcile_with_view(player_position, event_data);
         }
         first
+    }
+
+    /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
+    /// `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
+    /// `event_object_movement.c:1383-1397`): position queries stop returning it until a later
+    /// admission pass spawns it again. The script verb's `FlagSet` of the object's hide flag is
+    /// the caller's, so that later pass does not respawn it. Returns whether an active entry was
+    /// retired.
+    pub fn remove_by_local_id(&mut self, local_id: u8) -> bool {
+        let Some(entry) = self.get_mut(local_id) else {
+            return false;
+        };
+        let was_active = entry.lifecycle.is_active();
+        if was_active {
+            entry.lifecycle = Lifecycle::Despawned;
+        }
+        was_active
     }
 
     /// Spawns every in-window, unhidden entry in template order, then removes every active entry
     /// outside the view (`TrySpawnObjectEvents` then `RemoveObjectEventsOutsideView`,
     /// `:1645-1675,1677-1710`), so a slot freed by this pass's removals goes to a later admission.
-    fn reconcile_with_view(&mut self, context: &FrameContext<'_>) {
-        self.reconciled_at = Some(context.player_position);
+    fn reconcile_with_view(&mut self, player_position: TilePos, event_data: &EventData) {
+        self.reconciled_at = Some(player_position);
         for index in 0..self.entries.len() {
-            if self.entries[index].should_spawn(context) {
+            if self.entries[index].should_spawn(player_position, event_data) {
                 let sprite_slot = self.lowest_free_sprite_slot();
                 self.entries[index].spawn(sprite_slot);
             }
         }
         for entry in &mut self.entries {
-            entry.remove_if_outside_view(context);
+            entry.remove_if_outside_view(player_position);
         }
         // A removed carried entry has no template left to respawn from: it ceases to exist.
         self.entries.retain(|entry| {
@@ -167,10 +197,10 @@ impl ObjectEventCollection {
 }
 
 impl LiveObjectEvent {
-    fn should_spawn(&self, context: &FrameContext<'_>) -> bool {
+    fn should_spawn(&self, player_position: TilePos, event_data: &EventData) -> bool {
         !self.lifecycle.is_active()
-            && tile_is_in_view(self.state.template_position(), context.player_position)
-            && object_event_is_visible(self.template, context.event_data)
+            && tile_is_in_view(self.state.template_position(), player_position)
+            && object_event_is_visible(self.template, event_data)
     }
 
     fn spawn(&mut self, sprite_slot: usize) {
@@ -186,12 +216,12 @@ impl LiveObjectEvent {
         };
     }
 
-    pub(super) fn remove_if_outside_view(&mut self, context: &FrameContext<'_>) {
+    pub(super) fn remove_if_outside_view(&mut self, player_position: TilePos) {
         let Lifecycle::Active { initial, .. } = self.lifecycle else {
             return;
         };
-        if !tile_is_in_view(self.state.position(), context.player_position)
-            && !tile_is_in_view(initial, context.player_position)
+        if !tile_is_in_view(self.state.position(), player_position)
+            && !tile_is_in_view(initial, player_position)
         {
             self.lifecycle = Lifecycle::Despawned;
         }
