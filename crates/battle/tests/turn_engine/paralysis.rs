@@ -295,9 +295,14 @@ fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
     // draw: every enemy slot is spent, so the rejection loop short-circuits
     // to Struggle without drawing), the player's ordinary Tackle (4 draws;
     // this exact fixture is `move_resolution.rs`'s own forced-Struggle
-    // pairing, so it is known to survive), the enemy's full-paralysis draw
-    // against its forced Struggle (residue 0 -> cancelled).
-    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0, 0]);
+    // pairing, so it is known to survive), the enemy's `GetMoveTarget` draw
+    // (`HandleAction_UseMove`, `battle_util.c:100`-`:105`; the loop,
+    // `:3849`-`:3853`: 2 % 2 = 0 is the player, accepted first try; it is
+    // deliberately not a full-paralysis residue, so an engine that skips it
+    // would spend it as that draw and not cancel), then the enemy's
+    // full-paralysis draw against its forced Struggle (residue 0 ->
+    // cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0, 2, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -323,12 +328,51 @@ fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
         "cancelled by its own paralysis draw, not upstream's unmodelled \
          Struggle mechanics: {events:?}"
     );
-    assert_eq!(rng.draws(), 7);
+    assert_eq!(rng.draws(), 8);
+    rng.assert_exhausted();
     assert!(
         battle.outcome().is_none(),
         "a full-paralysis cancellation is not an error: the turn completes \
          normally, unlike an uncancelled forced Struggle"
     );
+}
+
+#[test]
+fn a_paralysed_forced_struggle_player_redraws_get_move_target_until_it_selects_the_enemy() {
+    // The player is battler 0, so `GetMoveTarget`'s loop
+    // (`pokeemerald/src/battle_util.c:3849`-`:3853`, `Random() %
+    // gBattlersCount` with `gBattlersCount` = 2) rejects even results (the
+    // attacker itself) and accepts only odd ones (the opposing battler 1).
+    // It runs from `HandleAction_UseMove` (`:100`-`:105`) before any
+    // canceller, so full paralysis cancels the Struggle only after the loop.
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    for _ in 0..player.moves()[0].pp {
+        player.deduct_pp(0).unwrap();
+    }
+    player.set_status1(Status1::Paralysed);
+    let enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the wild enemy's
+    // slot pick (0: its one real slot), the enemy's Tackle (4 draws; the
+    // paralysed player is quartered in Speed and moves second), the player's
+    // target loop (0 and 2 select itself and are redrawn, 1 selects the
+    // enemy), then the player's full-paralysis draw (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 2, 1, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[2],
+        BattleEvent::FullyParalyzed {
+            by_player: true,
+            move_id: STRUGGLE,
+        },
+        "{events:?}"
+    );
+    rng.assert_exhausted();
 }
 
 /// `data/battle_scripts_1.s:1013`-`:1014`: `typecalc` then

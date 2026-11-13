@@ -21,6 +21,9 @@ pub struct ConnectionCrossing {
     pub target: MapId,
     /// The landing tile position within `target`'s own coordinate space.
     pub position: (i32, i32),
+    /// The translation from the departed map's coordinates to `target`'s, the shift every
+    /// live object carried across the crossing follows.
+    pub shift: (i32, i32),
 }
 
 /// Provides geometry, cells, and behaviors for maps connected to the current
@@ -42,6 +45,17 @@ pub trait ConnectedMapData {
     /// the counterpart of [`MapRuntime::metatile_behavior`] across a
     /// connection.
     fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8>;
+
+    /// Returns whether a live object carried across `crossing` holds the landing tile at
+    /// `elevation` for collision, queried in `crossing.target`'s coordinates
+    /// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4724-4741`).
+    ///
+    /// Only the already-active objects the crossing keeps answer: the destination's own
+    /// templates have not spawned, so a first crossing onto an authored object's tile stays
+    /// passable. The default carries none, as a resolver with no live set does.
+    fn carried_object_event_blocks(&self, _crossing: ConnectionCrossing, _elevation: u8) -> bool {
+        false
+    }
 }
 
 impl<F> ConnectedMapData for F
@@ -99,6 +113,13 @@ impl<'a> MapRuntime<'a> {
     pub const fn with_object_events(mut self, events: &'a ObjectEventCollection) -> Self {
         self.object_events = Some(events);
         self
+    }
+
+    /// Returns whether a live object-event collection is bound
+    /// ([`Self::with_object_events`]).
+    #[must_use]
+    pub const fn has_live_object_events(&self) -> bool {
+        self.object_events.is_some()
     }
 
     /// Returns the bound map id.
@@ -164,16 +185,19 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns object events at `(x, y, elevation)` in declaration order.
+    /// Returns object events at `(x, y, elevation)` in declaration order, identifying each by
+    /// its current tile alone; [`Self::collision_objects_at`] also holds the tile a walker leaves.
     ///
     /// With a bound collection ([`Self::with_object_events`]) the position
     /// and elevation are each object's live ones and every result is its
-    /// authored template, whose own coordinates are not current; a bound
-    /// collection never falls back to authored coordinates. Unbound, the
-    /// authored coordinates are scanned. Either the event or query elevation
-    /// may be [`super::collision::ELEVATION_TRANSITION`]. This query does not
-    /// filter hidden templates; [`super::object_event::visible_object_event_at`]
-    /// composes visibility with the ordered scan.
+    /// authored template, whose own coordinates are not current; only entries
+    /// the scheduler has admitted are scanned, and a bound collection never
+    /// falls back to authored coordinates. Unbound, the authored coordinates
+    /// are scanned. Either the event or query elevation may be
+    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not read
+    /// hide flags; [`super::object_event::visible_object_event_at`] applies
+    /// them to the unbound scan, as the bound scheduler applied them at
+    /// admission.
     pub fn object_events_at(
         &self,
         x: i32,
@@ -196,6 +220,53 @@ impl<'a> MapRuntime<'a> {
                 && super::collision::elevations_compatible(o.elevation, elevation)
         });
         live.into_iter().flatten().chain(authored)
+    }
+
+    /// Returns object events that hold `(x, y, elevation)` for collision: those on the tile and
+    /// those still leaving it, in declaration order.
+    ///
+    /// [`Self::object_events_at`] is the identification query (current tile only); this one is
+    /// its collision counterpart (`DoesObjectCollideWithObjectAt`,
+    /// `event_object_movement.c:4724-4741`). Elevation matching, the bound-collection rule and
+    /// hidden templates are as there; an unbound template never moves, so it holds one tile.
+    /// [`super::object_event::blocking_object_event_at`] adds the hide-flag filter an unbound
+    /// scan needs; a bound collection's scheduler applied the flag at admission.
+    pub fn collision_objects_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &'static ObjectEvent> + 'a {
+        let live = self.object_events.map(|events| {
+            events
+                .collision_objects_at(x, y, elevation)
+                .map(LiveObjectEvent::template)
+        });
+        let authored = if self.object_events.is_none() {
+            self.events.object_events
+        } else {
+            &[]
+        };
+        let authored = authored.iter().filter(move |o| {
+            i32::from(o.x) == x
+                && i32::from(o.y) == y
+                && super::collision::elevations_compatible(o.elevation, elevation)
+        });
+        live.into_iter().flatten().chain(authored)
+    }
+
+    /// Returns the map `template`'s live entry was carried out of by a connection crossing
+    /// ([`LiveObjectEvent::carried_from`]), or `None` for an entry of this map, an unbound
+    /// runtime, or a template no bound entry was seeded from.
+    ///
+    /// Entries are told apart by template identity, not value: a collection never holds two
+    /// entries over one template, because an object already live is not spawned a second time.
+    #[must_use]
+    pub fn carried_from(&self, template: &ObjectEvent) -> Option<MapId> {
+        self.object_events?
+            .iter()
+            .find(|entry| std::ptr::eq(entry.template(), template))?
+            .carried_from()
     }
 
     /// Returns the first warp at `(x, y, elevation)`.
@@ -274,9 +345,15 @@ impl<'a> MapRuntime<'a> {
             else {
                 continue;
             };
+            let (Some(shift_x), Some(shift_y)) =
+                (position.0.checked_sub(x), position.1.checked_sub(y))
+            else {
+                continue;
+            };
             return Some(ConnectionCrossing {
                 target: connection.target,
                 position,
+                shift: (shift_x, shift_y),
             });
         }
         None
@@ -845,6 +922,8 @@ mod tests {
             .expect("south connection should resolve");
         assert_eq!(crossing.target, MapId("MAP_SOUTH_NEIGHBOR"));
         assert_eq!(crossing.position, (3, 0));
+        // The landing is the departed tile moved by the shift: (3, 10) + (0, -10).
+        assert_eq!(crossing.shift, (0, -10));
 
         assert!(runtime
             .resolve_connection(Direction::North, 3, -1, &dims)

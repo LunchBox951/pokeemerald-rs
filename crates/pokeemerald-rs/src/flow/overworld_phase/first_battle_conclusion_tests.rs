@@ -99,6 +99,7 @@ fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_101_trigger_phase`] that retains the checkout pack, so the
@@ -111,6 +112,7 @@ fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
@@ -502,5 +504,71 @@ fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before
         phase.player.previous_elevation(),
         BIRCHS_LAB_ARRIVAL_ELEVATION,
         "previous elevation equals the current one for a freshly placed player"
+    );
+}
+
+/// `LOCALID_ROUTE101_ZIGZAGOON`, the rescue Zigzagoon's local id in the generated Route 101
+/// events.
+const ZIGZAGOON_LOCAL_ID: u8 = 4;
+
+#[test]
+fn a_failed_lab_warp_leaves_no_admitted_zigzagoon_on_route_101() {
+    let player = PlayerState::new((5, 5), 3, Direction::East);
+    let mut phase = route_101_trigger_phase(player);
+    let templates: &'static [assets::ObjectEvent] = Box::leak(Box::new([assets::ObjectEvent {
+        local_id: ZIGZAGOON_LOCAL_ID,
+        graphics_id: "OBJ_EVENT_GFX_ZIGZAGOON_1",
+        x: 6,
+        y: 5,
+        elevation: 3,
+        movement_type: assets::MovementType::FaceDown,
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: assets::TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: None,
+        flag: "FLAG_HIDE_ROUTE_101_ZIGZAGOON",
+    }]));
+    phase.object_events = admitted_objects(templates, &phase.player, &phase.save1.event_data);
+    assert!(
+        phase
+            .object_events
+            .get(ZIGZAGOON_LOCAL_ID)
+            .unwrap()
+            .is_active(),
+        "setup: the Zigzagoon is admitted"
+    );
+
+    phase.conclude_first_battle();
+    assert_eq!(phase.map_id, ROUTE_101, "setup: the lab warp fails");
+    assert!(phase
+        .save1
+        .event_data
+        .flag_get(FLAG_HIDE_ROUTE_101_ZIGZAGOON)
+        .unwrap());
+
+    let runtime = phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events);
+    assert_eq!(
+        engine::overworld::object_event::visible_object_event_at(
+            &runtime,
+            6,
+            5,
+            3,
+            &phase.save1.event_data
+        )
+        .map(|o| o.local_id),
+        None,
+        "the removed Zigzagoon must not stay query-visible"
+    );
+    assert!(
+        !phase
+            .object_events
+            .get(ZIGZAGOON_LOCAL_ID)
+            .unwrap()
+            .is_active(),
+        "the removed Zigzagoon must not stay active (drawn)"
     );
 }
