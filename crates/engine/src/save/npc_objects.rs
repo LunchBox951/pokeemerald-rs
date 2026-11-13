@@ -4,7 +4,7 @@
 //! (`SaveObjectEvents`/`LoadObjectEvents`, `src/load_save.c:180-194`); slot 0 is the player
 //! ([`super::block::SavedObjectEvent`]) and slots 1 to 15 hold the map's active objects.
 //! [`SavedNpcObjects`] models the live state of the active ones the overworld scheduler can
-//! change -- identity, movement type, facing, both elevations and the three coordinate pairs
+//! change -- identity (the object's origin map and local id), movement type, facing, both elevations and the three coordinate pairs
 //! -- at their upstream offsets (`include/global.fieldmap.h:195-254`). Every other byte of a
 //! record (sprite ids, flag bitfields, metatile behaviours, `movementDirection`, ...) is a
 //! runtime value the port recreates on load, and is preserved from the base when patching.
@@ -23,8 +23,10 @@
 //!   `SaveBlock1::require_generation`), so a build that does not
 //!   know the snapshot, and rewrote the file leaving these bytes in place, withdraws it.
 //!
-//! Slot 1 always carries the snapshot's map (`mapGroup`/`mapNum`), active or not, so a loader
-//! can tell a snapshot of another map from one of its own.
+//! The snapshot's own map -- the one whose coordinates every record is in -- is kept in the
+//! same unused `padding2` byte of slots 5 (`mapGroup`) and 6 (`mapNum`), so a loader can tell
+//! a snapshot of another map from one of its own even when no record, or only an object carried
+//! in across a connection, names it.
 //!
 //! A snapshot absent for either reason decodes to `None`, and the game falls back to seeding the
 //! map's templates, as before this record existed.
@@ -49,8 +51,11 @@ const MAP_NUM_OFFSET: usize = 0x09;
 const MAP_GROUP_OFFSET: usize = 0x0A;
 const INITIAL_COORDS_OFFSET: usize = 0x0C;
 const PREVIOUS_COORDS_OFFSET: usize = 0x14;
-const STAMP_BYTE_OFFSET: usize = 0x23;
+const PADDING2_OFFSET: usize = 0x23;
 const STAMP_LEN: usize = std::mem::size_of::<u32>();
+// `padding2` of slots 5 and 6 (record indices 4 and 5) hold the snapshot's map.
+const MAP_GROUP_RECORD: usize = STAMP_LEN;
+const MAP_NUM_RECORD: usize = STAMP_LEN + 1;
 
 const fn record(index: usize) -> usize {
     OBJECT_EVENTS_OFFSET + (FIRST_NPC_SLOT + index) * OBJECT_EVENT_LEN
@@ -59,12 +64,18 @@ const fn record(index: usize) -> usize {
 // The 15 records fill `objectEvents` up to `objectEventTemplates` at 0xC70
 // (`include/global.h:1018-1019`) and the stamp spans four of them.
 const _: () = assert!(record(NPC_OBJECT_CAPACITY) == 0xC70);
-const _: () = assert!(STAMP_LEN <= NPC_OBJECT_CAPACITY);
+const _: () = assert!(MAP_NUM_RECORD < NPC_OBJECT_CAPACITY);
 
-/// One active non-player object's saved state. Coordinates are the saved map's, as
-/// `ObjectEvent` keeps them minus `MAP_OFFSET` (`include/fieldmap.h:18`).
+/// One active non-player object's saved state. Coordinates are the saved map's -- also for an
+/// object carried in from the map it names -- as `ObjectEvent` keeps them minus `MAP_OFFSET`
+/// (`include/fieldmap.h:18`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedNpcObject {
+    /// `mapGroup`: the map the object belongs to, which is the snapshot's map unless it was
+    /// carried in across a connection.
+    pub map_group: u8,
+    /// `mapNum`.
+    pub map_num: u8,
     /// `localId`.
     pub local_id: u8,
     /// `movementType`, an upstream `MOVEMENT_TYPE_*` id.
@@ -83,7 +94,7 @@ pub struct SavedNpcObject {
     pub previous: Coords16,
 }
 
-/// Every non-player object active on one map when the game was saved.
+/// Every non-player object active when the game was saved on one map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedNpcObjects {
     map_group: u8,
@@ -104,13 +115,13 @@ impl SavedNpcObjects {
         })
     }
 
-    /// The snapshot's map group (`mapGroup`).
+    /// The group of the map the game was saved on.
     #[must_use]
     pub const fn map_group(&self) -> u8 {
         self.map_group
     }
 
-    /// The snapshot's map number (`mapNum`).
+    /// The number of the map the game was saved on.
     #[must_use]
     pub const fn map_num(&self) -> u8 {
         self.map_num
@@ -131,8 +142,8 @@ impl SavedNpcObjects {
             return;
         };
         base[record(0) + MARKER_OFFSET] |= OBJECT_EVENT_MARKER_BIT;
-        base[record(0) + MAP_GROUP_OFFSET] = snapshot.map_group;
-        base[record(0) + MAP_NUM_OFFSET] = snapshot.map_num;
+        base[record(MAP_GROUP_RECORD) + PADDING2_OFFSET] = snapshot.map_group;
+        base[record(MAP_NUM_RECORD) + PADDING2_OFFSET] = snapshot.map_num;
         for index in 0..NPC_OBJECT_CAPACITY {
             let at = record(index);
             base[at] &= !OBJECT_EVENT_ACTIVE_BIT;
@@ -143,8 +154,8 @@ impl SavedNpcObjects {
             base[at + IS_PLAYER_OFFSET] &= !OBJECT_EVENT_IS_PLAYER_BIT;
             base[at + MOVEMENT_TYPE_OFFSET] = object.movement_type;
             base[at + LOCAL_ID_OFFSET] = object.local_id;
-            base[at + MAP_NUM_OFFSET] = snapshot.map_num;
-            base[at + MAP_GROUP_OFFSET] = snapshot.map_group;
+            base[at + MAP_NUM_OFFSET] = object.map_num;
+            base[at + MAP_GROUP_OFFSET] = object.map_group;
             base[at + OBJECT_EVENT_ELEVATIONS_OFFSET] = (object.current_elevation
                 & DIRECTION_NIBBLE_MASK)
                 | ((object.previous_elevation & DIRECTION_NIBBLE_MASK) << MOVEMENT_DIRECTION_SHIFT);
@@ -166,7 +177,7 @@ impl SavedNpcObjects {
     pub(super) fn stamp(snapshot: Option<&Self>, bytes: &mut [u8], counter: u32) {
         if snapshot.is_some() {
             for (index, byte) in counter.to_le_bytes().into_iter().enumerate() {
-                bytes[record(index) + STAMP_BYTE_OFFSET] = byte;
+                bytes[record(index) + PADDING2_OFFSET] = byte;
             }
         }
     }
@@ -176,23 +187,22 @@ impl SavedNpcObjects {
         is_marked(bytes) && read_stamp(bytes) != counter
     }
 
-    /// Decodes the snapshot `bytes` hold, if their marker is set. A record naming another map
-    /// than slot 1's, which this port's writer never produces, is dropped.
+    /// Decodes the snapshot `bytes` hold, if their marker is set.
     pub(super) fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if !is_marked(bytes) {
             return None;
         }
-        let map_group = bytes[record(0) + MAP_GROUP_OFFSET];
-        let map_num = bytes[record(0) + MAP_NUM_OFFSET];
+        let map_group = bytes[record(MAP_GROUP_RECORD) + PADDING2_OFFSET];
+        let map_num = bytes[record(MAP_NUM_RECORD) + PADDING2_OFFSET];
         let objects = (0..NPC_OBJECT_CAPACITY)
             .map(record)
             .filter(|&at| {
                 bytes[at] & OBJECT_EVENT_ACTIVE_BIT != 0
                     && bytes[at + IS_PLAYER_OFFSET] & OBJECT_EVENT_IS_PLAYER_BIT == 0
-                    && bytes[at + MAP_GROUP_OFFSET] == map_group
-                    && bytes[at + MAP_NUM_OFFSET] == map_num
             })
             .map(|at| SavedNpcObject {
+                map_group: bytes[at + MAP_GROUP_OFFSET],
+                map_num: bytes[at + MAP_NUM_OFFSET],
                 local_id: bytes[at + LOCAL_ID_OFFSET],
                 movement_type: bytes[at + MOVEMENT_TYPE_OFFSET],
                 facing_direction: bytes[at + OBJECT_EVENT_DIRECTIONS_OFFSET]
@@ -221,7 +231,7 @@ fn is_marked(bytes: &[u8]) -> bool {
 fn read_stamp(bytes: &[u8]) -> u32 {
     let mut stamp = [0u8; STAMP_LEN];
     for (index, byte) in stamp.iter_mut().enumerate() {
-        *byte = bytes[record(index) + STAMP_BYTE_OFFSET];
+        *byte = bytes[record(index) + PADDING2_OFFSET];
     }
     u32::from_le_bytes(stamp)
 }

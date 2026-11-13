@@ -413,6 +413,130 @@ fn a_carried_npc_whose_sheet_the_entered_map_lacks_is_still_drawn() {
     );
 }
 
+/// SAVE copies every active object, including one carried in across the connection, and an
+/// ordinary continue puts it back beside the entered map's own, drawn from the carried sheet
+/// (`SaveObjectEvents`, `load_save.c:180-186`; `SpawnObjectEventsOnReturnToField`,
+/// `event_object_movement.c:1715-1726`).
+#[test]
+fn a_carried_npc_survives_save_and_continue_active_at_its_tile_and_drawn() {
+    let mut youngster = npc(1, 15, 3);
+    youngster.flag = "FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE";
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![youngster]);
+    cross_north(&mut phase);
+    let before = *entry_of(&phase, &templates[0]);
+    assert_eq!(before.carried_from(), Some(ROUTE_101));
+    assert!(before.is_active());
+
+    phase.copy_party_and_objects_to_save();
+    phase.save1.pos.x = i16::try_from(phase.player.position().0).unwrap();
+    phase.save1.pos.y = i16::try_from(phase.player.position().1).unwrap();
+    assert_eq!(
+        super::saved_map_id(phase.save1.location),
+        Some(OLDALE_TOWN),
+        "the crossing saved the entered map as the location"
+    );
+    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let resumed = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Test(leaked),
+        phase.save1.clone(),
+        phase.save2.clone(),
+    )
+    .expect("an ordinary continue of the entered map");
+    std::fs::remove_file(path).expect("scratch pack");
+
+    let entry = resumed
+        .object_events
+        .find(Some(ROUTE_101), 1)
+        .expect("the carried NPC is restored beside Oldale's own objects");
+    assert!(entry.is_active());
+    assert_eq!(entry.state().position(), before.state().position());
+    assert_eq!(
+        entry.state().previous_position(),
+        before.state().previous_position()
+    );
+    assert_eq!(entry.state().facing(), before.state().facing());
+    assert_eq!(entry.carried_from(), Some(ROUTE_101));
+    assert_eq!(
+        resumed
+            .object_events
+            .object_events_at(
+                before.state().position().0,
+                before.state().position().1,
+                before.state().elevation()
+            )
+            .count(),
+        1,
+        "solid at its tile before any frame"
+    );
+    assert!(
+        resumed.scene.binds_sprite("OBJ_EVENT_GFX_YOUNGSTER"),
+        "the continued scene binds the carried NPC's sheet"
+    );
+
+    let compose = |phase: &OverworldPhase, objects: &ObjectEventCollection| {
+        phase.scene.compose_live(
+            &phase.player,
+            &phase.save1.event_data,
+            0,
+            objects,
+            rendering::PaletteStage::default(),
+        )
+    };
+    let shown = compose(&resumed, &resumed.object_events);
+    let mut elsewhere = resumed.object_events.clone();
+    let moved = elsewhere
+        .find_mut(Some(ROUTE_101), 1)
+        .expect("the carried entry");
+    for _ in 0..32 {
+        moved.state_mut().walk(Direction::East);
+    }
+    assert!(!tile_is_in_view(
+        moved.state().position(),
+        resumed.player.position()
+    ));
+    assert!(
+        shown.pixels() != compose(&resumed, &elsewhere).pixels(),
+        "the carried NPC contributes pixels to the continued frame"
+    );
+}
+
+/// A carried record whose object its map does not declare refuses the whole snapshot: the
+/// continue seeds the entered map's templates rather than resume with the NPC silently gone.
+#[test]
+fn a_carried_record_naming_no_object_refuses_the_snapshot_and_seeds_the_templates() {
+    let (mut phase, _templates, path) = route_101_with_live_npcs(vec![npc(1, 15, 3)]);
+    cross_north(&mut phase);
+    phase.copy_party_and_objects_to_save();
+    let saved = phase.save1.npc_objects.as_ref().expect("a snapshot");
+    let mut unresolvable = saved.objects()[0];
+    assert_eq!(unresolvable.local_id, 1);
+    unresolvable.local_id = 250;
+    phase.save1.npc_objects =
+        engine::save::SavedNpcObjects::new(saved.map_group(), saved.map_num(), vec![unresolvable]);
+    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let resumed = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Test(leaked),
+        phase.save1.clone(),
+        phase.save2.clone(),
+    )
+    .expect("the continue still lands");
+    std::fs::remove_file(path).expect("scratch pack");
+
+    assert!(resumed
+        .object_events
+        .iter()
+        .all(|entry| entry.carried_from().is_none()));
+    assert_eq!(
+        resumed.object_events.iter().count(),
+        assets::MapEventsTable::new()
+            .resolve(OLDALE_TOWN)
+            .unwrap()
+            .object_events
+            .len(),
+        "Oldale's own templates, seeded"
+    );
+}
+
 /// The ground Route 101's synthetic layout stands the NPCs on.
 const GROUND: u8 = 3;
 

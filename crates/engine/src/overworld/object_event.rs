@@ -510,6 +510,13 @@ impl ObjectEventState {
         );
     }
 
+    /// Puts the template-position snapshot at `tile`, for an object restored in a map's
+    /// coordinates other than its template's (one carried in across a connection): its next
+    /// spawn reads the snapshot, and [`Self::translate`] shifts it with the object.
+    pub const fn rebase_template_position(&mut self, tile: TilePos) {
+        self.template_position = tile;
+    }
+
     /// Changes the current movement type.
     pub const fn set_movement_type(&mut self, movement_type: MovementType) {
         self.movement_type = movement_type;

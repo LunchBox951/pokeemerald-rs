@@ -8,6 +8,8 @@ const LOOK_AROUND: u8 = 1;
 fn youngster() -> SavedNpcObject {
     let tile = Coords16 { x: 16, y: 8 };
     SavedNpcObject {
+        map_group: ROUTE_101.0,
+        map_num: ROUTE_101.1,
         local_id: 1,
         movement_type: LOOK_AROUND,
         facing_direction: WEST,
@@ -157,12 +159,43 @@ fn withdrawing_a_snapshot_clears_its_marker() {
 }
 
 #[test]
-fn a_record_of_another_map_or_the_player_is_not_decoded() {
+fn a_record_keeps_its_own_map_and_a_player_record_is_not_decoded() {
     let mut bytes = patched(&snapshot(vec![youngster(), youngster(), youngster()]));
     bytes[record(1) + 0x0A] = 3;
+    bytes[record(1) + 0x09] = 7;
     bytes[record(2) + 0x02] |= OBJECT_EVENT_IS_PLAYER_BIT;
     let decoded = SavedNpcObjects::from_bytes(&bytes).unwrap();
-    assert_eq!(decoded.objects(), [youngster()]);
+    let carried = SavedNpcObject {
+        map_group: 3,
+        map_num: 7,
+        ..youngster()
+    };
+    assert_eq!(decoded.objects(), [youngster(), carried]);
+    assert_eq!(
+        (decoded.map_group(), decoded.map_num()),
+        ROUTE_101,
+        "the snapshot's map is the saved map's, not any record's"
+    );
+}
+
+#[test]
+fn the_saved_map_survives_a_snapshot_whose_first_record_is_carried_in() {
+    let carried = SavedNpcObject {
+        map_group: 1,
+        map_num: 2,
+        ..youngster()
+    };
+    let bytes = patched(&snapshot(vec![carried]));
+    let decoded = SavedNpcObjects::from_bytes(&bytes).unwrap();
+    assert_eq!((decoded.map_group(), decoded.map_num()), ROUTE_101);
+    assert_eq!(decoded.objects(), [carried]);
+}
+
+#[test]
+fn the_saved_map_sits_in_the_padding_of_slots_five_and_six() {
+    let bytes = patched(&snapshot(Vec::new()));
+    assert_eq!(bytes[record(4) + 0x23], ROUTE_101.0);
+    assert_eq!(bytes[record(5) + 0x23], ROUTE_101.1);
 }
 
 #[test]

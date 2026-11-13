@@ -107,6 +107,8 @@ fn sample_npc_snapshot() -> SavedNpcObjects {
         0,
         16,
         vec![SavedNpcObject {
+            map_group: 0,
+            map_num: 16,
             local_id: 1,
             movement_type: 1,
             facing_direction: 3,

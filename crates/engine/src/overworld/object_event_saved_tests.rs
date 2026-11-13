@@ -1,12 +1,17 @@
 use super::*;
 use crate::event_data::EventData;
 use crate::overworld::direction::Direction;
+use crate::overworld::object_event::LiveObjectEvent;
 use crate::overworld::object_event_harness::{leaked, template, Rig, ScriptedRng};
 use assets::{MapId, MovementType};
 
 const NEVER_HIDDEN: &str = "0";
 const HIDDEN_FLAG: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM";
 const PLAYER: TilePos = (20, 20);
+
+fn no_carried(_: MapId, _: u8) -> Option<&'static assets::ObjectEvent> {
+    None
+}
 
 fn rig() -> Rig {
     let mut rig = Rig::new(
@@ -122,7 +127,7 @@ fn restoring_makes_the_saved_objects_active_with_their_saved_state() {
     let saved = rig.collection.saved_objects();
 
     let mut resumed = reloaded(&rig);
-    assert_eq!(resumed.restore_saved(&saved, PLAYER), 2);
+    assert_eq!(resumed.restore_saved(&saved, PLAYER, no_carried), 2);
 
     assert_eq!(
         resumed.saved_objects(),
@@ -157,7 +162,7 @@ fn a_restored_object_ignores_a_hide_flag_set_since_but_no_map_load_admission_fol
     assert_eq!(saved.len(), 3);
 
     let mut resumed = reloaded(&rig);
-    resumed.restore_saved(&saved[..2], PLAYER);
+    resumed.restore_saved(&saved[..2], PLAYER, no_carried);
     let mut resumed = Rig {
         collection: resumed,
         event_data: hide_flag_set(),
@@ -181,7 +186,7 @@ fn an_unsaved_entry_is_admitted_once_the_player_moves() {
     rig.tick(1);
     let saved = rig.collection.saved_objects();
     let mut resumed = reloaded(&rig);
-    resumed.restore_saved(&saved[..1], PLAYER);
+    resumed.restore_saved(&saved[..1], PLAYER, no_carried);
 
     let mut moved = Rig {
         collection: resumed,
@@ -205,22 +210,100 @@ fn an_unknown_or_repeated_id_is_skipped() {
     saved.push(saved[0]);
 
     let mut resumed = reloaded(&active);
-    assert_eq!(resumed.restore_saved(&saved, PLAYER), 3);
+    assert_eq!(resumed.restore_saved(&saved, PLAYER, no_carried), 3);
 }
 
-#[test]
-fn entries_carried_from_another_map_are_not_saved() {
-    let mut rig = rig();
-    rig.tick(1);
-    let departed = MapId("MAP_ROUTE101");
-    let carried = rig.collection.carry_across_connection(
-        departed,
+const DEPARTED: MapId = MapId("MAP_ROUTE101");
+
+/// `rig`'s active entries after a crossing from `DEPARTED` into Oldale.
+fn crossed(rig: &Rig) -> ObjectEventCollection {
+    rig.collection.carry_across_connection(
+        DEPARTED,
         MapId("MAP_OLDALE_TOWN"),
         leaked(vec![template(9, 5, 5, MovementType::FaceUp, NEVER_HIDDEN)]),
         (0, 20),
+    )
+}
+
+#[test]
+fn an_active_entry_carried_from_another_map_is_saved() {
+    let mut rig = rig();
+    rig.tick(1);
+    let carried = crossed(&rig);
+    assert!(carried.find(Some(DEPARTED), 1).unwrap().is_active());
+    let saved = carried.saved_objects();
+    let youngster = saved.iter().find(|o| o.local_id == 1).expect("carried");
+    assert_eq!(youngster.origin, Some(DEPARTED));
+    assert_eq!(
+        youngster.state.position,
+        (20, 38),
+        "in the entered map's coordinates"
     );
-    assert!(carried.find(Some(departed), 1).unwrap().is_active());
-    assert!(carried.saved_objects().is_empty());
+    assert!(
+        saved.iter().all(|o| o.local_id != 9),
+        "the entered map's unadmitted template has no object"
+    );
+}
+
+#[test]
+fn a_carried_entry_is_restored_beside_the_maps_own_with_its_origin() {
+    let mut rig = rig();
+    rig.tick(1);
+    rig.collection
+        .get_mut(1)
+        .unwrap()
+        .state_mut()
+        .face(Direction::West);
+    let carried = crossed(&rig);
+    let saved = carried.saved_objects();
+    assert_eq!(saved.len(), 3);
+
+    let entered = leaked(vec![template(9, 5, 5, MovementType::FaceUp, NEVER_HIDDEN)]);
+    let mut resumed = ObjectEventCollection::from_templates(entered);
+    let origin_templates: Vec<_> = rig
+        .collection
+        .iter()
+        .map(LiveObjectEvent::template)
+        .collect();
+    let restored = resumed.restore_saved(&saved, PLAYER, |map, id| {
+        assert_eq!(map, DEPARTED);
+        origin_templates.iter().copied().find(|t| t.local_id == id)
+    });
+
+    assert_eq!(restored, 3);
+    assert_eq!(
+        resumed.saved_objects(),
+        saved,
+        "a second save writes the same objects"
+    );
+    let youngster = resumed.find(Some(DEPARTED), 1).unwrap();
+    assert!(youngster.is_active());
+    assert_eq!(youngster.state().facing(), Direction::West);
+    assert_eq!(youngster.state().position(), (20, 38));
+    assert!(
+        !resumed.get(9).unwrap().is_active(),
+        "the entered map's own template is not admitted by the restore"
+    );
+    assert_eq!(
+        resumed
+            .iter()
+            .map(LiveObjectEvent::carried_from)
+            .collect::<Vec<_>>(),
+        [None, Some(DEPARTED), Some(DEPARTED), Some(DEPARTED)],
+        "the map's own entries first, then the carried ones, as a crossing leaves them"
+    );
+    let ids: std::collections::HashSet<u32> = resumed.iter().map(LiveObjectEvent::id).collect();
+    assert_eq!(ids.len(), 4, "every entry has its own identity");
+}
+
+#[test]
+fn a_carried_object_the_origin_cannot_name_is_skipped_and_counted_out() {
+    let mut rig = rig();
+    rig.tick(1);
+    let saved = crossed(&rig).saved_objects();
+    let mut resumed = ObjectEventCollection::from_templates(leaked(vec![]));
+    assert_eq!(resumed.restore_saved(&saved, PLAYER, no_carried), 0);
+    assert!(resumed.saved_objects().is_empty());
 }
 
 #[test]
@@ -238,7 +321,7 @@ fn a_restored_look_around_object_keeps_its_facing_through_its_next_frames() {
         collection: reloaded(&rig),
         ..rig
     };
-    resumed.collection.restore_saved(&saved, PLAYER);
+    resumed.collection.restore_saved(&saved, PLAYER, no_carried);
     // Frame 1 of a restarted callback chooses a delay, as a fresh admission's does.
     resumed.rng = ScriptedRng::new([0]);
     resumed.tick(1);
