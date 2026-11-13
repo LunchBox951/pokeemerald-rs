@@ -21691,6 +21691,14 @@
       "status": "pending"
     },
     "include/constants/trainers.h": {
+      "artifacts": {
+        "FACILITY_CLASS": {
+          "reason": "The 82 FACILITY_CLASS_* values and FACILITY_CLASSES_COUNT (include/constants/trainers.h:123-206) are ported as FacilityClass constants. The RS_FACILITY_CLASS_* values, the TRAINER_PIC_* and TRAINER_CLASS_* groups, and the rest of the header are not claimed here.",
+          "rust_target": "crates/assets/src/facility_classes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -30652,7 +30660,10 @@
     "src/data/pokemon/trainer_class_lookups.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gFacilityClassToPicIndex (src/data/pokemon/trainer_class_lookups.h:1-85) and gFacilityClassToTrainerClass (:87-171) ported as typed 82-entry tables over the FACILITY_CLASS_* values in include/constants/trainers.h, reusing TrainerPicId and TrainerClass from crates/assets/src/trainers.rs. Each has a checked lookup that rejects a facility class at or above FACILITY_CLASSES_COUNT. Data only: no consumer function (Battle Frontier trainer generation, trainer cards, portrait graphics, class display names) is ported.",
+      "rust_target": "crates/assets/src/facility_classes.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/tutor_learnsets.h": {
       "category": "code.header",

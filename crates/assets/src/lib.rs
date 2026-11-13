@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
+//! facility-class portrait and trainer-class lookups (see [`facility_classes`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -47,6 +48,7 @@ pub mod error;
 pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
+pub mod facility_classes;
 pub mod fonts;
 pub mod hidden_item_flags;
 pub mod items;
@@ -89,6 +91,10 @@ pub use egg_moves::{
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use facility_classes::{
+    facility_class_to_pic_index, facility_class_to_trainer_class, FacilityClass,
+    FacilityClassError, FACILITY_CLASSES_COUNT,
+};
 pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
