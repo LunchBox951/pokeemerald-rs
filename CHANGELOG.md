@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.122.0] - 2026-11-13
 
-- General improvements in preparation for faithful Game Boy sound channels: a square note whose pitch sweep runs off the top now holds its last level instead of cutting to silence, as on the original hardware.
+- General improvements in preparation for faithful Game Boy sound: a note that slides up past the highest pitch no longer cuts out abruptly, matching the original hardware.
 ## [0.0.121.0] - 2026-11-12
 
 - The Bag's pocket arrows now show which way you can switch pockets, and the bag shakes as you move through its lists, as in the original game.
