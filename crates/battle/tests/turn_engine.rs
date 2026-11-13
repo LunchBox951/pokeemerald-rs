@@ -14,6 +14,8 @@ mod announcement;
 mod attract;
 #[path = "turn_engine/bad_poison.rs"]
 mod bad_poison;
+#[path = "turn_engine/badge_boosts.rs"]
+mod badge_boosts;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]

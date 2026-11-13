@@ -387,6 +387,10 @@ pub(crate) struct OverworldPhase {
 /// reads.
 const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
 
+/// `FLAG_BADGE01/03/05/07_GET` (`SYSTEM_FLAGS + 0x7/0x9/0xB/0xD`,
+/// `include/constants/flags.h:1359`-`:1365`): the stat badges.
+const STAT_BADGE_FLAGS: [u16; 4] = [0x867, 0x869, 0x86B, 0x86D];
+
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
 /// answers every header, event, and collision query the phase makes, so a
 /// scene from another room would silently run `map`'s scripts over the wrong
@@ -409,14 +413,26 @@ impl OverworldPhase {
     /// that hand party members into `battle::Battle`, so traded Pokémon hit
     /// the pre-PP obedience gate (`IsMonDisobedient`,
     /// `src/battle_util.c:3923`-`:4038`).
+    ///
+    /// It also carries the stat badges; an unreadable flag counts as unearned.
     pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
-        let badges =
-            OBEDIENCE_BADGE_FLAGS.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false));
         battle::PlayerObedience::new(
             u32::from_le_bytes(self.save2.player_trainer_id),
             self.save2.player_name,
-            badges,
+            self.read_badge_flags(OBEDIENCE_BADGE_FLAGS),
         )
+        .with_stat_badges(self.stat_badges())
+    }
+
+    /// The earned stat badges, stamped on the lead and reserves before the
+    /// battle is built so the opening Speed comparison sees badge 3
+    /// (`src/battle_main.c:3852`-`:3861`, `:4639`-`:4645`).
+    pub(super) fn stat_badges(&self) -> battle::BadgeBoosts {
+        battle::BadgeBoosts::from_badges(self.read_badge_flags(STAT_BADGE_FLAGS))
+    }
+
+    fn read_badge_flags(&self, flags: [u16; 4]) -> [bool; 4] {
+        flags.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false))
     }
 
     /// Start a new overworld run from `source`, with `options` carrying the
@@ -1131,6 +1147,8 @@ mod route103_rival_tests;
 mod running_tests;
 #[cfg(test)]
 mod sight_trainer_tests;
+#[cfg(test)]
+mod stat_badge_tests;
 #[cfg(test)]
 mod step_tests;
 #[cfg(test)]

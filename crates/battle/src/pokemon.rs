@@ -16,6 +16,7 @@
 use assets::items::ItemId;
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
+use crate::badge_boosts::BadgeBoosts;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::gender::Gender;
@@ -411,6 +412,9 @@ pub struct BattlePokemon {
     /// separate count the battle's `gBattleMons` copy carries. Zero unless
     /// `status1` is [`Status1::BadPoisoned`], which seeds it.
     toxic_turns: u8,
+    /// See [`BattlePokemon::stat_badges`]. Excluded from [`PartialEq`]
+    /// (below): battle context, not identity.
+    stat_badges: BadgeBoosts,
     pending_move_learn: Option<PendingMoveLearn>,
 }
 
@@ -443,6 +447,7 @@ impl PartialEq for BattlePokemon {
             volatiles,
             status1,
             toxic_turns,
+            stat_badges: _,
             pending_move_learn,
         } = self;
         *species == other.species
@@ -583,6 +588,7 @@ impl BattlePokemon {
             volatiles: Volatiles::default(),
             status1: Status1::default(),
             toxic_turns: 0,
+            stat_badges: BadgeBoosts::NONE,
             pending_move_learn: None,
         })
     }
@@ -1158,17 +1164,11 @@ impl BattlePokemon {
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
     /// special Attack is returned raw: Thick Fat and Plus/Minus depend on the
     /// other battler, so callers apply them before the stage.
+    ///
+    /// Badge-free; damage reads [`BattlePokemon::damage_attacking_stat`].
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
-        match category {
-            crate::damage::MoveCategory::Physical => {
-                let raw_attack = crate::ability::hustle_attack(self.ability(), self.stats.attack);
-                let raw_attack =
-                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
-                (raw_attack, self.stages.attack)
-            }
-            crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),
-        }
+        self.attacking_stat_with(category, false, BadgeBoosts::NONE)
     }
 
     /// Defending stat and stage for the move category.
@@ -1177,19 +1177,93 @@ impl BattlePokemon {
     /// before the stage is applied, matching upstream's
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
     /// Defense never changes.
+    ///
+    /// Badge-free; damage reads [`BattlePokemon::damage_defending_stat`].
     #[must_use]
     pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.defending_stat_with(category, BadgeBoosts::NONE)
+    }
+
+    /// [`BattlePokemon::attacking_stat`] in `CalculateBaseDamage`'s order:
+    /// Huge Power, then the badge, then Hustle and Guts
+    /// (`pokeemerald/src/pokemon.c:3158`-`:3168`, `:3205`-`:3212`). Thick Fat
+    /// and Plus/Minus read the other battler, so the caller applies them.
+    #[must_use]
+    pub fn damage_attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.attacking_stat_with(category, true, self.stat_badges)
+    }
+
+    /// [`BattlePokemon::defending_stat`] with the badge applied before Marvel
+    /// Scale (`pokeemerald/src/pokemon.c:3163`-`:3168`, `:3213`-`:3214`).
+    #[must_use]
+    pub fn damage_defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.defending_stat_with(category, self.stat_badges)
+    }
+
+    fn attacking_stat_with(
+        &self,
+        category: crate::damage::MoveCategory,
+        huge_power: bool,
+        badges: BadgeBoosts,
+    ) -> (u32, StatStage) {
         match category {
             crate::damage::MoveCategory::Physical => {
-                let raw_defense = crate::ability::marvel_scale_defense(
-                    self.ability(),
-                    self.status1,
-                    self.stats.defense,
-                );
+                let raw_attack = if huge_power {
+                    crate::ability::huge_power_attack(self.ability(), category, self.stats.attack)
+                } else {
+                    self.stats.attack
+                };
+                let raw_attack = badges.boost_attack(raw_attack);
+                let raw_attack = crate::ability::hustle_attack(self.ability(), raw_attack);
+                let raw_attack =
+                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
+                (raw_attack, self.stages.attack)
+            }
+            crate::damage::MoveCategory::Special => (
+                badges.boost_special(self.stats.sp_attack),
+                self.stages.sp_attack,
+            ),
+        }
+    }
+
+    fn defending_stat_with(
+        &self,
+        category: crate::damage::MoveCategory,
+        badges: BadgeBoosts,
+    ) -> (u32, StatStage) {
+        match category {
+            crate::damage::MoveCategory::Physical => {
+                let raw_defense = badges.boost_defense(self.stats.defense);
+                let raw_defense =
+                    crate::ability::marvel_scale_defense(self.ability(), self.status1, raw_defense);
                 (raw_defense, self.stages.defense)
             }
-            crate::damage::MoveCategory::Special => (self.stats.sp_defense, self.stages.sp_defense),
+            crate::damage::MoveCategory::Special => (
+                badges.boost_special(self.stats.sp_defense),
+                self.stages.sp_defense,
+            ),
         }
+    }
+
+    /// The stat badges of the side this battler fights on: battle context that
+    /// never changes [`BattlePokemon::stats`] or [`BattlePokemon::cached_stats`]
+    /// (`pokeemerald/src/pokemon.c:3407`-`:3420`). [`crate::Battle`] clears it on
+    /// enemies and shares the lead's with the reserves.
+    #[must_use]
+    pub const fn stat_badges(&self) -> BadgeBoosts {
+        self.stat_badges
+    }
+
+    /// Sets [`BattlePokemon::stat_badges`]; call it on the lead before
+    /// building a [`crate::Battle`] so the opening Speed comparison sees it.
+    #[must_use]
+    pub const fn with_stat_badges(mut self, badges: BadgeBoosts) -> Self {
+        self.stat_badges = badges;
+        self
+    }
+
+    pub(crate) const fn set_stat_badges(&mut self, badges: BadgeBoosts) {
+        self.stat_badges = badges;
     }
 
     /// Speed after applying its stat stage.
@@ -1202,14 +1276,15 @@ impl BattlePokemon {
         self.stages.speed.apply(self.stats.speed)
     }
 
-    /// [`BattlePokemon::effective_speed`] with paralysis' quarter modifier
-    /// applied after stage scaling, truncating independently
+    /// [`BattlePokemon::effective_speed`] with this battler's Speed badge
+    /// ([`BattlePokemon::stat_badges`]) and then paralysis' quarter modifier
+    /// applied after stage scaling, each truncating independently
     /// (`speedBattler /= 4`, `battle_main.c:4650`-`:4651`,
     /// `:4684`-`:4685`). Turn order is the only reader of this modifier —
     /// see [`BattlePokemon::effective_speed`]'s own doc.
     #[must_use]
     pub const fn speed_for_turn_order(&self) -> u32 {
-        let speed = self.effective_speed();
+        let speed = self.stat_badges.boost_speed(self.effective_speed());
         if self.status1.is_paralysed() {
             speed / PARALYSIS_SPEED_DIVISOR
         } else {

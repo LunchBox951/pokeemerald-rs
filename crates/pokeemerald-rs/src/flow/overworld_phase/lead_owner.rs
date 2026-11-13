@@ -62,7 +62,10 @@ impl OverworldPhase {
                 && party::is_traded_record(record, owner_id, &self.save2.player_name)
         });
         let traded = traded || battler.is_traded_recipient();
-        battler.with_traded_recipient(traded)
+        // Stamped before the constructor's opening Speed comparison.
+        battler
+            .with_traded_recipient(traded)
+            .with_stat_badges(self.stat_badges())
     }
 
     /// A copy of the resident lead for a battle start, classified against the

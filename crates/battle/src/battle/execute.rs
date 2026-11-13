@@ -2,7 +2,7 @@
 
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
-use crate::ability::{burn_halves_damage, huge_power_attack};
+use crate::ability::burn_halves_damage;
 use crate::attract::is_attract_effect;
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
@@ -784,9 +784,8 @@ impl Battle {
         } else {
             &self.enemy
         };
-        let (raw_attack, attack_stage) = battler.attacking_stat(MoveCategory::Physical);
-        let attack_stat = huge_power_attack(battler.ability(), MoveCategory::Physical, raw_attack);
-        let (raw_defense, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let (attack_stat, attack_stage) = battler.damage_attacking_stat(MoveCategory::Physical);
+        let (raw_defense, defense_stage) = battler.damage_defending_stat(MoveCategory::Physical);
         let defense_stat = if halves_defense {
             raw_defense / 2
         } else {
