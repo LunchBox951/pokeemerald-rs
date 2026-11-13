@@ -310,6 +310,18 @@ fn the_any_slot_ability_screen_admits_every_effect_spore_species() {
 }
 
 #[test]
+fn the_any_slot_ability_screen_admits_both_truant_species() {
+    let dex = Dex::new();
+    for species in [SpeciesId::SLAKOTH, SpeciesId::SLAKING] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
 fn the_any_slot_ability_screen_admits_every_speed_boost_species() {
     let dex = Dex::new();
     for species in [SpeciesId::NINJASK, SpeciesId::YANMA] {
@@ -330,7 +342,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
         (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
         (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::SLAKOTH, assets::AbilityId::TRUANT),
         (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, assets::AbilityId::TRACE),
         (SpeciesId::PORYGON2, assets::AbilityId::TRACE),

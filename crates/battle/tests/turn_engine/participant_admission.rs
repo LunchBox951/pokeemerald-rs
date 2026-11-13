@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and always-refused abilities (Truant, Intimidate,
-//! Color Change, Trace, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate,
+//! Color Change, Trace, Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -28,8 +28,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 24] {
             mon(SpeciesId::MAWILE, 1, Status1::Healthy),
             AbilityId::INTIMIDATE,
         ),
-        (healthy(SpeciesId::SLAKOTH), AbilityId::TRUANT),
-        (healthy(SpeciesId::SLAKING), AbilityId::TRUANT),
         (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
         (healthy(SpeciesId::PORYGON), AbilityId::TRACE),
         (healthy(SpeciesId::PORYGON2), AbilityId::TRACE),
@@ -47,8 +45,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 24] {
             mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
             AbilityId::FLAME_BODY,
         ),
-        (healthy(SpeciesId::CLEFAIRY), AbilityId::CUTE_CHARM),
-        (healthy(SpeciesId::SKITTY), AbilityId::CUTE_CHARM),
         (healthy(SpeciesId::KYOGRE), AbilityId::DRIZZLE),
         (healthy(SpeciesId::GROUDON), AbilityId::DROUGHT),
         (healthy(SpeciesId::TYRANITAR), AbilityId::SAND_STREAM),
@@ -60,9 +56,27 @@ fn refused() -> [(BattlePokemon, AbilityId); 24] {
             mon(SpeciesId::SNORLAX, 0, Status1::Poisoned),
             AbilityId::IMMUNITY,
         ),
+        // Immunity cures bad poison too, whatever its stored counter
+        // (`battle_util.c:2878`-`:2883`).
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 0 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 5 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 15 }),
+            AbilityId::IMMUNITY,
+        ),
         (
             mon(SpeciesId::GOLDEEN, 1, Status1::Burned),
             AbilityId::WATER_VEIL,
+        ),
+        (
+            mon(SpeciesId::SLUGMA, 0, Status1::Frozen),
+            AbilityId::MAGMA_ARMOR,
         ),
         (
             mon(SpeciesId::HOOTHOOT, 0, Status1::Asleep { turns: 3 }),
@@ -215,6 +229,10 @@ const EFFECT_SPORE_HOLDERS: [SpeciesId; 4] = [
     SpeciesId::BRELOOM,
 ];
 
+/// Truant's whole species line: its loafing alternation is modelled, so both
+/// are admitted wherever they stand.
+const TRUANT_HOLDERS: [SpeciesId; 2] = [SpeciesId::SLAKOTH, SpeciesId::SLAKING];
+
 /// The constructor script for `player` against `enemy`: the order tiebreak is
 /// drawn only when their turn-order Speeds tie.
 fn admission_script_for(player: &BattlePokemon, enemy: &BattlePokemon) -> Vec<u16> {
@@ -228,6 +246,109 @@ fn effect_spore_holders_are_admitted_on_every_participant_path() {
             let holder = || {
                 let holder = mon(species, 0, status);
                 assert_eq!(holder.ability(), AbilityId::EFFECT_SPORE);
+                holder
+            };
+            let opponent = || healthy(SpeciesId::ZIGZAGOON);
+            let lead = || healthy(SpeciesId::MUDKIP);
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+            wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            trainer(holder(), vec![], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+            trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(
+                lead(),
+                vec![],
+                vec![opponent(), opponent(), holder()],
+                &mut rng,
+            )
+            .unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(lead(), vec![holder()], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+    }
+}
+
+/// Cute Charm's whole species pool: its contact infatuation is modelled
+/// (`battle_util.c:2851`-`:2870`), so every holder is admitted wherever it stands.
+const CUTE_CHARM_HOLDERS: [SpeciesId; 3] =
+    [SpeciesId::CLEFAIRY, SpeciesId::SKITTY, SpeciesId::DELCATTY];
+
+#[test]
+fn cute_charm_holders_are_admitted_on_every_participant_path() {
+    for species in CUTE_CHARM_HOLDERS {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            let holder = || {
+                let holder = mon(species, 0, status);
+                assert_eq!(holder.ability(), AbilityId::CUTE_CHARM);
+                holder
+            };
+            let opponent = || healthy(SpeciesId::ZIGZAGOON);
+            let lead = || healthy(SpeciesId::MUDKIP);
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+            wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            trainer(holder(), vec![], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+            trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(
+                lead(),
+                vec![],
+                vec![opponent(), opponent(), holder()],
+                &mut rng,
+            )
+            .unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(lead(), vec![holder()], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+    }
+}
+
+#[test]
+fn truant_holders_are_admitted_on_every_participant_path() {
+    for species in TRUANT_HOLDERS {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            let holder = || {
+                let holder = mon(species, 0, status);
+                assert_eq!(holder.ability(), AbilityId::TRUANT);
                 holder
             };
             let opponent = || healthy(SpeciesId::ZIGZAGOON);
@@ -338,7 +459,6 @@ fn an_always_refused_ability_is_refused_whatever_the_status() {
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, AbilityId::TRACE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
-        (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, AbilityId::SAND_STREAM),
@@ -452,8 +572,8 @@ fn a_speed_boost_holder_does_not_excuse_an_unrelated_refusal() {
     let result = trainer(
         healthy(SpeciesId::ZIGZAGOON),
         vec![],
-        vec![holder(), healthy(SpeciesId::SLAKOTH)],
+        vec![holder(), healthy(SpeciesId::KECLEON)],
         &mut rng,
     );
-    assert_refused_without_draws(&result, AbilityId::TRUANT, &rng);
+    assert_refused_without_draws(&result, AbilityId::COLOR_CHANGE, &rng);
 }

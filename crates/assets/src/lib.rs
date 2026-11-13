@@ -41,6 +41,7 @@ pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
 pub mod bundled_overworld;
+pub mod decorations;
 pub mod egg_moves;
 pub mod error;
 pub mod event_scripts;
@@ -49,6 +50,7 @@ pub mod experience;
 pub mod fonts;
 pub mod hidden_item_flags;
 pub mod items;
+pub mod keypad_icons;
 pub mod level_up_learnsets;
 pub mod map_events;
 pub mod map_headers;
@@ -59,6 +61,7 @@ pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
 pub mod pokedex;
+pub mod script_refs;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -91,6 +94,7 @@ pub use fonts::{
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
 };
+pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
@@ -111,6 +115,7 @@ pub use new_game_flags::{
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
+pub use script_refs::{MapScriptTableRef, ScriptRef};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
@@ -128,8 +133,10 @@ pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
-    PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle,
-    StarterSpecies, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot, PcWallpaperHandle,
+    PcWallpaperId, PcWallpaperTile, PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle,
+    StarterPreviewHandle, StarterSpecies, TextPrinterDownArrow, TilesetHandle,
+    TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,

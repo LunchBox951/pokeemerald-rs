@@ -42,11 +42,18 @@ fn boosted(by_player: bool, stage: i8) -> BattleEvent {
     }
 }
 
-fn splash_event(by_player: bool) -> BattleEvent {
-    BattleEvent::NothingHappened {
-        by_player,
-        move_id: SPLASH,
-    }
+/// A Splash action: its announcement, then its no-effect result.
+fn splash_events(by_player: bool) -> [BattleEvent; 2] {
+    [
+        BattleEvent::UsedMove {
+            by_player,
+            move_id: SPLASH,
+        },
+        BattleEvent::NothingHappened {
+            by_player,
+            move_id: SPLASH,
+        },
+    ]
 }
 
 /// A level-10 Ninjask and a level-30 Zigzagoon, both knowing only Splash.
@@ -74,11 +81,16 @@ fn an_initial_lead_boosts_at_the_end_of_turn_one_on_either_side_and_wins_the_nex
         let first = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap();
-        let ninjask_acts = splash_event(ninjask_is_player);
-        let other_acts = splash_event(!ninjask_is_player);
+        let ninjask_acts = splash_events(ninjask_is_player);
+        let other_acts = splash_events(!ninjask_is_player);
         assert_eq!(
             first,
-            vec![other_acts, ninjask_acts, boosted(ninjask_is_player, 1)],
+            [
+                &other_acts[..],
+                &ninjask_acts,
+                &[boosted(ninjask_is_player, 1)]
+            ]
+            .concat(),
             "the slower holder acts second and boosts after both actions: {first:?}"
         );
 
@@ -87,7 +99,12 @@ fn an_initial_lead_boosts_at_the_end_of_turn_one_on_either_side_and_wins_the_nex
             .unwrap();
         assert_eq!(
             second,
-            vec![ninjask_acts, other_acts, boosted(ninjask_is_player, 2)],
+            [
+                &ninjask_acts[..],
+                &other_acts,
+                &[boosted(ninjask_is_player, 2)]
+            ]
+            .concat(),
             "one stage at +1 beats the faster base Speed: {second:?}"
         );
         rng.assert_exhausted();
@@ -110,12 +127,12 @@ fn both_speed_boost_holders_boost_in_the_residual_order() {
 
     assert_eq!(
         events,
-        vec![
-            splash_event(true),
-            splash_event(false),
-            boosted(true, 1),
-            boosted(false, 1),
+        [
+            &splash_events(true)[..],
+            &splash_events(false),
+            &[boosted(true, 1), boosted(false, 1)],
         ]
+        .concat()
     );
     rng.assert_exhausted();
 }
@@ -175,7 +192,7 @@ fn a_holder_boosts_before_its_own_poison_tick() {
         .unwrap();
 
     assert_eq!(
-        &events[2..],
+        &events[4..],
         &[
             boosted(true, 1),
             BattleEvent::HurtByPoison {

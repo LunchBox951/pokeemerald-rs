@@ -363,7 +363,7 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, BattleEvent::ExpGained(_))),
+            .any(|event| matches!(event, BattleEvent::ExpGained { .. })),
         "the knockout still pays out: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
@@ -546,6 +546,7 @@ fn a_forced_struggle_is_compared_by_its_retained_slot_at_the_end_turn() {
         0, 0, // Battle::new: turn number, seeding tie
         0, 0, // turn number, enemy pick
         0, // action tie (Struggle 0 vs Tackle 0): player first
+        1, // Struggle's `GetMoveTarget`: the player picks the enemy (odd)
         0, 1, 0, // Struggle
         0, 1, 0, 0, // Tackle
         1, // an end-turn tie draw, if one were wrongly taken: enemy first
@@ -557,7 +558,7 @@ fn a_forced_struggle_is_compared_by_its_retained_slot_at_the_end_turn() {
     let (hits, ticks) = hit_and_tick_sides(&events);
     assert_eq!(hits, [true, false], "{events:?}");
     assert_eq!(ticks, [true, false], "{events:?}");
-    assert_eq!(rng.draws(), 12, "no end-turn tie draw: {events:?}");
+    assert_eq!(rng.draws(), 13, "no end-turn tie draw: {events:?}");
 }
 
 /// Upstream never assigns a position for a forced Struggle
@@ -576,14 +577,16 @@ fn adjudicator_player_forced_struggle_ignores_the_submitted_cursor() {
     player.set_status1(Status1::Poisoned);
     let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     enemy.set_status1(Status1::Poisoned);
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    // After the action tie (idx 4), the player's Struggle spends its
+    // `GetMoveTarget` draw (1: the enemy; `battle_util.c:100`-`:105`).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
     assert_eq!(
         rng.draws(),
-        13,
+        14,
         "one end-turn tie draw expected: {events:?}"
     );
 }
@@ -600,7 +603,9 @@ fn adjudicator_enemy_forced_struggle_reads_its_retained_slot() {
         enemy.deduct_pp(0).unwrap();
     }
     enemy.set_status1(Status1::Poisoned);
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    // The player's Tackle runs first; the enemy's Struggle then spends its
+    // `GetMoveTarget` draw (0: the player; `battle_util.c:100`-`:105`).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)

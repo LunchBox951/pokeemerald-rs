@@ -12,6 +12,8 @@ mod creation;
 #[cfg(unix)]
 mod durability;
 #[cfg(unix)]
+mod permissions;
+#[cfg(unix)]
 mod quarantine;
 #[cfg(unix)]
 mod races;
@@ -30,6 +32,21 @@ fn entry_names(dir: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// Writes `keep` into the level captured in the quarantine `held`, as a
+/// writer that fills the level after rollback moved it there would.
+#[cfg(unix)]
+fn write_into_capture(held: std::os::fd::BorrowedFd<'_>) {
+    use std::io::Write as _;
+    let keep = rustix::fs::openat(
+        held,
+        format!("{}/keep", super::take_back::QUARANTINE_ENTRY),
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    fs::File::from(keep).write_all(b"x").unwrap();
 }
 
 #[cfg(unix)]
@@ -51,6 +68,30 @@ fn rerun_alone_for_stderr(test_path: &str) -> String {
         .env(ROLLBACK_STDERR_CHILD, "1")
         .output()
         .unwrap();
+    child_stderr(&output)
+}
+
+/// [`rerun_alone_for_stderr`] with the child's soft `RLIMIT_NOFILE` lowered
+/// to 64, for a test that fills its descriptor table with
+/// [`fill_descriptor_table_leaving`] and so must not do so in the shared
+/// test process. Only the Linux and Android race tests need it.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn rerun_alone_for_stderr_under_descriptor_pressure(test_path: &str) -> String {
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(r#"ulimit -Sn 64 && exec "$0" "$1" --exact --nocapture"#)
+        .arg(exe)
+        .arg(test_path)
+        .env(ROLLBACK_STDERR_CHILD, "1")
+        .output()
+        .unwrap();
+    child_stderr(&output)
+}
+
+/// The stderr of a child that must have passed its one test.
+#[cfg(unix)]
+fn child_stderr(output: &std::process::Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(

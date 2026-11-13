@@ -43,7 +43,7 @@ fn png_of(height: u32, bit_depth: u8, pixel_of_frame: impl Fn(u32) -> u8) -> Vec
         let pixel = pixel_of_frame(row / FRAME_ROWS);
         raw.resize(raw.len() + row_bytes, pixel);
     }
-    let plte = vec![7; 16 * 3];
+    let plte = vec![7; 16.min(1usize << bit_depth) * 3];
     indexed_png_from_raw_with_plte(bit_depth, 64, height, &raw, &plte)
 }
 

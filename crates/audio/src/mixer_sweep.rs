@@ -1,4 +1,4 @@
-//! Mixer-level sweep tick cadence, overflow muting, and tick-buffer bounds.
+//! Mixer-level sweep tick cadence, overflow holding, and tick-buffer bounds.
 
 use super::test_support::*;
 use super::*;
@@ -65,7 +65,10 @@ fn mix_frame_sweeps_at_128hz_across_frame_boundaries() {
 }
 
 #[test]
-fn mix_frame_mutes_an_overflowing_sweep_on_the_hardware_tick_count() {
+fn mix_frame_holds_an_overflowing_sweeps_last_level_on_the_hardware_tick_count() {
+    // The overflow only clears `playingCh1` (`mgba/src/gb/audio.c:667-672`);
+    // `GBAudioSamplePSG` keeps mixing the untouched `ch1.sample`
+    // (`:745-754`), so the mixed output holds its last level, not silence.
     const FRAMES_BEFORE_OVERFLOW: usize = 29;
     const FREQUENCY_BEFORE_OVERFLOW: u16 = 1122;
     const FREQUENCY_AT_OVERFLOW: u16 = 1683;
@@ -92,13 +95,18 @@ fn mix_frame_mutes_an_overflowing_sweep_on_the_hardware_tick_count() {
     assert_eq!(
         mixer.voice_count(),
         1,
-        "the overflow mutes the hardware channel, keeping the slot for a later trigger"
+        "the overflow stops the hardware channel, keeping the slot for a later trigger"
+    );
+    let held_pair = [out[out.len() - 2], out[out.len() - 1]];
+    assert!(
+        held_pair.iter().any(|&sample| sample != 0.0),
+        "sanity: the overflow frame must end on an audible level"
     );
 
     mixer.mix_frame(&mut out);
     assert!(
-        out.iter().all(|&sample| sample == 0.0),
-        "a muted channel contributes nothing to the frames after its overflow"
+        out.chunks_exact(2).all(|pair| pair == held_pair),
+        "a stopped channel holds its last level through the frames after its overflow"
     );
 }
 
@@ -108,7 +116,7 @@ fn a_frames_sweep_tick_buffer_never_has_to_grow() {
 
     assert_eq!(MAX_SWEEP_TICKS_PER_FRAME, 3);
 
-    let mut clock = FrameSequencer128Hz::default();
+    let mut clock = FrameSequencer::default();
     let mut ticks = Vec::new();
     let mut seen_three = false;
     for _ in 0..FRAMES_TO_SAMPLE {

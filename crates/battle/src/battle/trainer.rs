@@ -636,8 +636,6 @@ mod tests {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality, ability) in [
-            (SpeciesId::SLAKOTH, SLOT_0, assets::AbilityId::TRUANT),
-            (SpeciesId::SLAKING, SLOT_1, assets::AbilityId::TRUANT),
             (SpeciesId::TAUROS, SLOT_1, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GYARADOS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GRANBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
@@ -708,6 +706,15 @@ mod tests {
             (SpeciesId::PARASECT, SLOT_1),
             (SpeciesId::SHROOMISH, SLOT_0),
             (SpeciesId::BRELOOM, SLOT_1),
+            (SpeciesId::SLAKOTH, SLOT_0),
+            (SpeciesId::SLAKING, SLOT_1),
+            // Miguel's Skitty carries Cute Charm in both slots, which the
+            // turn engine now models (`ABILITY_CUTE_CHARM`,
+            // `battle_util.c:2851`-`:2870`).
+            (SpeciesId::SKITTY, SLOT_0),
+            (SpeciesId::SKITTY, SLOT_1),
+            (SpeciesId::DELCATTY, SLOT_0),
+            (SpeciesId::CLEFAIRY, SLOT_0),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,
@@ -788,9 +795,9 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            screen(&[member(ItemId::NONE), member(ItemId::SITRUS_BERRY)]),
             Err(crate::error::BattleError::UnsupportedHeldItem(
-                ItemId::ORAN_BERRY
+                ItemId::SITRUS_BERRY
             ))
         );
     }
