@@ -23,6 +23,7 @@ mod party_menu;
 mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
+mod summary_screen_graphics;
 mod text_printer;
 mod text_tokens;
 mod trainer_battler;
@@ -61,6 +62,10 @@ pub use party_menu::{PartyMenuBackground, PartyMenuButton, PartyMenuHandle, Part
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
+pub use summary_screen_graphics::{
+    SummaryScreenGraphicsHandle, SummaryScreenMoveEffect, SummaryScreenPage, SummaryScreenPalette,
+    SummaryScreenSheet,
+};
 pub use text_printer::TextPrinterDownArrow;
 
 pub use trainer_battler::TrainerBattlerHandle;

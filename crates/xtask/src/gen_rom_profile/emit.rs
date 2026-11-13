@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 mod poke_ball;
+mod summary_screen_graphics;
 
 use rom_import::Encoding;
 
@@ -77,7 +78,7 @@ use crate::roots::{{
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
     PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    StarterChooserRoots, SummaryScreenGraphicsRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
@@ -146,6 +147,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_interface_roots(&mut out, &plan.battle_interface);
     naming_screen_roots(&mut out, &plan.naming_screen);
     party_menu_roots(&mut out, &plan.party_menu);
+    summary_screen_graphics::summary_screen_graphics_roots(&mut out, &plan.summary_screen_graphics);
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
@@ -1403,6 +1405,7 @@ mod bag_field_tests {
             battle_interface: interface_plan(),
             naming_screen: naming_plan(),
             party_menu: party_menu_plan(),
+            summary_screen_graphics: super::summary_screen_graphics::tests::plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
@@ -1416,6 +1419,15 @@ mod bag_field_tests {
         assert_down_arrow_root(&module);
         assert_naming_roots(&module);
         assert_party_menu_roots(&module);
+        assert!(
+            module.contains("    summary_screen_graphics: SummaryScreenGraphicsRoots {"),
+            "{module}"
+        );
+        assert!(
+            !module.contains("SummaryScreenGraphicsRoots::NONE"),
+            "{module}"
+        );
+        assert!(module.contains("SummaryScreenGraphicsRoots,"), "{module}");
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

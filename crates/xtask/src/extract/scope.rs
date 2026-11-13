@@ -19,6 +19,7 @@ use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
+use super::summary_screen_graphics::pack_ids as summary_screen_graphics_pack_ids;
 pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;
 use super::ExtractError;
 
@@ -735,6 +736,12 @@ pub(crate) fn party_menu_ids() -> Vec<String> {
 /// palette, and the opened-ball sheet.
 pub(crate) fn poke_ball_ids() -> Vec<String> {
     poke_ball_pack_ids()
+}
+
+/// Every `summary-screen-graphics/` pack id extraction emits: four sheets,
+/// three palettes, and nine maps.
+pub(crate) fn summary_screen_graphics_ids() -> Vec<String> {
+    summary_screen_graphics_pack_ids()
 }
 
 /// Where the naming screen's sources live, relative to the checkout.

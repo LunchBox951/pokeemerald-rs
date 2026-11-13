@@ -5,9 +5,9 @@ use super::pack_source::PackSource;
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
     layout_ids, naming_screen_ids, opening_scene_ids, party_menu_ids, poke_ball_ids,
-    sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
-    KEYPAD_ICONS, TILESETS,
+    sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, summary_screen_graphics_ids,
+    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS,
+    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -253,6 +253,28 @@ pub fn require_party_menu(pack: &PackSource) -> Result<(), GenRomProfileError> {
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every summary-screen sheet,
+/// palette, and map is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `summary-screen-graphics/` entry outside the fixed inventory, which the locator, reading only
+/// the inventory, would otherwise silently leave out of the profile.
+pub fn require_summary_screen_graphics(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = summary_screen_graphics_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("summary-screen-graphics/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's summary-screen-graphics inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
 /// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
 /// the enemy shadow, and the two ball palettes are present, and with
@@ -360,6 +382,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battle_interface(pack)?;
     require_naming_screen(pack)?;
     require_party_menu(pack)?;
+    require_summary_screen_graphics(pack)?;
     require_trainer_front(pack)?;
     require_trainer_battlers(pack)
 }

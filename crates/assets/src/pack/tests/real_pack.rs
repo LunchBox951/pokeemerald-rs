@@ -606,6 +606,60 @@ fn real_pack_down_arrow_frames_bob_the_arrow_up_one_row_at_a_time() {
 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_summary_screen_graphics_has_every_record_in_its_upstream_shape() {
+    use crate::{
+        SummaryScreenMoveEffect, SummaryScreenPage, SummaryScreenPalette, SummaryScreenSheet,
+    };
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let screen = pack
+        .summary_screen_graphics()
+        .expect("the summary screen graphics");
+
+    // `tiles.png` keeps all 240 tiles and its 128 palette colours.
+    let tiles = screen.sheet(SummaryScreenSheet::Tiles);
+    assert_eq!((tiles.width, tiles.height), (128, 120));
+    assert_eq!(tiles.pixels.len(), 128 * 120);
+    let palette = screen.palette(SummaryScreenPalette::Tiles);
+    assert_eq!(palette.color_count, 128);
+    assert_eq!(palette.color(0), Some(0x3AD6));
+    assert_eq!(palette.color(127), Some(0x7FFF));
+    // The selector sheet and the markings palette are one bank each.
+    let selector = screen.sheet(SummaryScreenSheet::MoveSelect);
+    assert_eq!((selector.width, selector.height), (16, 128));
+    assert_eq!(
+        screen.palette(SummaryScreenPalette::MoveSelect).color(0),
+        Some(0)
+    );
+    let markings = screen.palette(SummaryScreenPalette::Markings);
+    assert_eq!(markings.color_count, 16);
+    assert_eq!(
+        [0, 1, 2, 3].map(|index| markings.color(index).unwrap()),
+        [0, 0x6E54, 0x7675, 0x7FFF]
+    );
+    // Each button is four tiles, and the two differ.
+    let (a, b) = (
+        screen.sheet(SummaryScreenSheet::AButton),
+        screen.sheet(SummaryScreenSheet::BButton),
+    );
+    assert_eq!((a.width, a.height, b.width, b.height), (16, 16, 16, 16));
+    assert_ne!(a.pixels, b.pixels);
+    // The five pages are different 32x32 screens.
+    for (index, page) in SummaryScreenPage::ALL.into_iter().enumerate() {
+        assert_eq!(screen.page_tilemap(page).len(), 2048);
+        assert!(SummaryScreenPage::ALL[index + 1..]
+            .iter()
+            .all(|&other| screen.page_tilemap(other) != screen.page_tilemap(page)));
+    }
+    // The effect maps are stored whole: 80, 80 and 64 entries.
+    let lengths =
+        SummaryScreenMoveEffect::ALL.map(|effect| screen.move_effect_tilemap(effect).len());
+    assert_eq!(lengths, [160, 160, 128]);
+    assert_eq!(screen.status_tilemap.len(), 40);
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_party_menu_has_every_record_in_its_upstream_shape() {
     use crate::{PartyMenuButton, PartyMenuSlot};
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");

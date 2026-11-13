@@ -9,15 +9,16 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, poke_ball, sprites, starter_chooser, summary_screen_graphics,
+    text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
     party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS,
-    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
-    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    summary_screen_graphics_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS,
+    FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS,
+    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -56,6 +57,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(battle_interface_ids())
         .chain(naming_screen_ids())
         .chain(party_menu_ids())
+        .chain(summary_screen_graphics_ids())
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
@@ -101,6 +103,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             naming_screen::locate(ctx, &mut report).map(|_| ())
         } else if domain == "party_menu" {
             party_menu::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "summary_screen_graphics" {
+            summary_screen_graphics::locate(ctx, &mut report).map(|_| ())
         } else if domain == "interface" {
             interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
@@ -165,6 +169,7 @@ fn the_fixed_inventory_ids_are_unique() {
         battle_interface_ids(),
         naming_screen_ids(),
         party_menu_ids(),
+        summary_screen_graphics_ids(),
         poke_ball_ids(),
         trainer_battler_ids(),
     ] {
@@ -565,6 +570,48 @@ fn a_surplus_party_menu_entry_is_refused_by_id() {
         );
         let mut report = Vec::new();
         let err = party_menu::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_summary_screen_inventory_is_four_sheets_three_palettes_and_nine_maps() {
+    let ids = summary_screen_graphics_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 16);
+    assert_eq!(count("summary-screen-graphics/image/"), 4);
+    assert_eq!(count("summary-screen-graphics/palette/"), 3);
+    assert_eq!(count("summary-screen-graphics/raw/"), 9);
+}
+
+#[test]
+fn a_pack_missing_a_summary_screen_entry_is_refused() {
+    for id in summary_screen_graphics_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "summary_screen_graphics");
+    }
+}
+
+#[test]
+fn a_surplus_summary_screen_entry_is_refused_by_id() {
+    let surplus = "summary-screen-graphics/image/page_unused";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-summary-screen", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = summary_screen_graphics::locate(ctx, &mut report)
             .map(|_| ())
             .unwrap_err();
         assert!(

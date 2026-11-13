@@ -41,6 +41,7 @@ pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
+pub(crate) mod summary_screen_graphics;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
@@ -83,6 +84,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battlers::write,
     naming_screen::write,
     party_menu::write,
+    summary_screen_graphics::write,
     poke_ball::write,
     trainer_front::write,
     trainer_battlers::write,

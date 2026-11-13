@@ -651,6 +651,17 @@ pub struct PartyMenuPlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The summary screen's sheets, palettes, and maps, owned.
+#[derive(Debug, Clone)]
+pub struct SummaryScreenGraphicsPlan {
+    /// Every `summary-screen-graphics/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `summary-screen-graphics/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `summary-screen-graphics/raw/*` map root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -692,6 +703,8 @@ pub struct ProfilePlan {
     pub naming_screen: NamingScreenPlan,
     /// The party menu's sheets, palettes, and maps.
     pub party_menu: PartyMenuPlan,
+    /// The summary screen's sheets, palettes, and maps.
+    pub summary_screen_graphics: SummaryScreenGraphicsPlan,
     /// The static battler art.
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.

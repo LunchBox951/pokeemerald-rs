@@ -49,6 +49,7 @@ mod poke_ball;
 mod search;
 mod sprites;
 mod starter_chooser;
+mod summary_screen_graphics;
 mod text_window;
 mod tilesets;
 mod title;
@@ -188,6 +189,7 @@ fn locate_profile(
         battle_interface: battle_interface::locate(ctx, lines)?,
         naming_screen: naming_screen::locate(ctx, lines)?,
         party_menu: party_menu::locate(ctx, lines)?,
+        summary_screen_graphics: summary_screen_graphics::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
         trainer_front,
