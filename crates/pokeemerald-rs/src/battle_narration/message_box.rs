@@ -100,12 +100,18 @@ impl BattleTextbox {
     /// Draws the textbox, blanks the message window to its background, and
     /// replays `ops` inside it, each glyph in the colours it carries.
     /// `window_fill` is the colours the latest whole-window clear erased with.
+    ///
+    /// The window's tiles replace the textbox tilemap on BG0 inside its
+    /// rectangle (`PutWindowTilemap`), so a pixel the text erases to index 0
+    /// shows what lies beneath BG0: `framebuffer` as it was before the
+    /// textbox was drawn.
     pub(super) fn compose(
         &self,
         framebuffer: &mut Framebuffer,
         ops: &[WindowOp],
         window_fill: Option<TextColors>,
     ) {
+        let scene = textbox::needs_scene(ops, window_fill).then(|| framebuffer.clone());
         BgLayer::new(&self.tileset, &self.palette, &self.tilemap).composite(framebuffer);
         let (origin, size) = window_rect();
         textbox::fill_rect(
@@ -122,8 +128,11 @@ impl BattleTextbox {
             size,
             &self.icons,
             &self.window_palette(),
-            window_fill,
-            None,
+            textbox::WindowBackdrop {
+                interior: BACKGROUND_INDEX,
+                fill: window_fill,
+                scene: scene.as_ref(),
+            },
         );
     }
 

@@ -281,8 +281,7 @@ impl NpcDialog {
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
             &self.icons,
             &self.frame.palette,
-            self.window_fill,
-            scene.as_ref(),
+            textbox::WindowBackdrop::message_box(self.window_fill, scene.as_ref()),
         );
         base
     }

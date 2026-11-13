@@ -68,8 +68,7 @@ fn a_color_blue_glyph_paints_palette_index_8_where_the_plain_one_paints_2() {
             (200, 32),
             &super::test_keypad_icons(&[]),
             &palette,
-            None,
-            None,
+            WindowBackdrop::message_box(None, None),
         );
         fb
     };
@@ -103,8 +102,7 @@ fn colors_apply_per_glyph_not_to_the_whole_page() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(fb.pixel(0, 0), Some(palette[2]));
     assert_eq!(fb.pixel(20, 0), Some(palette[8]));
@@ -141,8 +139,7 @@ fn default_colors_through_the_palette_match_the_fixed_role_slots_byte_for_byte()
         (200, 32),
         &super::test_keypad_icons(&[]),
         &frame.palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(roles.pixels(), via_palette.pixels());
 }
@@ -158,8 +155,7 @@ fn a_highlight_paints_only_the_glyphs_actual_footprint() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(fb.pixel(2, 0), Some(palette[4]), "inside the footprint");
     assert_eq!(
@@ -186,8 +182,7 @@ fn an_explicit_highlight_of_the_default_background_repaints_it() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(fb.pixel(2, 0), Some(palette[1]));
 }
@@ -203,8 +198,7 @@ fn transparent_and_missing_palette_entries_skip_safely() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(fb.pixels(), marker_fb().pixels());
 }
@@ -234,8 +228,7 @@ fn a_clear_erases_with_its_own_background() {
             (200, 32),
             &super::test_keypad_icons(&[]),
             &palette,
-            None,
-            None,
+            WindowBackdrop::message_box(None, None),
         );
         fb
     };
@@ -265,8 +258,7 @@ fn a_clear_erases_with_its_own_background() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        Some(&scene),
+        WindowBackdrop::message_box(None, Some(&scene)),
     );
     assert_eq!(fb.pixel(0, 0), Some(palette[2]));
 }
@@ -291,8 +283,7 @@ fn a_transparent_scroll_fill_shows_the_scene() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        Some(&scene),
+        WindowBackdrop::message_box(None, Some(&scene)),
     );
     assert_eq!(fb.pixel(0, 0), scene.pixel(0, 0));
     assert_eq!(fb.pixel(3, 1), scene.pixel(3, 1));
@@ -318,8 +309,7 @@ fn a_window_fill_covers_the_content_with_its_background() {
             (16, 16),
             &super::test_keypad_icons(&[]),
             &palette,
-            Some(colors(2, background, 3)),
-            Some(&scene),
+            WindowBackdrop::message_box(Some(colors(2, background, 3)), Some(&scene)),
         );
         fb
     };
@@ -350,8 +340,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     // `mixed_glyph` puts a value-3 pixel at (3, 0), inside the footprint.
     assert_eq!(fb.pixel(3, 0), Some(palette[4]));
@@ -364,8 +353,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     assert_eq!(plain.pixel(3, 0), marker_fb().pixel(3, 0));
 }
@@ -391,8 +379,7 @@ fn a_highlight_paints_the_real_fonts_cell_background() {
         (200, 32),
         &super::test_keypad_icons(&[]),
         &palette,
-        None,
-        None,
+        WindowBackdrop::message_box(None, None),
     );
     let width = usize::from(glyph.advance_width);
     let mut unpainted = 0;

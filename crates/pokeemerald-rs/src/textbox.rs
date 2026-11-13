@@ -26,6 +26,38 @@ const MESSAGE_BOX_SHADOW_PALETTE_INDEX: usize = TextColors::MESSAGE_BOX.shadow a
 /// any text prints (`TEXT_COLOR_WHITE`).
 const MESSAGE_BOX_BACKGROUND_PALETTE_INDEX: u8 = TextColors::MESSAGE_BOX.background;
 
+/// What lies under a window's text: the interior it starts from, the latest
+/// whole-window fill, and the scene a transparent fill shows.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowBackdrop<'a> {
+    /// The palette index the window's interior already shows before any op
+    /// replays (the message box's frame interior, or a window's initial
+    /// `FillWindowPixelBuffer` colour). An erase with this index restores the
+    /// pre-glyph framebuffer; any other opaque index paints its palette entry.
+    pub(crate) interior: u8,
+    /// The colours the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`).
+    pub(crate) fill: Option<TextColors>,
+    /// The framebuffer as it was before the window and its surroundings were
+    /// drawn, which a transparent (index 0) fill or scroll fill shows
+    /// ([`needs_scene`]).
+    pub(crate) scene: Option<&'a Framebuffer>,
+}
+
+impl<'a> WindowBackdrop<'a> {
+    /// A message box, whose interior is `TEXT_COLOR_WHITE` (index 1).
+    pub(crate) const fn message_box(
+        fill: Option<TextColors>,
+        scene: Option<&'a Framebuffer>,
+    ) -> Self {
+        Self {
+            interior: MESSAGE_BOX_BACKGROUND_PALETTE_INDEX,
+            fill,
+            scene,
+        }
+    }
+}
+
 /// Glyph-role color slots [`blit_glyphs_colored`] indexes a revealed glyph's
 /// pixel through -- distinct from the palette indices above.
 const GLYPH_COLOR_COUNT: usize = 4;
@@ -389,19 +421,13 @@ pub(crate) fn push_clipped(ops: &mut Vec<WindowOp>, op: WindowOp, content_height
 ///
 /// Each glyph maps the [`TextColors`] it carries through `palette`, the
 /// window's loaded palette, so a `COLOR` or `SHADOW` control recolors only the
-/// glyphs revealed after it. `window_fill` is the colors the latest
-/// whole-window clear erased with (`Printer::cleared_window_colors`); `scene`
-/// is the framebuffer as it was before the frame tiles were drawn, which a
-/// transparent (index 0) fill or scroll fill shows ([`needs_scene`]).
+/// glyphs revealed after it. `backdrop` gives the window's interior index, the
+/// latest whole-window fill, and the scene a transparent fill shows.
 ///
 /// A `ClearSpan` erases its window-local rectangle with its own background
-/// (see [`erase_with_background`]) before any later glyph lands, covering
+/// (see [`Eraser::erase`]) before any later glyph lands, covering
 /// whatever an earlier op painted there, partial glyph included
 /// (`pokeemerald/src/text.c:649-674`, `:1063-1090`).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one window replay needs its geometry, icon sheet, palette, and both fill sources"
-)]
 pub(crate) fn compose_window_ops(
     fb: &mut Framebuffer,
     ops: &[WindowOp],
@@ -409,11 +435,16 @@ pub(crate) fn compose_window_ops(
     content_size: (i32, i32),
     icons: &KeypadIconSheet,
     palette: &[Rgb888],
-    window_fill: Option<TextColors>,
-    scene: Option<&Framebuffer>,
+    backdrop: WindowBackdrop<'_>,
 ) {
-    let background = fb.clone();
-    if let Some(fill) = window_fill {
+    let eraser = Eraser {
+        background: fb.clone(),
+        interior: backdrop.interior,
+        palette,
+        origin,
+        content_size,
+    };
+    if let Some(fill) = backdrop.fill {
         let full = ClearedSpan {
             x: 0,
             y: 0,
@@ -421,7 +452,7 @@ pub(crate) fn compose_window_ops(
             height: content_size.1,
             colors: fill,
         };
-        erase_with_background(fb, &background, scene, palette, full, origin, content_size);
+        eraser.erase(fb, full, backdrop.scene);
     }
     for op in ops {
         match op {
@@ -438,10 +469,10 @@ pub(crate) fn compose_window_ops(
                 blit_keypad_icon(fb, *icon, icons, palette, origin, content_size);
             }
             WindowOp::ClearSpan(span) => {
-                erase_with_background(fb, &background, None, palette, *span, origin, content_size);
+                eraser.erase(fb, *span, None);
             }
             WindowOp::ScrollFill(span) => {
-                erase_with_background(fb, &background, scene, palette, *span, origin, content_size);
+                eraser.erase(fb, *span, backdrop.scene);
             }
         }
     }
@@ -458,38 +489,45 @@ pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> 
         })
 }
 
-/// Erases `span` with `span.colors.background`.
-///
-/// Index 0 is transparent. A scroll fill and a whole-window fill write pixel
-/// value 0 (`ScrollWindow`, `pokeemerald/src/text.c:1196-1201`), so they
-/// restore the `scene` beneath the window; with no `scene` there is nothing to
-/// restore and nothing is painted. A `CLEAR`/`CLEAR_TO` span never gets a
-/// `scene`: upstream's `ClearTextSpan` skips painting when the background is
-/// transparent (`pokeemerald/src/text.c:649-674`). Index
-/// `TEXT_COLOR_WHITE` is the window interior the frame tiles already drew, so
-/// it restores from `background`, the pre-glyph composed framebuffer. Any other
-/// index fills with that palette entry; a missing entry is skipped.
-fn erase_with_background(
-    fb: &mut Framebuffer,
-    background: &Framebuffer,
-    scene: Option<&Framebuffer>,
-    palette: &[Rgb888],
-    span: ClearedSpan,
+/// Erases spans inside one window during a [`compose_window_ops`] replay.
+struct Eraser<'a> {
+    /// The composed framebuffer before any op replayed: the window interior.
+    background: Framebuffer,
+    /// The palette index that interior shows ([`WindowBackdrop::interior`]).
+    interior: u8,
+    palette: &'a [Rgb888],
     origin: (i32, i32),
     content_size: (i32, i32),
-) {
-    match span.colors.background {
-        index if usize::from(index) == TRANSPARENT_PALETTE_INDEX => {
-            if let Some(scene) = scene {
-                restore_cleared_span(fb, scene, span, origin, content_size);
+}
+
+impl Eraser<'_> {
+    /// Erases `span` with `span.colors.background`.
+    ///
+    /// Index 0 is transparent. A scroll fill and a whole-window fill write
+    /// pixel value 0 (`ScrollWindow`, `pokeemerald/src/text.c:1196-1201`), so
+    /// they restore the `scene` beneath the window; with no `scene` there is
+    /// nothing to restore and nothing is painted. A `CLEAR`/`CLEAR_TO` span
+    /// never gets a `scene`: upstream's `ClearTextSpan` skips painting when the
+    /// background is transparent (`pokeemerald/src/text.c:649-674`). The
+    /// window's own interior index restores from `background`, the pre-glyph
+    /// composed framebuffer. Any other index fills with that palette entry, as
+    /// the window bitmap holds that index (`FillWindowPixelRect`,
+    /// `ScrollWindow`); a missing entry is skipped.
+    fn erase(&self, fb: &mut Framebuffer, span: ClearedSpan, scene: Option<&Framebuffer>) {
+        let (origin, content_size) = (self.origin, self.content_size);
+        match span.colors.background {
+            index if usize::from(index) == TRANSPARENT_PALETTE_INDEX => {
+                if let Some(scene) = scene {
+                    restore_cleared_span(fb, scene, span, origin, content_size);
+                }
             }
-        }
-        MESSAGE_BOX_BACKGROUND_PALETTE_INDEX => {
-            restore_cleared_span(fb, background, span, origin, content_size);
-        }
-        index => {
-            if let Some(&color) = palette.get(usize::from(index)) {
-                paint_cleared_span(fb, color, span, origin, content_size);
+            index if index == self.interior => {
+                restore_cleared_span(fb, &self.background, span, origin, content_size);
+            }
+            index => {
+                if let Some(&color) = self.palette.get(usize::from(index)) {
+                    paint_cleared_span(fb, color, span, origin, content_size);
+                }
             }
         }
     }
@@ -864,8 +902,7 @@ mod tests {
             ICON_CONTENT_SIZE,
             icons,
             &icon_palette(),
-            None,
-            None,
+            WindowBackdrop::message_box(None, None),
         );
         fb
     }
