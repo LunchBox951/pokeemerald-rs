@@ -17,7 +17,7 @@ fn rig() -> Rig {
         ],
         PLAYER,
     );
-    rig.rng = ScriptedRng::new(std::iter::repeat(0).take(256));
+    rig.rng = ScriptedRng::new(std::iter::repeat_n(0, 256));
     rig
 }
 

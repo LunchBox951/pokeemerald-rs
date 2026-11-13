@@ -167,8 +167,10 @@ fn a_record_of_another_map_or_the_player_is_not_decoded() {
 
 #[test]
 fn the_stamp_is_checked_against_the_slot_counter() {
-    let mut block = SaveBlock1::default();
-    block.npc_objects = Some(snapshot(vec![youngster()]));
+    let block = SaveBlock1 {
+        npc_objects: Some(snapshot(vec![youngster()])),
+        ..SaveBlock1::default()
+    };
     let mut bytes = block.to_bytes(0);
     block.stamp_generation(&mut bytes, 0x0102_0304);
     assert_eq!(bytes[record(0) + 0x23], 0x04);
