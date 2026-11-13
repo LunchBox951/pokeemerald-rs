@@ -102,9 +102,20 @@ impl WaveData {
         self.logical_len
     }
 
-    /// Return whether the wave has no logically playable samples.
+    /// Return whether the stored buffer has no samples, guard included; this
+    /// is exactly `self.len() == 0`.
+    ///
+    /// A wave whose [`Self::logical_len`] is zero but which retains a guard
+    /// sample is not empty here; see [`Self::is_logically_empty`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Return whether the wave has no logically playable samples, that is
+    /// [`Self::logical_len`] is zero, even if a guard sample is retained.
+    #[must_use]
+    pub fn is_logically_empty(&self) -> bool {
         self.logical_len == 0
     }
 }
@@ -154,9 +165,34 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_logical_len_is_empty_even_with_a_retained_guard_sample() {
+    fn a_zero_logical_len_is_logically_empty_even_with_a_retained_guard_sample() {
         let w = WaveData::one_shot(1 << 20, vec![5]).with_logical_len(0);
-        assert!(w.is_empty());
+        assert!(w.is_logically_empty());
         assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn is_empty_agrees_with_len_for_a_guard_only_wave() {
+        let w = WaveData::one_shot(1 << 20, vec![5]).with_logical_len(0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w.is_empty(), w.samples().is_empty());
+        assert!(!w.is_empty());
+        assert!(w.is_logically_empty());
+    }
+
+    #[test]
+    fn an_empty_buffer_is_empty_and_logically_empty() {
+        let w = WaveData::one_shot(1 << 20, Vec::new());
+        assert_eq!(w.len(), 0);
+        assert!(w.is_empty());
+        assert!(w.is_logically_empty());
+        assert_eq!(w.is_empty(), w.samples().is_empty());
+    }
+
+    #[test]
+    fn a_wave_with_playable_samples_is_neither_empty_nor_logically_empty() {
+        let w = WaveData::one_shot(1 << 20, vec![0, 1, 2, 3]).with_logical_len(3);
+        assert!(!w.is_empty());
+        assert!(!w.is_logically_empty());
     }
 }
