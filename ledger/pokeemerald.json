@@ -31076,7 +31076,10 @@
     "src/data/region_map/region_map_layout.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "sRegionMap_MapSectionLayout (src/data/region_map/region_map_layout.h:1-17), the 28 by 15 grid (MAP_WIDTH 28, MAP_HEIGHT 15, src/region_map.c:41-42) read as [y][x] (src/region_map.c:965), transcribed to a typed grid of RegionMapSectionId with a checked column/row lookup that rejects out-of-range coordinates, and MAPSEC_NONE for cells with no location. Data only: the region-map screen, cursor movement and its MAPCURSOR offsets, zoom, the Fly map, map-section names, and region-map graphics are not ported.",
+      "rust_target": "crates/assets/src/region_map_layout.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/script_menu.h": {
       "category": "code.header",
