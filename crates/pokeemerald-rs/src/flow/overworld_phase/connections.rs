@@ -10,7 +10,8 @@
 use assets::MapHeaderTable;
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{
-    warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
+    warp_destination_position, warp_in_facing, ConnectedMapData, ConnectionCrossing, TilePos,
+    NUM_METATILES_IN_PRIMARY,
 };
 use engine::save::WarpData;
 use std::cell::OnceCell;
@@ -42,9 +43,17 @@ use super::{assert_scene_owns_map, OverworldPhase};
 /// `source` is the owning [`OverworldPhase`]'s own retained
 /// [`crate::pack_source::PackSource`], so this per-attempt memoized load
 /// honors the same pack pin every other phase-owned load does.
+///
+/// [`ConnectedMapData::carried_object_event_blocks`] asks `departed_objects`, the live set
+/// of the map the player is leaving, what a crossing would carry
+/// ([`ObjectEventCollection::carry_across_connection`]). The destination's fresh templates are
+/// left out on purpose: none has spawned, as `DoesObjectCollideWithObjectAt` scans only active
+/// objects (`src/event_object_movement.c:4724-4741`).
 pub(super) struct MapConnections<'a> {
     pub(super) pack: &'a OnceCell<assets::pack::AssetPack>,
     pub(super) source: crate::pack_source::PackSource,
+    pub(super) departed: assets::MapId,
+    pub(super) departed_objects: &'a ObjectEventCollection,
 }
 
 impl MapConnections<'_> {
@@ -99,6 +108,14 @@ impl ConnectedMapData for MapConnections<'_> {
             .attribute_at(metatile_id)?
             .ok()
             .map(|attribute| attribute.behavior)
+    }
+
+    fn carried_object_event_blocks(&self, crossing: ConnectionCrossing, elevation: u8) -> bool {
+        self.departed_objects
+            .carry_across_connection(self.departed, crossing.target, &[], crossing.shift)
+            .collision_objects_at(crossing.position.0, crossing.position.1, elevation)
+            .next()
+            .is_some()
     }
 }
 

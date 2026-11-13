@@ -21,9 +21,9 @@
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp, Direction, MapRuntime,
-    PlayerState, StepOutcome, WarpTrigger,
+    PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
-use engine::save::Coords16;
+use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
@@ -414,6 +414,7 @@ impl OverworldPhase {
         let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
         let stepped_onto = self.take_stepped_onto();
+        self.count_took_step(stepped_onto);
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
@@ -537,6 +538,8 @@ impl OverworldPhase {
         let maps = MapConnections {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
+            departed: self.map_id,
+            departed_objects: &self.object_events,
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check
@@ -605,6 +608,18 @@ impl OverworldPhase {
         // after any warp above, so this reflects the post-warp tile on the
         // frame a warp lands.
         self.sync_saved_position();
+    }
+
+    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
+    /// (`field_control_avatar.c:116-118`), ahead of
+    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
+    /// (`:155-163`), so a landing those then claim still counts.
+    /// [`Self::take_stepped_onto`] already withholds the forced landing and
+    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
+        if stepped_onto.is_some() {
+            self.save1.game_stats.increment(GameStat::Steps);
+        }
     }
 
     /// Mirrors the player's logical tile into the retained save state.
