@@ -422,37 +422,34 @@ fn a_moved_level_that_gained_contents_leaving_its_name_vacant_is_reported_as_vac
 
 #[cfg(unix)]
 #[test]
-fn a_level_that_cannot_be_listed_is_left_in_place_unmoved() {
+fn a_populated_level_without_owner_read_is_left_in_place_unmoved() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    // A level whose listing fails (here for want of read permission) is no
-    // verdict that it is empty: it is not moved into a quarantine.
+    // A level its owner cannot list (here for want of the read bit) is
+    // listed with that bit granted for the listing alone: one that holds
+    // entries is not moved into a quarantine, and is left at the mode it
+    // was found at.
     let dir = TempDir::new("undo-unlistable");
     let level = dir.join("new");
     let created = super::create_directories(&level).unwrap();
     fs::write(level.join("keep"), b"x").unwrap();
     fs::set_permissions(&level, fs::Permissions::from_mode(0o300)).unwrap();
-    let unreadable = fs::read_dir(&level).is_err();
     let mut stages = Vec::new();
     super::take_back::undo_created_directories_with_capture_hooks(
         &created,
         &mut || {},
         &mut |stage, _| stages.push(stage),
     );
+    let mode = fs::metadata(&level).unwrap().permissions().mode() & 0o7777;
     fs::set_permissions(&level, fs::Permissions::from_mode(0o755)).unwrap();
 
-    if unreadable {
-        assert!(stages.is_empty(), "the level was moved: {stages:?}");
-        assert!(level.join("keep").is_file());
-        assert_eq!(entry_names(&dir.path), ["new"], "no quarantine was made");
-    } else {
-        // A privileged user is not closed off by `0o300`, so the assertion
-        // cannot run; say so rather than pass vacuously.
-        eprintln!(
-            "a_level_that_cannot_be_listed_is_left_in_place_unmoved: \
-             skipped -- running privileged, 0o300 did not close the level off"
-        );
-    }
+    assert!(stages.is_empty(), "the level was moved: {stages:?}");
+    assert!(level.join("keep").is_file());
+    assert_eq!(entry_names(&dir.path), ["new"], "no quarantine was made");
+    assert_eq!(
+        mode, 0o300,
+        "the level was not left at the mode it was found at"
+    );
 }
 
 #[cfg(unix)]
