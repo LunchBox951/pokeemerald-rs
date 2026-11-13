@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.121.0] - 2026-11-12
 
-- The Bag's pocket arrows now show which way you can switch pockets, and the bag shakes as you move through its lists, as in the original game.
+- General improvements in preparation for the Bag screen's pocket arrows and list shake, as in the original game.
 
 ## [0.0.120.0] - 2026-11-11
 
@@ -182,8 +182,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.78.0] - 2026-10-27
 
-- The Bag now shows a TM or HM's move type, power, accuracy and PP while its menu is open.
-- The Bag now shows scroll arrows for long lists and lets you reorder items with SELECT.
+- General improvements in preparation for showing a TM or HM's move type, power, accuracy and PP in the Bag screen.
+- General improvements in preparation for scroll arrows on long Bag lists and reordering items with SELECT.
 
 ## [0.0.77.0] - 2026-10-27
 
