@@ -148,13 +148,111 @@ impl SpeciesIconPaletteRecord {
     }
 }
 
+/// A species-icon table that is not the shape upstream's tables give it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeciesIconSchemaError {
+    /// The encoded sheet table is not [`SPECIES_SHEETS_BYTES`] bytes.
+    SheetTableBytes {
+        /// Bytes found.
+        found: usize,
+    },
+    /// The sheet table does not hold [`SPECIES_SLOTS`] rows.
+    SheetTableRows {
+        /// Rows found.
+        found: usize,
+    },
+    /// A species row names a sheet the table never references: at or past
+    /// [`TABLE_SHEETS`].
+    SheetOutOfRange {
+        /// The species slot.
+        species: usize,
+        /// The sheet number it names.
+        sheet: u16,
+    },
+    /// The palette-index table is not [`SPECIES_SLOTS`] bytes.
+    PaletteIndexBytes {
+        /// Bytes found.
+        found: usize,
+    },
+    /// A species row names a palette bank at or past [`PALETTE_BANKS`].
+    PaletteIndexOutOfRange {
+        /// The species slot.
+        species: usize,
+        /// The bank number it names.
+        bank: u8,
+    },
+    /// The encoded palette-record table is not [`PALETTE_TABLE_BYTES`] bytes.
+    PaletteTableBytes {
+        /// Bytes found.
+        found: usize,
+    },
+    /// A palette record is not the one upstream declares at its position.
+    PaletteRecord {
+        /// The record's position.
+        index: u8,
+        /// The bank number the record carries.
+        bank: u16,
+        /// The tag the record carries.
+        tag: u16,
+    },
+}
+
+impl fmt::Display for SpeciesIconSchemaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::SheetTableBytes { found } => {
+                write!(
+                    f,
+                    "sheet table is {found} bytes: expected {SPECIES_SHEETS_BYTES}"
+                )
+            }
+            Self::SheetTableRows { found } => {
+                write!(
+                    f,
+                    "sheet table holds {found} species: expected {SPECIES_SLOTS}"
+                )
+            }
+            Self::SheetOutOfRange { species, sheet } => write!(
+                f,
+                "species {species} names sheet {sheet}: the table references sheets below \
+                 {TABLE_SHEETS}"
+            ),
+            Self::PaletteIndexBytes { found } => {
+                write!(
+                    f,
+                    "palette-index table is {found} bytes: expected {SPECIES_SLOTS}"
+                )
+            }
+            Self::PaletteIndexOutOfRange { species, bank } => write!(
+                f,
+                "species {species} names palette {bank}: only {PALETTE_BANKS} banks exist"
+            ),
+            Self::PaletteTableBytes { found } => {
+                write!(
+                    f,
+                    "palette table is {found} bytes: expected {PALETTE_TABLE_BYTES}"
+                )
+            }
+            Self::PaletteRecord { index, bank, tag } => write!(
+                f,
+                "palette record {index} is bank {bank} with tag {tag}: upstream declares bank \
+                 {index} with tag {}",
+                SpeciesIconPaletteRecord::declared(index).tag
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpeciesIconSchemaError {}
+
 /// Encode one sheet number per species slot.
 ///
 /// # Errors
 ///
-/// A description of the first fault: a table not [`SPECIES_SLOTS`] long, or a
-/// sheet number at or past [`TABLE_SHEETS`].
-pub fn encode_species_sheets(sheets: &[u16]) -> Result<Vec<u8>, String> {
+/// [`SpeciesIconSchemaError::SheetTableRows`] for a table not
+/// [`SPECIES_SLOTS`] long and [`SpeciesIconSchemaError::SheetOutOfRange`] for
+/// a sheet number at or past [`TABLE_SHEETS`].
+pub fn encode_species_sheets(sheets: &[u16]) -> Result<Vec<u8>, SpeciesIconSchemaError> {
     check_species_sheets(sheets)?;
     Ok(sheets
         .iter()
@@ -166,14 +264,11 @@ pub fn encode_species_sheets(sheets: &[u16]) -> Result<Vec<u8>, String> {
 ///
 /// # Errors
 ///
-/// As [`encode_species_sheets`], for a payload not [`SPECIES_SHEETS_BYTES`]
-/// long.
-pub fn decode_species_sheets(bytes: &[u8]) -> Result<Vec<u16>, String> {
+/// [`SpeciesIconSchemaError::SheetTableBytes`] for a payload not
+/// [`SPECIES_SHEETS_BYTES`] long, then as [`encode_species_sheets`].
+pub fn decode_species_sheets(bytes: &[u8]) -> Result<Vec<u16>, SpeciesIconSchemaError> {
     if bytes.len() != SPECIES_SHEETS_BYTES {
-        return Err(format!(
-            "is {} bytes: expected {SPECIES_SHEETS_BYTES}",
-            bytes.len()
-        ));
+        return Err(SpeciesIconSchemaError::SheetTableBytes { found: bytes.len() });
     }
     let sheets: Vec<u16> = bytes
         .chunks_exact(2)
@@ -183,18 +278,14 @@ pub fn decode_species_sheets(bytes: &[u8]) -> Result<Vec<u16>, String> {
     Ok(sheets)
 }
 
-fn check_species_sheets(sheets: &[u16]) -> Result<(), String> {
+fn check_species_sheets(sheets: &[u16]) -> Result<(), SpeciesIconSchemaError> {
     if sheets.len() != SPECIES_SLOTS {
-        return Err(format!(
-            "holds {} species: expected {SPECIES_SLOTS}",
-            sheets.len()
-        ));
+        return Err(SpeciesIconSchemaError::SheetTableRows {
+            found: sheets.len(),
+        });
     }
     match sheets.iter().enumerate().find(|(_, &s)| s >= TABLE_SHEETS) {
-        Some((species, sheet)) => Err(format!(
-            "names sheet {sheet} for species {species}: the table references sheets \
-             below {TABLE_SHEETS}"
-        )),
+        Some((species, &sheet)) => Err(SpeciesIconSchemaError::SheetOutOfRange { species, sheet }),
         None => Ok(()),
     }
 }
@@ -203,23 +294,23 @@ fn check_species_sheets(sheets: &[u16]) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// A description of the first fault: a table not [`SPECIES_SLOTS`] long, or a
-/// bank number at or past [`PALETTE_BANKS`].
-pub fn check_palette_indices(indices: &[u8]) -> Result<(), String> {
+/// [`SpeciesIconSchemaError::PaletteIndexBytes`] for a table not
+/// [`SPECIES_SLOTS`] long and [`SpeciesIconSchemaError::PaletteIndexOutOfRange`]
+/// for a bank number at or past [`PALETTE_BANKS`].
+pub fn check_palette_indices(indices: &[u8]) -> Result<(), SpeciesIconSchemaError> {
     if indices.len() != SPECIES_SLOTS {
-        return Err(format!(
-            "is {} bytes: expected {SPECIES_SLOTS}",
-            indices.len()
-        ));
+        return Err(SpeciesIconSchemaError::PaletteIndexBytes {
+            found: indices.len(),
+        });
     }
     match indices
         .iter()
         .enumerate()
         .find(|(_, &i)| i >= PALETTE_BANKS)
     {
-        Some((species, bank)) => Err(format!(
-            "names palette {bank} for species {species}: only {PALETTE_BANKS} banks exist"
-        )),
+        Some((species, &bank)) => {
+            Err(SpeciesIconSchemaError::PaletteIndexOutOfRange { species, bank })
+        }
         None => Ok(()),
     }
 }
@@ -239,31 +330,25 @@ pub fn encode_palette_table() -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// A description of the first fault: a payload not [`PALETTE_TABLE_BYTES`]
-/// long, or a record that is not the one upstream declares at its position.
+/// [`SpeciesIconSchemaError::PaletteTableBytes`] for a payload not
+/// [`PALETTE_TABLE_BYTES`] long and [`SpeciesIconSchemaError::PaletteRecord`]
+/// for a record that is not the one upstream declares at its position.
 pub fn decode_palette_table(
     bytes: &[u8],
-) -> Result<[SpeciesIconPaletteRecord; PALETTE_RECORDS], String> {
+) -> Result<[SpeciesIconPaletteRecord; PALETTE_RECORDS], SpeciesIconSchemaError> {
     if bytes.len() != PALETTE_TABLE_BYTES {
-        return Err(format!(
-            "is {} bytes: expected {PALETTE_TABLE_BYTES}",
-            bytes.len()
-        ));
+        return Err(SpeciesIconSchemaError::PaletteTableBytes { found: bytes.len() });
     }
     let mut records = [SpeciesIconPaletteRecord::declared(0); PALETTE_RECORDS];
     for ((index, chunk), slot) in (0..PALETTE_RECORDS_U8)
         .zip(bytes.chunks_exact(PALETTE_RECORD_BYTES))
         .zip(&mut records)
     {
-        let source = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let bank = u16::from_le_bytes([chunk[0], chunk[1]]);
         let tag = u16::from_le_bytes([chunk[2], chunk[3]]);
         let declared = SpeciesIconPaletteRecord::declared(index);
-        if u8::try_from(source) != Ok(index) || tag != declared.tag {
-            return Err(format!(
-                "record {index} is bank {source} with tag {tag}: upstream declares bank \
-                 {index} with tag {}",
-                declared.tag
-            ));
+        if u8::try_from(bank) != Ok(index) || tag != declared.tag {
+            return Err(SpeciesIconSchemaError::PaletteRecord { index, bank, tag });
         }
         *slot = declared;
     }
@@ -273,6 +358,8 @@ pub fn decode_palette_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type Fault = fn(&mut Vec<u8>);
 
     #[test]
     fn sheet_ids_stop_at_the_declared_sheets() {
@@ -298,19 +385,32 @@ mod tests {
         let bytes = encode_species_sheets(&sheets).unwrap();
         assert_eq!(bytes.len(), 880);
         assert_eq!(decode_species_sheets(&bytes).unwrap(), sheets);
-        assert!(decode_species_sheets(&bytes[..879]).is_err());
+        assert_eq!(
+            decode_species_sheets(&bytes[..879]),
+            Err(SpeciesIconSchemaError::SheetTableBytes { found: 879 })
+        );
         let mut long = bytes.clone();
         long.push(0);
-        assert!(decode_species_sheets(&long).is_err());
+        assert_eq!(
+            decode_species_sheets(&long),
+            Err(SpeciesIconSchemaError::SheetTableBytes { found: 881 })
+        );
         for bad in [TABLE_SHEETS, SPEED_WIDE_SHEET, u16::MAX] {
+            let fault = SpeciesIconSchemaError::SheetOutOfRange {
+                species: 439,
+                sheet: bad,
+            };
             let mut table = sheets.clone();
             table[439] = bad;
-            assert!(encode_species_sheets(&table).is_err());
+            assert_eq!(encode_species_sheets(&table), Err(fault));
             let mut raw = bytes.clone();
             raw[878..880].copy_from_slice(&bad.to_le_bytes());
-            assert!(decode_species_sheets(&raw).is_err());
+            assert_eq!(decode_species_sheets(&raw), Err(fault));
         }
-        assert!(encode_species_sheets(&sheets[..439]).is_err());
+        assert_eq!(
+            encode_species_sheets(&sheets[..439]),
+            Err(SpeciesIconSchemaError::SheetTableRows { found: 439 })
+        );
     }
 
     #[test]
@@ -319,9 +419,18 @@ mod tests {
         check_palette_indices(&indices).unwrap();
         for bad in [3, 255] {
             indices[0] = bad;
-            assert!(check_palette_indices(&indices).is_err());
+            assert_eq!(
+                check_palette_indices(&indices),
+                Err(SpeciesIconSchemaError::PaletteIndexOutOfRange {
+                    species: 0,
+                    bank: bad
+                })
+            );
         }
-        assert!(check_palette_indices(&indices[..439]).is_err());
+        assert_eq!(
+            check_palette_indices(&indices[..439]),
+            Err(SpeciesIconSchemaError::PaletteIndexBytes { found: 439 })
+        );
     }
 
     #[test]
@@ -333,15 +442,70 @@ mod tests {
             assert_eq!(record.tag, 56000 + u16::from(index));
             assert_eq!(record.bank, (index < 3).then_some(index));
         }
-        for fault in [
-            |b: &mut Vec<u8>| b[0] = 1,
-            |b: &mut Vec<u8>| b[2] = 0,
-            |b: &mut Vec<u8>| b[20] = 9,
-            |b: &mut Vec<u8>| b.truncate(20),
-        ] {
+        let faults: [(Fault, SpeciesIconSchemaError); 4] = [
+            (
+                |b| b[0] = 1,
+                SpeciesIconSchemaError::PaletteRecord {
+                    index: 0,
+                    bank: 1,
+                    tag: 56000,
+                },
+            ),
+            (
+                |b| b[2] = 0,
+                SpeciesIconSchemaError::PaletteRecord {
+                    index: 0,
+                    bank: 0,
+                    tag: 0xDA00,
+                },
+            ),
+            (
+                |b| b[20] = 9,
+                SpeciesIconSchemaError::PaletteRecord {
+                    index: 5,
+                    bank: 9,
+                    tag: 56005,
+                },
+            ),
+            (
+                |b| b.truncate(20),
+                SpeciesIconSchemaError::PaletteTableBytes { found: 20 },
+            ),
+        ];
+        for (fault, expected) in faults {
             let mut bytes = encode_palette_table();
             fault(&mut bytes);
-            assert!(decode_palette_table(&bytes).is_err());
+            assert_eq!(decode_palette_table(&bytes), Err(expected));
+        }
+    }
+
+    #[test]
+    fn every_schema_fault_names_what_it_found() {
+        let rendered = [
+            SpeciesIconSchemaError::SheetTableBytes { found: 879 },
+            SpeciesIconSchemaError::SheetTableRows { found: 439 },
+            SpeciesIconSchemaError::SheetOutOfRange {
+                species: 3,
+                sheet: 415,
+            },
+            SpeciesIconSchemaError::PaletteIndexBytes { found: 439 },
+            SpeciesIconSchemaError::PaletteIndexOutOfRange {
+                species: 3,
+                bank: 7,
+            },
+            SpeciesIconSchemaError::PaletteTableBytes { found: 23 },
+            SpeciesIconSchemaError::PaletteRecord {
+                index: 4,
+                bank: 1,
+                tag: 56004,
+            },
+        ]
+        .map(|error| error.to_string());
+        for (text, needle) in rendered
+            .iter()
+            .zip(["879", "439", "415", "439", "7", "23", "56004"])
+        {
+            assert!(text.contains(needle), "{text}");
         }
     }
 }

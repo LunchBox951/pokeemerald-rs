@@ -122,9 +122,9 @@ pub(super) fn extract_species_icons(
         )?);
     }
     let sheets = encode_species_sheets(&inventory.species_sheets)
-        .map_err(|detail| mismatch(&tables_path, detail))?;
+        .map_err(|error| mismatch(&tables_path, error.to_string()))?;
     check_palette_indices(&inventory.palette_indices)
-        .map_err(|detail| mismatch(&tables_path, detail))?;
+        .map_err(|error| mismatch(&tables_path, error.to_string()))?;
     for entry in entries {
         writer.push(entry);
     }

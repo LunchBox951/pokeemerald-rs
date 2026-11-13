@@ -135,12 +135,12 @@ fn read_tables(ctx: &Context<'_>) -> Result<Tables, GenRomProfileError> {
         reason,
     };
     let species_sheets = decode_species_sheets(ctx.pack.raw_payload(SPECIES_SHEETS_ID)?)
-        .map_err(|reason| shape(SPECIES_SHEETS_ID, reason))?;
+        .map_err(|error| shape(SPECIES_SHEETS_ID, error.to_string()))?;
     let palette_indices = ctx.pack.raw_payload(PALETTE_INDICES_ID)?.to_vec();
     assets::species_icons::check_palette_indices(&palette_indices)
-        .map_err(|reason| shape(PALETTE_INDICES_ID, reason))?;
+        .map_err(|error| shape(PALETTE_INDICES_ID, error.to_string()))?;
     let records = ctx.pack.raw_payload(PALETTE_TABLE_ID)?;
-    decode_palette_table(records).map_err(|reason| shape(PALETTE_TABLE_ID, reason))?;
+    decode_palette_table(records).map_err(|error| shape(PALETTE_TABLE_ID, error.to_string()))?;
     if records != encode_palette_table() {
         return Err(shape(
             PALETTE_TABLE_ID,

@@ -91,8 +91,12 @@ impl AssetPack {
     pub fn species_icon_palette_records(
         &self,
     ) -> Result<[SpeciesIconPaletteRecord; PALETTE_RECORDS], PackError> {
-        decode_palette_table(self.raw(PALETTE_TABLE_ID)?)
-            .map_err(|detail| malformed(PALETTE_TABLE_ID.to_owned(), detail))
+        decode_palette_table(self.raw(PALETTE_TABLE_ID)?).map_err(|error| {
+            malformed(
+                PALETTE_TABLE_ID.to_owned(),
+                format!("is malformed: {error}"),
+            )
+        })
     }
 
     /// The sheet `gMonIconTable` assigns to `species`.
@@ -106,8 +110,12 @@ impl AssetPack {
         &self,
         species: SpeciesId,
     ) -> Result<SpeciesIconSheetId, PackError> {
-        let sheets = decode_species_sheets(self.raw(SPECIES_SHEETS_ID)?)
-            .map_err(|detail| malformed(SPECIES_SHEETS_ID.to_owned(), detail))?;
+        let sheets = decode_species_sheets(self.raw(SPECIES_SHEETS_ID)?).map_err(|error| {
+            malformed(
+                SPECIES_SHEETS_ID.to_owned(),
+                format!("is malformed: {error}"),
+            )
+        })?;
         let slot = usize::from(species.index());
         let sheet = *sheets
             .get(slot)
@@ -127,8 +135,12 @@ impl AssetPack {
     /// As [`AssetPack::species_icon_sheet_id`], for the palette-index table.
     pub fn species_icon_palette_index(&self, species: SpeciesId) -> Result<u8, PackError> {
         let indices = self.raw(PALETTE_INDICES_ID)?;
-        check_palette_indices(indices)
-            .map_err(|detail| malformed(PALETTE_INDICES_ID.to_owned(), detail))?;
+        check_palette_indices(indices).map_err(|error| {
+            malformed(
+                PALETTE_INDICES_ID.to_owned(),
+                format!("is malformed: {error}"),
+            )
+        })?;
         let slot = usize::from(species.index());
         indices
             .get(slot)
