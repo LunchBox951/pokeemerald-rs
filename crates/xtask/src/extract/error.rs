@@ -245,6 +245,13 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A species-icon source differs from its upstream declaration's shape.
+    SpeciesIconAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag source differs from its upstream graphic's shape.
     BagAssetMismatch {
         /// Source path.
@@ -523,6 +530,9 @@ impl fmt::Display for ExtractError {
             }
             Self::PartyMenuAssetMismatch { path, detail } => {
                 write!(f, "party-menu asset `{}` {detail}", path.display())
+            }
+            Self::SpeciesIconAssetMismatch { path, detail } => {
+                write!(f, "species-icon asset `{}` {detail}", path.display())
             }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())

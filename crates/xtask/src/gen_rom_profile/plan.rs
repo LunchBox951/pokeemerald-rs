@@ -651,6 +651,21 @@ pub struct PartyMenuPlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The party-mon icons, owned.
+#[derive(Debug, Clone)]
+pub struct SpeciesIconPlan {
+    /// `gMonIconTable`.
+    pub sheet_table: u32,
+    /// `gMonIconPaletteTable`.
+    pub palette_table: u32,
+    /// `species-icon/raw/palette-indices`.
+    pub palette_indices: BlobPlan,
+    /// Every `species-icon/image/*` root, in sheet-number order.
+    pub sheets: Vec<ImagePlan>,
+    /// The three `species-icon/palette/*` banks.
+    pub palettes: Vec<PalettePlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -696,6 +711,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
+    /// The party-mon icon sheets, palette banks, and tables.
+    pub species_icons: SpeciesIconPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.

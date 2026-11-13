@@ -134,6 +134,7 @@ mod pokedex;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
+mod species_icons;
 mod sprites;
 mod starter_chooser;
 mod text_source;
@@ -236,6 +237,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    species_icons::extract_species_icons(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

@@ -39,6 +39,7 @@ pub(crate) mod opening_scene;
 pub(crate) mod party_menu;
 pub(crate) mod poke_ball;
 pub(crate) mod song;
+pub(crate) mod species_icons;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
 pub(crate) mod text_window;
@@ -84,6 +85,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     naming_screen::write,
     party_menu::write,
     poke_ball::write,
+    species_icons::write,
     trainer_front::write,
     trainer_battlers::write,
 ];

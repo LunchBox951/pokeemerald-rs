@@ -9,14 +9,15 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, poke_ball, species_icons, sprites, starter_chooser, text_window,
+    tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
-    party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS,
-    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    party_menu_ids, poke_ball_ids, species_icon_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
     TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
@@ -59,6 +60,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
+        .chain(species_icon_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -101,6 +103,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             naming_screen::locate(ctx, &mut report).map(|_| ())
         } else if domain == "party_menu" {
             party_menu::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "species_icons" {
+            species_icons::locate(ctx, &mut report).map(|_| ())
         } else if domain == "interface" {
             interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
@@ -166,6 +170,7 @@ fn the_fixed_inventory_ids_are_unique() {
         naming_screen_ids(),
         party_menu_ids(),
         poke_ball_ids(),
+        species_icon_ids(),
         trainer_battler_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -565,6 +570,49 @@ fn a_surplus_party_menu_entry_is_refused_by_id() {
         );
         let mut report = Vec::new();
         let err = party_menu::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_species_icon_inventory_is_417_sheets_three_banks_and_three_tables() {
+    let ids = species_icon_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 423);
+    assert_eq!(count("species-icon/image/"), 417);
+    assert_eq!(count("species-icon/palette/"), 3);
+    assert_eq!(count("species-icon/raw/"), 3);
+}
+
+#[test]
+fn a_pack_missing_a_species_icon_entry_is_refused() {
+    for id in species_icon_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "species_icons");
+    }
+}
+
+#[test]
+fn a_surplus_species_icon_entry_is_refused_by_id() {
+    // One past the 417 declared sheets.
+    let surplus = "species-icon/image/417";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-species-icon", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = species_icons::locate(ctx, &mut report)
             .map(|_| ())
             .unwrap_err();
         assert!(

@@ -17,6 +17,7 @@ use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
+use super::species_icons::pack_ids as species_icon_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
 pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;
@@ -729,6 +730,12 @@ pub(crate) fn evolution_scene_ids() -> Vec<String> {
 /// palettes, and eight maps.
 pub(crate) fn party_menu_ids() -> Vec<String> {
     party_menu_pack_ids()
+}
+
+/// Every `species-icon/` pack id extraction emits: 417 sheets, three palette
+/// banks and three tables.
+pub(crate) fn species_icon_ids() -> Vec<String> {
+    species_icon_pack_ids()
 }
 
 /// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its

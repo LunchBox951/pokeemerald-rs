@@ -160,6 +160,14 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A species-icon entry differs from the upstream icon data's shape, or a
+    /// species or sheet number lies outside the tables.
+    MalformedSpeciesIconAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battle-effect sprite entry differs from the upstream graphic's shape.
     MalformedBattleEffectAsset {
         /// Asset id.
@@ -368,6 +376,9 @@ impl fmt::Display for PackError {
             Self::MalformedPartyMenuAsset { id, detail } => {
                 write!(f, "asset pack: party-menu entry `{id}` {detail}")
             }
+            Self::MalformedSpeciesIconAsset { id, detail } => {
+                write!(f, "asset pack: species-icon entry `{id}` {detail}")
+            }
             Self::MalformedBattleEffectAsset { id, detail } => {
                 write!(f, "asset pack: battle-effect entry `{id}` {detail}")
             }
@@ -462,6 +473,7 @@ impl std::error::Error for PackError {
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedPartyMenuAsset { .. }
+            | Self::MalformedSpeciesIconAsset { .. }
             | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
             | Self::MalformedBagAsset { .. }
