@@ -188,12 +188,15 @@ fn the_next_message_starts_with_its_own_frames_button_edges() {
     submit(
         &mut layer,
         &fixture,
-        &[message::WAIT_FOR_PRESS, message::AB],
+        &[message::WAIT_FOR_PRESS, message::WAIT_FOR_PRESS],
     );
     run(&mut layer, &[NONE, NONE, NONE]);
-    // The press that releases the wait is frame 4's; the message ends on
-    // frame 6, and the press is not reused for the next message's prompt.
-    let ticks = run(&mut layer, &[B_PRESS, NONE, NONE, NONE]);
+    // The press that releases the first wait is frame 4's; the first message
+    // ends on frame 6, and the press is not reused for the second prompt.
+    let ticks = run(
+        &mut layer,
+        &[B_PRESS, NONE, NONE, NONE, NONE, NONE, B_PRESS, NONE],
+    );
 
-    assert_eq!(trace(&ticks), "!GFG");
+    assert_eq!(trace(&ticks), "!GFG??!G");
 }
