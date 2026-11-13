@@ -21427,6 +21427,14 @@
       "status": "pending"
     },
     "include/constants/easy_chat.h": {
+      "artifacts": {
+        "EC_WORD_GREETINGS": {
+          "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat_greetings::GreetingsWordIndex. The group id and every other group's words are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -21838,6 +21846,14 @@
       "status": "pending"
     },
     "include/easy_chat.h": {
+      "artifacts": {
+        "EasyChatWordInfo": {
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91): text, alphabeticalOrder and enabled are the fields of assets::easy_chat_greetings::GreetingsWord, with the u8 pointer as a charmap-notation str, the ints as a typed GreetingsWordIndex and a bool. Other users of the struct (the group table in easy_chat_groups.h) are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29946,7 +29962,10 @@
     "src/data/easy_chat/easy_chat_group_greetings.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEasyChatGroup_Greetings (src/data/easy_chat/easy_chat_group_greetings.h:44-297) and the 42 gEasyChatWord_* texts (lines 1-42) extracted to assets::easy_chat_greetings::GreetingsGroup keyed by GreetingsWordIndex (EC_WORD_THANKS..EC_WORD_COUNT_ON, include/constants/easy_chat.h:261-302): text, alphabeticalOrder permutation and the enabled flag per row; all 42 words are enabled upstream. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
+      "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/easy_chat/easy_chat_group_hobbies.h": {
       "category": "code.header",
