@@ -291,6 +291,10 @@ impl OverworldPhase {
             current_elevation: self.player.elevation(),
             previous_elevation: self.player.previous_elevation(),
         };
+        // `SaveObjectEvents` (`src/load_save.c:180-186`) copies every object slot; a map holding
+        // more active objects than the array has slots (or a tile no `s16` holds) saves none, and
+        // a continue seeds the templates.
+        self.save1.npc_objects = super::saved_objects::capture(self.map_id, &self.object_events);
     }
 }
 

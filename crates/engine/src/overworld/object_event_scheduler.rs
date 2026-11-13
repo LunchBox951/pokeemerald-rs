@@ -171,7 +171,7 @@ impl ObjectEventCollection {
 
     /// The lowest slot no active entry holds: the first index at which the sorted held slots
     /// stop counting up from zero.
-    fn lowest_free_sprite_slot(&self) -> usize {
+    pub(super) fn lowest_free_sprite_slot(&self) -> usize {
         let mut held: Vec<usize> = self
             .entries
             .iter()
@@ -184,7 +184,7 @@ impl ObjectEventCollection {
             .count()
     }
 
-    fn active_indices_in_sprite_slot_order(&self) -> Vec<usize> {
+    pub(super) fn active_indices_in_sprite_slot_order(&self) -> Vec<usize> {
         let mut active: Vec<(usize, usize)> = self
             .entries
             .iter()

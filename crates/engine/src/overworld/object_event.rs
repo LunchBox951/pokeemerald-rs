@@ -21,7 +21,7 @@ use crate::event_data::EventData;
 mod live_object_events;
 pub use live_object_events::{
     collision_in_direction, FrameContext, LiveObjectEvent, MovementRange, NpcCollision,
-    ObjectEventCollection, Occupant,
+    ObjectEventCollection, Occupant, SavedLiveObject,
 };
 
 #[path = "object_event_motion.rs"]
@@ -265,6 +265,26 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
     }
 }
 
+/// What a save records of an active object's [`ObjectEventState`] (`SaveObjectEvents`,
+/// `load_save.c:180-186`): everything the field scheduler and a script can have changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavedLiveState {
+    /// The current tile.
+    pub position: TilePos,
+    /// The tile occupied before the latest walk.
+    pub previous_position: TilePos,
+    /// `currentElevation`.
+    pub elevation: u8,
+    /// `previousElevation`.
+    pub previous_elevation: u8,
+    /// `facingDirection`.
+    pub facing: Direction,
+    /// The current movement type.
+    pub movement_type: MovementType,
+    /// `initialCoords`, the template tile the object was spawned for.
+    pub initial: TilePos,
+}
+
 /// Mutable position, previous-position, elevation, facing, and movement state copied from an
 /// object-event template.
 ///
@@ -452,6 +472,22 @@ impl ObjectEventState {
         self.previous_elevation = self.template_elevation;
         self.movement_type = self.template_movement_type;
         self.facing = initial_facing_direction(self.template_movement_type);
+        self.step = None;
+    }
+
+    /// Puts back the live state a save recorded for an active object: both tiles, both
+    /// elevations, facing, and the current movement type, as `LoadObjectEvents` copies them
+    /// into `gObjectEvents` (`load_save.c:188-194`). Nothing the object was mid-way through
+    /// survives, since `ReturnToField` recreates its sprite and clears its movement
+    /// (`event_object_movement.c:1769-1809`, `:4895-4901`); the template snapshots, which a
+    /// respawn reads, are kept.
+    pub const fn restore_live(&mut self, saved: &SavedLiveState) {
+        self.position = saved.position;
+        self.previous_position = saved.previous_position;
+        self.elevation = saved.elevation;
+        self.previous_elevation = saved.previous_elevation;
+        self.facing = saved.facing;
+        self.movement_type = saved.movement_type;
         self.step = None;
     }
 

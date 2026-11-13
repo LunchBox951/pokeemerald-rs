@@ -57,6 +57,7 @@ mod live_battle_text;
 mod object_events;
 mod placement;
 mod route103_rival_trigger;
+mod saved_objects;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
@@ -632,7 +633,10 @@ impl OverworldPhase {
             placement::saved_cell_elevation(&scene, position),
             tile_elevation,
         );
-        let object_events = connections::seed_object_events(&scene);
+        // An ordinary continue puts back the objects the save held; only a save without a
+        // snapshot of this map seeds the templates (and is admitted below).
+        let object_events =
+            saved_objects::restore_or_seed(&scene, map_id, block1.npc_objects.as_ref(), position);
         let mut phase = Self {
             scene,
             player: PlayerState::with_saved_elevations(

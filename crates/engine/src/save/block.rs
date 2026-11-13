@@ -40,6 +40,7 @@
 
 use super::bag::{Bag, BAG_LEN};
 use super::game_stats::GameStats;
+use super::npc_objects::SavedNpcObjects;
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
 use crate::overworld::ELEVATION_MULTI_LEVEL;
@@ -97,9 +98,9 @@ const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
 // `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
 const GAME_STATS_OFFSET: usize = 0x159C;
-const OBJECT_EVENTS_OFFSET: usize = 0xA30;
-const OBJECT_EVENT_LEN: usize = 0x24;
-const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
+pub(super) const OBJECT_EVENTS_OFFSET: usize = 0xA30;
+pub(super) const OBJECT_EVENT_LEN: usize = 0x24;
+pub(super) const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
 // Reset clears every slot, then local initialization spawns the player before
 // map objects; first-inactive allocation therefore assigns slot 0
 // (event_object_movement.c:1199-1204,1358-1375; overworld.c:2163-2177).
@@ -109,7 +110,7 @@ const PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + OBJECT_EVENT_DIRECTIONS_OFFSET;
 // `ObjectEvent`'s packed `currentElevation:4` / `previousElevation:4` byte
 // (include/global.fieldmap.h:232-233).
-const OBJECT_EVENT_ELEVATIONS_OFFSET: usize = 0x0B;
+pub(super) const OBJECT_EVENT_ELEVATIONS_OFFSET: usize = 0x0B;
 const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_ELEVATIONS_OFFSET;
@@ -117,7 +118,7 @@ const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
 // (include/global.fieldmap.h:196).
 const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
-const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
+pub(super) const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 // The top bit of `ObjectEvent`'s third bitfield byte, inside the
 // `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:224).
 // Only this port's writer sets it. Set, it is the strong signal that the
@@ -125,7 +126,7 @@ const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 // only by the pristine-upstream rule ([`pristine_upstream_player_object`]).
 const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
-const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
+pub(super) const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
 // The whole `u32 padding:4` field: the high nibble of the third bitfield byte
 // (include/global.fieldmap.h:224). Upstream never writes it, so a real
 // upstream record reads zero here.
@@ -135,26 +136,26 @@ const OBJECT_EVENT_PADDING_MASK: u8 = 0xF0;
 // `InitPlayerAvatar` (field_player_avatar.c:1401).
 const PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x02;
-const OBJECT_EVENT_IS_PLAYER_BIT: u8 = 0x01;
+pub(super) const OBJECT_EVENT_IS_PLAYER_BIT: u8 = 0x01;
 // `ObjectEvent::currentCoords` (include/global.fieldmap.h:235), map-local plus
 // `MAP_OFFSET` (include/fieldmap.h:18), as upstream keeps it against
 // `SaveBlock1::pos`. Written from `pos` with the elevation pair, so a writer
 // that moves `pos` but preserves the entry leaves the two disagreeing.
-const OBJECT_EVENT_CURRENT_COORDS_OFFSET: usize = 0x10;
+pub(super) const OBJECT_EVENT_CURRENT_COORDS_OFFSET: usize = 0x10;
 const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
-const MAP_OFFSET: i16 = 7;
+pub(super) const MAP_OFFSET: i16 = 7;
 // `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
 // the model never reads and an earlier port writer never touched, reused to hold
 // the save counter of the write that stored the pair. Every writer advances
 // the counter, so a save by a build that does not stamp it leaves a stale one.
-const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
+pub(super) const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
 const PLAYER_OBJECT_EVENT_GENERATION_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_INITIAL_COORDS_OFFSET;
-const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
-const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
+pub(super) const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
+pub(super) const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
 const SERIALIZED_U32_LEN: usize = std::mem::size_of::<u32>();
 const SAVE_BLOCK1_FULL_SECTOR_COUNT: usize = 3;
@@ -219,9 +220,9 @@ fn object_event_coords(pos: Coords16) -> Coords16 {
 impl Coords16 {
     const X_OFFSET: usize = 0;
     const Y_OFFSET: usize = Self::X_OFFSET + SERIALIZED_U16_LEN;
-    const LEN: usize = Self::Y_OFFSET + SERIALIZED_U16_LEN;
+    pub(super) const LEN: usize = Self::Y_OFFSET + SERIALIZED_U16_LEN;
 
-    fn to_bytes(self) -> [u8; Self::LEN] {
+    pub(super) fn to_bytes(self) -> [u8; Self::LEN] {
         let mut out = [0u8; Self::LEN];
         out[Self::X_OFFSET..Self::X_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&self.x.to_le_bytes());
@@ -680,6 +681,10 @@ pub struct SaveBlock1 {
     pub event_data: EventData,
     /// Saved directions from the player object entry.
     pub player_object_event: SavedObjectEvent,
+    /// The active non-player objects saved in `objectEvents` slots 1 to 15
+    /// ([`SavedNpcObjects`]); `None` when the save holds no snapshot of this port's
+    /// (a legacy or foreign write), so the map's templates are seeded instead.
+    pub npc_objects: Option<SavedNpcObjects>,
     /// Plaintext `gameStats` counters.
     pub game_stats: GameStats,
 }
@@ -698,6 +703,7 @@ impl Default for SaveBlock1 {
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
+            npc_objects: None,
             game_stats: GameStats::default(),
         }
     }
@@ -711,6 +717,7 @@ impl SaveBlock1 {
             bytes[PLAYER_OBJECT_EVENT_GENERATION_OFFSET..][..SERIALIZED_U32_LEN]
                 .copy_from_slice(&counter.to_le_bytes());
         }
+        SavedNpcObjects::stamp(self.npc_objects.as_ref(), bytes, counter);
     }
 
     /// Withdraws trust in a marked saved elevation pair unless the stamp in
@@ -724,6 +731,9 @@ impl SaveBlock1 {
         let marked = bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0;
         if marked && read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
             self.player_object_event.active = false;
+        }
+        if SavedNpcObjects::is_stale(bytes, counter) {
+            self.npc_objects = None;
         }
     }
 
@@ -782,6 +792,7 @@ impl SaveBlock1 {
             base[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
                 .copy_from_slice(&object_event_coords(self.pos).to_bytes());
         }
+        SavedNpcObjects::patch(self.npc_objects.as_ref(), base);
     }
 
     /// Decodes modeled fields and decrypts money and bag quantities.
@@ -836,6 +847,7 @@ impl SaveBlock1 {
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
             .with_active(trusted_player_object(bytes, pos)),
+            npc_objects: SavedNpcObjects::from_bytes(bytes),
         })
     }
 }
@@ -899,7 +911,7 @@ fn write_warp(out: &mut [u8], offset: usize, warp: WarpData) {
         .copy_from_slice(&bytes[WarpData::Y_OFFSET..WarpData::Y_OFFSET + SERIALIZED_U16_LEN]);
 }
 
-fn read_i16(bytes: &[u8], offset: usize) -> i16 {
+pub(super) fn read_i16(bytes: &[u8], offset: usize) -> i16 {
     i16::from_le_bytes([bytes[offset], bytes[offset + 1]])
 }
 
@@ -907,7 +919,7 @@ fn read_u16(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+pub(super) fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes([
         bytes[offset],
         bytes[offset + 1],
@@ -1404,9 +1416,12 @@ mod tests {
                 block.patch_bytes(base, key);
             },
             // The player object's first byte shares `active` (bit 0) with
-            // unmodeled bitfields, which patching preserves.
+            // unmodeled bitfields, which patching preserves. The first non-player
+            // object's third bitfield byte likewise shares the snapshot marker
+            // (`npc_objects`' tests check it, and its sibling bits, at bit level).
             &[
                 PLAYER_OBJECT_EVENT_ACTIVE_OFFSET,
+                PLAYER_OBJECT_EVENT_ACTIVE_OFFSET + OBJECT_EVENT_LEN + 0x03,
                 PLAYER_OBJECT_EVENT_MARKER_OFFSET,
                 PLAYER_OBJECT_EVENT_COORDS_OFFSET,
                 PLAYER_OBJECT_EVENT_COORDS_OFFSET + 1,

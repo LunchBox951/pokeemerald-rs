@@ -20,13 +20,17 @@ use assets::{MapId, ObjectEvent};
 
 use crate::overworld::collision::elevations_compatible;
 
-use super::ObjectEventState;
+use super::{ObjectEventState, SavedLiveState};
 use crate::overworld::player::TilePos;
 
 #[path = "object_event_scheduler.rs"]
 mod scheduler;
 pub use scheduler::FrameContext;
 use scheduler::Lifecycle;
+
+#[path = "object_event_saved.rs"]
+mod saved;
+pub use saved::SavedLiveObject;
 
 #[path = "object_event_collision.rs"]
 mod object_collision;
