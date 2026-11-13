@@ -126,10 +126,15 @@ impl OverworldPhase {
         buttons: ButtonState,
     ) -> Option<SightTrainerOutcome> {
         let approach = self.sight_approach.as_ref()?;
-        let (stage, local_id) = (approach.stage, approach.local_id);
+        let (stage, local_id, carried_from) =
+            (approach.stage, approach.local_id, approach.carried_from);
         let player_was_moving = self.player.in_transit();
         self.tick_player_under_approach_lock();
-        if self.object_events.get(local_id).is_none() {
+        // A local id names an object only within its own map, so the entry
+        // is `(carried_from, local_id)`, never the bare id: the entered map
+        // may declare a namesake (`GetObjectEventIdByLocalIdAndMap`,
+        // `event_object_movement.c:1263-1285`).
+        if self.object_events.find(carried_from, local_id).is_none() {
             return Some(self.cancel_approach_without_trainer(local_id, stage));
         }
         match stage {
@@ -146,7 +151,7 @@ impl OverworldPhase {
                 let player_position = self.player.position();
                 if let (Some(approach), Some(live)) = (
                     &mut self.sight_approach,
-                    self.object_events.get_mut(local_id),
+                    self.object_events.find_mut(carried_from, local_id),
                 ) {
                     let scene = &self.scene;
                     approach.advance_movement(live.state_mut(), player_position, |state| {
@@ -169,7 +174,7 @@ impl OverworldPhase {
                 }
                 if let (Some(approach), Some(live)) = (
                     &mut self.sight_approach,
-                    self.object_events.get_mut(local_id),
+                    self.object_events.find_mut(carried_from, local_id),
                 ) {
                     let facing = approach.stop_facing_player(live.state_mut());
                     // `CancelPlayerForcedMovement` never clears
@@ -374,6 +379,7 @@ impl OverworldPhase {
             engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
         self.sight_approach = Some(SightApproach::new(
             templates[0].local_id,
+            None,
             1,
             "Whoa!",
             battle,

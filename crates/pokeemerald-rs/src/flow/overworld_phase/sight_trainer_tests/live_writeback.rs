@@ -336,3 +336,91 @@ fn real_pack_the_stopped_trainer_is_drawn_where_he_stopped_after_the_battle() {
         "a south-facing standing frame is not flipped"
     );
 }
+
+/// A local id names an object only within its own map
+/// (`GetObjectEventIdByLocalIdAndMap`, `event_object_movement.c:1263-1285`).
+/// A sight trainer carried across a connection into a map that declares an
+/// object with the same local id is still the one that walks: the namesake,
+/// first in the entered map's declaration order, stays where it stands.
+#[test]
+fn an_approach_walks_the_carried_trainer_and_not_the_entered_maps_namesake() {
+    const DEPARTED: assets::MapId = assets::MapId("MAP_ROUTE104");
+    const LOCAL_ID: u8 = 1;
+    let object = |x: i16, y: i16, trainer_type: assets::TrainerType| assets::ObjectEvent {
+        local_id: LOCAL_ID,
+        graphics_id: "OBJ_EVENT_GFX_HIKER",
+        x,
+        y,
+        elevation: 3,
+        movement_type: engine::overworld::trainer_facing_movement_type(Direction::South),
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type,
+        trainer_sight_or_berry_tree_id: "0",
+        script: None,
+        flag: "0",
+    };
+    let departed_templates: &'static [assets::ObjectEvent] =
+        Box::leak(Box::new([object(50, 8, assets::TrainerType::None)]));
+    let entered_templates: &'static [assets::ObjectEvent] =
+        Box::leak(Box::new([object(60, 3, assets::TrainerType::None)]));
+
+    // The player stands three tiles south of the trainer: two tiles to walk.
+    let mut phase = route_103_phase(PlayerState::new((50, 11), 3, Direction::North));
+    phase.object_events = ObjectEventCollection::from_templates(departed_templates);
+    phase.step(ButtonState::new());
+    assert!(
+        phase
+            .object_events
+            .get(LOCAL_ID)
+            .is_some_and(engine::overworld::object_event::LiveObjectEvent::is_active),
+        "setup: the departed visit admitted the trainer"
+    );
+    phase.object_events =
+        phase
+            .object_events
+            .carry_across_connection(DEPARTED, ROUTE_103, entered_templates, (0, 0));
+    let namesake = *phase
+        .object_events
+        .get(LOCAL_ID)
+        .expect("setup: the entered map declares the local id");
+    assert_eq!(
+        namesake.carried_from(),
+        None,
+        "setup: a bare local id resolves to the entered map's own object"
+    );
+    assert_eq!(
+        phase
+            .object_events
+            .find(Some(DEPARTED), LOCAL_ID)
+            .map(|entry| entry.state().position()),
+        Some((50, 8)),
+        "setup: the carried trainer is a second entry under the same local id"
+    );
+
+    seed_approach_for(&mut phase, LOCAL_ID, Some(DEPARTED), 2);
+    assert_eq!(
+        phase
+            .sight_approach
+            .as_ref()
+            .and_then(super::super::sight_trainer_approach::SightApproach::carried_from),
+        Some(DEPARTED)
+    );
+    for _ in 0..300 {
+        phase.advance_sight_trainer_approach_frame(ButtonState::new());
+        let carried = phase.object_events.find(Some(DEPARTED), LOCAL_ID).unwrap();
+        if carried.state().position() == (50, 10) {
+            break;
+        }
+    }
+
+    let carried = phase.object_events.find(Some(DEPARTED), LOCAL_ID).unwrap();
+    assert_eq!(
+        carried.state().position(),
+        (50, 10),
+        "the carried trainer walked up to the player"
+    );
+    let namesake_now = phase.object_events.get(LOCAL_ID).unwrap();
+    assert_eq!(namesake_now.state().position(), namesake.state().position());
+    assert_eq!(namesake_now.state().facing(), namesake.state().facing());
+}

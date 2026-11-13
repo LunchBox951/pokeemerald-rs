@@ -218,6 +218,17 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
 /// (`InitTrainerApproachTask`'s own `approachDistance - 1`), carrying a real
 /// stand-in battle (section docs).
 pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
+    seed_approach_for(phase, rhetts_object_event().local_id, None, walk_tiles);
+}
+
+/// [`seed_approach`] for the live entry `(carried_from, local_id)` names, so a
+/// test can approach a trainer a connection crossing carried into this map.
+pub(super) fn seed_approach_for(
+    phase: &mut OverworldPhase,
+    local_id: u8,
+    carried_from: Option<MapId>,
+    walk_tiles: u8,
+) {
     phase.rng = engine::rng::Rng::new(7);
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
         overwhelming_lead(),
@@ -227,7 +238,8 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     .expect("the stand-in Route 103 rival must always construct");
     phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
-        rhetts_object_event().local_id,
+        local_id,
+        carried_from,
         walk_tiles,
         "Whoa!\nHow'd you get into a space this small?",
         battle,
