@@ -1,7 +1,21 @@
 //! Typed access to a tileset's borrowed `metatile_attributes.bin` bytes.
 //!
-//! Each entry is a little-endian `u16` indexed by the local metatile identity
-//! carried by [`MetatileCell::metatile_id`](crate::map_layouts::MetatileCell::metatile_id).
+//! A map's metatile ids come from two tilesets. Upstream `include/fieldmap.h`
+//! gives the primary tileset the first `NUM_METATILES_IN_PRIMARY` (512) ids and
+//! the secondary tileset the rest, and `src/fieldmap.c` picks the attribute
+//! table by that boundary, subtracting it from a secondary id before indexing.
+//! [`MetatileCell::metatile_id`](crate::map_layouts::MetatileCell::metatile_id)
+//! is the raw 10-bit grid id, not a tileset-local index: a secondary-tileset
+//! cell carries 512 or more.
+//!
+//! Each tileset's `metatile_attributes.bin` holds little-endian `u16` entries
+//! indexed by the tileset-local id, so entry 0 of the secondary table is grid
+//! id 512. [`MetatileAttributeTable`] does not know which tileset it views and
+//! rebases nothing. The caller chooses the primary table for a grid id below
+//! 512, and for an id of 512 or more chooses the secondary table and passes
+//! the id minus 512. This crate does not define the boundary constant. Its
+//! owner is `engine::overworld::NUM_METATILES_IN_PRIMARY`.
+//!
 //! Upstream `include/global.fieldmap.h` assigns bits 0 through 7 to a terrain
 //! behaviour identity, leaves bits 8 through 11 unused, and assigns bits 12
 //! through 15 to [`MetatileLayerType`]. Behaviour identities remain raw because
@@ -82,8 +96,13 @@ impl MetatileAttribute {
     }
 }
 
-/// A view borrowing encoded attributes for `'a`, indexed by local metatile
-/// identity.
+/// A view borrowing one tileset's encoded attributes for `'a`, indexed by the
+/// tileset-local metatile id.
+///
+/// The view covers the primary or the secondary tileset and is not told which.
+/// A grid id at or above `NUM_METATILES_IN_PRIMARY` is rebased by the caller
+/// before a secondary-table lookup; the [module documentation](self) states
+/// the rule.
 #[derive(Debug, Clone, Copy)]
 pub struct MetatileAttributeTable<'a> {
     bytes: &'a [u8],
@@ -111,8 +130,12 @@ impl<'a> MetatileAttributeTable<'a> {
         self.len() == 0
     }
 
-    /// Returns the decoded attribute for `metatile_id`, or `None` when the
-    /// identity is outside the table.
+    /// Returns the decoded attribute for the tileset-local `metatile_id`, or
+    /// `None` when it is outside the table.
+    ///
+    /// `metatile_id` indexes this table directly and is not rebased. A raw
+    /// grid id at or above `NUM_METATILES_IN_PRIMARY` must be rebased before
+    /// a secondary-table lookup; see the [module documentation](self).
     ///
     /// # Errors
     ///
@@ -129,7 +152,7 @@ impl<'a> MetatileAttributeTable<'a> {
         ])))
     }
 
-    /// Iterates over complete attributes in local metatile identity order.
+    /// Iterates over complete attributes in tileset-local metatile id order.
     pub fn attributes(&self) -> impl Iterator<Item = Result<MetatileAttribute, AssetError>> + 'a {
         self.bytes
             .chunks_exact(BYTES_PER_METATILE_ATTRIBUTE)
@@ -141,6 +164,7 @@ impl<'a> MetatileAttributeTable<'a> {
 mod tests {
     use super::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
     use crate::error::AssetError;
+    use crate::map_layouts::MetatileCell;
 
     const COVERED_LAYER_BITS: u16 = 0x1000;
     const SPLIT_LAYER_BITS: u16 = 0x2000;
@@ -226,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn table_decodes_entries_in_local_metatile_identity_order() {
+    fn table_decodes_entries_in_tileset_local_id_order() {
         let bytes = [0x01, 0x00, 0x02, 0x10, 0x03, 0x20];
         let attributes = [
             MetatileAttribute {
@@ -288,5 +312,41 @@ mod tests {
         assert!(table.is_empty());
         assert!(table.attribute_at(0).is_none());
         assert_eq!(table.attributes().count(), 0);
+    }
+
+    #[test]
+    fn secondary_grid_id_is_rebased_before_lookup() {
+        // Upstream rebases a grid id of NUM_METATILES_IN_PRIMARY or more by
+        // subtracting it, so grid id 513 is entry 1 of the secondary table.
+        const NUM_METATILES_IN_PRIMARY: u16 = 512;
+        let primary_bytes = [0x01, 0x00, 0x02, 0x00];
+        let secondary_bytes = [0x05, 0x00, 0x06, 0x10];
+        let primary = MetatileAttributeTable::new(&primary_bytes);
+        let secondary = MetatileAttributeTable::new(&secondary_bytes);
+
+        let cell = MetatileCell::from_raw(NUM_METATILES_IN_PRIMARY + 1);
+        assert_eq!(cell.metatile_id, 513);
+        assert!(cell.metatile_id >= NUM_METATILES_IN_PRIMARY);
+
+        assert!(secondary.attribute_at(cell.metatile_id).is_none());
+        let rebased = cell.metatile_id - NUM_METATILES_IN_PRIMARY;
+        assert_eq!(
+            secondary.attribute_at(rebased),
+            Some(Ok(MetatileAttribute {
+                behavior: 6,
+                layer_type: MetatileLayerType::Covered,
+            }))
+        );
+
+        // Grid ids below the boundary index the primary table unchanged.
+        let first = MetatileCell::from_raw(1);
+        assert!(first.metatile_id < NUM_METATILES_IN_PRIMARY);
+        assert_eq!(
+            primary.attribute_at(first.metatile_id),
+            Some(Ok(MetatileAttribute {
+                behavior: 2,
+                layer_type: MetatileLayerType::Normal,
+            }))
+        );
     }
 }
