@@ -63,6 +63,7 @@ pub mod pack;
 pub mod pokedex;
 pub mod script_refs;
 pub mod species;
+pub mod species_icons;
 pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod trainers;

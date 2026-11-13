@@ -20,6 +20,7 @@ mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
+mod species_icons;
 mod starter_chooser;
 mod text_printer;
 mod trainer_battler;

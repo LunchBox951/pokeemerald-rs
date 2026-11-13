@@ -22,6 +22,7 @@ mod paletted_image;
 mod party_menu;
 mod poke_ball;
 mod pokedex_graphics;
+mod species_icons;
 mod starter_chooser;
 mod text_printer;
 mod text_tokens;
@@ -60,6 +61,7 @@ pub use paletted_image::PalettedImage;
 pub use party_menu::{PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot};
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
+pub use species_icons::SpeciesIconRecord;
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 pub use text_printer::TextPrinterDownArrow;
 
