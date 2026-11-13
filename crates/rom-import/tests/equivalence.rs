@@ -53,6 +53,9 @@ use assets::{AssetPack, CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 use rom_import::FIELD_MESSAGE_PACK_ID;
 
+#[path = "equivalence/species_icons.rs"]
+mod species_icons;
+
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
 
@@ -84,6 +87,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "poke-ball/",
     "naming-screen/",
     "party-menu/",
+    "species-icon/",
 ];
 
 /// The text printer's page-prompt arrow, by id: `interface/` is a complete
@@ -411,6 +415,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))
+        .chain(species_icons::species_icon_ids())
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 

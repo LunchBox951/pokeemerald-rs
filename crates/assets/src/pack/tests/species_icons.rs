@@ -355,3 +355,69 @@ fn individual_readers_need_only_their_own_records() {
     ));
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_species_icons_have_every_record_in_their_upstream_shape() {
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    // 417 declared sheets: 416 of 32x64 and the unused 128x64 wide sheet, each
+    // within one 16-colour bank.
+    for n in 0..SHEETS {
+        let id = SpeciesIconSheetId::new(n).unwrap();
+        let sheet = pack.species_icon_sheet(id).unwrap();
+        assert_eq!((sheet.width, sheet.height), id.size(), "sheet {n}");
+        assert_eq!(sheet.bit_depth, 4, "sheet {n}");
+    }
+    // 440 species rows over 415 stored sheets, each with a bank.
+    let mut sheets = std::collections::BTreeSet::new();
+    for species in 0..440u16 {
+        let icon = pack.species_icon(SpeciesId(species)).unwrap();
+        assert!(icon.palette_index < 3, "species {species}");
+        assert_eq!(icon.palette.color_count, 16);
+        sheets.insert(icon.sheet_id.index());
+    }
+    assert_eq!(sheets.len(), 415);
+    assert!(pack.species_icon(SpeciesId(440)).is_err());
+
+    // Shared, special and form rows, from upstream's `gMonIconTable` and
+    // `gMonIconPaletteIndices`: sheets are numbered by first appearance.
+    for (species, sheet, bank) in [
+        (0u16, 0u16, 0u8),
+        (1, 0, 1),
+        (201, 200, 0),
+        (252, 251, 0),
+        (276, 251, 0),
+        (277, 252, 1),
+        (410, 385, 0),
+        (412, 387, 1),
+        (413, 388, 0),
+        (438, 413, 0),
+        (439, 414, 0),
+    ] {
+        let icon = pack.species_icon(SpeciesId(species)).unwrap();
+        assert_eq!(icon.sheet_id.index(), sheet, "species {species}");
+        assert_eq!(icon.palette_index, bank, "species {species}");
+        assert_eq!(icon.palette_tag, 56000 + u16::from(bank));
+    }
+    let (none, bulbasaur) = (
+        pack.species_icon(SpeciesId(0)).unwrap(),
+        pack.species_icon(SpeciesId(1)).unwrap(),
+    );
+    assert!(std::ptr::eq(none.sheet.pixels, bulbasaur.sheet.pixels));
+    assert!(!none.palette.colors().eq(bulbasaur.palette.colors()));
+
+    // Upstream's JASC banks as BGR555, and the six records.
+    for (bank, second) in [(0u8, 0x3A10u16), (1, 0x39CE), (2, 0x3DEF)] {
+        let palette = pack.species_icon_palette(bank).unwrap();
+        assert_eq!(
+            (palette.color(0), palette.color(1)),
+            (Some(0x426C), Some(second))
+        );
+    }
+    let records = pack.species_icon_palette_records().unwrap();
+    assert_eq!(
+        records.map(|r| r.bank),
+        [Some(0), Some(1), Some(2), None, None, None]
+    );
+}

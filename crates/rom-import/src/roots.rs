@@ -30,8 +30,10 @@
 use crate::reader::GbaPtr;
 
 mod poke_ball;
+mod species_icons;
 
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+pub use species_icons::SpeciesIconRoots;
 
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -752,6 +754,8 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
+    /// The party-mon icon sheets, palette banks, and species tables.
+    pub species_icons: SpeciesIconRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -810,6 +814,7 @@ impl Roots {
         party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
+        species_icons: SpeciesIconRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -850,6 +855,7 @@ impl Roots {
                     .iter()
                     .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
+            .chain(self.species_icons.sheets.iter())
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
                 self.trainer_battlers
@@ -884,6 +890,7 @@ impl Roots {
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
             .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
+            .chain(self.species_icons.palettes.iter())
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers

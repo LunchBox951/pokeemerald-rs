@@ -18,9 +18,6 @@ use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::species_icons::pack_ids as species_icon_pack_ids;
-pub(crate) use super::species_icons::{
-    inventory as species_icon_inventory, Inventory as SpeciesIconInventory,
-};
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
 pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;

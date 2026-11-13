@@ -30,7 +30,7 @@ use pack_format::PackWriter;
 use super::{build_image_entry, build_palette_entry, jasc_pal, png, push_raw_bytes};
 use super::{read_file, read_text, ExtractError};
 
-pub(crate) use source::{Inventory, SheetSource};
+use source::Inventory;
 
 const SPECIES_CONSTANTS: &str = "include/constants/species.h";
 const ICON_TABLES: &str = "src/pokemon_icon.c";
@@ -56,7 +56,7 @@ pub(crate) fn pack_ids() -> Vec<String> {
 ///
 /// [`ExtractError`] if a source file cannot be read or does not hold the
 /// declarations and tables in the shape the pack schema transcribes.
-pub(crate) fn inventory(upstream: &Path) -> Result<Inventory, ExtractError> {
+fn inventory(upstream: &Path) -> Result<Inventory, ExtractError> {
     let constants = read_text(&upstream.join(SPECIES_CONSTANTS))?;
     let tables_path = upstream.join(ICON_TABLES);
     let tables = read_text(&tables_path)?;

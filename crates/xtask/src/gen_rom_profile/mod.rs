@@ -47,6 +47,7 @@ mod party_menu;
 mod plan;
 mod poke_ball;
 mod search;
+mod species_icons;
 mod sprites;
 mod starter_chooser;
 mod text_window;
@@ -190,6 +191,7 @@ fn locate_profile(
         party_menu: party_menu::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
+        species_icons: species_icons::locate(ctx, lines)?,
         trainer_front,
         trainer_battlers,
     })
