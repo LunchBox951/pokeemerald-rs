@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.123.0] - 2026-11-13
 
-- General improvements in preparation for faithful music: a song can now change how quickly one part's notes swell in, fade, hold and die away, as the original game's music data allows.
+- General improvements in preparation for faithful music: the sound engine can now follow a song's instructions for how quickly one part's notes swell in, fade, hold and die away. No current song uses them yet, so nothing sounds different.
 
 ## [0.0.122.0] - 2026-11-13
 
