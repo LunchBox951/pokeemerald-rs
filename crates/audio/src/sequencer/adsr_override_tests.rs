@@ -159,6 +159,37 @@ fn an_override_on_one_track_leaves_another_track_on_the_bank_tone() {
 
 #[test]
 fn a_new_voice_replaces_the_local_tone_and_its_overrides() {
+    // Positive control: without the trailing VOICE, the same overrides reach
+    // the note exactly as a bank tone holding those bytes would.
+    let live = render_bits(
+        vec![direct_tone(DIRECT_BASE)],
+        vec![note_track(&[xcmd(XCMD_RELE, 245), xcmd(XCMD_ATTA, 255)])],
+    );
+    let patched = render_bits(
+        vec![direct_tone(Adsr {
+            attack: 255,
+            release: 245,
+            ..DIRECT_BASE
+        })],
+        vec![note_track(&[])],
+    );
+    assert_eq!(live, patched, "xRELE/xATTA must reach a note before VOICE");
+    let live_cgb = render_bits(
+        vec![square_tone(CGB_BASE)],
+        vec![note_track(&[xcmd(XCMD_SUST, 3)])],
+    );
+    let patched_cgb = render_bits(
+        vec![square_tone(CgbAdsr {
+            sustain: 3,
+            ..CGB_BASE
+        })],
+        vec![note_track(&[])],
+    );
+    assert_eq!(
+        live_cgb, patched_cgb,
+        "xSUST must reach a note before VOICE"
+    );
+
     let reset = render_bits(
         vec![direct_tone(DIRECT_BASE)],
         vec![note_track(&[
@@ -168,6 +199,7 @@ fn a_new_voice_replaces_the_local_tone_and_its_overrides() {
         ])],
     );
     let plain = render_bits(vec![direct_tone(DIRECT_BASE)], vec![note_track(&[])]);
+    assert_ne!(live, plain, "the control overrides must change the note");
     assert_eq!(reset, plain, "VOICE must discard every ADSR override");
 
     let reselected_cgb = render_bits(
@@ -175,27 +207,48 @@ fn a_new_voice_replaces_the_local_tone_and_its_overrides() {
         vec![note_track(&[xcmd(XCMD_SUST, 3), Event::Voice(0)])],
     );
     let plain_cgb = render_bits(vec![square_tone(CGB_BASE)], vec![note_track(&[])]);
+    assert_ne!(
+        live_cgb, plain_cgb,
+        "the control override must change the note"
+    );
     assert_eq!(reselected_cgb, plain_cgb);
 }
 
 #[test]
 fn an_override_does_not_alter_a_note_that_is_already_playing() {
-    let held = |prefix: &[Event]| {
-        let mut track = vec![
-            Event::Voice(0),
-            Event::Volume(127),
-            tied_note(60),
-            Event::Wait(12),
-        ];
-        track.extend_from_slice(prefix);
+    // `before` runs ahead of the tied note, `during` while it sounds.
+    let held = |before: &[Event], during: &[Event]| {
+        let mut track = vec![Event::Voice(0), Event::Volume(127)];
+        track.extend_from_slice(before);
+        track.extend([tied_note(60), Event::Wait(12)]);
+        track.extend_from_slice(during);
         track.extend([Event::EndOfTie { key: None }, Event::Wait(96), Event::Fine]);
         track
     };
-    let overridden = render_bits(
-        vec![direct_tone(DIRECT_BASE)],
-        vec![held(&[xcmd(XCMD_RELE, 245), xcmd(XCMD_SUST, 30)])],
+    let overrides = [xcmd(XCMD_RELE, 245), xcmd(XCMD_SUST, 30)];
+    let plain = render_bits(vec![direct_tone(DIRECT_BASE)], vec![held(&[], &[])]);
+
+    // Positive control: the same overrides issued before this tied note
+    // reach it exactly as a bank tone holding those bytes would.
+    let started_after = render_bits(vec![direct_tone(DIRECT_BASE)], vec![held(&overrides, &[])]);
+    let patched = render_bits(
+        vec![direct_tone(Adsr {
+            sustain: 30,
+            release: 245,
+            ..DIRECT_BASE
+        })],
+        vec![held(&[], &[])],
     );
-    let plain = render_bits(vec![direct_tone(DIRECT_BASE)], vec![held(&[])]);
+    assert_eq!(
+        started_after, patched,
+        "the overrides must reach a later note"
+    );
+    assert_ne!(
+        started_after, plain,
+        "the control overrides must change the note"
+    );
+
+    let overridden = render_bits(vec![direct_tone(DIRECT_BASE)], vec![held(&[], &overrides)]);
     assert_eq!(
         overridden, plain,
         "the sounding note keeps the ADSR it was started with"
@@ -252,6 +305,42 @@ fn indirect_children_do_not_receive_a_parent_tone_override() {
         xcmd(XCMD_SUST, 3),
         xcmd(XCMD_RELE, 7),
     ];
+    // Positive control: the same overrides on a direct parent holding the
+    // child's tone reach its note as the literal bank bytes would.
+    let direct_patched = Adsr {
+        attack: 255,
+        decay: 90,
+        sustain: 30,
+        release: 245,
+    };
+    let cgb_patched = CgbAdsr {
+        attack: 7,
+        decay: 6,
+        sustain: 3,
+        release: 7,
+    };
+    for (base, patched, overrides) in [
+        (
+            direct_tone(DIRECT_BASE),
+            direct_tone(direct_patched),
+            &overrides,
+        ),
+        (
+            square_tone(CGB_BASE),
+            square_tone(cgb_patched),
+            &cgb_overrides,
+        ),
+    ] {
+        let overridden = render_bits(vec![base.clone()], vec![note_track(overrides)]);
+        let in_bank = render_bits(vec![patched], vec![note_track(&[])]);
+        let plain = render_bits(vec![base], vec![note_track(&[])]);
+        assert_eq!(overridden, in_bank, "a direct parent takes the overrides");
+        assert_ne!(
+            overridden, plain,
+            "the control overrides must change the note"
+        );
+    }
+
     for (parent, overrides) in [
         (split, &overrides),
         (rhythm(), &overrides),
