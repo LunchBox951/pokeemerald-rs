@@ -22,47 +22,88 @@
 //! - A listing that fails other than with `EACCES`, for want of a free
 //!   descriptor or otherwise, is no verdict that the level is empty: it is
 //!   reported and leaves the level standing, unmoved.
-//! - A level whose bits were granted and whose original mode then cannot be
-//!   put back keeps the owner's read and search bits. Nothing in it is lost
-//!   or moved; its owner can only list it, as creation meant it to.
+//!
+//! A mode that cannot be put back after the listing is no accepted residual:
+//! the listing hands it to the caller as [`ModeLeft`], which reports it for a
+//! level still standing once its take-back is done (see
+//! [`super::warn_mode_left`]). A level that was removed needs no report.
 
 use std::os::fd::{AsFd, OwnedFd};
 
 use rustix::fs::{Dir, Mode, OFlags};
 
-use super::super::super::dest::set_held_directory_mode;
 use super::super::CreatedDirectory;
 
-/// Whether `dir`'s held original lists an entry other than `.` and `..`.
-/// `Ok(false)` for a level that is not held open; a failure to list is the
-/// error, not a verdict that the level is empty. A level its owner cannot
-/// list is listed with the owner's read and search bits granted for the
-/// listing alone; `EACCES` means they were already there or could not be
-/// granted.
-pub(super) fn level_holds_entries(dir: &CreatedDirectory) -> rustix::io::Result<bool> {
+/// How a held level's mode is set: `dest::set_held_directory_mode`, or a
+/// test's stand-in that fails.
+pub(in super::super) type SetHeldMode<'s> = dyn Fn(&OwnedFd, Mode) -> std::io::Result<()> + 's;
+
+/// A level whose owner was granted the bits to list it, and whose mode
+/// could not then be put back as it was found.
+#[derive(Debug)]
+pub(super) struct ModeLeft {
+    /// The mode the level was found at, and is not back at.
+    pub(super) found: Mode,
+    /// Why putting it back failed.
+    pub(super) error: std::io::Error,
+}
+
+/// What listing a held level found.
+pub(super) struct Listing {
+    /// Whether it lists an entry other than `.` and `..`; a failure to list
+    /// is the error, not a verdict that the level is empty.
+    pub(super) holds_entries: rustix::io::Result<bool>,
+    /// Set when the mode the listing changed could not be put back.
+    pub(super) mode_left: Option<ModeLeft>,
+}
+
+/// Lists `dir`'s held original, with its mode set through `set_mode`.
+/// A level that is not held open lists empty. A level its owner cannot list
+/// is listed with the owner's read and search bits granted for the listing
+/// alone; `EACCES` means they were already there or could not be granted.
+pub(super) fn list_level(dir: &CreatedDirectory, set_mode: &SetHeldMode<'_>) -> Listing {
     let Some(own) = dir.own.as_deref() else {
-        return Ok(false);
+        return Listing {
+            holds_entries: Ok(false),
+            mode_left: None,
+        };
     };
     match list_held(own) {
-        Err(err) if err == rustix::io::Errno::ACCESS => list_with_owner_read(own, err),
-        listed => listed,
+        Err(err) if err == rustix::io::Errno::ACCESS => list_with_owner_read(own, err, set_mode),
+        listed => Listing {
+            holds_entries: listed,
+            mode_left: None,
+        },
     }
 }
 
 /// Lists `own` with the owner's read and search bits granted through it,
-/// then puts its mode back. `denied` is the listing's own error, returned
-/// when the level already had both bits or they could not be granted.
-fn list_with_owner_read(own: &OwnedFd, denied: rustix::io::Errno) -> rustix::io::Result<bool> {
-    let found = Mode::from_raw_mode(rustix::fs::fstat(own)?.st_mode) & Mode::all();
+/// then puts its mode back, saying so if that fails. `denied` is the
+/// listing's own error, returned when the level already had both bits or
+/// they could not be granted.
+fn list_with_owner_read(
+    own: &OwnedFd,
+    denied: rustix::io::Errno,
+    set_mode: &SetHeldMode<'_>,
+) -> Listing {
+    let unchanged = |holds_entries| Listing {
+        holds_entries,
+        mode_left: None,
+    };
+    let found = match rustix::fs::fstat(own) {
+        Ok(stat) => Mode::from_raw_mode(stat.st_mode) & Mode::all(),
+        Err(err) => return unchanged(Err(err)),
+    };
     let listable = Mode::RUSR | Mode::XUSR;
-    if found.contains(listable) || set_held_directory_mode(own, found | listable).is_err() {
-        return Err(denied);
+    if found.contains(listable) || set_mode(own, found | listable).is_err() {
+        return unchanged(Err(denied));
     }
-    let listed = list_held(own);
-    // A failure here is an accepted residual (module doc): the level only
-    // keeps the bits its owner was meant to have.
-    let _ = set_held_directory_mode(own, found);
-    listed
+    Listing {
+        holds_entries: list_held(own),
+        mode_left: set_mode(own, found)
+            .err()
+            .map(|error| ModeLeft { found, error }),
+    }
 }
 
 /// Whether `own` lists an entry other than `.` and `..`.

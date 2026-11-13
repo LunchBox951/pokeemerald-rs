@@ -68,16 +68,20 @@ pub(super) use hooks::{
     take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
     take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
 };
-use occupied::level_holds_entries;
+#[cfg(all(test, target_os = "linux"))]
+pub(super) use occupied::SetHeldMode;
+use occupied::{list_level, ModeLeft};
 use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
-use report::{level_location, warn_if_moved_away, warn_left_standing};
+use report::{level_location, standing, warn_if_moved_away, warn_left_standing, Standing};
 #[cfg(test)]
 pub(super) use report::{located_beside, verified_location};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{is_this_level, take_back_into, take_back_unwritable_in_place, unlink_in_place};
+use restore::{
+    holds_this_level, is_this_level, take_back_into, take_back_unwritable_in_place, unlink_in_place,
+};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -108,6 +112,32 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     created: &[CreatedDirectory],
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+) {
+    undo_created_directories_setting_modes(
+        created,
+        before_take,
+        in_quarantine,
+        &super::super::dest::set_held_directory_mode,
+    );
+}
+
+/// [`super::undo_created_directories`] with each held level's mode set
+/// through `set_mode`, so a test can make putting a mode back fail.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn undo_created_directories_setting_modes_with(
+    created: &[CreatedDirectory],
+    set_mode: &SetHeldMode<'_>,
+) {
+    undo_created_directories_setting_modes(created, &mut || {}, &mut |_, _| {}, set_mode);
+}
+
+/// [`undo_created_directories_with_capture_hooks`] with each held level's
+/// mode set through `set_mode`.
+fn undo_created_directories_setting_modes(
+    created: &[CreatedDirectory],
+    before_take: &mut dyn FnMut(),
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    set_mode: &occupied::SetHeldMode<'_>,
 ) {
     let mut quarantine = None;
     for dir in created.iter().rev() {
@@ -156,32 +186,23 @@ pub(super) fn undo_created_directories_with_capture_hooks(
                 // quarantine, a crash would leave them hidden there. The
                 // in-place unlink above moves nothing and removes only an
                 // empty level, so it needs no listing first.
-                match take_back_unless_listed_empty(parent, dir) {
-                    Some(Outcome::Stopped) => break,
-                    Some(_) => continue,
-                    None => {}
-                }
-                if quarantine.is_none() {
-                    quarantine = claim_quarantine(created, dir);
-                }
-                let Some(held) = quarantine.as_ref() else {
+                // A mode the listing could not put back is reported once
+                // the level's take-back is done, if it still stands.
+                let listing = list_level(dir, set_mode);
+                let went_on =
+                    match take_back_unless_listed_empty(parent, dir, listing.holds_entries) {
+                        Some(outcome) => outcome != Outcome::Stopped,
+                        None => take_back_through_quarantine(
+                            &mut quarantine,
+                            created,
+                            parent,
+                            dir,
+                            in_quarantine,
+                        ),
+                    };
+                warn_mode_left(parent, dir, listing.mode_left);
+                if !went_on {
                     break;
-                };
-                match take_back_into(held, parent, dir, in_quarantine) {
-                    Outcome::Taken => {}
-                    Outcome::Stopped => break,
-                    Outcome::CrossDevice => {
-                        // The shared quarantine's descriptor is released
-                        // first, so the fallback can open what it needs even
-                        // when that descriptor took the last free slot; a
-                        // level further out claims a fresh one.
-                        if let Some(shared) = quarantine.take() {
-                            remove_quarantine(&shared, &mut || {});
-                        }
-                        if !take_back_beside(parent, dir) {
-                            break;
-                        }
-                    }
                 }
             }
             // Gone already -- nothing to remove here, and the level above is
@@ -230,6 +251,60 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     }
 }
 
+/// Takes the empty, listed `dir` back through the shared `quarantine`,
+/// claiming it first if there is none yet, or through one of its own beside
+/// it when it is on another filesystem. Whether the walk goes on.
+fn take_back_through_quarantine<'a>(
+    quarantine: &mut Option<quarantine::Quarantine<'a>>,
+    created: &'a [CreatedDirectory],
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+) -> bool {
+    if quarantine.is_none() {
+        *quarantine = claim_quarantine(created, dir);
+    }
+    let Some(held) = quarantine.as_ref() else {
+        return false;
+    };
+    match take_back_into(held, parent, dir, in_quarantine) {
+        Outcome::Taken => true,
+        Outcome::Stopped => false,
+        Outcome::CrossDevice => {
+            // The shared quarantine's descriptor is released first, so the
+            // fallback can open what it needs even when that descriptor took
+            // the last free slot; a level further out claims a fresh one.
+            if let Some(shared) = quarantine.take() {
+                remove_quarantine(&shared, &mut || {});
+            }
+            take_back_beside(parent, dir)
+        }
+    }
+}
+
+/// Reports that `dir`'s mode, changed so its owner could list it, could not
+/// be put back, if the level still stands; one that was removed needs no
+/// report. It is named where it stands now when that is known, else under
+/// its name while that name still holds it.
+fn warn_mode_left(parent: &OwnedFd, dir: &CreatedDirectory, mode_left: Option<ModeLeft>) {
+    let Some(ModeLeft { found, error }) = mode_left else {
+        return;
+    };
+    let at = match standing(dir) {
+        Standing::Gone => return,
+        Standing::Linked(Some(path)) => path,
+        _ => match holds_this_level(parent.as_fd(), &dir.name, dir) {
+            Ok(false) => return,
+            _ => level_location(dir),
+        },
+    };
+    eprintln!(
+        "warning: {} keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o{:03o}: {error}",
+        OneLinePath(&at),
+        found.bits()
+    );
+}
+
 /// `None` when `dir` lists empty, so it goes through the quarantine.
 /// Otherwise it is not moved: one that holds entries, or whose listing
 /// fails, is reported and left where it stands, except that one its owner is
@@ -237,8 +312,12 @@ pub(super) fn undo_created_directories_with_capture_hooks(
 /// through the held descriptor) is unlinked in place, which moves nothing
 /// and removes only an empty level. That keeps the take-back of an empty
 /// level whose owner-access restore failed, as before the listing.
-fn take_back_unless_listed_empty(parent: &OwnedFd, dir: &CreatedDirectory) -> Option<Outcome> {
-    match level_holds_entries(dir) {
+fn take_back_unless_listed_empty(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    holds_entries: rustix::io::Result<bool>,
+) -> Option<Outcome> {
+    match holds_entries {
         Ok(false) => None,
         Ok(true) => {
             leave_unmoved(
