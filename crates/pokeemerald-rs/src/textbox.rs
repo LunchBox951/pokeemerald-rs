@@ -1,11 +1,14 @@
-//! Draws text-window frames and revealed glyphs directly into framebuffers.
+//! Draws text-window frames, revealed glyphs, and keypad icons directly into
+//! framebuffers.
 //!
 //! Revealed glyphs have pixel positions inside a window, so they do not fit
-//! the tile-aligned background compositor. Glyphs and frame tiles both draw
-//! with colors read from the loaded window palette `(behavioral-fidelity)`.
+//! the tile-aligned background compositor. Glyphs, keypad icons, and frame
+//! tiles all draw with colors read from the loaded window palette
+//! `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
-use engine::text::render::{ClearedSpan, RevealedGlyph, TextColors};
+use assets::KeypadIconSheet;
+use engine::text::render::{ClearedSpan, KeypadIconPlacement, RevealedGlyph, TextColors};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
@@ -213,6 +216,61 @@ pub(crate) fn blit_glyphs_colored_tracked<'a>(
     }
 }
 
+/// Draws one keypad icon at its window-local placement, clipped to the
+/// content bounds the same way [`blit_glyphs_colored_tracked`] clips a glyph.
+///
+/// Upstream's `DrawKeypadIcon` blits the sheet rectangle with colour key `0`
+/// and copies every other index unchanged into the window
+/// (`pokeemerald/src/text.c:1609-1623`, `pokeemerald/src/window.c:398-413`), so
+/// an icon pixel indexes the whole window `palette` directly rather than the
+/// printer's glyph-role colours.
+fn blit_keypad_icon(
+    fb: &mut Framebuffer,
+    icon: KeypadIconPlacement,
+    icons: &KeypadIconSheet,
+    palette: &[Rgb888],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    let (content_width, content_height) = content_size;
+    for pixel_y in 0..u32::from(icon.height) {
+        for pixel_x in 0..u32::from(icon.width) {
+            let Some(palette_index) = icons.pixel(icon.id, pixel_x, pixel_y) else {
+                continue;
+            };
+            if usize::from(palette_index) == TRANSPARENT_PALETTE_INDEX {
+                continue;
+            }
+            let Some(&color) = palette.get(usize::from(palette_index)) else {
+                continue;
+            };
+            let (Ok(pixel_x), Ok(pixel_y)) = (i32::try_from(pixel_x), i32::try_from(pixel_y))
+            else {
+                continue;
+            };
+            let (Some(content_x), Some(content_y)) =
+                (icon.x.checked_add(pixel_x), icon.y.checked_add(pixel_y))
+            else {
+                continue;
+            };
+            if content_x < 0
+                || content_y < 0
+                || content_x >= content_width
+                || content_y >= content_height
+            {
+                continue;
+            }
+            set_pixel_checked(
+                fb,
+                &mut Coverage::disabled(),
+                origin.0 + content_x,
+                origin.1 + content_y,
+                color,
+            );
+        }
+    }
+}
+
 /// One retained window effect, in the order the printer produced it.
 ///
 /// A dialog or intro scene keeps these instead of a flat glyph list so a
@@ -226,6 +284,8 @@ pub(crate) enum WindowOp {
     Glyph(Box<RevealedGlyph>),
     /// A span a `CLEAR`/`CLEAR_TO` control erased (`Printer::cleared_span`).
     ClearSpan(ClearedSpan),
+    /// A keypad icon the printer placed (`Printer::keypad_icon`).
+    KeypadIcon(KeypadIconPlacement),
     /// The rows a window scroll exposed ([`scroll_window_ops`]), filled with
     /// the background in force. Unlike a `ClearSpan`, a background of index 0
     /// writes transparent pixels, as `ScrollWindow`'s `PIXEL_FILL(0)` does.
@@ -262,12 +322,70 @@ impl WindowOp {
         match self {
             Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
             Self::ClearSpan(span) | Self::ScrollFill(span) => span.y = span.y.saturating_add(dy),
+            Self::KeypadIcon(icon) => icon.y = icon.y.saturating_add(dy),
+        }
+    }
+
+    /// This op without its rows at or below a window's bottom edge, or `None`
+    /// when nothing of it lies inside a window `content_height` pixels tall.
+    /// Rows above the top edge need no clip: a scroll only moves content up,
+    /// so they never return.
+    ///
+    /// Upstream draws into the window bitmap, which clips at its bottom edge
+    /// (`CopyGlyphToWindow`, `src/text.c`); `ScrollWindow` later moves only
+    /// pixels already in that bitmap, so a row clipped at reveal never comes
+    /// back into view. A window that retains ops and replays them after every
+    /// scroll shift reproduces that by clipping once, at reveal time, through
+    /// this method or [`push_clipped`].
+    pub(crate) fn clipped_below(self, content_height: i32) -> Option<Self> {
+        match self {
+            Self::Glyph(mut revealed) => {
+                let visible_rows = content_height.saturating_sub(revealed.y);
+                if visible_rows <= 0 {
+                    return None;
+                }
+                let visible_rows = usize::try_from(visible_rows).unwrap_or(usize::MAX);
+                if let Some(hidden) = revealed
+                    .glyph
+                    .pixels
+                    .get_mut(visible_rows.saturating_mul(GLYPH_SIZE)..)
+                {
+                    hidden.fill(0);
+                }
+                Some(Self::Glyph(revealed))
+            }
+            Self::ClearSpan(mut span) => {
+                span.height = span.height.min(content_height.saturating_sub(span.y));
+                (span.height > 0).then_some(Self::ClearSpan(span))
+            }
+            Self::ScrollFill(mut span) => {
+                span.height = span.height.min(content_height.saturating_sub(span.y));
+                (span.height > 0).then_some(Self::ScrollFill(span))
+            }
+            Self::KeypadIcon(mut icon) => {
+                let visible_rows = content_height.saturating_sub(icon.y);
+                if visible_rows <= 0 {
+                    return None;
+                }
+                icon.height = icon
+                    .height
+                    .min(u8::try_from(visible_rows).unwrap_or(u8::MAX));
+                Some(Self::KeypadIcon(icon))
+            }
         }
     }
 }
 
-/// Replays ordered glyph and clear-span ops onto `fb`, which must already
-/// hold the window's frame tiles and nothing else.
+/// Retains `op` in `ops` with the rows below a `content_height`-pixel window
+/// removed; an op wholly below it is dropped. See [`WindowOp::clipped_below`].
+pub(crate) fn push_clipped(ops: &mut Vec<WindowOp>, op: WindowOp, content_height: i32) {
+    if let Some(op) = op.clipped_below(content_height) {
+        ops.push(op);
+    }
+}
+
+/// Replays ordered glyph, keypad-icon, and clear-span ops onto `fb`, which
+/// must already hold the window's frame tiles and nothing else.
 ///
 /// Each glyph maps the [`TextColors`] it carries through `palette`, the
 /// window's loaded palette, so a `COLOR` or `SHADOW` control recolors only the
@@ -280,11 +398,16 @@ impl WindowOp {
 /// (see [`erase_with_background`]) before any later glyph lands, covering
 /// whatever an earlier op painted there, partial glyph included
 /// (`pokeemerald/src/text.c:649-674`, `:1063-1090`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one window replay needs its geometry, icon sheet, palette, and both fill sources"
+)]
 pub(crate) fn compose_window_ops(
     fb: &mut Framebuffer,
     ops: &[WindowOp],
     origin: (i32, i32),
     content_size: (i32, i32),
+    icons: &KeypadIconSheet,
     palette: &[Rgb888],
     window_fill: Option<TextColors>,
     scene: Option<&Framebuffer>,
@@ -311,6 +434,9 @@ pub(crate) fn compose_window_ops(
                     GlyphColors::Palette(palette),
                 );
             }
+            WindowOp::KeypadIcon(icon) => {
+                blit_keypad_icon(fb, *icon, icons, palette, origin, content_size);
+            }
             WindowOp::ClearSpan(span) => {
                 erase_with_background(fb, &background, None, palette, *span, origin, content_size);
             }
@@ -328,7 +454,7 @@ pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> 
     window_fill.is_some_and(|fill| fill.background == 0)
         || ops.iter().any(|op| match op {
             WindowOp::ScrollFill(span) => span.colors.background == 0,
-            WindowOp::Glyph(_) | WindowOp::ClearSpan(_) => false,
+            WindowOp::Glyph(_) | WindowOp::ClearSpan(_) | WindowOp::KeypadIcon(_) => false,
         })
 }
 
@@ -524,6 +650,25 @@ fn set_pixel_checked(fb: &mut Framebuffer, coverage: &mut Coverage, x: i32, y: i
     }
 }
 
+/// A keypad-icon sheet that is transparent except at the given sheet
+/// positions, each `(x, y, palette index)`.
+#[cfg(test)]
+pub(crate) fn test_keypad_icons(marks: &[(u32, u32, u8)]) -> KeypadIconSheet {
+    use assets::keypad_icons::{SHEET_HEIGHT, SHEET_WIDTH};
+
+    let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+    for &(x, y, index) in marks {
+        pixels[(y * SHEET_WIDTH + x) as usize] = index;
+    }
+    KeypadIconSheet::new(ImageRef {
+        width: SHEET_WIDTH,
+        height: SHEET_HEIGHT,
+        bit_depth: 4,
+        pixels: &pixels,
+    })
+    .expect("this is the exact real keypad-icon sheet shape")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,6 +830,159 @@ mod tests {
         assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
     }
 
+    const ICON_FIRST_COLOR: Rgb888 = Rgb888 { r: 1, g: 2, b: 3 };
+    const ICON_SECOND_COLOR: Rgb888 = Rgb888 { r: 4, g: 5, b: 6 };
+    const ICON_THIRD_COLOR: Rgb888 = Rgb888 { r: 7, g: 8, b: 9 };
+    const ICON_CONTENT_SIZE: (i32, i32) = (200, 32);
+    const ICON_ORIGIN: (i32, i32) = (20, 30);
+    /// Icon `A` (id 0, tile 0, 8x12), drawn at the window origin.
+    const ICON_A_AT_ORIGIN: KeypadIconPlacement = KeypadIconPlacement {
+        x: 0,
+        y: 0,
+        id: 0,
+        width: 8,
+        height: 12,
+    };
+
+    /// A window palette whose slots 1 to 3 are distinct and whose glyph-role
+    /// colors differ from all of them, so an icon recoloured through the
+    /// glyph roles is caught.
+    fn icon_palette() -> Vec<Rgb888> {
+        let mut palette = vec![Rgb888::BLACK; 16];
+        palette[1] = ICON_FIRST_COLOR;
+        palette[2] = ICON_SECOND_COLOR;
+        palette[3] = ICON_THIRD_COLOR;
+        palette
+    }
+
+    fn compose_icon_ops(ops: &[WindowOp], icons: &KeypadIconSheet) -> Framebuffer {
+        let mut fb = Framebuffer::new();
+        compose_window_ops(
+            &mut fb,
+            ops,
+            ICON_ORIGIN,
+            ICON_CONTENT_SIZE,
+            icons,
+            &icon_palette(),
+            None,
+            None,
+        );
+        fb
+    }
+
+    #[test]
+    fn a_keypad_icon_copies_window_palette_indices_and_skips_zero() {
+        let icons = test_keypad_icons(&[(0, 0, 1), (1, 0, 2), (2, 0, 3), (7, 11, 2)]);
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(ICON_A_AT_ORIGIN)], &icons);
+
+        // Index 1 is the window palette's slot 1, not the glyph foreground role.
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_FIRST_COLOR));
+        assert_eq!(pixel_at(&fb, (21, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (22, 30)), Some(ICON_THIRD_COLOR));
+        assert_eq!(pixel_at(&fb, (27, 41)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (23, 30)), Some(Rgb888::BLACK), "index 0");
+    }
+
+    #[test]
+    fn a_keypad_icon_is_drawn_at_its_reported_position_and_confined_to_its_size() {
+        // Marks one pixel right of and one below icon A's 8x12 rectangle.
+        let icons = test_keypad_icons(&[(0, 0, 2), (8, 0, 3), (0, 12, 3)]);
+        let placement = KeypadIconPlacement {
+            x: 10,
+            y: 4,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(placement)], &icons);
+
+        assert_eq!(pixel_at(&fb, (30, 34)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (38, 34)), Some(Rgb888::BLACK), "past width");
+        assert_eq!(pixel_at(&fb, (30, 46)), Some(Rgb888::BLACK), "past height");
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(Rgb888::BLACK), "origin");
+    }
+
+    #[test]
+    fn a_keypad_icon_on_the_third_tile_row_reads_the_sheet_at_its_own_origin() {
+        // Icon 10 (UPDOWN) is tile 0x20: sheet position (0, 16).
+        let icons = test_keypad_icons(&[(0, 16, 3), (0, 0, 2)]);
+        let placement = KeypadIconPlacement {
+            id: 10,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(placement)], &icons);
+
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_THIRD_COLOR));
+    }
+
+    #[test]
+    fn a_keypad_icon_is_clipped_to_the_content_rect() {
+        let rows: Vec<(u32, u32, u8)> = (0..12).map(|y| (0, y, 2)).collect();
+        let icons = test_keypad_icons(&rows);
+        let above = KeypadIconPlacement {
+            y: -6,
+            ..ICON_A_AT_ORIGIN
+        };
+
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(above)], &icons);
+
+        assert_eq!(
+            pixel_at(&fb, (20, 29)),
+            Some(Rgb888::BLACK),
+            "above the window"
+        );
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (20, 35)), Some(ICON_SECOND_COLOR));
+        assert_eq!(
+            pixel_at(&fb, (20, 36)),
+            Some(Rgb888::BLACK),
+            "past the icon"
+        );
+
+        let past_right = KeypadIconPlacement {
+            x: ICON_CONTENT_SIZE.0 - 1,
+            ..ICON_A_AT_ORIGIN
+        };
+        let fb = compose_icon_ops(&[WindowOp::KeypadIcon(past_right)], &icons);
+        assert_eq!(pixel_at(&fb, (219, 30)), Some(ICON_SECOND_COLOR));
+        assert_eq!(pixel_at(&fb, (220, 30)), Some(Rgb888::BLACK), "outside");
+    }
+
+    #[test]
+    fn a_later_clear_span_erases_an_earlier_keypad_icon() {
+        let icons = test_keypad_icons(&[(0, 0, 2)]);
+        let ops = [
+            WindowOp::KeypadIcon(ICON_A_AT_ORIGIN),
+            WindowOp::ClearSpan(ClearedSpan {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 12,
+                colors: TextColors::default(),
+            }),
+        ];
+
+        let fb = compose_icon_ops(&ops, &icons);
+
+        assert_eq!(pixel_at(&fb, (20, 30)), Some(Rgb888::BLACK));
+    }
+
+    #[test]
+    fn a_window_scroll_moves_a_keypad_icon() {
+        let mut op = WindowOp::KeypadIcon(ICON_A_AT_ORIGIN);
+
+        op.shift_y(-4);
+
+        assert_eq!(
+            op,
+            WindowOp::KeypadIcon(KeypadIconPlacement {
+                y: -4,
+                ..ICON_A_AT_ORIGIN
+            })
+        );
+    }
+
     #[test]
     fn restore_cleared_span_skips_a_span_reaching_past_the_i32_maximum() {
         let mut fb = Framebuffer::new();
@@ -784,6 +1082,74 @@ mod tests {
         coverage.mark(0, wrapping_y);
 
         assert!(!coverage.is_painted(0, 0));
+    }
+
+    const WINDOW_HEIGHT_PX: i32 = 32;
+
+    fn icon_at(y: i32) -> WindowOp {
+        WindowOp::KeypadIcon(KeypadIconPlacement {
+            x: 0,
+            y,
+            id: 0,
+            width: 8,
+            height: 12,
+        })
+    }
+
+    #[test]
+    fn a_keypad_icon_keeps_only_the_rows_inside_the_window() {
+        assert_eq!(
+            icon_at(20).clipped_below(WINDOW_HEIGHT_PX),
+            Some(icon_at(20))
+        );
+        let Some(WindowOp::KeypadIcon(partial)) = icon_at(28).clipped_below(WINDOW_HEIGHT_PX)
+        else {
+            panic!("an icon straddling the edge keeps its top rows");
+        };
+        assert_eq!(partial.height, 4);
+        assert_eq!(
+            icon_at(WINDOW_HEIGHT_PX).clipped_below(WINDOW_HEIGHT_PX),
+            None
+        );
+    }
+
+    #[test]
+    fn a_cleared_span_is_cut_at_the_window_bottom() {
+        let span = |y| {
+            WindowOp::ClearSpan(ClearedSpan {
+                x: 0,
+                y,
+                width: 8,
+                height: 16,
+                colors: TextColors::default(),
+            })
+        };
+        let Some(WindowOp::ClearSpan(partial)) = span(24).clipped_below(WINDOW_HEIGHT_PX) else {
+            panic!("a span straddling the edge keeps its top rows");
+        };
+        assert_eq!(partial.height, 8);
+        assert_eq!(span(WINDOW_HEIGHT_PX).clipped_below(WINDOW_HEIGHT_PX), None);
+    }
+
+    #[test]
+    fn a_glyph_loses_the_rows_below_the_window_and_is_dropped_when_wholly_outside() {
+        let painted_rows = |y| {
+            let op = WindowOp::Glyph(Box::new(opaque_glyph_at(0, y)));
+            let Some(WindowOp::Glyph(glyph)) = op.clipped_below(WINDOW_HEIGHT_PX) else {
+                return None;
+            };
+            Some(
+                glyph
+                    .glyph
+                    .pixels
+                    .chunks(GLYPH_SIZE)
+                    .filter(|row| row.iter().any(|&pixel| pixel != 0))
+                    .count(),
+            )
+        };
+        assert_eq!(painted_rows(0), Some(GLYPH_SIZE));
+        assert_eq!(painted_rows(WINDOW_HEIGHT_PX - 5), Some(5));
+        assert_eq!(painted_rows(WINDOW_HEIGHT_PX), None);
     }
 }
 

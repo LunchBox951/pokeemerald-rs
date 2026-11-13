@@ -46,6 +46,17 @@ const ACCURACY_ONLY: &[u16] = &[0]; // battle_script_commands.c:1176
 const ACC_CRIT_VARIANCE_SECONDARY: &[u16] = &[0; 4];
 // Struggle skips the secondary-chance draw.
 const ACC_CRIT_VARIANCE: &[u16] = &[0; 3];
+// The same draw sites scripted `u16::MAX`, for fixtures whose assertions need
+// accuracy to hit and no critical hit. `u16::MAX` is a multiple of 3, so the
+// Static contact roll below does proc: the paralysis is incidental to them.
+const MAX_CONSTRUCTION_SEED: &[u16] = &[u16::MAX]; // battle_main.c:3140
+const MAX_TURN_SEED: &[u16] = &[u16::MAX]; // battle_main.c:3923 / :4013
+const MAX_AI_SIMULATED_DAMAGE: &[u16] = &[u16::MAX; 4]; // battle_ai_script_commands.c:341, one per slot
+const MAX_DEFENSE_DROP_VIABILITY_ROLL: &[u16] = &[u16::MAX]; // battle_ai_scripts.s:1128
+const MAX_TRAINER_MOVE_PICK: &[u16] = &[u16::MAX]; // battle_ai_script_commands.c:445
+const MAX_ACCURACY_ONLY: &[u16] = &[u16::MAX]; // battle_script_commands.c:1176
+const MAX_ACC_CRIT_VARIANCE_SECONDARY: &[u16] = &[u16::MAX; 4]; // as `ACC_CRIT_VARIANCE_SECONDARY`
+const MAX_STATIC_CONTACT_ROLL: &[u16] = &[u16::MAX]; // battle_util.c:2821-2835, `Random() % 3`
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
     MoveLearnDecision, PlayerAction, PpBonuses, Status1,
@@ -208,7 +219,7 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
             matches!(
                 e,
                 BattleEvent::Fainted { .. }
-                    | BattleEvent::ExpGained(_)
+                    | BattleEvent::ExpGained { .. }
                     | BattleEvent::MoneyGained(_)
                     | BattleEvent::Ended(_)
             )
@@ -220,7 +231,10 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
         tail,
         vec![
             &BattleEvent::Fainted { by_player: false },
-            &BattleEvent::ExpGained(69),
+            &BattleEvent::ExpGained {
+                amount: 69,
+                boosted: false,
+            },
             &BattleEvent::MoneyGained(300),
             &BattleEvent::Ended(BattleOutcome::PlayerWon),
         ]
@@ -250,7 +264,10 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(46)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 46,
+            boosted: false,
+        }),
         "a wild KO pays expYield * level / 7 with no bonus: {events:?}"
     );
     assert!(
@@ -291,11 +308,17 @@ fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(67)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 67,
+            boosted: false,
+        }),
         "a trainer KO pays 64*5/7 = 45, then 45*150/100 = 67: {events:?}"
     );
     assert!(
-        !events.contains(&BattleEvent::ExpGained(68)),
+        !events.contains(&BattleEvent::ExpGained {
+            amount: 68,
+            boosted: false,
+        }),
         "bonus-before-division would pay 68: {events:?}"
     );
     assert_eq!(battle.player().experience() - experience_before, 67);
@@ -319,7 +342,10 @@ fn an_odd_trainer_award_applies_the_bonus_after_the_division() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::ExpGained(45)),
+        events.contains(&BattleEvent::ExpGained {
+            amount: 45,
+            boosted: false,
+        }),
         "a wild KO pays 64*5/7 = 45 with no bonus: {events:?}"
     );
     assert_eq!(battle.player().experience() - experience_before, 45);
@@ -550,7 +576,22 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
     lead.apply_damage(lead.current_hp() - 1);
     let party = vec![lead, max_iv_mon(&dex, PICHU, 5, vec![TACKLE])];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut rng = SequenceRng::new(script(&[
+        MAX_CONSTRUCTION_SEED, // battle_main.c:3140 construction turn seed
+        // Turn 1: the player's Slash knocks the 1 HP lead out, so the enemy
+        // never acts and the replacement is sent out without a move.
+        MAX_TURN_SEED,                   // battle_main.c:3923/:4013 turn-start seed
+        MAX_AI_SIMULATED_DAMAGE,         // battle_ai_script_commands.c:341, slots 0..3
+        MAX_TRAINER_MOVE_PICK,           // battle_ai_script_commands.c:445 highest-score pick
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // the player's Slash
+        // Turn 2: Slash lands on Pichu before its Tackle answers.
+        MAX_TURN_SEED,
+        MAX_AI_SIMULATED_DAMAGE,
+        MAX_TRAINER_MOVE_PICK,
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // the player's Slash
+        MAX_STATIC_CONTACT_ROLL,         // Pichu's Static answers Slash's contact
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // Pichu's Tackle
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
     let old_stats = battle.player().stats();
@@ -560,7 +601,7 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
         .unwrap();
     let exp_index = first
         .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .position(|event| matches!(event, BattleEvent::ExpGained { .. }))
         .expect("the faint awards EXP");
     let send_out_index = first
         .iter()
@@ -610,6 +651,8 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
         }),
         "the next turn uses the updated level and stats: {second:?}"
     );
+    assert_eq!(rng.draws(), 26, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Upstream `GiveMoveToMon` teaches every crossed level's move with no
@@ -891,7 +934,24 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         .unwrap();
     let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut rng = SequenceRng::new(script(&[
+        MAX_CONSTRUCTION_SEED, // battle_main.c:3140 construction turn seed
+        // Turn 1: the player's Scratch leaves Treecko standing, then its Leer
+        // is the enemy's accuracy-only status move.
+        MAX_TURN_SEED,                   // battle_main.c:3923/:4013 turn-start seed
+        MAX_AI_SIMULATED_DAMAGE,         // battle_ai_script_commands.c:341, slots 0..3
+        MAX_TRAINER_MOVE_PICK,           // battle_ai_script_commands.c:445 highest-score pick
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // the player's Scratch
+        MAX_ACCURACY_ONLY,               // the enemy's Leer
+        // Turn 2: the damaged Treecko makes the AI roll Leer's discouragement
+        // check, then the player's Scratch knocks it out, which ends the loop
+        // at the Peck prompt. The refused turn and the answer draw nothing.
+        MAX_TURN_SEED,
+        MAX_AI_SIMULATED_DAMAGE,
+        MAX_DEFENSE_DROP_VIABILITY_ROLL, // battle_ai_scripts.s:1128 Leer's discourage roll
+        MAX_TRAINER_MOVE_PICK,
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // the player's Scratch
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -906,7 +966,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     }
     let exp_index = events
         .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .position(|event| matches!(event, BattleEvent::ExpGained { .. }))
         .unwrap_or_else(|| panic!("the faint awards EXP: {events:?}"));
     let prompt_index = events
         .iter()
@@ -988,6 +1048,8 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         BattleError::NoMoveLearnPending,
         "answering twice is a caller bug, not a second decision"
     );
+    assert_eq!(rng.draws(), 23, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 #[test]
@@ -1156,14 +1218,20 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        first.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        first.contains(&BattleEvent::ExpGained {
+            amount: BOOSTED_AWARD_PER_LEVEL_5_STARTER,
+            boosted: false,
+        }),
         "{first:?}"
     );
     let second = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        second.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        second.contains(&BattleEvent::ExpGained {
+            amount: BOOSTED_AWARD_PER_LEVEL_5_STARTER,
+            boosted: false,
+        }),
         "paid again rather than folded into the first knockout's award: {second:?}"
     );
     assert_eq!(rng.draws(), 21, "exact scripted draw stream is consumed");
@@ -1474,7 +1542,14 @@ fn an_exhausted_unscoreable_move_does_not_block_a_trainer_battle() {
         enemy.deduct_pp(0).unwrap();
     }
     let scratch_pp = enemy.moves()[1].pp;
-    let mut rng = SequenceRng::new([u16::MAX; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        MAX_CONSTRUCTION_SEED,           // battle_main.c:3140 construction turn seed
+        MAX_TURN_SEED,                   // battle_main.c:3923/:4013 turn-start seed
+        MAX_AI_SIMULATED_DAMAGE,         // battle_ai_script_commands.c:341, slots 0..3
+        MAX_TRAINER_MOVE_PICK,           // battle_ai_script_commands.c:445 highest-score pick
+        MAX_ACCURACY_ONLY,               // battle_script_commands.c:1176 the player's Growl
+        MAX_ACC_CRIT_VARIANCE_SECONDARY, // the enemy's Scratch
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
     let events = battle
@@ -1490,6 +1565,8 @@ fn an_exhausted_unscoreable_move_does_not_block_a_trainer_battle() {
     )));
     assert_eq!(battle.enemy().moves()[0].pp, 0);
     assert_eq!(battle.enemy().moves()[1].pp, scratch_pp - 1);
+    assert_eq!(rng.draws(), 12, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// `sIgnoredPowerfulMoveEffects` (`src/battle_ai_script_commands.c:266-280`)

@@ -66,6 +66,7 @@ fn a_color_blue_glyph_paints_palette_index_8_where_the_plain_one_paints_2() {
             &glyph_ops(vec![mixed_glyph(c, false)]),
             (0, 0),
             (200, 32),
+            &super::test_keypad_icons(&[]),
             &palette,
             None,
             None,
@@ -100,6 +101,7 @@ fn colors_apply_per_glyph_not_to_the_whole_page() {
         &glyph_ops(vec![first, second]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -137,6 +139,7 @@ fn default_colors_through_the_palette_match_the_fixed_role_slots_byte_for_byte()
         &glyph_ops(vec![glyph]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &frame.palette,
         None,
         None,
@@ -153,6 +156,7 @@ fn a_highlight_paints_only_the_glyphs_actual_footprint() {
         &glyph_ops(vec![mixed_glyph(colors(2, 4, 3), true)]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -180,6 +184,7 @@ fn an_explicit_highlight_of_the_default_background_repaints_it() {
         &glyph_ops(vec![mixed_glyph(colors(2, 1, 3), true)]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -196,6 +201,7 @@ fn transparent_and_missing_palette_entries_skip_safely() {
         &glyph_ops(vec![mixed_glyph(colors(0, 0, 200), true)]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -221,7 +227,16 @@ fn a_clear_erases_with_its_own_background() {
         let mut fb = marker.clone();
         let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
         ops.push(span_with(background));
-        compose_window_ops(&mut fb, &ops, (0, 0), (200, 32), &palette, None, None);
+        compose_window_ops(
+            &mut fb,
+            &ops,
+            (0, 0),
+            (200, 32),
+            &super::test_keypad_icons(&[]),
+            &palette,
+            None,
+            None,
+        );
         fb
     };
     // Index 1 restores the window interior, covering the glyph.
@@ -248,6 +263,7 @@ fn a_clear_erases_with_its_own_background() {
         &ops,
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         Some(&scene),
@@ -273,6 +289,7 @@ fn a_transparent_scroll_fill_shows_the_scene() {
         &ops,
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         Some(&scene),
@@ -299,6 +316,7 @@ fn a_window_fill_covers_the_content_with_its_background() {
             &[],
             (8, 8),
             (16, 16),
+            &super::test_keypad_icons(&[]),
             &palette,
             Some(colors(2, background, 3)),
             Some(&scene),
@@ -330,6 +348,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
         &glyph_ops(vec![mixed_glyph(colors(2, 4, 3), true)]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -343,6 +362,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
         &glyph_ops(vec![mixed_glyph(TextColors::default(), false)]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,
@@ -369,6 +389,7 @@ fn a_highlight_paints_the_real_fonts_cell_background() {
         &glyph_ops(vec![revealed]),
         (0, 0),
         (200, 32),
+        &super::test_keypad_icons(&[]),
         &palette,
         None,
         None,

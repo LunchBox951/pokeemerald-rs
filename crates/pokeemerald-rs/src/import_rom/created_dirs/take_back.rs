@@ -2,7 +2,10 @@
 //! removes a created level without trusting its mutable name.
 //!
 //! A level whose name still resolves to the identity captured at creation
-//! is renamed (no-replace) into a quarantine: one private directory per
+//! is renamed (no-replace) into a quarantine, unless it lacks the owner's
+//! write bit, which moving a directory to another parent needs: such a level
+//! is unlinked by name in its pinned parent after the same identity check
+//! (see [`restore`]). The quarantine is one private directory per
 //! rollback, made beside the outermost level rollback may take back, so it
 //! is never inside a level it empties. A level on another filesystem than
 //! that quarantine (`EXDEV`, as behind a `..` into a mount) gets a
@@ -11,8 +14,10 @@
 //! further out claims a fresh one. In a
 //! quarantine the level is re-checked by identity and unlinked through the
 //! held quarantine, or put back (no-replace) under its name, or beside it
-//! as `<name>.restored-<n>`, if it is not ours or holds something. Every
-//! step that leaves a level standing says so on stderr.
+//! as `<name>.restored-<n>`, if it is not ours or holds something. A name
+//! too long for that suffix is cut short first, so the recovery name fits
+//! the 255-byte component limit. Every step that leaves a level standing
+//! says so on stderr.
 //!
 //! This module walks the levels; the steps live in its children:
 //!
@@ -60,11 +65,11 @@ use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 #[cfg(test)]
-pub(super) use report::located_beside;
+pub(super) use report::{located_beside, verified_location};
 use report::{warn_if_moved_away, warn_left_standing};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{is_this_level, take_back_into};
+use restore::{is_this_level, take_back_into, take_back_unwritable_in_place};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -131,6 +136,14 @@ pub(super) fn undo_created_directories_with_capture_hooks(
         match looked_up {
             Ok((_, true)) => {
                 before_take();
+                // A level without owner write cannot be renamed into a
+                // quarantine, so it is not given one: it is unlinked in its
+                // parent, and needs no quarantine to be made first.
+                match take_back_unwritable_in_place(parent, dir) {
+                    Some(Outcome::Stopped) => break,
+                    Some(_) => continue,
+                    None => {}
+                }
                 if quarantine.is_none() {
                     quarantine = claim_quarantine(created, dir);
                 }
