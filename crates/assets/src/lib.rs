@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the four
+//! NPC trade offers with their mail messages (see [`ingame_trades`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -49,6 +50,7 @@ pub mod evolution;
 pub mod experience;
 pub mod fonts;
 pub mod hidden_item_flags;
+pub mod ingame_trades;
 pub mod items;
 pub mod keypad_icons;
 pub mod level_up_learnsets;
@@ -93,6 +95,10 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use ingame_trades::{
+    InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
+    INGAME_TRADES_COUNT, INGAME_TRADE_MAIL_COUNT, INGAME_TRADE_MAIL_WORDS_COUNT,
 };
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
