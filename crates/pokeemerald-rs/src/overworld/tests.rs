@@ -633,6 +633,8 @@ fn hblank_budget_regression_fixture() -> (
 /// on `OverworldScene::compose`); the budget math is pinned in `rendering`.
 #[test]
 fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
+    const FILLER_COPIES: usize = 64;
+
     let (scene, player, event_data) = hblank_budget_regression_fixture();
 
     let target_x =
@@ -651,7 +653,6 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
     //   reduced:  954 - 14 - 58 * 16 = 12 after the 58th filler, the 59th
     //             leaves -4, and the 60th's traversal ends the walk (dropped).
     // Any count from 59 to 74 straddles the two cutoffs.
-    const FILLER_COPIES: usize = 64;
     let production = scene.sprite_entries(&player, &event_data);
     assert_eq!(
         production.len(),
