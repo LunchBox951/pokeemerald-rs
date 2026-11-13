@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
+//! Battle Pyramid wild Pokémon rosters (see [`battle_pyramid_wild_mons`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -40,6 +41,7 @@ pub mod abilities;
 pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
+pub mod battle_pyramid_wild_mons;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod egg_moves;
@@ -81,6 +83,11 @@ pub use audio::{
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
+pub use battle_pyramid_wild_mons::{
+    pyramid_round, pyramid_wild_mon, PyramidAbilitySelector, PyramidLevelMode, PyramidLevelOffset,
+    PyramidMonLevel, PyramidRosterPosition, PyramidWildLevel, PyramidWildMon, PyramidWildMonError,
+    PYRAMID_ROUNDS, PYRAMID_WILD_MON_MOVES, PYRAMID_WILD_MON_SLOTS,
 };
 pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
