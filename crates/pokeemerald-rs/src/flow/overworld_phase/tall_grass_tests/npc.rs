@@ -350,3 +350,64 @@ fn setting_the_hide_flag_of_an_admitted_npc_keeps_its_effect_until_removeobject_
     idle(&mut phase, 3);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 }
+
+/// `GroundEffect_StepOnTallGrass` passes `previousElevation`, which
+/// `ObjectEventUpdateElevation` keeps at the last ordinary cell's 4 on a
+/// transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npcs_rustle_on_transition_grass_takes_the_retained_elevations_subpriority() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_NORMAL, 4), ((3, 13), MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0, "plain ground");
+    phase
+        .object_events
+        .get_mut(6)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    idle(&mut phase, 1);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 4));
+    // `sElevationToSubpriority[4]` is 83, the row term at top 0 is 30, and a
+    // rustle on its first command adds 4.
+    assert_eq!(
+        phase.scene.tall_grass_effect_depths(),
+        vec![(4, 83 + 30 + 4)]
+    );
+}
+
+/// `GroundEffect_SpawnOnTallGrass` passes `previousElevation`, which stays the
+/// template's 3 on a transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npc_admitted_on_transition_grass_places_its_effect_at_the_retained_elevation() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 3));
+    // `sElevationToSubpriority[3]` is 115 and the row term at top 0 is 30.
+    assert_eq!(phase.scene.tall_grass_effect_depths(), vec![(3, 115 + 30)]);
+}
