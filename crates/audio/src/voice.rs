@@ -356,7 +356,7 @@ impl Voice {
     /// Accumulate this voice into one frame after [`Self::begin_frame`].
     pub fn render(&mut self, acc: &mut [StereoAcc]) {
         let phase_step = self.playback_rate.phase_step(self.frequency);
-        if self.wave.is_empty() {
+        if self.wave.is_logically_empty() {
             // An empty wave is already exhausted and cannot produce release or
             // pseudo-echo samples.
             self.envelope.retire();
@@ -502,6 +502,23 @@ mod tests {
             (48..=52).contains(&interpolated_sample),
             "midpoint interpolation was {interpolated_sample}"
         );
+    }
+
+    #[test]
+    fn a_guard_only_wave_renders_silence_and_retires() {
+        let guard_only = Arc::new(WaveData::one_shot(0, vec![50]).with_logical_len(0));
+        let mut voice = voice(
+            guard_only,
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
+            0,
+        );
+        let mut acc = vec![(0, 0); 4];
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert!(!voice.is_active());
+        assert_eq!(acc, vec![(0, 0); 4]);
     }
 
     #[test]
