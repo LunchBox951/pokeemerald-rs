@@ -74,6 +74,26 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                     ]);
                     continue;
                 }
+                if name == "FILL_WINDOW" {
+                    out.extend([0xFC, 0x0F]);
+                    continue;
+                }
+                if let Some(index) = name.strip_prefix("HIGHLIGHT ") {
+                    out.extend([
+                        0xFC,
+                        0x02,
+                        index.parse().expect("HIGHLIGHT takes a palette index"),
+                    ]);
+                    continue;
+                }
+                if let Some(width) = name.strip_prefix("CLEAR ") {
+                    out.extend([
+                        0xFC,
+                        0x11,
+                        width.parse().expect("CLEAR takes a pixel width"),
+                    ]);
+                    continue;
+                }
                 if let Some(frames) = name.strip_prefix("PAUSE ") {
                     out.extend([
                         0xFC,
