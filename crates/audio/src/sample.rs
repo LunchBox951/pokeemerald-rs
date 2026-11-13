@@ -174,7 +174,8 @@ mod tests {
     #[test]
     fn is_empty_agrees_with_len_for_a_guard_only_wave() {
         let w = WaveData::one_shot(1 << 20, vec![5]).with_logical_len(0);
-        assert_eq!(w.is_empty(), w.len() == 0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w.is_empty(), w.samples().is_empty());
         assert!(!w.is_empty());
         assert!(w.is_logically_empty());
     }
@@ -185,7 +186,7 @@ mod tests {
         assert_eq!(w.len(), 0);
         assert!(w.is_empty());
         assert!(w.is_logically_empty());
-        assert_eq!(w.is_empty(), w.len() == 0);
+        assert_eq!(w.is_empty(), w.samples().is_empty());
     }
 
     #[test]
