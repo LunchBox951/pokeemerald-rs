@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.125.0] - 2026-11-13
 
-- Ninjask and Yanma brought in from a save can now battle, and their Speed Boost raises their Speed at the end of each turn, as in the original game.
+- General improvements in preparation for Pokémon with Speed Boost, such as Ninjask and Yanma: the ability now raises Speed at the end of each turn in battle, as in the original game. No Pokémon you can meet yet has it.
 
 ## [0.0.124.0] - 2026-11-13
 
