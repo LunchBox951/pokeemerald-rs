@@ -11,7 +11,7 @@ use super::metatile_behavior::{
     MB_SLIDE_WEST, MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST,
     MB_WALK_NORTH, MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
 };
-use super::object_event::visible_object_event_at;
+use super::object_event::blocking_object_event_at;
 #[cfg(test)]
 use super::{collision, metatile_behavior, object_event};
 use crate::event_data::EventData;
@@ -1027,7 +1027,7 @@ impl PlayerState {
             return Some(Collision::ElevationMismatch);
         }
         if landing.object_events_accessible
-            && visible_object_event_at(
+            && blocking_object_event_at(
                 runtime,
                 landing.position.0,
                 landing.position.1,

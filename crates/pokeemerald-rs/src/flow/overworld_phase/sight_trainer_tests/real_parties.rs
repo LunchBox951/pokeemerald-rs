@@ -196,13 +196,13 @@ fn phase_in_cone_of(fighter: &Fighter) -> OverworldPhase {
     let scene = if fighter.elevation == 3 {
         crate::overworld::test_support::synthetic_scene(80, 16)
     } else {
-        let at = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
-        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
-            80,
-            16,
-            at,
-            fighter.elevation,
-        )
+        // The trainer stands one tile from the player, and settles on its own
+        // cell's elevation (`ObjectEventUpdateElevation`), so the player's
+        // tile and its four neighbours carry the fighter's elevation.
+        let (x, y) = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
+        let cells = [(x, y), (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+            .map(|at| (at, fighter.elevation));
+        crate::overworld::test_support::synthetic_scene_with_cell_elevations(80, 16, &cells)
     };
     let mut phase = OverworldPhase::for_test(scene, ROUTE_103, player, None);
     phase.rng = engine::rng::Rng::new(RNG_SEED);

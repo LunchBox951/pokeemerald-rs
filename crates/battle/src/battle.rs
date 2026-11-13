@@ -1650,6 +1650,13 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // A forced Struggle (`noValidMoves`) picks its target before any
+        // canceller runs, so the draws are spent even when sleep, paralysis
+        // or the like then cancels the action (`HandleAction_UseMove`,
+        // `pokeemerald/src/battle_util.c:100`-`:105`).
+        if slot.is_none() && move_id == STRUGGLE {
+            draw_struggle_target(player_is_attacker, rng);
+        }
         // `gCurrentMove` is set for the chosen action before anything can
         // gate its execution (`HandleAction_UseMove`,
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
@@ -2115,6 +2122,19 @@ impl Battle {
     fn finish(&mut self, events: &mut Vec<BattleEvent>, outcome: BattleOutcome) {
         self.outcome = Some(outcome);
         events.push(BattleEvent::Ended(outcome));
+    }
+}
+
+/// `GetMoveTarget(MOVE_STRUGGLE, NO_TARGET_OVERRIDE)` in singles: redraws
+/// `Random() % 2` until it names the opposing battler (the player accepts an
+/// odd result, the opponent an even one), `pokeemerald/src/battle_util.c:3849`-
+/// `:3853`. Follow Me and the Lightning Rod swap never apply to Struggle here.
+fn draw_struggle_target(player_is_attacker: bool, rng: &mut impl BattleRng) {
+    loop {
+        let targets_player = rng.next_u16().is_multiple_of(2);
+        if targets_player != player_is_attacker {
+            return;
+        }
     }
 }
 
