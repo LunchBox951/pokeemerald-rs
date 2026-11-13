@@ -502,6 +502,7 @@ impl OverworldPhase {
                     approach_walk_tiles(live.state().position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(
                     live.template().local_id,
+                    live.carried_from(),
                     walk_tiles,
                     entry.intro,
                     battle,

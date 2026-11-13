@@ -204,6 +204,7 @@ fn approaching_from(
     }]));
     let mut approach = SightApproach::new(
         templates[0].local_id,
+        None,
         walk_tiles,
         "Whoa!",
         stand_in_battle(),
