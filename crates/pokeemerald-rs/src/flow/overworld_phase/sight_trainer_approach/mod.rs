@@ -357,8 +357,15 @@ impl SightApproach {
     /// that a zero-tile approach (the trainer was already adjacent, possibly
     /// having been *walked into* rather than having walked) turns the same
     /// way upstream would.
+    ///
+    /// `FaceDirection` also ends in `ShiftStillObjectEventCoords`
+    /// (`event_object_movement.c:5048-5056,2162-2165`), so the face action
+    /// settles the trainer's previous tile itself. After a walked tile it
+    /// finds that already done; for a zero-tile approach it is the only
+    /// settle there is.
     fn face_player(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
         trainer.face(direction_to_face(trainer.position(), player_position));
+        trainer.settle_previous_position();
         self.stage = ApproachStage::PlayerFacesTrainer;
     }
 

@@ -646,3 +646,81 @@ fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
     assert_eq!(trainer.position(), (rx, ry + 2));
     assert_eq!((trainer.elevation(), trainer.previous_elevation()), (0, 5));
 }
+
+/// A zero-tile approach settles the trainer's previous tile when it faces the
+/// player (`MOVEMENT_ACTION_FACE_PLAYER` -> `FaceDirection` ->
+/// `ShiftStillObjectEventCoords`, `event_object_movement.c:5048-5056,2162-2165,
+/// 6181-6189`). Rhett has been walked off a tall-grass tile and still records
+/// it as his previous one, which keeps the grass effect there alive
+/// (`UpdateTallGrassFieldEffect` retires it only once neither of its owner's
+/// tiles is the effect's, `field_effect_helpers.c:332-355`); the face action
+/// must retire that effect while the intro is still waiting, not leave it up.
+#[test]
+fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_through_the_intro() {
+    use engine::overworld::metatile_behavior::MB_TALL_GRASS;
+
+    const GROUND: u8 = 3;
+    let (rx, ry) = RHETT_TILE;
+    let grass = (u16::try_from(rx).unwrap(), u16::try_from(ry - 1).unwrap());
+    let scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
+        80,
+        16,
+        &[(grass, MB_TALL_GRASS, GROUND)],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ROUTE_103,
+        PlayerState::new((rx, ry + 1), GROUND, Direction::North),
+        None,
+    )
+    .with_private_object_event_rng();
+    fn rhett(phase: &mut OverworldPhase) -> &mut engine::overworld::ObjectEventState {
+        phase
+            .object_events
+            .get_mut(rhetts_object_event().local_id)
+            .expect("Rhett is in the live collection")
+            .state_mut()
+    }
+
+    // Rhett stands on the grass tile when the scene first admits him, so the
+    // spawn-time pass seeds a settled effect owned by him.
+    rhett(&mut phase).walk(Direction::North);
+    phase.step(ButtonState::new());
+    assert_eq!(
+        rhett(&mut phase).position(),
+        (rx, ry - 1),
+        "setup: on grass"
+    );
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1, "setup: seeded");
+
+    // Then he is moved onto his authored tile without the walk settling, so he
+    // records the grass tile as his previous one -- the shape a zero-tile
+    // approach inherits.
+    rhett(&mut phase).walk(Direction::South);
+    assert_eq!(rhett(&mut phase).position(), RHETT_TILE);
+    assert_eq!(rhett(&mut phase).previous_position(), (rx, ry - 1));
+    seed_approach(&mut phase, 0);
+    for _ in 0..LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.scene.tall_grass_effect_count(),
+            1,
+            "the departed tile's effect stands until the face action"
+        );
+    }
+    // The face stage, its wait, and the followup frame, all before the speech.
+    for _ in 0..3 {
+        phase.step(ButtonState::new());
+    }
+    assert!(phase.sight_approach.is_some(), "the intro is still open");
+    assert_eq!(
+        approaching_trainer(&phase).previous_position(),
+        RHETT_TILE,
+        "the face action settled the previous tile"
+    );
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        0,
+        "the departed tile's grass effect retires while the intro waits"
+    );
+}
