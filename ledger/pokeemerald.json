@@ -21848,10 +21848,10 @@
     "include/easy_chat.h": {
       "artifacts": {
         "EasyChatWordInfo": {
-          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91): text, alphabeticalOrder and enabled are the fields of assets::easy_chat_greetings::GreetingsWord, with the u8 pointer as a charmap-notation str, the ints as a typed GreetingsWordIndex and a bool. Other users of the struct (the group table in easy_chat_groups.h) are not modelled.",
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as the Greetings row shape: assets::easy_chat_greetings::GreetingsWord carries text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as a GreetingsWordIndex whose domain is 0..41. The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
           "rust_target": "crates/assets/src/easy_chat_greetings.rs",
           "spec": "S-4",
-          "status": "ported"
+          "status": "stubbed"
         }
       },
       "category": "code.header",
