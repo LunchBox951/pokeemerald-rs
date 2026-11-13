@@ -28784,6 +28784,14 @@
       "status": "pending"
     },
     "src/battle_anim_smokescreen.c": {
+      "artifacts": {
+        "gBattlePalaceNatureToMoveTarget": {
+          "reason": "gBattlePalaceNatureToMoveTarget (src/battle_anim_smokescreen.c:20-47) ported as a typed 25-entry table of PALACE_TARGET_* preferences with a checked lookup by Gen III nature id. Target selection (src/battle_gfx_sfx_util.c) and the smokescreen animation code are not ported, and the rest of src/battle_anim_smokescreen.c is not claimed here.",
+          "rust_target": "crates/assets/src/battle_palace.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29350,6 +29358,18 @@
           "rust_target": "crates/battle/src/status1.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "gBattlePalaceNatureToMoveGroupLikelihood": {
+          "reason": "gBattlePalaceNatureToMoveGroupLikelihood (src/battle_script_commands.c:849-884) ported as a typed 25-entry table of four named percent thresholds per nature (above-half attack and defense, at-or-below-half attack and defense), with a checked lookup by Gen III nature id. Data only: Palace move selection, its RNG draws and the move-group classification of each move are not ported, and the rest of src/battle_script_commands.c is not claimed here.",
+          "rust_target": "crates/assets/src/battle_palace.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sBattlePalaceNatureToFlavorTextId": {
+          "reason": "sBattlePalaceNatureToFlavorTextId (src/battle_script_commands.c:886-913) ported as a typed 25-entry table of B_MSG_* flavor-text ids with a checked lookup by Gen III nature id. The flavor strings and the VARIOUS_PALACE_FLAVOR_TEXT command are not ported, and the rest of src/battle_script_commands.c is not claimed here.",
+          "rust_target": "crates/assets/src/battle_palace.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
