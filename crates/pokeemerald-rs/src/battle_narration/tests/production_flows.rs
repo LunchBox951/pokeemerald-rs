@@ -12,7 +12,7 @@ use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleOutcome, BattlePokemon, BattleRng, Dex, Ivs, PlayerAction};
 use engine::rng::Rng;
-use engine::text::render::{PrinterInput, TextSpeed};
+use engine::text::render::{PrinterInput, TextSpeed, TickEvent};
 use engine::text::{self, Token};
 
 use super::fixtures::{battler, render, template, upstream_fixture, Fixture};
@@ -68,6 +68,8 @@ fn scene(kind: BattleKind, opponent: &str, trainer: Option<Trainer>) -> Scene {
 struct Frame {
     turn_started: bool,
     result_published: Option<BattleOutcome>,
+    /// The printer's event this frame, if the printer ran.
+    printer_event: Option<TickEvent>,
 }
 
 struct Sequencer {
@@ -124,8 +126,11 @@ impl Sequencer {
     }
 
     fn frame(&mut self, fixture: &Fixture, input: PrinterInput) -> Frame {
-        self.layer.tick(input);
-        let mut frame = Frame::default();
+        let tick = self.layer.tick(input);
+        let mut frame = Frame {
+            printer_event: tick.printer_event,
+            ..Frame::default()
+        };
         if !self.text_is_done() || self.published.is_some() {
             return frame;
         }
@@ -228,20 +233,60 @@ fn the_result_is_withheld_until_the_last_prompt_is_answered() {
     }
     assert!(sequencer.engine_outcome.is_some());
 
-    // The engine already reports the win, yet nothing publishes it while held
-    // buttons sit on the experience message's page prompt.
+    // The turn queues the move line, the faint message, then the experience
+    // message; the last two each end in a page prompt. Tap through the faint
+    // prompt: fresh presses are the only thing that answers a page prompt.
+    let mut answered = 0;
+    let mut frames = 0;
+    while answered == 0 {
+        let input = if frames % 4 == 3 { A_PRESS } else { NONE };
+        let frame = sequencer.frame(&fixture, input);
+        assert_eq!(frame.result_published, None);
+        if frame.printer_event == Some(TickEvent::Cleared) {
+            answered += 1;
+        }
+        frames += 1;
+        assert!(frames < FRAME_LIMIT);
+    }
+    assert!(sequencer.engine_outcome.is_some());
+    assert_eq!(sequencer.script.len(), 5, "{:?}", sequencer.script);
+
+    // Without input, the experience message prints up to its page prompt.
+    let mut frame = sequencer.frame(&fixture, NONE);
+    let mut printing = 0;
+    while frame.printer_event != Some(TickEvent::AwaitingClear) {
+        assert_eq!(frame.result_published, None);
+        assert_ne!(frame.printer_event, Some(TickEvent::Cleared));
+        frame = sequencer.frame(&fixture, NONE);
+        printing += 1;
+        assert!(printing < FRAME_LIMIT);
+    }
+    assert_eq!(frame.result_published, None);
+
+    // The engine already reports the win and the last prompt is the only text
+    // outstanding, yet nothing publishes it while held buttons sit on that
+    // prompt.
     let held = PrinterInput {
         a_held: true,
         ..NONE
     };
     for _ in 0..200 {
-        assert_eq!(sequencer.frame(&fixture, held).result_published, None);
+        let frame = sequencer.frame(&fixture, held);
+        assert_eq!(frame.result_published, None);
+        assert_eq!(frame.printer_event, Some(TickEvent::AwaitingClear));
     }
     assert_eq!(sequencer.published, None);
     assert!(sequencer.layer.has_outstanding_text());
 
-    sequencer.play_out(&fixture, |_| A_PRESS);
+    let press = sequencer.frame(&fixture, A_PRESS);
+    assert_eq!(press.printer_event, Some(TickEvent::Cleared));
+    assert_eq!(press.result_published, None);
+    assert_eq!(sequencer.published, None);
+    assert!(sequencer.layer.has_outstanding_text());
 
+    sequencer.play_out(&fixture, |_| NONE);
+
+    assert!(!sequencer.layer.has_outstanding_text());
     assert_eq!(sequencer.published, Some(BattleOutcome::PlayerWon));
 }
 
