@@ -288,8 +288,14 @@ fn sprite_order_puts_a_new_sprite_behind_a_tied_one_at_any_priority() {
 fn sprite_order_gives_an_unnamed_sprite_no_history() {
     let anonymous = |n: u8, y: u8| DepthSprite::with_subpriority(tagged_at(y, n), 100);
     let mut order = SpriteOrder::default();
-    assert_eq!(banks(&mut order, &[anonymous(0, 40), object(1, 70)]), [1, 0]);
-    assert_eq!(banks(&mut order, &[anonymous(0, 40), object(1, 40)]), [1, 0]);
+    assert_eq!(
+        banks(&mut order, &[anonymous(0, 40), object(1, 70)]),
+        [1, 0]
+    );
+    assert_eq!(
+        banks(&mut order, &[anonymous(0, 40), object(1, 40)]),
+        [1, 0]
+    );
 }
 
 /// A crossing translates a tall-grass effect's identity with its tile, so the
