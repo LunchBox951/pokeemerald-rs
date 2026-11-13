@@ -21,6 +21,7 @@ mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;
+mod summary_screen_graphics;
 mod text_printer;
 mod trainer_battler;
 mod trainer_pic;

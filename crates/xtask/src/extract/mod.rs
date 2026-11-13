@@ -136,6 +136,7 @@ mod publish;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;
+mod summary_screen_graphics;
 mod text_source;
 mod text_window;
 mod tilesets;
@@ -236,6 +237,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    summary_screen_graphics::extract_summary_screen_graphics(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

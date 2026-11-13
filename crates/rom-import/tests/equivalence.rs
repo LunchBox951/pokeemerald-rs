@@ -84,6 +84,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "poke-ball/",
     "naming-screen/",
     "party-menu/",
+    "summary-screen-graphics/",
 ];
 
 /// The text printer's page-prompt arrow, by id: `interface/` is a complete
@@ -243,6 +244,30 @@ const EVOLUTION_SCENE_IDS: [&str; 7] = [
     "evolution-scene/palette/evo_sparkle",
     "evolution-scene/raw/bg_inner",
     "evolution-scene/raw/bg_outer",
+];
+
+/// The summary screen's sixteen pack ids, named independently of the checkout
+/// extractor and of the profile: four sheets, three palettes, the five page
+/// screens, three move-effect maps, and the status map.
+/// `summary-screen-graphics/` is a complete prefix, but a record both backends
+/// drop together would pass it.
+const SUMMARY_SCREEN_GRAPHICS_IDS: [&str; 16] = [
+    "summary-screen-graphics/image/tiles",
+    "summary-screen-graphics/image/move_select",
+    "summary-screen-graphics/image/a_button",
+    "summary-screen-graphics/image/b_button",
+    "summary-screen-graphics/palette/tiles",
+    "summary-screen-graphics/palette/move_select",
+    "summary-screen-graphics/palette/markings",
+    "summary-screen-graphics/raw/page_info",
+    "summary-screen-graphics/raw/page_info_egg",
+    "summary-screen-graphics/raw/page_skills",
+    "summary-screen-graphics/raw/page_battle_moves",
+    "summary-screen-graphics/raw/page_contest_moves",
+    "summary-screen-graphics/raw/effect_battle",
+    "summary-screen-graphics/raw/effect_contest",
+    "summary-screen-graphics/raw/effect_cancel",
+    "summary-screen-graphics/raw/status_tilemap",
 ];
 
 /// The party menu's fourteen pack ids, named independently of the checkout
@@ -411,6 +436,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))
+        .chain(SUMMARY_SCREEN_GRAPHICS_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -632,6 +658,88 @@ fn the_party_menu_handle_is_equal_from_the_rom_and_the_checkout() {
     }
     assert_ne!(ours.confirm_button, ours.cancel_button);
     eprintln!("party-menu record equal through both backends");
+}
+
+/// Every summary-screen graphic resolves through the typed accessors from both
+/// packs and is equal. The accessors validate each shape, so a ROM import that
+/// wrote a different raster, palette length, or map width fails here as well
+/// as in the byte comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_summary_screen_handle_is_equal_from_the_rom_and_the_checkout() {
+    use assets::{
+        SummaryScreenMoveEffect, SummaryScreenPage, SummaryScreenPalette, SummaryScreenSheet,
+    };
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-summary-screen-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+    let imported = assets::AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = assets::AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let ours = imported
+        .summary_screen_graphics()
+        .expect("the imported summary screen");
+    let theirs = checkout
+        .summary_screen_graphics()
+        .expect("the checkout summary screen");
+
+    for sheet in SummaryScreenSheet::ALL {
+        let (a, b) = (ours.sheet(sheet), theirs.sheet(sheet));
+        assert_eq!(
+            (a.width, a.height, a.bit_depth),
+            (sheet.size().0, sheet.size().1, 4),
+            "{sheet:?}"
+        );
+        assert_eq!(
+            (a.width, a.height, a.bit_depth, a.pixels),
+            (b.width, b.height, b.bit_depth, b.pixels),
+            "{sheet:?}"
+        );
+    }
+    for palette in SummaryScreenPalette::ALL {
+        let (a, b) = (ours.palette(palette), theirs.palette(palette));
+        assert_eq!(a.color_count, palette.color_count(), "{palette:?}");
+        assert_eq!(a.color_count, b.color_count, "{palette:?}");
+        assert!(a.colors().eq(b.colors()), "{palette:?}");
+    }
+    for page in SummaryScreenPage::ALL {
+        assert_eq!(
+            ours.page_tilemap(page),
+            theirs.page_tilemap(page),
+            "{page:?}"
+        );
+    }
+    for effect in SummaryScreenMoveEffect::ALL {
+        assert_eq!(
+            ours.move_effect_tilemap(effect),
+            theirs.move_effect_tilemap(effect),
+            "{effect:?}"
+        );
+    }
+    assert_eq!(ours.status_tilemap, theirs.status_tilemap);
+    // The two buttons are different sheets, not one repeated.
+    assert_ne!(
+        ours.sheet(SummaryScreenSheet::AButton).pixels,
+        ours.sheet(SummaryScreenSheet::BButton).pixels
+    );
+    eprintln!("summary-screen-graphics record equal through both backends");
 }
 
 /// The down arrow resolves through the typed accessor from both packs, and
@@ -949,6 +1057,100 @@ fn the_party_menu_profile_roots_are_the_pinned_ids() {
         ("cancel_button", 7 * 2 * 2),
     ] {
         assert_eq!(map(&format!("party-menu/raw/{id}")), (Raw, len), "{id}");
+    }
+}
+
+/// The profile's summary-screen roots are exactly the 16 pinned ids, with the
+/// encodings and shapes upstream stores, so the complete
+/// `summary-screen-graphics/` prefix cannot pass by both backends dropping the
+/// same entry.
+#[test]
+fn the_summary_screen_profile_roots_are_the_pinned_ids() {
+    use rom_import::Encoding::{Lz77, Raw};
+    let roots = &rom_import::EMERALD_US_REV0.roots.summary_screen_graphics;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut expected = SUMMARY_SCREEN_GRAPHICS_IDS;
+    expected.sort_unstable();
+    assert_eq!(profiled, expected);
+
+    let image = |id: &str| {
+        let root = roots.images.iter().find(|root| root.id == id).unwrap();
+        (
+            root.encoding,
+            root.width,
+            root.height,
+            root.tile_count,
+            root.rom_bit_depth,
+            root.pack_bit_depth,
+        )
+    };
+    // The tile sheet keeps all 240 tiles; there is no `-num_tiles` cut.
+    assert_eq!(
+        image("summary-screen-graphics/image/tiles"),
+        (Lz77, 128, 120, 240, 4, 4)
+    );
+    assert_eq!(
+        image("summary-screen-graphics/image/move_select"),
+        (Lz77, 16, 128, 32, 4, 4)
+    );
+    for id in ["a_button", "b_button"] {
+        assert_eq!(
+            image(&format!("summary-screen-graphics/image/{id}")),
+            (Raw, 16, 16, 4, 4, 4),
+            "{id}"
+        );
+    }
+    let palette = |id: &str| {
+        let root = roots.palettes.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.color_count)
+    };
+    assert_eq!(
+        palette("summary-screen-graphics/palette/tiles"),
+        (Lz77, 8 * 16)
+    );
+    assert_eq!(
+        palette("summary-screen-graphics/palette/move_select"),
+        (Lz77, 16)
+    );
+    assert_eq!(
+        palette("summary-screen-graphics/palette/markings"),
+        (Raw, 16)
+    );
+    let map = |id: &str| {
+        let root = roots.tilemaps.iter().find(|root| root.id == id).unwrap();
+        (root.encoding, root.len)
+    };
+    for id in [
+        "page_info",
+        "page_info_egg",
+        "page_skills",
+        "page_battle_moves",
+        "page_contest_moves",
+    ] {
+        assert_eq!(
+            map(&format!("summary-screen-graphics/raw/{id}")),
+            (Lz77, 32 * 32 * 2),
+            "{id}"
+        );
+    }
+    for (id, len) in [
+        ("effect_battle", 80 * 2),
+        ("effect_contest", 80 * 2),
+        ("effect_cancel", 64 * 2),
+        ("status_tilemap", 10 * 2 * 2),
+    ] {
+        assert_eq!(
+            map(&format!("summary-screen-graphics/raw/{id}")),
+            (Raw, len),
+            "{id}"
+        );
     }
 }
 

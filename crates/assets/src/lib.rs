@@ -135,7 +135,9 @@ pub use pack::{
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
     PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot, PokeBallHandle,
     PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
-    TextPrinterDownArrow, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    SummaryScreenGraphicsHandle, SummaryScreenMoveEffect, SummaryScreenPage, SummaryScreenPalette,
+    SummaryScreenSheet, TextPrinterDownArrow, TilesetHandle, TrainerBattlerHandle,
+    TrainerPicHandle, WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,

@@ -20204,10 +20204,98 @@
       "status": "ported"
     },
     "graphics/summary_screen": {
+      "artifacts": {
+        "a_button.png": {
+          "reason": "src/pokemon_summary_screen.c:725-728 includes a_button.png as raw .4bpp only (sButtons_Gfx[0], four tiles, no palette); the extractor publishes the 16x16 raster as summary-screen-graphics/image/a_button and no palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "b_button.png": {
+          "reason": "src/pokemon_summary_screen.c:725-728 includes b_button.png as raw .4bpp only (sButtons_Gfx[1], four tiles, no palette); the extractor publishes the 16x16 raster as summary-screen-graphics/image/b_button and no palette. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "effect_battle.bin": {
+          "reason": "src/graphics.c:1253-1255 includes effect_battle.bin raw (INCBIN_U16, gSummaryScreen_MoveEffect_Battle_Tilemap) as 80 16-bit entries, more than the sliding window that draws it reads; the extractor publishes all 160 bytes unchanged as summary-screen-graphics/raw/effect_battle and AssetPack::summary_screen_move_effect_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "effect_cancel.bin": {
+          "reason": "src/graphics.c:1253-1255 includes effect_cancel.bin raw (INCBIN_U16, gSummaryScreen_MoveEffect_Cancel_Tilemap) as 64 16-bit entries, more than the sliding window that draws it reads; the extractor publishes all 128 bytes unchanged as summary-screen-graphics/raw/effect_cancel and AssetPack::summary_screen_move_effect_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "effect_contest.bin": {
+          "reason": "src/graphics.c:1253-1255 includes effect_contest.bin raw (INCBIN_U16, gSummaryScreen_MoveEffect_Contest_Tilemap) as 80 16-bit entries, more than the sliding window that draws it reads; the extractor publishes all 160 bytes unchanged as summary-screen-graphics/raw/effect_contest and AssetPack::summary_screen_move_effect_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "markings.pal": {
+          "reason": "src/pokemon_summary_screen.c:1097 includes markings.pal as a raw .gbapal (sMarkings_Pal, 16 colours); the extractor converts the JASC palette to BGR555 and publishes it as summary-screen-graphics/palette/markings. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "move_select.png": {
+          "reason": "src/graphics.c:1125-1126 builds move_select.png as 4bpp LZ77 graphics (gSummaryMoveSelect_Gfx, 32 tiles) with its embedded 16-colour palette (gSummaryMoveSelect_Pal); the extractor publishes the 16x128 raster as summary-screen-graphics/image/move_select and the PLTE as summary-screen-graphics/palette/move_select. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_battle_moves.bin": {
+          "reason": "src/graphics.c:1130-1134 builds page_battle_moves.bin as an LZ77 tilemap (gSummaryPage_*_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as summary-screen-graphics/raw/page_battle_moves and AssetPack::summary_screen_page_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_contest_moves.bin": {
+          "reason": "src/graphics.c:1130-1134 builds page_contest_moves.bin as an LZ77 tilemap (gSummaryPage_*_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as summary-screen-graphics/raw/page_contest_moves and AssetPack::summary_screen_page_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_info.bin": {
+          "reason": "src/graphics.c:1130-1134 builds page_info.bin as an LZ77 tilemap (gSummaryPage_*_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as summary-screen-graphics/raw/page_info and AssetPack::summary_screen_page_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_info_egg.bin": {
+          "reason": "src/graphics.c:1130-1134 builds page_info_egg.bin as an LZ77 tilemap (gSummaryPage_*_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as summary-screen-graphics/raw/page_info_egg and AssetPack::summary_screen_page_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_skills.bin": {
+          "reason": "src/graphics.c:1130-1134 builds page_skills.bin as an LZ77 tilemap (gSummaryPage_*_Tilemap), a 32x32 screen of 16-bit entries; the checkout holds the uncompressed source, so the extractor publishes its 2048 bytes unchanged as summary-screen-graphics/raw/page_skills and AssetPack::summary_screen_page_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "status_tilemap.bin": {
+          "reason": "src/pokemon_summary_screen.c:369 includes status_tilemap.bin raw (INCBIN_U16, sStatusTilemap) as a 10x2 grid of 16-bit screen entries; the extractor publishes its 40 bytes unchanged as summary-screen-graphics/raw/status_tilemap and AssetPack::summary_screen_status_tilemap checks the length. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "tiles.png": {
+          "reason": "src/graphics.c:1128-1129 builds tiles.png as 8-bit-indexed 4bpp LZ77 graphics (gSummaryScreen_Gfx, all 240 tiles, no -num_tiles cut) and its embedded 128-colour palette as LZ77 gbapal (gSummaryScreen_Pal); the extractor narrows the indices to their low nibble, publishes the whole 128x120 raster as summary-screen-graphics/image/tiles and all 128 PLTE colours (eight banks) as summary-screen-graphics/palette/tiles. AssetPack::summary_screen_sheet and summary_screen_palette read them with the shared bank-image validator. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "All 14 files of the directory are extracted by crates/xtask/src/extract/summary_screen_graphics.rs into 16 normalized summary-screen-graphics/ pack entries (four sheets, three palettes, nine tilemaps) following each upstream declaration (LZ77-built versus raw), and exposed by typed AssetPack readers that use the shared bank-image validator. The ROM importer reproduces the same 16 entries from the BPEE rev-0 profile (crates/rom-import/src/domains/summary_screen_graphics.rs, gated by the real-ROM equivalence test's summary-screen-graphics/ prefix). The summary screen itself is not modelled here.",
+      "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/text_window": {
       "category": "graphics.ui",
@@ -32442,6 +32530,12 @@
           "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "summary_screen_graphics": {
+          "reason": "src/graphics.c:1125-1134 and 1253-1255 gSummaryMoveSelect_Gfx/_Pal, gSummaryScreen_Gfx/_Pal, the five gSummaryPage_*_Tilemap and the three gSummaryScreen_MoveEffect_*_Tilemap: extracted by crates/xtask/src/extract/summary_screen_graphics.rs honouring the LZ77-built sources and the raw INCBIN_U16 effect maps; no summary-screen logic is modelled here. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
@@ -34167,6 +34261,14 @@
       "status": "pending"
     },
     "src/pokemon_summary_screen.c": {
+      "artifacts": {
+        "summary_screen_graphics": {
+          "reason": "src/pokemon_summary_screen.c:369, 725-728 and 1097 sStatusTilemap, sButtons_Gfx and sMarkings_Pal: extracted by crates/xtask/src/extract/summary_screen_graphics.rs as the raw status tilemap, the two button sheets and the markings palette; no summary-screen drawing, paging or move selection is modelled here. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/summary_screen_graphics.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/summary_screen_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

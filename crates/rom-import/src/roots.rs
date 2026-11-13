@@ -30,8 +30,10 @@
 use crate::reader::GbaPtr;
 
 mod poke_ball;
+mod summary_screen_graphics;
 
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+pub use summary_screen_graphics::SummaryScreenGraphicsRoots;
 
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -748,6 +750,8 @@ pub struct Roots {
     pub naming_screen: NamingScreenRoots,
     /// The party menu's sheets, palettes, and maps.
     pub party_menu: PartyMenuRoots,
+    /// The summary screen's sheets, palettes, and maps.
+    pub summary_screen_graphics: SummaryScreenGraphicsRoots,
     /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
@@ -808,6 +812,7 @@ impl Roots {
         battle_interface: BattleInterfaceRoots::NONE,
         naming_screen: NamingScreenRoots::NONE,
         party_menu: PartyMenuRoots::NONE,
+        summary_screen_graphics: SummaryScreenGraphicsRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
@@ -838,6 +843,7 @@ impl Roots {
             .chain(self.battle_interface.images.iter())
             .chain(self.naming_screen.images.iter())
             .chain(self.party_menu.images.iter())
+            .chain(self.summary_screen_graphics.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -877,6 +883,7 @@ impl Roots {
             .chain(self.battle_interface.palettes.iter())
             .chain(self.naming_screen.palettes.iter())
             .chain(self.party_menu.palettes.iter())
+            .chain(self.summary_screen_graphics.palettes.iter())
             .chain(
                 self.battlers
                     .species
