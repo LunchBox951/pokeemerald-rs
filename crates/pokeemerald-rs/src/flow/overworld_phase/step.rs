@@ -20,8 +20,8 @@
 
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
-    trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, StepOutcome,
-    WarpTrigger,
+    trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp, Direction, MapRuntime,
+    PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
 use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
@@ -32,6 +32,7 @@ use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
+use super::escalator_arrival::landed_on_escalator;
 use super::input::{advance_or_skip_for_preempt, held_direction, observe_tile, settle_outcome};
 pub(super) use super::interaction::InteractionOutcome;
 use super::sight_trainer_trigger::SightTrainerOutcome;
@@ -322,6 +323,10 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        // Map load has already spawned the objects in view, so a crossing on the first frame
+        // carries them.
+        self.admit_object_events_on_map_load();
+
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
@@ -329,7 +334,7 @@ impl OverworldPhase {
 
         // An active battle owns the frame ahead of the dialog check, as the
         // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
-        if self.advance_active_battle_frame() {
+        if self.advance_active_battle_frame(buttons) {
             return;
         }
 
@@ -340,7 +345,9 @@ impl OverworldPhase {
         // cutscene included, leaves the field's sprites animating.
         self.scene.seed_tall_grass_placement(&self.player);
         self.step_field_frame(buttons);
-        self.scene.advance_tall_grass(&self.player);
+        self.advance_object_events();
+        self.scene
+            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no
@@ -404,7 +411,10 @@ impl OverworldPhase {
             return;
         }
 
+        let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
+        let stepped_onto = self.take_stepped_onto();
+        self.count_took_step(stepped_onto);
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
@@ -414,24 +424,6 @@ impl OverworldPhase {
         // object events the scene draws.
         let runtime = self.scene.runtime().with_object_events(&self.object_events);
 
-        // `in_transit` read before this call's own movement, which is
-        // what defers a completed step to the call after the one that
-        // drained its animation (the "Frame shape" section above owns
-        // the derivation).
-        //
-        // `field_input_suppressed` withholds a forced landing from every
-        // completed-step consumer below, per upstream's `tookStep`/
-        // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
-        let stepped_onto = self
-            .pending_landing
-            .take_if(|_| !self.player.in_transit())
-            .filter(|_| !self.player.field_input_suppressed());
-        // `tookStep` (`field_control_avatar.c:116-118`) bumps the counter
-        // ahead of `TryStartStepBasedScript`'s coord event, door warp and
-        // step scripts (`:155-163`), so a landing those then claim counts.
-        if stepped_onto.is_some() {
-            self.save1.game_stats.increment(GameStat::Steps);
-        }
         // A stationary turn's own tile-centre observation, taken once its
         // busy timer has drained (`field_player_avatar.c:901-915`). It
         // feeds only the encounter gate below -- never the coord-event,
@@ -454,8 +446,16 @@ impl OverworldPhase {
         let landed = stepped_onto.filter(|_| !first_battle_triggered);
         // Retained previous elevation, not collision -- contract noted at
         // `resolve_pre_movement_field_input`'s `previous_elevation` local.
-        let door_warp = landed
-            .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.previous_elevation()));
+        // The escalator is the other `TryStartWarpEventScript` branch the
+        // arrived tile can fire (`:702-714`), checked beside the door and
+        // under the same claims, so everything keyed on `door_warp` below
+        // treats it as one completed-step warp.
+        let door_warp = landed.and_then(|(x, y)| {
+            let elevation = self.player.previous_elevation();
+            trigger_door_warp(&runtime, x, y, elevation)
+                .or_else(|| trigger_escalator_warp(&runtime, x, y, elevation))
+        });
+        let escalator_warp = door_warp.is_some() && landed_on_escalator(&runtime, landed);
         // `TryStartStepCountScript` runs inside `TryStartStepBasedScript`
         // after the coord event and the door-shaped warp, ahead of the
         // wild-encounter roll (`field_control_avatar.c:155-163,543-553`), so
@@ -478,16 +478,10 @@ impl OverworldPhase {
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
         // fightable map (`wild_table_fightable`), and only with a lead the
-        // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
-        // used to sit here too, for the one loss path issue #261's
-        // white-out could not yet cover (a lost Route 101 first battle --
-        // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
-        // #251's `first_battle_conclusion` now heals that lead the
-        // instant the battle ends, on every outcome, and a pre-#251 save
-        // that *serialized* the residual state is healed at load
-        // (`from_saved`'s migration, PR #291 review), so no path can
-        // leave a fainted lead standing here any more and the filter
-        // was removed
+        // turn engine admits (`wild_lead_admissible`). That shared lead
+        // screen also refuses a fainted lead, so a lead the healing paths
+        // cannot reach (an imported save, or an undecodable reserve that
+        // keeps the party's HP total nonzero) rolls nothing
         // (`crate::flow::wild_encounter`'s module docs, "Lead-health
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
@@ -544,6 +538,8 @@ impl OverworldPhase {
         let maps = MapConnections {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
+            departed: self.map_id,
+            departed_objects: &self.object_events,
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check
@@ -563,6 +559,8 @@ impl OverworldPhase {
                 || pre.interaction.is_some()
                 || pre.start_menu.is_some(),
         );
+
+        self.latch_escalator_walk_off_landing(walk_off_step, &outcome);
 
         // `DoGroundEffects_OnBeginStep` runs from the step's first movement
         // update (`event_object_movement.c:5354-5357`), so the grass it
@@ -587,6 +585,7 @@ impl OverworldPhase {
 
         // Warp, interaction, battle, then the START menu, in upstream's
         // `ProcessPlayerFieldInput` order.
+        let departed_from = self.map_id;
         self.resolve_step_events(
             warp_trigger,
             encounter,
@@ -595,6 +594,7 @@ impl OverworldPhase {
             pre.interaction,
             pre.start_menu,
         );
+        self.begin_escalator_arrival(escalator_warp, departed_from);
 
         // Map-edge connection crossing (issue #177): deferred to here,
         // `runtime`'s last use above (method docs' own section on this).
@@ -608,6 +608,18 @@ impl OverworldPhase {
         // after any warp above, so this reflects the post-warp tile on the
         // frame a warp lands.
         self.sync_saved_position();
+    }
+
+    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
+    /// (`field_control_avatar.c:116-118`), ahead of
+    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
+    /// (`:155-163`), so a landing those then claim still counts.
+    /// [`Self::take_stepped_onto`] already withholds the forced landing and
+    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
+        if stepped_onto.is_some() {
+            self.save1.game_stats.increment(GameStat::Steps);
+        }
     }
 
     /// Mirrors the player's logical tile into the retained save state.
@@ -662,7 +674,7 @@ impl OverworldPhase {
         // forced-movement tile that closes the first of those two states
         // (method doc, issue #926).
         let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
+            && !self.field_input_closed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -683,7 +695,7 @@ impl OverworldPhase {
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
         let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+            (!landing_claimed && arrow_trigger.is_none() && !self.field_input_closed())
                 .then(|| self.interaction_tokens_this_frame(buttons, runtime))
                 .flatten();
 
@@ -728,7 +740,12 @@ impl OverworldPhase {
         else {
             return;
         };
-        if self.cross_connection(to_map, to_position) {
+        // The departed-to-entered translation: the step has already left the
+        // player in the entered map's coordinates, so its previous tile there
+        // against its pre-step tile is the camera offset.
+        let (from, previous) = (pre_step_player.position(), self.player.previous_position());
+        let shift = (previous.0 - from.0, previous.1 - from.1);
+        if self.cross_connection(to_map, to_position, shift) {
             // The crossing step's own begin-step pass, on the entered map.
             self.scene
                 .player_step_began(to_position, self.player.previous_elevation());

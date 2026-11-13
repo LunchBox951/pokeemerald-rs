@@ -1,10 +1,22 @@
-//! The player's tall-grass field effect (`FLDEFF_TALL_GRASS`).
+//! The tall-grass field effect (`FLDEFF_TALL_GRASS`) of the player and of the
+//! scene's object events.
 //!
 //! Stepping onto an `MB_TALL_GRASS` tile starts a rustle sprite there
 //! (`GroundEffect_StepOnTallGrass`, `event_object_movement.c:7813-7825`, run at
 //! the *start* of the step by `DoGroundEffects_OnBeginStep`, `:8098-8116`);
 //! being placed on one -- a new game, a continue, a warp landing -- shows it
 //! already at rest (`GroundEffect_SpawnOnTallGrass`, `:7800-7811`).
+//!
+//! Every object event goes through the same two passes: each is created with
+//! `triggerGroundEffectsOnMove` set (`InitObjectEventStateFromTemplate`,
+//! `:1301`), and its sprite callback runs both before anything else
+//! (`UpdateObjectEventCurrentMovement`, `:4929-4945`). An effect therefore has an
+//! [`Owner`], the object whose tiles decide when it has left. An object gets its
+//! spawn-time pass on the first frame after the scheduler admits it
+//! ([`OverworldScene::seed_object_tall_grass`]) and a begin-step pass when its
+//! tile changes ([`OverworldScene::object_steps_began`]); an object the
+//! scheduler removes loses its effects at once, as the effect's callback finds no
+//! owner (`UpdateTallGrassFieldEffect`, `field_effect_helpers.c:332-337`).
 //!
 //! An effect is kept per tile and simulated like the sprite it models:
 //! [`TallGrassEffects::advance`] is `UpdateTallGrassFieldEffect`
@@ -15,15 +27,33 @@
 //! The sheet and palette are optional pack content: a pack without them draws
 //! no effect ([`load_resources`]).
 //!
-//! Not modelled: effects for object events other than the player, the long
-//! grass effect, and an effect's carry-over across a map-edge connection
-//! (`field_effect_helpers.c:325-330`).
+//! A player-owned effect survives a map-edge connection crossing, translated into
+//! the entered map's coordinates with its animation and moved-away state kept
+//! (`field_effect_helpers.c:325-330`): [`OverworldScene::carry_tall_grass_from`].
+//! The entered scene keeps no tileset attributes for its connected layouts, so
+//! the departed tile's behaviour is read from the departed scene as the effect
+//! crosses and kept with it; the tile must lie inside the entered map's backup
+//! band (`viewport::within_backup_map_band`) or the effect is dropped. An
+//! object-owned effect crosses with its owner, which the live collection keeps
+//! alive across the crossing (`ObjectEventCollection::carry_across_connection`):
+//! owners are named by [`LiveObjectEvent::id`], which a collection index is not,
+//! since the entered collection lists the entered map's templates first and
+//! removing a carried entry compacts the indices after it. The carried object's
+//! ground-effect pass is kept too, so the entered scene does not run a second
+//! spawn-time pass over it. An effect whose owner the crossing did not keep
+//! retires as in an ordinary owner removal.
+//!
+//! Not modelled: the long grass effect, and the camera's saved-view cells that
+//! upstream also copies into the entered map's backup grid
+//! (`fieldmap.c:473,617`).
+
+use std::collections::BTreeMap;
 
 use assets::pack::{AssetPack, PaletteRef};
 use assets::{ImageRef, PackError};
-#[cfg(test)]
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
 use engine::overworld::{PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
@@ -167,8 +197,23 @@ impl Animation {
     }
 }
 
+/// The object event whose ground-effect pass started an effect
+/// (`sLocalId`/`sMapNum`/`sMapGroup`, `field_effect_helpers.c:305-307`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Owner {
+    Player,
+    /// The scene's object event with this [`LiveObjectEvent::id`]. The id, not the entry's index
+    /// in the live collection, names the owner: removing a carried entry compacts the indices
+    /// after it, and a crossing seeds the entered map's templates ahead of the carried entries.
+    Object(u32),
+}
+
+/// An owner's current and previous tiles (`currentCoords`, `previousCoords`).
+type OwnerTiles = (TilePos, TilePos);
+
 #[derive(Debug, Clone, Copy)]
 struct TallGrassEffect {
+    owner: Owner,
     tile: TilePos,
     /// `sElevation`: the owner's `previousElevation` when the effect began.
     elevation: u8,
@@ -178,6 +223,9 @@ struct TallGrassEffect {
     /// Whether this frame's callback saw the first command, which adds
     /// [`FIRST_COMMAND_SUBPRIORITY`].
     on_first_command: bool,
+    /// The behaviour of a tile outside the active grid, which only a carried
+    /// effect can stand on: the connection strip's cell, read when it crossed.
+    strip_behavior: Option<u8>,
 }
 
 /// An object sprite an effect's depth is compared against
@@ -199,6 +247,13 @@ pub(super) struct TallGrassEffects {
     /// Whether the player's object event has not yet had its spawn-time
     /// ground effects (`triggerGroundEffectsOnMove`, `:1301`).
     placement_pending: bool,
+    /// Per [`LiveObjectEvent::id`]: the tile its object stood on when its last
+    /// ground-effect pass ran. An object with no sprite, or whose
+    /// `triggerGroundEffectsOnMove` is still set, has no record.
+    object_passes: BTreeMap<u32, TilePos>,
+    /// Whether the first frame's object admission has not yet run (map load's
+    /// `TrySpawnObjectEvents`, `overworld.c:2163`, ahead of the first callback).
+    admission_pending: bool,
 }
 
 impl TallGrassEffects {
@@ -207,7 +262,19 @@ impl TallGrassEffects {
         Self {
             effects: Vec::new(),
             placement_pending: true,
+            object_passes: BTreeMap::new(),
+            admission_pending: true,
         }
+    }
+
+    /// Whether the first-frame admission is still pending, without taking it.
+    pub(super) fn admission_pending(&self) -> bool {
+        self.admission_pending
+    }
+
+    /// Takes the pending first-frame admission, which runs once per scene.
+    pub(super) fn take_admission_pending(&mut self) -> bool {
+        std::mem::take(&mut self.admission_pending)
     }
 
     /// Takes the pending spawn-time pass, which runs once per placement.
@@ -217,14 +284,16 @@ impl TallGrassEffects {
 
     /// `GroundEffect_StepOnTallGrass`: a rustling effect on `tile`. A step
     /// settles the placement pass, as the object's first ground-effect pass.
-    pub(super) fn spawn_step(&mut self, tile: TilePos, elevation: u8) {
-        self.placement_pending = false;
-        self.push(tile, elevation, Animation::fresh());
+    pub(super) fn spawn_step(&mut self, owner: Owner, tile: TilePos, elevation: u8) {
+        if owner == Owner::Player {
+            self.placement_pending = false;
+        }
+        self.push(owner, tile, elevation, Animation::fresh());
     }
 
     /// `GroundEffect_SpawnOnTallGrass`: a settled effect on `tile`.
-    pub(super) fn spawn_placement(&mut self, tile: TilePos, elevation: u8) {
-        self.push(tile, elevation, Animation::settled());
+    pub(super) fn spawn_placement(&mut self, owner: Owner, tile: TilePos, elevation: u8) {
+        self.push(owner, tile, elevation, Animation::settled());
     }
 
     /// Records that the player's first ground-effect pass found no grass.
@@ -232,30 +301,63 @@ impl TallGrassEffects {
         self.placement_pending = false;
     }
 
-    fn push(&mut self, tile: TilePos, elevation: u8, animation: Animation) {
+    /// Whether the object `id` has had its spawn-time pass since it was
+    /// last admitted.
+    fn object_pass_done(&self, id: u32) -> bool {
+        self.object_pass_tile(id).is_some()
+    }
+
+    /// The tile the object `id` stood on at its last pass.
+    fn object_pass_tile(&self, id: u32) -> Option<TilePos> {
+        self.object_passes.get(&id).copied()
+    }
+
+    fn record_object_pass(&mut self, id: u32, tile: TilePos) {
+        self.object_passes.insert(id, tile);
+    }
+
+    /// The object `id` has no sprite: its next admission runs a spawn pass.
+    fn forget_object(&mut self, id: u32) {
+        self.object_passes.remove(&id);
+    }
+
+    /// Forgets the passes of objects no longer in the live collection, whose ids are never
+    /// reused.
+    fn retain_object_passes(&mut self, mut is_live: impl FnMut(u32) -> bool) {
+        self.object_passes.retain(|&id, _| is_live(id));
+    }
+
+    fn push(&mut self, owner: Owner, tile: TilePos, elevation: u8, animation: Animation) {
         self.effects.push(TallGrassEffect {
+            owner,
             tile,
             elevation,
             animation,
             owner_moved: false,
             on_first_command: false,
+            strip_behavior: None,
         });
     }
 
     /// One frame of every effect's callback and animation.
     ///
     /// `behavior_at` answers `MapGridGetMetatileBehaviorAt`; a tile it cannot
-    /// resolve is not tall grass. `owner` is the object event that started the
-    /// effects: its current and previous tiles decide when it has left.
+    /// resolve is not tall grass. `owner_tiles` answers an effect's owner's
+    /// current and previous tiles, which decide when it has left; an owner it
+    /// cannot find has been removed, and its effects go with it
+    /// (`TryGetObjectEventIdByLocalIdAndMap`, `field_effect_helpers.c:332-337`).
     pub(super) fn advance(
         &mut self,
-        owner: &PlayerState,
+        owner_tiles: impl Fn(Owner) -> Option<OwnerTiles>,
         behavior_at: impl Fn(TilePos) -> Option<u8>,
     ) {
-        let current = owner.position();
-        let previous = owner.previous_position();
         self.effects.retain_mut(|effect| {
-            let tall_grass = behavior_at(effect.tile).is_some_and(is_tall_grass);
+            let Some((current, previous)) = owner_tiles(effect.owner) else {
+                return false;
+            };
+            let tall_grass = behavior_at(effect.tile)
+                .or(effect.strip_behavior)
+                .is_some_and(is_tall_grass);
             if !tall_grass || (effect.owner_moved && effect.animation.ended) {
                 return false;
             }
@@ -358,6 +460,14 @@ impl TallGrassEffect {
     }
 }
 
+/// Whether the object has a sprite: the scheduler has admitted it and not since retired it. The
+/// hide flag was applied at admission, and a flag set afterwards leaves the sprite until a script's
+/// `removeobject` retires the entry (`RemoveObjectEventByLocalIdAndMap`,
+/// `event_object_movement.c:1389-1397`).
+fn has_sprite(live: &LiveObjectEvent) -> bool {
+    live.is_active()
+}
+
 impl OverworldScene {
     /// The player's spawn-time ground-effect pass (`DoGroundEffects_OnSpawn`,
     /// `event_object_movement.c:8080-8096`): a settled effect when the player
@@ -368,8 +478,11 @@ impl OverworldScene {
             return;
         }
         if self.is_tall_grass_at(player.position()) {
-            self.grass
-                .spawn_placement(player.position(), player.previous_elevation());
+            self.grass.spawn_placement(
+                Owner::Player,
+                player.position(),
+                player.previous_elevation(),
+            );
         }
     }
 
@@ -379,25 +492,183 @@ impl OverworldScene {
     /// began, which `ObjectEventUpdateElevation` has already updated.
     pub(crate) fn player_step_began(&mut self, tile: TilePos, elevation: u8) {
         if self.sprites.draws_tall_grass() && self.is_tall_grass_at(tile) {
-            self.grass.spawn_step(tile, elevation);
+            self.grass.spawn_step(Owner::Player, tile, elevation);
         } else {
             self.grass.settle_placement();
         }
     }
 
-    /// Destroys every effect and readies the player's spawn-time pass again,
-    /// as a return to the field does (`ResetSpriteData`, `overworld.c:2134`).
+    /// Whether the scene's first object frame has yet to run, without taking it.
+    pub(crate) fn object_admission_pending(&self) -> bool {
+        self.grass.admission_pending()
+    }
+
+    /// Takes the pending first-frame admission: true once per scene, on the
+    /// frame whose scheduler pass admits the objects already in view.
+    pub(crate) fn take_object_admission_pending(&mut self) -> bool {
+        self.grass.take_admission_pending()
+    }
+
+    /// The object events' spawn-time ground-effect pass
+    /// (`DoGroundEffects_OnSpawn`, `event_object_movement.c:8078-8096`): a
+    /// settled effect for each object the scheduler has admitted since its last
+    /// pass, standing on tall grass. The object's elevation is first settled on
+    /// its tile (`UpdateObjectEventElevationAndPriority`, `:8089`), and the
+    /// pass runs whether or not object events are frozen. An object without a
+    /// sprite (not admitted, outside the view, removed) is forgotten, so its next
+    /// admission runs the pass again (`triggerGroundEffectsOnMove`, `:1301`).
+    pub(crate) fn seed_object_tall_grass(
+        &mut self,
+        objects: &ObjectEventCollection,
+        _event_data: &EventData,
+    ) {
+        let draws = self.sprites.draws_tall_grass();
+        self.grass
+            .retain_object_passes(|id| objects.by_id(id).is_some());
+        for live in objects.iter() {
+            let id = live.id();
+            if !has_sprite(live) {
+                self.grass.forget_object(id);
+                continue;
+            }
+            if self.grass.object_pass_done(id) {
+                continue;
+            }
+            let state = live.state();
+            let tile = state.position();
+            self.grass.record_object_pass(id, tile);
+            if draws && self.is_tall_grass_at(tile) {
+                let elevation = state.previous_elevation();
+                self.grass
+                    .spawn_placement(Owner::Object(id), tile, elevation);
+            }
+        }
+    }
+
+    /// The object events' begin-step ground-effect pass
+    /// (`DoGroundEffects_OnBeginStep`, `:8098-8116`): a rustling effect for each
+    /// object whose step has just begun onto tall grass. The scheduler commits
+    /// a step's destination when the step begins, so an object whose tile
+    /// differs from its last pass's has begun one. Runs after the frame's
+    /// callbacks, as upstream's pass follows the movement callback.
+    pub(crate) fn object_steps_began(
+        &mut self,
+        objects: &ObjectEventCollection,
+        _event_data: &EventData,
+    ) {
+        let draws = self.sprites.draws_tall_grass();
+        for live in objects.iter() {
+            let id = live.id();
+            if !has_sprite(live) {
+                self.grass.forget_object(id);
+                continue;
+            }
+            let state = live.state();
+            let tile = state.position();
+            if self
+                .grass
+                .object_pass_tile(id)
+                .is_none_or(|last| last == tile)
+            {
+                continue;
+            }
+            self.grass.record_object_pass(id, tile);
+            if draws && self.is_tall_grass_at(tile) {
+                let elevation = state.previous_elevation();
+                self.grass.spawn_step(Owner::Object(id), tile, elevation);
+            }
+        }
+    }
+
+    /// Carries the live effects of `departed` into this just-loaded scene after
+    /// a seamless connection crossing (`UpdateTallGrassFieldEffect`,
+    /// `field_effect_helpers.c:325-330`). `shift` translates the departed map's
+    /// tile coordinates into this map's. `objects` is the object collection the
+    /// crossing leaves: an object-owned effect follows its owner, named by
+    /// [`LiveObjectEvent::id`], and is dropped with an owner the crossing did
+    /// not keep. An effect whose translated tile falls outside this map's backup
+    /// band is dropped. Animation, moved-away state, elevation, and depth state
+    /// are kept; so is each kept object's ground-effect pass, translated, so the
+    /// entered scene does not give a live object a second spawn-time effect. The
+    /// scene's own placement and admission passes are left to run.
+    pub(crate) fn carry_tall_grass_from(
+        &mut self,
+        departed: &Self,
+        shift: (i32, i32),
+        objects: &ObjectEventCollection,
+    ) {
+        if !self.sprites.draws_tall_grass() {
+            return;
+        }
+        let runtime = departed.runtime();
+        let (width, height) = (self.layout.width, self.layout.height);
+        let carried: Vec<TallGrassEffect> = departed
+            .grass
+            .effects
+            .iter()
+            .filter(|effect| match effect.owner {
+                Owner::Player => true,
+                Owner::Object(id) => objects.by_id(id).is_some_and(LiveObjectEvent::is_active),
+            })
+            .filter_map(|effect| {
+                let tile = (effect.tile.0 + shift.0, effect.tile.1 + shift.1);
+                if !viewport::within_backup_map_band(
+                    width,
+                    height,
+                    i64::from(tile.0),
+                    i64::from(tile.1),
+                ) {
+                    return None;
+                }
+                let behavior = runtime
+                    .metatile_behavior(effect.tile.0, effect.tile.1)
+                    .or(effect.strip_behavior);
+                Some(TallGrassEffect {
+                    tile,
+                    strip_behavior: behavior,
+                    ..*effect
+                })
+            })
+            .collect();
+        self.grass.effects.extend(carried);
+        for live in objects.iter().filter(|live| live.is_active()) {
+            if let Some(&(x, y)) = departed.grass.object_passes.get(&live.id()) {
+                self.grass
+                    .record_object_pass(live.id(), (x + shift.0, y + shift.1));
+            }
+        }
+    }
+
+    /// Destroys every effect and readies every object event's spawn-time pass
+    /// again, the player's included, as a return to the field does
+    /// (`ResetSpriteData`, `overworld.c:2134`, then `ResetObjectEventFldEffData`,
+    /// `event_object_movement.c:1795-1806`).
     pub(crate) fn reset_field_effects(&mut self) {
         self.grass = TallGrassEffects::new();
     }
 
     /// Runs every effect's callback and animation for one frame, after the
     /// frame's movement as `AnimateSprites` follows the player's own callback.
-    pub(crate) fn advance_tall_grass(&mut self, player: &PlayerState) {
+    /// `objects` are the owners of the object events' effects.
+    pub(crate) fn advance_tall_grass(
+        &mut self,
+        player: &PlayerState,
+        objects: &ObjectEventCollection,
+        _event_data: &EventData,
+    ) {
         let mut grass = std::mem::take(&mut self.grass);
         {
             let runtime = self.runtime();
-            grass.advance(player, |(x, y)| runtime.metatile_behavior(x, y));
+            grass.advance(
+                |owner| match owner {
+                    Owner::Player => Some((player.position(), player.previous_position())),
+                    Owner::Object(id) => objects
+                        .by_id(id)
+                        .filter(|live| has_sprite(live))
+                        .map(|live| (live.state().position(), live.state().previous_position())),
+                },
+                |(x, y)| runtime.metatile_behavior(x, y),
+            );
         }
         self.grass = grass;
     }

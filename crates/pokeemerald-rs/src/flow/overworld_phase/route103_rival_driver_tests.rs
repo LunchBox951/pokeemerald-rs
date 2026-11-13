@@ -423,7 +423,8 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
             Direction::East,
         ),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     route_101.rng = Rng::new(1);
     let ivs = Ivs {
         hp: battle::MAX_IV,
@@ -578,7 +579,7 @@ fn a_refused_rival_start_returns_the_lent_lead() {
 #[test]
 fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
     let mut phase = route_103_phase_facing_the_rival();
-    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     phase.rng = engine::rng::Rng::new(1);
 
@@ -597,6 +598,24 @@ fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
         "the lead returns with the item it was saved with"
     );
     phase.restore_lead_battler(lent);
+}
+
+/// After the take, the same lead starts the rival battle, and it carries no item.
+#[test]
+fn taking_a_refused_item_lets_the_rival_battle_start() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.set_fresh_lead_for_test(loaded_holding(
+        &overwhelming_treecko_lead(),
+        ItemId::ORAN_BERRY,
+    ));
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::ORAN_BERRY))
+    );
+
+    phase.step(pressed(Buttons::A));
+
+    assert!(phase.is_rival_battle_active(), "the battle starts");
 }
 
 /// A start refused for the starter variable also returns the lent lead.

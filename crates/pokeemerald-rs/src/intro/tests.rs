@@ -134,6 +134,7 @@ fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
     IntroScene::new(
         synthetic_sources(pixels),
         transparent_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         speed,
         NewGameOptions::DEFAULT,
     )
@@ -319,6 +320,98 @@ fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
     );
 }
 
+/// A scene printing `{SHIFT_DOWN shift_down}A\l` and then a long pause, so the
+/// scroll's 16 pixels finish before the page ends.
+fn scene_with_a_shifted_glyph_then_scroll(shift_down: u8) -> IntroScene {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: 0x0E,
+            args: vec![shift_down],
+        },
+        Token::Char('A'),
+        Token::PromptScroll,
+        Token::ExtCtrl {
+            sub: 0x08,
+            args: vec![u8::MAX],
+        },
+        Token::End,
+    ]);
+    scene
+}
+
+/// Reveals the glyph, answers the scroll prompt, and lets the scroll run out.
+fn scroll_past_the_prompt(scene: &mut IntroScene) {
+    const FRAMES_AFTER_THE_ANSWER: usize = 8;
+    scene.tick(NO_INPUT);
+    scene.tick(NO_INPUT);
+    scene.tick(PRESS_A);
+    for _ in 0..FRAMES_AFTER_THE_ANSWER {
+        scene.tick(NO_INPUT);
+    }
+}
+
+/// The glyph-wide strip of the speech window's content, one colour per window
+/// row.
+fn glyph_column_rows(scene: &IntroScene) -> Vec<Vec<Option<Rgb888>>> {
+    let fb = scene.compose();
+    (0..crate::textbox::STANDARD_BOX_CONTENT_SIZE_PX.1)
+        .map(|row| {
+            (0..i32::try_from(assets::fonts::GLYPH_SIZE).unwrap())
+                .map(|column| {
+                    let (x, y) = box_pixel((column, row));
+                    fb.pixel(x, y)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_glyph_clipped_below_the_window_stays_hidden_after_a_scroll() {
+    let blank = synthetic_scene(&transparent_glyph_sheet_pixels(), TextSpeed::Instant);
+    let background = glyph_column_rows(&blank);
+    // A lands at window y = 32, wholly below the 32-pixel window.
+    let mut scene = scene_with_a_shifted_glyph_then_scroll(31);
+    scene.tick(NO_INPUT);
+    assert_eq!(glyph_column_rows(&scene), background, "before scroll");
+
+    scroll_past_the_prompt(&mut scene);
+
+    assert_eq!(glyph_column_rows(&scene), background, "after scroll");
+}
+
+#[test]
+fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scroll() {
+    const LAST_WINDOW_ROW: usize = 31;
+    const SCROLL_PX: usize = 16;
+    let blank = synthetic_scene(&transparent_glyph_sheet_pixels(), TextSpeed::Instant);
+    let background = glyph_column_rows(&blank);
+    // A lands at window y = 31: only its top row is inside the window.
+    let mut scene = scene_with_a_shifted_glyph_then_scroll(30);
+    scene.tick(NO_INPUT);
+    let before = glyph_column_rows(&scene);
+    assert_ne!(before[LAST_WINDOW_ROW], background[LAST_WINDOW_ROW]);
+    for (row, pixels) in before.iter().enumerate().take(LAST_WINDOW_ROW) {
+        assert_eq!(pixels, &background[row], "before scroll row {row}");
+    }
+
+    scroll_past_the_prompt(&mut scene);
+
+    // The scroll moved the revealed row up; rows clipped at reveal never come
+    // back.
+    let after = glyph_column_rows(&scene);
+    for (row, pixels) in after.iter().enumerate() {
+        let expected = if row == LAST_WINDOW_ROW - SCROLL_PX {
+            &before[LAST_WINDOW_ROW]
+        } else {
+            &background[row]
+        };
+        assert_eq!(pixels, expected, "after scroll row {row}");
+    }
+}
+
 /// Upstream's message printer starts at window-local (0, 1)
 /// (`pokeemerald/src/menu.c:169-180`) in a window at tilemap (2, 15)
 /// (`pokeemerald/src/main_menu.c` `sNewGameBirchSpeechTextWindows`), so the
@@ -364,6 +457,7 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Mid,
         NewGameOptions::DEFAULT,
     );
@@ -392,12 +486,65 @@ fn box_pixel(content: (i32, i32)) -> (usize, usize) {
     (usize::try_from(x).unwrap(), usize::try_from(y).unwrap())
 }
 
+/// `[KEYPAD_ICON A_BUTTON, 'A']` mirrors the dialog regression: the speech
+/// window draws the icon at the printer's placement and starts the next glyph
+/// at the icon's right edge.
+#[test]
+fn a_keypad_icon_draws_at_the_printers_placement_and_the_next_glyph_follows_it() {
+    const ICON_A_ID: u8 = 0;
+    const ICON_A_WIDTH: i32 = 8;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        transparent_message_box(),
+        crate::textbox::test_keypad_icons(&[(0, 0, 2), (3, 5, 3)]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::KeypadIcon(ICON_A_ID),
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    let placement = scene
+        .printer
+        .keypad_icon()
+        .expect("the first tick places the icon");
+    assert_eq!(
+        (placement.x, placement.y),
+        (STANDARD_PRINTER_ORIGIN.0, STANDARD_PRINTER_ORIGIN.1)
+    );
+    let fb = scene.compose();
+    let at = |dx: i32, dy: i32| {
+        let (x, y) = box_pixel((placement.x + dx, placement.y + dy));
+        fb.pixel(x, y)
+    };
+    assert_eq!(at(0, 0), Some(DARK_GREY_GLYPH_COLOR), "icon index 2");
+    assert_eq!(at(3, 5), Some(SHADOW_GLYPH_COLOR), "icon index 3");
+    assert_eq!(at(ICON_A_WIDTH, 0), Some(Rgb888::BLACK), "no glyph yet");
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    let fb = scene.compose();
+    let (glyph_x, glyph_y) = box_pixel((
+        STANDARD_PRINTER_ORIGIN.0 + ICON_A_WIDTH + 4,
+        STANDARD_PRINTER_ORIGIN.1 + 8,
+    ));
+    assert_eq!(
+        fb.pixel(glyph_x, glyph_y),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the glyph starts after the icon"
+    );
+}
+
 #[test]
 fn clear_paints_the_erased_span_with_the_windows_background() {
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -460,6 +607,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
     let mut scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -501,6 +649,61 @@ fn clear_to_paints_only_up_to_its_target_column() {
         fb.pixel(still_glyph_x, still_glyph_y),
         Some(DARK_GREY_GLYPH_COLOR),
         "pixels past the target column belong to the same glyph and must stay visible"
+    );
+}
+
+#[test]
+fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
+    // `0x14` is `EXT_CTRL_CODE_MIN_LETTER_SPACING`; upstream copies the glyph
+    // and only then clears the gap up to the minimum (`pokeemerald/src/text.c`
+    // `:1146-1156`), so the opaque glyph's pixels inside the gap must show the
+    // window's background.
+    const MINIMUM: u8 = 12;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: 0x14,
+            args: vec![MINIMUM],
+        },
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue, "reveals 'A'");
+    assert!(
+        matches!(
+            scene.ops.as_slice(),
+            [WindowOp::Glyph(_), WindowOp::ClearSpan(_)]
+        ),
+        "the gap span follows the glyph in the same tick"
+    );
+
+    let fb = scene.compose();
+    let probe = |x: i32| {
+        let (x, y) = box_pixel((STANDARD_PRINTER_ORIGIN.0 + x, STANDARD_PRINTER_ORIGIN.1 + 8));
+        fb.pixel(x, y)
+    };
+    assert_eq!(
+        probe(2),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the glyph's own advance stays"
+    );
+    assert_eq!(
+        probe(NORMAL_A_ADVANCE_WIDTH + 2),
+        Some(SOLID_FRAME_COLOR),
+        "the gap up to the minimum is erased after the glyph draws"
+    );
+    assert_eq!(
+        probe(i32::from(MINIMUM) + 1),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "pixels past the minimum are untouched"
     );
 }
 
