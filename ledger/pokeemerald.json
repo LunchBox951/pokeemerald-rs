@@ -31259,6 +31259,14 @@
       "status": "pending"
     },
     "src/data/wallpapers.h": {
+      "artifacts": {
+        "non-default-standard-wallpapers": {
+          "reason": "src/data/wallpapers.h:179-197 sWallpapers entries 4-15 (Crag through Plain) are modelled as the closed PcWallpaperId manifest in upstream order, with the typed tiles, tilemap and [frame, background] palette payload AssetPack::pc_wallpaper returns for them (LoadWallpaperGfx and DrawWallpaper, src/pokemon_storage_system.c:5357-5387 and :5423-5439): tilemap words keep tile index, flips and palette bank, validated against the sheet and the pair. STUBBED because no producer fills these records yet: checkout extraction and supported-ROM import of the tile, tilemap and palette bytes are deferred, so a production pack holds no wallpaper entries and the accessor reports the missing entry. The four default wallpapers (IDs 0-3), Walda's wallpaper and every runtime consumer are not modelled. The parent header stays pending.",
+          "rust_target": "crates/assets/src/pack/pc_wallpaper.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
