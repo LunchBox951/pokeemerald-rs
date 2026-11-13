@@ -195,3 +195,33 @@ fn a_landing_that_triggers_a_door_warp_still_increments_first() {
     );
     assert_eq!(steps(&phase), 2);
 }
+
+/// The escalator arrival's east step is held movement
+/// (`field_effect.c:1813-1818`), so `runningState` stays `NOT_MOVING` and
+/// `tookStep` never fires for it (`field_control_avatar.c:118-119`): the
+/// walk-off is not counted, while the next ordinary step is.
+#[test]
+fn the_escalator_arrival_walk_off_does_not_increment() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.begin_escalator_arrival(true, MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_2F"));
+    for _ in 0..40 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.position(),
+        (5, 6),
+        "fixture precondition: the arrival walked the player one tile east"
+    );
+    assert_eq!(steps(&phase), 0, "the held walk-off is not a took-step");
+
+    // Control: an ordinary keypad step from the same tile counts.
+    for _ in 0..40 {
+        phase.step(held(Buttons::RIGHT));
+        if phase.player.position() == (6, 6) && !phase.player.in_transit() {
+            break;
+        }
+    }
+    phase.step(ButtonState::new());
+    assert_eq!(phase.player.position(), (6, 6));
+    assert_eq!(steps(&phase), 1, "an ordinary step is counted");
+}
