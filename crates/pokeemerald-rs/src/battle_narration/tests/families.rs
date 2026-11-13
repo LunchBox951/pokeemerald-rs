@@ -1,103 +1,20 @@
 //! One test per message family, driving [`Narrator`] with events and expanding
 //! the requests against upstream template text.
 
+use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
-use super::fixtures::{battler, narrator, render, request, scene, Fixture, RATTATA, ZIGZAGOON};
+use super::fixtures::{
+    battler, narrator, render, request, scene, upstream_fixture, Fixture, RATTATA, SPECIALS,
+    ZIGZAGOON,
+};
 use crate::battle_narration::{
     expand, AssetNames, BattleKind, NarrationError, NarrationRequest, Narrator, Side, TemplateId,
 };
 
-/// Upstream table templates (`src/battle_message.c`) keyed by `STRINGID_*`.
-const SLOTS: &[(u16, &str)] = &[
-    (12, "{B_TRAINER1_LOSE_TEXT}"),
-    (13, "{B_BUFF1} gained{B_BUFF2}\n{B_BUFF3} EXP. Points!\\p"),
-    (15, "{B_BUFF1} learned\n{B_BUFF2}!\\p"),
-    (16, "{B_BUFF1} is trying to\nlearn {B_BUFF2}.\\p"),
-    (17, "But, {B_BUFF1} can't learn\nmore than four moves.\\p"),
-    (18, "Delete a move to make\nroom for {B_BUFF2}?"),
-    (19, "{B_BUFF1} forgot\n{B_BUFF2}.\\p"),
-    (20, "{PAUSE 32}Stop learning\n{B_BUFF2}?"),
-    (21, "{B_BUFF1} did not learn\n{B_BUFF2}.\\p"),
-    (23, "{B_ATK_NAME_WITH_PREFIX}'s\nattack missed!"),
-    (28, "{B_ATK_NAME_WITH_PREFIX}\nfainted!\\p"),
-    (29, "{B_DEF_NAME_WITH_PREFIX}\nfainted!\\p"),
-    (30, "{B_PLAYER_NAME} got ¥{B_BUFF1}\nfor winning!\\p"),
-    (31, "{B_PLAYER_NAME} is out of\nusable POKéMON!\\p"),
-    (32, "{B_PLAYER_NAME} whited out!"),
-    (36, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade {B_EFF_NAME_WITH_PREFIX} sleep!"),
-    (41, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\npoisoned {B_EFF_NAME_WITH_PREFIX}!"),
-    (42, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby poison!"),
-    (48, "{B_ATK_NAME_WITH_PREFIX} is hurt\nby its burn!"),
-    (107, "{B_ATK_NAME_WITH_PREFIX} is fast\nasleep."),
-    (108, "{B_ATK_NAME_WITH_PREFIX} woke up!"),
-    (51, "{B_ATK_NAME_WITH_PREFIX} is\nfrozen solid!"),
-    (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
-    (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
-    (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
-    (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
-    (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
-    (209, "sharply "),
-    (210, "rose!"),
-    (211, "harshly "),
-    (212, "fell!"),
-    (216, "{B_DEF_NAME_WITH_PREFIX}'s {B_BUFF1}\n{B_BUFF2}"),
-    (217, "A critical hit!"),
-    (221, "It's not very effective…"),
-    (222, "It's super effective!"),
-    (219, "1, 2, and... Poof!\\p"),
-    (220, "And...\\p"),
-    (223, "Got away safely!\\p"),
-    (224, "Wild {B_BUFF1} fled!"),
-    (226, "Can't escape!\\p"),
-    (327, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade {B_CURRENT_MOVE} useless!"),
-    (329, ""),
-    (330, " a boosted"),
-    (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
-    (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
-    (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
-    (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
-];
-
-const SPECIALS: &[(&str, &str)] = &[
-    (
-        "sText_WildPkmnAppeared",
-        "Wild {B_OPPONENT_MON1_NAME} appeared!\\p",
-    ),
-    (
-        "sText_Trainer1WantsToBattle",
-        "{B_TRAINER1_CLASS} {B_TRAINER1_NAME}\nwould like to battle!\\p",
-    ),
-    ("sText_GoPkmn", "Go! {B_PLAYER_MON1_NAME}!"),
-    (
-        "sText_Trainer1SentOutPkmn",
-        "{B_TRAINER1_CLASS} {B_TRAINER1_NAME} sent\nout {B_OPPONENT_MON1_NAME}!",
-    ),
-    (
-        "sText_Trainer1SentOutPkmn2",
-        "{B_TRAINER1_CLASS} {B_TRAINER1_NAME} sent\nout {B_BUFF1}!",
-    ),
-    ("sText_GoPkmn2", "Go! {B_BUFF1}!"),
-    ("sText_DoItPkmn", "Do it! {B_BUFF1}!"),
-    ("sText_GoForItPkmn", "Go for it, {B_BUFF1}!"),
-    (
-        "sText_YourFoesWeakGetEmPkmn",
-        "Your foe's weak!\nGet 'em, {B_BUFF1}!",
-    ),
-    (
-        "sText_AttackerUsedX",
-        "{B_ATK_NAME_WITH_PREFIX} used\n{B_BUFF2}",
-    ),
-    ("sText_ExclamationMark", "!"),
-];
-
-fn fixture() -> Fixture {
-    Fixture::new(SLOTS, SPECIALS)
-}
-
 fn lines(requests: &[NarrationRequest]) -> Vec<String> {
-    let fixture = fixture();
+    let fixture = upstream_fixture();
     requests
         .iter()
         .map(|request| render(&expand(&fixture.table(), &AssetNames, request).unwrap()))
@@ -119,7 +36,7 @@ fn a_wild_battle_opens_by_naming_the_wild_pokemon() {
 
     assert_eq!(
         lines(&[narrator.introduction()]),
-        ["Wild RATTATA appeared!{SCROLL}"]
+        ["Wild RATTATA appeared!{CLEAR}"]
     );
     assert_eq!(narrator.initial_send_out(Side::Opponent), None);
     assert_eq!(
@@ -138,7 +55,7 @@ fn a_trainer_battle_opens_with_the_challenge_and_the_trainers_send_out() {
             narrator.initial_send_out(Side::Opponent).unwrap()
         ]),
         [
-            "YOUNGSTER BEN\nwould like to battle!{SCROLL}",
+            "YOUNGSTER BEN\nwould like to battle!{CLEAR}",
             "YOUNGSTER BEN sent\nout RATTATA!"
         ]
     );
@@ -222,6 +139,42 @@ fn a_frozen_user_prints_frozen_solid_and_a_thaw_names_the_move_that_caused_it() 
     );
 }
 
+/// `STRINGID_PKMNWASBURNED` names the effect battler and
+/// `STRINGID_PKMNWASDEFROSTED` the defender, which is the move's target in
+/// both (`battle_message.c:94,101`).
+#[test]
+fn a_burn_and_a_fire_move_defrost_name_the_target_not_the_user() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Burned {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+        BattleEvent::Burned {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::TargetDefrosted {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "Foe RATTATA was burned!",
+            "Foe RATTATA was\ndefrosted!",
+            "TORCHIC was burned!",
+            "TORCHIC was\ndefrosted!"
+        ]
+    );
+}
+
 #[test]
 fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
     let mut narrator = narrator(BattleKind::Trainer);
@@ -239,6 +192,46 @@ fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         ["Foe RATTATA is\nloafing around!", "TORCHIC used\nEMBER!"]
+    );
+}
+
+#[test]
+fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Disobeyed {
+            message: LoafMessage::Loafing,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::WontObey,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::PretendedNotToNotice,
+        },
+        BattleEvent::DisobedientSelfHit {
+            by_player: true,
+            damage: 3,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "TORCHIC is\nloafing around!",
+            "TORCHIC won't\nobey!",
+            "TORCHIC turned away!",
+            "TORCHIC pretended\nnot to notice!",
+            "TORCHIC won't\nobey!",
+            "It hurt itself in its\nconfusion!",
+            "TORCHIC ignored\norders!",
+            "TORCHIC began to nap!",
+            "TORCHIC\nfell asleep!",
+        ]
     );
 }
 
@@ -371,6 +364,131 @@ fn end_turn_poison_and_burn_name_the_battler_they_hurt() {
     );
 }
 
+/// `gLeechSeedStringIds` prints its set entry for the seeded target
+/// (`data/battle_scripts_1.s:1164`-`:1170`) and its drain entry once for the
+/// seeded battler, as the attacker, after both HP updates (`:3265`-`:3284`);
+/// the seeder's share prints nothing. `BattleScript_ItemHealHP_RemoveItem`
+/// names the holder as the scripting battler and its item as the last used one.
+#[test]
+fn leech_seed_and_oran_berry_print_their_own_messages() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Seeded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::SappedByLeechSeed {
+                    by_player: false,
+                    damage: 1,
+                },
+                BattleEvent::LeechSeedHealed {
+                    by_player: true,
+                    healed: 1,
+                },
+                BattleEvent::ItemRestoredHealth {
+                    by_player: true,
+                    item: ItemId::ORAN_BERRY,
+                    healed: 10,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA was seeded!",
+            "Wild RATTATA's health is\nsapped by LEECH SEED!",
+            "TORCHIC's ORAN BERRY\nrestored health!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectLeechSeed`'s `accuracycheck` jumps to
+/// `BattleScript_DoLeechSeed` on a miss (`data/battle_scripts_1.s:1163`), and
+/// `Cmd_setseeded` picks `B_MSG_LEECH_SEED_MISS` for that miss and for an
+/// already-seeded target alike (`src/battle_script_commands.c:6720`-`:6724`),
+/// so either failure names the target (`gLeechSeedStringIds`,
+/// `src/battle_message.c:963`) rather than the attacker's generic miss.
+#[test]
+fn a_missed_or_repeated_leech_seed_names_the_target_that_evaded_it() {
+    let mut narrator = narrator(BattleKind::Wild);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::LeechSeedEvaded {
+                    by_player: true,
+                    move_id: MoveId::LEECH_SEED,
+                },
+                BattleEvent::LeechSeedEvaded {
+                    by_player: false,
+                    move_id: MoveId::LEECH_SEED,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA evaded\nthe attack!",
+            "TORCHIC evaded\nthe attack!",
+        ]
+    );
+}
+
+#[test]
+fn attract_names_the_target_and_the_infatuated_actor_with_its_attractor() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::ATTRACT;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::Infatuated {
+                    by_player: true,
+                    move_id,
+                },
+                BattleEvent::InLove { by_player: false },
+                BattleEvent::ImmobilizedByLove {
+                    by_player: false,
+                    move_id,
+                },
+                BattleEvent::ObliviousPreventsAttraction {
+                    by_player: false,
+                    move_id,
+                },
+            ]
+        )),
+        [
+            "Wild RATTATA\nfell in love!",
+            "Wild RATTATA is in love\nwith TORCHIC!",
+            "Wild RATTATA is\nimmobilized by love!",
+            "TORCHIC's OBLIVIOUS\nprevents romance!",
+        ]
+    );
+}
+
+/// `BattleScript_CuteCharmActivates` prints `STRINGID_PKMNSXINFATUATEDY` with
+/// the holder as the defender and the infatuated attacker
+/// (`data/battle_scripts_1.s:4193`-`:4197`).
+#[test]
+fn cute_charm_names_its_holder_and_the_attacker_it_infatuated() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("SKITTY", Some(AbilityId::CUTE_CHARM));
+    let mut narrator = Narrator::new(scene);
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[BattleEvent::InfatuatedByCuteCharm {
+                by_player: true,
+                move_id: MoveId::TACKLE,
+            }]
+        )),
+        ["Wild SKITTY's CUTE CHARM\ninfatuated TORCHIC!"]
+    );
+}
+
 #[test]
 fn a_replacement_is_named_after_the_faint_that_precedes_it() {
     let mut narrator = narrator(BattleKind::Trainer);
@@ -390,7 +508,7 @@ fn a_replacement_is_named_after_the_faint_that_precedes_it() {
     assert_eq!(
         lines(&requests),
         [
-            "Foe RATTATA\nfainted!{SCROLL}",
+            "Foe RATTATA\nfainted!{CLEAR}",
             "YOUNGSTER BEN sent\nout ZIGZAGOON!",
             "Foe ZIGZAGOON's\nattack missed!"
         ]
@@ -440,17 +558,17 @@ fn experience_and_move_learning_print_in_upstream_order() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "TORCHIC gained\n1234 EXP. Points!{SCROLL}",
-            "TORCHIC is trying to\nlearn EMBER.{SCROLL}",
-            "But, TORCHIC can't learn\nmore than four moves.{SCROLL}",
+            "TORCHIC gained\n1234 EXP. Points!{CLEAR}",
+            "TORCHIC is trying to\nlearn EMBER.{CLEAR}",
+            "But, TORCHIC can't learn\nmore than four moves.{CLEAR}",
             "Delete a move to make\nroom for EMBER?",
-            "1, 2, and... Poof!{SCROLL}",
-            "TORCHIC forgot\nSCRATCH.{SCROLL}",
-            "And...{SCROLL}",
-            "TORCHIC learned\nEMBER!{SCROLL}",
+            "1, 2, and... Poof!{CLEAR}",
+            "TORCHIC forgot\nSCRATCH.{CLEAR}",
+            "And...{CLEAR}",
+            "TORCHIC learned\nEMBER!{CLEAR}",
             // `decode_to_string` spells `{PAUSE 32}` as its control code.
             "{CTRL:0x08}Stop learning\nEMBER?",
-            "TORCHIC did not learn\nEMBER.{SCROLL}",
+            "TORCHIC did not learn\nEMBER.{CLEAR}",
         ]
     );
 }
@@ -466,9 +584,9 @@ fn a_trainer_victory_prints_the_defeat_the_trainers_words_then_the_prize() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "Player defeated\nYOUNGSTER BEN!{SCROLL}",
+            "Player defeated\nYOUNGSTER BEN!{CLEAR}",
             "Good battle!{CTRL:0x09}",
-            "BRENDAN got ¥120\nfor winning!{SCROLL}"
+            "BRENDAN got ¥120\nfor winning!{CLEAR}"
         ]
     );
 }
@@ -483,7 +601,7 @@ fn a_loss_prints_both_whiteout_messages_and_a_wild_win_prints_nothing() {
             &[BattleEvent::Ended(BattleOutcome::PlayerLost)]
         )),
         [
-            "BRENDAN is out of\nusable POKéMON!{SCROLL}",
+            "BRENDAN is out of\nusable POKéMON!{CLEAR}",
             "BRENDAN whited out!"
         ]
     );
@@ -514,8 +632,8 @@ fn running_and_a_fleeing_wild_pokemon_print_their_own_lines() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "Can't escape!{SCROLL}",
-            "Got away safely!{SCROLL}",
+            "Can't escape!{CLEAR}",
+            "Got away safely!{CLEAR}",
             "Wild RATTATA fled!"
         ]
     );
@@ -533,6 +651,33 @@ fn a_cured_status_that_names_no_status_is_refused() {
         narrator.requests(&AssetNames, &event),
         Err(NarrationError::MissingContext("cured status"))
     );
+}
+
+/// Shed Skin names the cured status through `STATUS1_POISON` for either
+/// poison (`pokeemerald/src/battle_util.c:2620-2638`), so a bad poison cure
+/// narrates exactly as an ordinary one, whatever its stored counter.
+#[test]
+fn a_shed_skin_bad_poison_cure_narrates_as_poison() {
+    for by_player in [true, false] {
+        let expected = narrator(BattleKind::Wild).requests(
+            &AssetNames,
+            &BattleEvent::ShedSkinCured {
+                by_player,
+                status: Status1::Poisoned,
+            },
+        );
+        assert!(expected.is_ok(), "{expected:?}");
+        for counter in [0, 5, 15] {
+            let toxic = narrator(BattleKind::Wild).requests(
+                &AssetNames,
+                &BattleEvent::ShedSkinCured {
+                    by_player,
+                    status: Status1::BadPoisoned { counter },
+                },
+            );
+            assert_eq!(toxic, expected, "counter {counter}, by_player {by_player}");
+        }
+    }
 }
 
 #[test]
@@ -641,7 +786,7 @@ fn a_run_away_escape_names_the_fleeing_battler_and_its_ability() {
 
     assert_eq!(
         lines(&narrate(&mut narrator, &[escape])),
-        ["TORCHIC fled\nusing RUN AWAY!{SCROLL}"]
+        ["TORCHIC fled\nusing RUN AWAY!{CLEAR}"]
     );
 }
 
@@ -760,8 +905,8 @@ fn a_boosted_award_reads_gained_a_boosted() {
     assert_eq!(
         lines(&narrate(&mut narrator, &[award(false), award(true)])),
         [
-            "TORCHIC gained\n69 EXP. Points!{SCROLL}",
-            "TORCHIC gained a boosted\n69 EXP. Points!{SCROLL}",
+            "TORCHIC gained\n69 EXP. Points!{CLEAR}",
+            "TORCHIC gained a boosted\n69 EXP. Points!{CLEAR}",
         ]
     );
 }
