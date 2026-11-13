@@ -247,6 +247,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (280, "{B_ATK_NAME_WITH_PREFIX} turned away!"),
     (281, "{B_ATK_NAME_WITH_PREFIX} pretended\nnot to notice!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
+    (194, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nraised its SPEED!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
     (209, "sharply "),
     (210, "rose!"),
