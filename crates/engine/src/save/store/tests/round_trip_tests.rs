@@ -1,6 +1,7 @@
 //! Full-image geometry, save/load round trips, and sector rotation.
 
 use super::*;
+use crate::save::npc_objects::{SavedNpcObject, SavedNpcObjects};
 
 #[test]
 fn flash_image_keeps_full_physical_geometry() {
@@ -98,6 +99,57 @@ fn an_old_build_save_back_at_the_same_position_leaves_the_pair_untrusted() {
         !reopened.player_object_event.active,
         "a pair stamped by an earlier save must not be trusted"
     );
+}
+
+fn sample_npc_snapshot() -> SavedNpcObjects {
+    let tile = Coords16 { x: 16, y: 8 };
+    SavedNpcObjects::new(
+        0,
+        16,
+        vec![SavedNpcObject {
+            map_group: 0,
+            map_num: 16,
+            local_id: 1,
+            movement_type: 1,
+            facing_direction: 3,
+            current_elevation: 0,
+            previous_elevation: 4,
+            initial: tile,
+            current: tile,
+            previous: tile,
+        }],
+    )
+    .unwrap()
+}
+
+/// The non-player objects a save holds come back through the real sectors, and a later save
+/// without a snapshot withdraws them rather than leaving stale records to be adopted.
+#[test]
+fn the_npc_snapshot_survives_a_save_and_a_snapshotless_save_withdraws_it() {
+    let mut store = SaveStore::new();
+    let mut block1 = sample_block1();
+    block1.npc_objects = Some(sample_npc_snapshot());
+    store.save(&block1, &sample_block2());
+    assert_eq!(store.load().block1.npc_objects, block1.npc_objects);
+
+    block1.npc_objects = None;
+    store.save(&block1, &sample_block2());
+    assert_eq!(store.load().block1.npc_objects, None);
+}
+
+/// An unstamped writer (this build's predecessor, or any that rewrites the file) advances the
+/// counter and leaves the records in place: the snapshot, which it knows nothing about, is no
+/// longer the state of the game and must not be applied.
+#[test]
+fn an_unstamped_rewrite_withdraws_the_npc_snapshot() {
+    let mut store = SaveStore::new();
+    let mut block1 = sample_block1();
+    block1.npc_objects = Some(sample_npc_snapshot());
+    store.save(&block1, &sample_block2());
+    assert!(store.load().block1.npc_objects.is_some(), "fresh save");
+
+    write_without_a_generation_stamp(&mut store, block1.pos);
+    assert_eq!(store.load().block1.npc_objects, None);
 }
 
 /// An upstream-origin image -- `active` and `isPlayer` set, coordinates

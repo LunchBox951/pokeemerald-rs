@@ -267,6 +267,183 @@ mod rendered {
         }
     }
 
+    /// Route 101's real youngster alone on a roomy scene, as a continue's loaded scene.
+    fn youngster_scene() -> crate::overworld::OverworldScene {
+        let route_101 = MapEventsTable::new().resolve(ROUTE_101).unwrap();
+        let youngster = std::slice::from_ref(route_101.object_events.first().unwrap());
+        let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+            object_events: youngster,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+            ..*route_101
+        }));
+        crate::overworld::test_support::synthetic_scene_with_events(100, 100, events, &SPRITES)
+            .in_room_for_test(ROUTE_101)
+    }
+
+    #[test]
+    fn a_scheduler_turned_facing_survives_save_and_ordinary_continue() {
+        let mut phase = route_101_beside_the_youngster(0);
+        assert_eq!(
+            phase.object_events.get(1).unwrap().state().movement_type(),
+            MovementType::LookAround
+        );
+        idle_frames(&mut phase, 1);
+        assert_eq!(facing(&phase, 1), Direction::South, "the authored facing");
+        // Seed 0 turns him West on frame 33.
+        idle_frames(&mut phase, 32);
+        assert_eq!(facing(&phase, 1), Direction::West);
+        phase.copy_party_and_objects_to_save();
+        phase.save1.pos.x = i16::try_from(phase.player.position().0).unwrap();
+        phase.save1.pos.y = i16::try_from(phase.player.position().1).unwrap();
+
+        let resumed = OverworldPhase::from_saved(
+            youngster_scene(),
+            ROUTE_101,
+            phase.save1.clone(),
+            phase.save2.clone(),
+        );
+        let youngster = resumed.object_events.get(1).unwrap();
+        assert!(youngster.is_active(), "an active object is respawned");
+        assert_eq!(youngster.state().position(), YOUNGSTER);
+        assert_eq!(
+            youngster.state().facing(),
+            Direction::West,
+            "upstream restores the saved objectEvents' facing on CONTINUE"
+        );
+    }
+
+    /// The youngster after seed 0's frame-33 turn to the West, in a phase whose save1 holds the
+    /// player's tile as a step leaves it.
+    fn turned_west() -> OverworldPhase {
+        let mut phase = route_101_beside_the_youngster(0);
+        idle_frames(&mut phase, 1);
+        assert_eq!(facing(&phase, 1), Direction::South, "the authored facing");
+        idle_frames(&mut phase, 32);
+        assert_eq!(facing(&phase, 1), Direction::West);
+        phase.save1.pos.x = i16::try_from(phase.player.position().0).unwrap();
+        phase.save1.pos.y = i16::try_from(phase.player.position().1).unwrap();
+        phase
+    }
+
+    fn continued(
+        block1: engine::save::SaveBlock1,
+        block2: engine::save::SaveBlock2,
+    ) -> OverworldPhase {
+        OverworldPhase::from_saved(youngster_scene(), ROUTE_101, block1, block2)
+    }
+
+    #[test]
+    fn a_turn_survives_the_real_save_file_and_a_resumed_frame() {
+        let temp = crate::flow::tests::TempSave::new("npc-facing");
+        let mut slot = temp.slot();
+        let mut phase = turned_west();
+        crate::flow::save_continue_support::save_from_the_start_menu(&mut phase, &mut slot);
+
+        let loaded = slot.load();
+        let objects = loaded
+            .block1
+            .npc_objects
+            .as_ref()
+            .expect("this build's snapshot");
+        assert_eq!(objects.objects().len(), 1);
+        assert_eq!(
+            objects.objects()[0].facing_direction,
+            Direction::West.to_dir_id()
+        );
+
+        let mut resumed = continued(loaded.block1, loaded.block2);
+        assert_eq!(
+            facing(&resumed, 1),
+            Direction::West,
+            "before any resumed frame"
+        );
+        assert!(resumed.object_events.get(1).unwrap().is_active());
+        idle_frames(&mut resumed, 1);
+        assert_eq!(facing(&resumed, 1), Direction::West);
+        assert_eq!(
+            resumed.object_events.get(1).unwrap().state().position(),
+            YOUNGSTER
+        );
+    }
+
+    #[test]
+    fn a_save_without_a_snapshot_seeds_the_templates_as_before() {
+        let mut phase = turned_west();
+        phase.copy_party_and_objects_to_save();
+        phase.save1.npc_objects = None;
+
+        let resumed = continued(phase.save1.clone(), phase.save2.clone());
+
+        let youngster = resumed.object_events.get(1).unwrap();
+        assert_eq!(youngster.state().facing(), Direction::South);
+        assert!(
+            youngster.is_active(),
+            "admitted at map load, as a fresh entry is"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_of_another_map_is_not_applied() {
+        let mut phase = turned_west();
+        phase.copy_party_and_objects_to_save();
+        let objects = phase.save1.npc_objects.as_ref().unwrap();
+        phase.save1.npc_objects = engine::save::SavedNpcObjects::new(
+            objects.map_group(),
+            objects.map_num() + 1,
+            objects.objects().to_vec(),
+        );
+
+        let resumed = continued(phase.save1.clone(), phase.save2.clone());
+
+        assert_eq!(facing(&resumed, 1), Direction::South);
+    }
+
+    #[test]
+    fn a_snapshot_with_an_unreadable_record_is_refused_whole() {
+        let mut phase = turned_west();
+        phase.copy_party_and_objects_to_save();
+        let objects = phase.save1.npc_objects.as_ref().unwrap();
+        let mut unreadable = objects.objects()[0];
+        unreadable.movement_type = 0xFF;
+        phase.save1.npc_objects = engine::save::SavedNpcObjects::new(
+            objects.map_group(),
+            objects.map_num(),
+            vec![unreadable],
+        );
+
+        let resumed = continued(phase.save1.clone(), phase.save2.clone());
+
+        let youngster = resumed.object_events.get(1).unwrap();
+        assert!(
+            youngster.is_active(),
+            "the templates are seeded and admitted instead"
+        );
+        assert_eq!(youngster.state().facing(), Direction::South);
+    }
+
+    #[test]
+    fn an_empty_snapshot_respawns_nothing_until_the_player_moves() {
+        let mut phase = turned_west();
+        assert!(phase.object_events.remove_by_local_id(1));
+        phase.copy_party_and_objects_to_save();
+        assert!(phase
+            .save1
+            .npc_objects
+            .as_ref()
+            .unwrap()
+            .objects()
+            .is_empty());
+
+        let resumed = continued(phase.save1.clone(), phase.save2.clone());
+
+        assert!(
+            !resumed.object_events.get(1).unwrap().is_active(),
+            "no object was active at save time"
+        );
+    }
+
     #[test]
     fn turns_change_facing_but_leave_the_interaction_target_and_the_composed_frame_alone() {
         let mut phase = route_101_beside_the_youngster(0);

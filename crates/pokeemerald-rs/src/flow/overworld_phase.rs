@@ -57,6 +57,7 @@ mod live_battle_text;
 mod object_events;
 mod placement;
 mod route103_rival_trigger;
+mod saved_objects;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
@@ -506,11 +507,15 @@ impl OverworldPhase {
         // continue does not rerun the map's on-transition script, so a
         // previously set var (e.g. Route 103's rival sprite) must already
         // be here for the first composed frame to resolve it correctly.
-        let scene = overworld::load_room_from_source(
+        // The scene binds the sprites of the objects the save holds from a neighbouring map too,
+        // as a connection crossing's does, or they would stand solid and undrawn.
+        let carried = saved_objects::carried_templates(map_id, &block1);
+        let scene = overworld::load_room_carrying_from_source(
             &source,
             map_id,
             block2.player_gender.into(),
             &block1.event_data,
+            &carried,
         )?;
         let mut phase = Self::from_saved(scene, map_id, block1, block2);
         // The one production caller: retains the source the scene above
@@ -632,7 +637,9 @@ impl OverworldPhase {
             placement::saved_cell_elevation(&scene, position),
             tile_elevation,
         );
-        let object_events = connections::seed_object_events(&scene);
+        // An ordinary continue puts back the objects the save held; only a save without a
+        // snapshot of this map seeds the templates (and is admitted below).
+        let object_events = saved_objects::restore_or_seed(&scene, map_id, &block1, position);
         let mut phase = Self {
             scene,
             player: PlayerState::with_saved_elevations(
