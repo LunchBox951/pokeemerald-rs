@@ -153,7 +153,7 @@ fn a_connection_crossing_carries_the_order_history_into_the_entered_scene() {
     departed.update_object_elevations(&mut objects);
     assert!(npc_leads(&departed, &order(&departed, &objects)));
 
-    entered.carry_sprite_order_from(&departed, (0, 0));
+    entered.carry_sprite_order_from(&departed);
     objects
         .get_mut(1)
         .unwrap()

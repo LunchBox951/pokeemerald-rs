@@ -123,6 +123,7 @@ fn an_effect_on_a_tile_that_is_no_longer_tall_grass_is_removed_at_once() {
 
 fn effect(elevation: u8, on_first_command: bool) -> TallGrassEffect {
     TallGrassEffect {
+        serial: 0,
         owner: Owner::Player,
         tile: TILE,
         elevation,
@@ -225,4 +226,61 @@ fn each_effect_is_judged_against_its_own_owners_tiles() {
         "only the owner that left loses its effect"
     );
     assert_eq!(effects.effects[0].owner, Owner::Object(0));
+}
+
+/// The effects' OBJs, tagged by palette bank with their creation rank, in the
+/// order `order` draws them. Each is tied in every depth key with the others.
+fn drawn_ranks(effects: &TallGrassEffects, order: &mut npc::SpriteOrder) -> Vec<u8> {
+    let sprites: Vec<npc::DepthSprite> = effects
+        .oam_entries(&owner_on_tile(), 0, &[])
+        .into_iter()
+        .map(|(entry, subpriority, id)| {
+            let npc::SpriteId::Effect(serial) = id else {
+                panic!("an effect names itself by serial");
+            };
+            let tagged = SheetSprite::new(
+                OamEntry::new(
+                    entry.x().unsigned_abs(),
+                    entry.y(),
+                    0,
+                    u8::try_from(serial).unwrap(),
+                    BitDepth::Bpp4,
+                    false,
+                    false,
+                    OBJ_SHAPE,
+                    OBJ_SIZE,
+                    OBJ_PRIORITY,
+                    true,
+                ),
+                0,
+            );
+            npc::DepthSprite::with_subpriority(tagged, subpriority).with_id(id)
+        })
+        .collect();
+    order
+        .order(&sprites)
+        .iter()
+        .map(|sprite| sprite.palette_bank())
+        .collect()
+}
+
+/// An effect keeps the draw-order identity it was created with: when an older
+/// effect on the same tile expires, a survivor is not renumbered into the
+/// expired one's history slot, so it does not jump ahead of a tied effect.
+#[test]
+fn an_older_effect_expiring_keeps_a_younger_tied_effects_place() {
+    let mut effects = TallGrassEffects::new();
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
+    effects.spawn_placement(Owner::Object(7), TILE, ELEVATION);
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
+    let mut order = npc::SpriteOrder::default();
+    assert_eq!(drawn_ranks(&effects, &mut order), [0, 1, 2]);
+
+    // The first effect expires, as `advance` drops an ended effect.
+    effects.effects.remove(0);
+    assert_eq!(
+        drawn_ranks(&effects, &mut order),
+        [1, 2],
+        "the younger player effect stays behind the other owner's"
+    );
 }

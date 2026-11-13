@@ -194,13 +194,9 @@ pub(in crate::overworld) enum SpriteId {
     Player,
     /// The scene's object event with this `LiveObjectEvent::id`.
     Object(u32),
-    /// A tall-grass effect: its owner (`None` for the player), its tile, and
-    /// which of that owner's effects on the tile it is, in creation order.
-    Effect {
-        owner: Option<u32>,
-        tile: (i32, i32),
-        nth: u8,
-    },
+    /// A tall-grass effect, by the serial it was created with, which it keeps
+    /// for its whole life.
+    Effect(u32),
 }
 
 /// Upstream's persistent `sSpriteOrder`, as far as it shows in the draw order.
@@ -227,33 +223,12 @@ pub(in crate::overworld) enum SpriteId {
 /// as a new sprite; and a slot freed and reused before an intervening sort
 /// would hand the new sprite its predecessor's place, but the port has no slot
 /// to name.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(in crate::overworld) struct SpriteOrder {
     previous: Vec<SpriteId>,
 }
 
 impl SpriteOrder {
-    /// This history in the coordinates of a map `shift` tiles on, for a seamless
-    /// connection crossing, which keeps every sprite (`LoadMapFromCameraTransition`,
-    /// `overworld.c:784-825`, never calls `ResetSpriteData`): objects and the
-    /// player keep their ids, and a tall-grass effect follows its tile.
-    pub(in crate::overworld) fn shifted(&self, shift: (i32, i32)) -> Self {
-        Self {
-            previous: self
-                .previous
-                .iter()
-                .map(|&id| match id {
-                    SpriteId::Effect { owner, tile, nth } => SpriteId::Effect {
-                        owner,
-                        tile: (tile.0 + shift.0, tile.1 + shift.1),
-                        nth,
-                    },
-                    other => other,
-                })
-                .collect(),
-        }
-    }
-
     /// Orders `sprites` as upstream emits OAM, ascending by parent OBJ
     /// priority, then subpriority, then lower on-screen signed `y`
     /// (`SortSprites`, `sprite.c:413-419`); sprites tied in all three keep the

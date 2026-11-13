@@ -213,6 +213,11 @@ type OwnerTiles = (TilePos, TilePos);
 
 #[derive(Debug, Clone, Copy)]
 struct TallGrassEffect {
+    /// Names this effect for its whole life, across a connection crossing:
+    /// [`TallGrassEffects::push`] numbers effects in creation order. The depth
+    /// order's history keys on it, so an older effect's expiry cannot renumber
+    /// a survivor.
+    serial: u32,
     owner: Owner,
     tile: TilePos,
     /// `sElevation`: the owner's `previousElevation` when the effect began.
@@ -244,6 +249,8 @@ pub(super) struct DepthObject {
 #[derive(Debug, Default)]
 pub(super) struct TallGrassEffects {
     effects: Vec<TallGrassEffect>,
+    /// The [`TallGrassEffect::serial`] the next effect takes.
+    next_serial: u32,
     /// Whether the player's object event has not yet had its spawn-time
     /// ground effects (`triggerGroundEffectsOnMove`, `:1301`).
     placement_pending: bool,
@@ -261,6 +268,7 @@ impl TallGrassEffects {
     pub(super) fn new() -> Self {
         Self {
             effects: Vec::new(),
+            next_serial: 0,
             placement_pending: true,
             object_passes: BTreeMap::new(),
             admission_pending: true,
@@ -328,7 +336,10 @@ impl TallGrassEffects {
     }
 
     fn push(&mut self, owner: Owner, tile: TilePos, elevation: u8, animation: Animation) {
+        let serial = self.next_serial;
+        self.next_serial += 1;
         self.effects.push(TallGrassEffect {
+            serial,
             owner,
             tile,
             elevation,
@@ -383,8 +394,7 @@ impl TallGrassEffects {
         let (lag_x, lag_y) = viewport::camera_lag_px(player);
         self.effects
             .iter()
-            .enumerate()
-            .filter_map(|(index, effect)| {
+            .filter_map(|effect| {
                 // The effect covers the tile under the player's lower half:
                 // one metatile below an object event's 16x32 top.
                 let left = i32::from(avatar::PLAYER_OBJ_X)
@@ -414,18 +424,7 @@ impl TallGrassEffects {
                     ),
                     sheet_tile,
                 );
-                let nth = self.effects[..index]
-                    .iter()
-                    .filter(|earlier| earlier.owner == effect.owner && earlier.tile == effect.tile)
-                    .count();
-                let id = npc::SpriteId::Effect {
-                    owner: match effect.owner {
-                        Owner::Player => None,
-                        Owner::Object(id) => Some(id),
-                    },
-                    tile: effect.tile,
-                    nth: u8::try_from(nth).unwrap_or(u8::MAX),
-                };
+                let id = npc::SpriteId::Effect(effect.serial);
                 Some((entry, effect.subpriority(left, top, objects), id))
             })
             .collect()
@@ -595,11 +594,11 @@ impl OverworldScene {
     }
 
     /// Carries the sprite draw-order history of `departed` into this just-loaded
-    /// scene after a seamless connection crossing, `shift` tiles into this map's
-    /// coordinates; a crossing keeps the sprites and so their order.
-    pub(crate) fn carry_sprite_order_from(&mut self, departed: &Self, shift: (i32, i32)) {
-        self.sprites
-            .carry_sprite_order_from(&departed.sprites, shift);
+    /// scene after a seamless connection crossing, which keeps the sprites and
+    /// so their order. Objects and effects keep the identities the history names
+    /// them by ([`Self::carry_tall_grass_from`] keeps each effect's serial).
+    pub(crate) fn carry_sprite_order_from(&mut self, departed: &Self) {
+        self.sprites.carry_sprite_order_from(&departed.sprites);
     }
 
     /// Carries the live effects of `departed` into this just-loaded scene after
@@ -652,6 +651,12 @@ impl OverworldScene {
                 })
             })
             .collect();
+        // The carried effects keep their serials, so the order history that names
+        // them still does; this scene's own serials start after them.
+        self.grass.next_serial = carried
+            .iter()
+            .map(|effect| effect.serial + 1)
+            .fold(self.grass.next_serial, u32::max);
         self.grass.effects.extend(carried);
         for live in objects.iter().filter(|live| live.is_active()) {
             if let Some(&(x, y)) = departed.grass.object_passes.get(&live.id()) {

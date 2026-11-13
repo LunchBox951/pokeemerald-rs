@@ -181,12 +181,12 @@ impl SceneSprites {
         self.sprite_order.take();
     }
 
-    /// Takes over `departed`'s draw-order history, `shift` tiles into this map's
-    /// coordinates, after a seamless connection crossing, which keeps every
-    /// sprite and so `sSpriteOrder` (`LoadMapFromCameraTransition`,
-    /// `overworld.c:784-825`).
-    pub(super) fn carry_sprite_order_from(&self, departed: &Self, shift: (i32, i32)) {
-        *self.sprite_order.borrow_mut() = departed.sprite_order.borrow().shifted(shift);
+    /// Takes over `departed`'s draw-order history after a seamless connection
+    /// crossing, which keeps every sprite and so `sSpriteOrder`
+    /// (`LoadMapFromCameraTransition`, `overworld.c:784-825`).
+    pub(super) fn carry_sprite_order_from(&self, departed: &Self) {
+        self.sprite_order
+            .replace(departed.sprite_order.borrow().clone());
     }
 
     /// Whether the pack supplied the tall-grass effect's sheet and palette.

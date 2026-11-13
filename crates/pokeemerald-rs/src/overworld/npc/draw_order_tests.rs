@@ -298,26 +298,22 @@ fn sprite_order_gives_an_unnamed_sprite_no_history() {
     );
 }
 
-/// A crossing translates a tall-grass effect's identity with its tile, so the
-/// effect keeps its place, and leaves objects and the player named as they were.
+/// A tall-grass effect is named by its serial alone, so a cloned history (the
+/// connection crossing's carry) keeps an effect's place beside an object.
 #[test]
-fn sprite_order_shifted_follows_an_effect_across_a_crossing() {
-    let effect = |tile: (i32, i32), bank: u8, y: u8| {
-        DepthSprite::with_subpriority(tagged_at(y, bank), 100).with_id(SpriteId::Effect {
-            owner: None,
-            tile,
-            nth: 0,
-        })
+fn sprite_order_clone_keeps_an_effects_place() {
+    let effect = |serial: u32, bank: u8, y: u8| {
+        DepthSprite::with_subpriority(tagged_at(y, bank), 100).with_id(SpriteId::Effect(serial))
     };
     let mut order = SpriteOrder::default();
     assert_eq!(
-        banks(&mut order, &[effect((3, 4), 0, 70), object(1, 40)]),
+        banks(&mut order, &[effect(3, 0, 70), object(1, 40)]),
         [0, 1]
     );
-    let mut order = order.shifted((-2, 5));
-    // Both tied now: the effect, moved to its shifted tile, still leads.
+    let mut carried = order.clone();
+    // Both tied now: the effect still leads, whatever the listing order.
     assert_eq!(
-        banks(&mut order, &[object(1, 40), effect((1, 9), 0, 40)]),
+        banks(&mut carried, &[object(1, 40), effect(3, 0, 40)]),
         [0, 1]
     );
 }
