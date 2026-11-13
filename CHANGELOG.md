@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.124.0] - 2026-11-13
+## [0.0.125.0] - 2026-11-13
 
 - General improvements in preparation for dialogue text that changes colour mid-line, with highlighted and shadowed words.
+
+## [0.0.124.0] - 2026-11-13
+
+- General improvements in preparation for game statistics, such as a count of the steps you take.
 
 ## [0.0.123.0] - 2026-11-13
 
@@ -561,7 +565,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.124.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cb63d96e6399c057df86b5e103ad985c772f1d55...dev
+[0.0.125.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/685d7358aa2372042630ee889f0e731c324296d4...dev
+[0.0.124.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cb63d96e6399c057df86b5e103ad985c772f1d55...685d7358aa2372042630ee889f0e731c324296d4
 [0.0.123.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5bc427b52affc7926f5ef151a6c8f61aea0399a6...cb63d96e6399c057df86b5e103ad985c772f1d55
 [0.0.122.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b97228fd8ec88b037fa676694630a9af1640a005...5bc427b52affc7926f5ef151a6c8f61aea0399a6
 [0.0.121.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf410482c663a1f400e85eeb33694f955affcd51...b97228fd8ec88b037fa676694630a9af1640a005
