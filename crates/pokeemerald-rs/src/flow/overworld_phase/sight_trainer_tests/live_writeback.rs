@@ -205,7 +205,6 @@ fn the_stopped_trainers_cone_is_measured_from_where_it_stopped() {
             objects,
             &phase.scene.runtime(),
             &PlayerState::new(tile, 3, Direction::North),
-            &phase.save1().event_data,
         )
     };
     assert!(
