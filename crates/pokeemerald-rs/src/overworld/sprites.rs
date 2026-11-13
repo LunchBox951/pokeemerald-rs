@@ -8,6 +8,7 @@
 //! ROM-side image store; composing stages only the drawn frames into OBJ VRAM
 //! (`super::obj_vram`), so its size is not bound by the ten-bit OBJ tile field.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
@@ -39,6 +40,10 @@ pub(super) struct SceneSprites {
     /// its live tile.
     cell_elevations: CellElevations,
     bindings: HashMap<&'static str, SpriteBinding>,
+    /// The previous frame's draw order, which an exact depth tie keeps
+    /// (`sSpriteOrder`, `sprite.c:372-440`). Composing is `&self`, so the
+    /// history is interior state; composing the same frame again changes nothing.
+    sprite_order: RefCell<npc::SpriteOrder>,
 }
 
 use engine::overworld::collision::ELEVATION_TRANSITION;
@@ -161,12 +166,27 @@ impl SceneSprites {
             },
             cell_elevations,
             bindings,
+            sprite_order: RefCell::default(),
         })
     }
 
     #[cfg(test)]
     pub(super) const fn grass_base_tile(&self) -> Option<u16> {
         self.grass_base_tile
+    }
+
+    /// Forgets the draw-order history, as `ResetSpriteData` resets `sSpriteOrder`
+    /// to the identity (`sprite.c:848-858`).
+    pub(super) fn reset_sprite_order(&self) {
+        self.sprite_order.take();
+    }
+
+    /// Takes over `departed`'s draw-order history, `shift` tiles into this map's
+    /// coordinates, after a seamless connection crossing, which keeps every
+    /// sprite and so `sSpriteOrder` (`LoadMapFromCameraTransition`,
+    /// `overworld.c:784-825`).
+    pub(super) fn carry_sprite_order_from(&self, departed: &Self, shift: (i32, i32)) {
+        *self.sprite_order.borrow_mut() = departed.sprite_order.borrow().shifted(shift);
     }
 
     /// Whether the pack supplied the tall-grass effect's sheet and palette.
@@ -203,7 +223,8 @@ impl SceneSprites {
 
     /// Lists the player first, then NPCs in `objects` order, then the tall-grass
     /// effects, and orders by OBJ priority and y-derived subpriority
-    /// ([`npc::order_sprites`]); the player leads a tie in every sort key.
+    /// ([`npc::SpriteOrder`]); a tie in every sort key keeps the order of the
+    /// previous call, and sprites new together tie in this listing order.
     /// `objects` supplies tile, facing, and the retained elevation that sets
     /// each sprite's priority, settled by
     /// [`Self::update_object_elevations`]; the scene's templates keep the graphics
@@ -224,7 +245,8 @@ impl SceneSprites {
         let mut sprites = vec![npc::DepthSprite::single(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
-        )];
+        )
+        .with_id(npc::SpriteId::Player)];
         sprites.extend(npc::elevated_oam_entries(
             objects,
             &elevations,
@@ -245,12 +267,12 @@ impl SceneSprites {
                 grass
                     .oam_entries(player, first_tile, &depth_objects)
                     .into_iter()
-                    .map(|(entry, subpriority)| {
-                        npc::DepthSprite::with_subpriority(entry, subpriority)
+                    .map(|(entry, subpriority, id)| {
+                        npc::DepthSprite::with_subpriority(entry, subpriority).with_id(id)
                     }),
             );
         }
-        npc::order_sprites(&sprites)
+        self.sprite_order.borrow_mut().order(&sprites)
     }
 
     pub(super) const fn tiles(&self) -> &Tileset {

@@ -90,6 +90,8 @@ mod tileset_anims;
 mod viewport;
 
 #[cfg(test)]
+mod depth_tie_order_tests;
+#[cfg(test)]
 mod retained_elevation_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -597,7 +599,11 @@ impl OverworldScene {
     /// [`Framebuffer`].
     ///
     /// `event_data` controls object visibility, and `tick` selects the animated tile frames.
-    /// The result is deterministic for this scene and the supplied arguments.
+    /// The result is deterministic for this scene, the supplied arguments, and the
+    /// scene's composition history: sprites tied in every depth key keep the order
+    /// of the previous composition (`sSpriteOrder`, `sprite.c:372-440`), so an
+    /// intervening [`Self::compose_live`] can change which of two overlapping tied
+    /// sprites is drawn on top. Composing the same frame again changes nothing.
     /// The sprite layer uses the reduced HBlank-free interval OAM budget because overworld setup enables
     /// `DISPCNT_HBLANK_INTERVAL` (`pokeemerald/src/overworld.c:2122-2123`).
     ///

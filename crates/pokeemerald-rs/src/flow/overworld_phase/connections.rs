@@ -548,6 +548,9 @@ impl OverworldPhase {
         // The still-live rustles, the player's and those of the objects just kept, follow the
         // camera into the entered map's coordinates (`field_effect_helpers.c:325-330`).
         scene.carry_tall_grass_from(&self.scene, shift, &object_events);
+        // The sprites persist across the crossing, and so does their draw order
+        // (`sSpriteOrder`, `sprite.c:372-440`).
+        scene.carry_sprite_order_from(&self.scene, shift);
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = to_map;

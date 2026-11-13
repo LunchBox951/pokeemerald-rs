@@ -22,8 +22,9 @@
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
 //! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`)
 //! taken from the sprite's bottom edge. [`rendering::SpriteLayer`] has no
-//! subpriority, so [`order_sprites`] reproduces it by giving the
-//! lower-on-screen object the lower OAM index. The 48x48 truck is twelve
+//! subpriority, so [`SpriteOrder`] reproduces it by giving the
+//! lower-on-screen object the lower OAM index, and keeping last frame's order
+//! where every sort key ties. The 48x48 truck is twelve
 //! horizontal OBJs (`sOamTable_48x48`) that sort as one object by the parent's
 //! priority and subpriority and all draw at priority 2.
 
@@ -429,12 +430,13 @@ use engine::overworld::PlayerState;
 #[cfg(test)]
 use oam::OAM_Y_MODULUS;
 pub(super) use oam::{
-    elevated_oam_entries, order_sprites, subpriority_from_bottom, wrap_oam_x, wrap_oam_y,
-    DepthSprite,
+    elevated_oam_entries, subpriority_from_bottom, wrap_oam_x, wrap_oam_y, DepthSprite, SpriteId,
+    SpriteOrder,
 };
 #[cfg(test)]
 use oam::{
-    oam_entries, object_origin, object_screen_position, order_by_depth, subpriority, truck_entries,
+    oam_entries, object_origin, object_screen_position, order_by_depth, order_sprites, subpriority,
+    truck_entries,
 };
 
 #[cfg(test)]

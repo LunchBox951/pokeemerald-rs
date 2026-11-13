@@ -3,7 +3,7 @@
 //! upstream's subpriority sort.
 //!
 //! [`elevated_oam_entries`] turns each active, bound object event into a
-//! [`DepthSprite`], and [`order_sprites`] orders the player, those sprites and
+//! [`DepthSprite`], and [`SpriteOrder`] orders the player, those sprites and
 //! any field-effect sprites as `SortSprites` hands them to the PPU
 //! (`sprite.c:413-419`). Every OBJ is a [`SheetSprite`] carrying the unmasked
 //! index of its frame in the combined sheet until OBJ VRAM staging. Bindings,
@@ -120,6 +120,9 @@ pub(in crate::overworld) struct DepthSprite {
     parent_y: u8,
     /// The parent's subpriority.
     pub(super) subpriority: u16,
+    /// Which sprite this is across frames, for [`SpriteOrder`]; `None` for a
+    /// sprite with no history, which is new on every frame.
+    id: Option<SpriteId>,
 }
 
 impl DepthSprite {
@@ -143,7 +146,14 @@ impl DepthSprite {
             parent_y: entry.y(),
             subpriority,
             entries: vec![entry],
+            id: None,
         }
+    }
+
+    /// This sprite named `id` for [`SpriteOrder`].
+    pub(in crate::overworld) const fn with_id(mut self, id: SpriteId) -> Self {
+        self.id = Some(id);
+        self
     }
 
     /// The parent's on-screen left `x`: its first OBJ's, which for the truck
@@ -176,23 +186,118 @@ fn signed_screen_y(y: u8) -> i16 {
     }
 }
 
-/// Orders sprites as upstream emits OAM: ascending parent OBJ priority, then
-/// subpriority, then lower on-screen signed `y` (`SortSprites`,
-/// `sprite.c:413-419`); ties keep input order and each sprite's OBJs stay
-/// together. The emitted OBJs keep their wrapped `y`.
-pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
-    let mut ordered: Vec<&DepthSprite> = sprites.iter().collect();
-    ordered.sort_by_key(|sprite| {
-        (
-            sprite.parent_priority,
-            sprite.subpriority,
-            std::cmp::Reverse(signed_screen_y(sprite.parent_y)),
-        )
-    });
-    ordered
-        .into_iter()
-        .flat_map(|sprite| sprite.entries.iter().copied())
-        .collect()
+/// Which sprite a [`DepthSprite`] is from one frame to the next: the slot
+/// upstream's `sSpriteOrder` keeps its place for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::overworld) enum SpriteId {
+    /// The player's object event.
+    Player,
+    /// The scene's object event with this `LiveObjectEvent::id`.
+    Object(u32),
+    /// A tall-grass effect: its owner (`None` for the player), its tile, and
+    /// which of that owner's effects on the tile it is, in creation order.
+    Effect {
+        owner: Option<u32>,
+        tile: (i32, i32),
+        nth: u8,
+    },
+}
+
+/// Upstream's persistent `sSpriteOrder`, as far as it shows in the draw order.
+///
+/// `SortSprites` (`sprite.c:372-440`) is an insertion sort over the previous
+/// frame's permutation that swaps two neighbours only when the earlier one has
+/// a strictly greater `subpriority | priority << 8`, or an equal one and a
+/// strictly smaller signed `oam.y` (`:413-415`). That is a stable sort of the
+/// previous order, so sprites tied in every key keep last frame's order. The
+/// order is reset to the identity only with the sprite table
+/// (`ResetAllSprites`, `sprite.c:848-858`), which a scene's load stands for.
+///
+/// An unused sprite is `sDummySprite` (subpriority `0xFF`, OBJ priority 3,
+/// `y` 160; `sprite.c:101-115,159-169,682-685`), so every unused slot sorts
+/// after each sprite the field draws (priority 0 to 2). A sprite created later
+/// takes a free slot without moving it in the order (`CreateSprite`,
+/// `:502-508`), so it starts its first sort behind every sprite that existed
+/// and loses an exact tie to them; a sprite that goes away leaves the others'
+/// relative order alone. The sprites of one frame that are new together keep
+/// their input order, standing for slot order.
+///
+/// Not modelled: an object the port does not draw (outside the screen margin)
+/// keeps its place in upstream's order as an invisible sprite, here it rejoins
+/// as a new sprite; and a slot freed and reused before an intervening sort
+/// would hand the new sprite its predecessor's place, but the port has no slot
+/// to name.
+#[derive(Debug, Default)]
+pub(in crate::overworld) struct SpriteOrder {
+    previous: Vec<SpriteId>,
+}
+
+impl SpriteOrder {
+    /// This history in the coordinates of a map `shift` tiles on, for a seamless
+    /// connection crossing, which keeps every sprite (`LoadMapFromCameraTransition`,
+    /// `overworld.c:784-825`, never calls `ResetSpriteData`): objects and the
+    /// player keep their ids, and a tall-grass effect follows its tile.
+    pub(in crate::overworld) fn shifted(&self, shift: (i32, i32)) -> Self {
+        Self {
+            previous: self
+                .previous
+                .iter()
+                .map(|&id| match id {
+                    SpriteId::Effect { owner, tile, nth } => SpriteId::Effect {
+                        owner,
+                        tile: (tile.0 + shift.0, tile.1 + shift.1),
+                        nth,
+                    },
+                    other => other,
+                })
+                .collect(),
+        }
+    }
+
+    /// Orders `sprites` as upstream emits OAM, ascending by parent OBJ
+    /// priority, then subpriority, then lower on-screen signed `y`
+    /// (`SortSprites`, `sprite.c:413-419`); sprites tied in all three keep the
+    /// order they had in the previous call. Each sprite's OBJs stay together
+    /// and keep their wrapped `y`.
+    pub(in crate::overworld) fn order(&mut self, sprites: &[DepthSprite]) -> Vec<SheetSprite> {
+        let mut placed = vec![false; sprites.len()];
+        let mut sequence: Vec<&DepthSprite> = Vec::with_capacity(sprites.len());
+        for id in &self.previous {
+            let found = sprites
+                .iter()
+                .enumerate()
+                .find(|&(index, sprite)| !placed[index] && sprite.id == Some(*id));
+            if let Some((index, sprite)) = found {
+                placed[index] = true;
+                sequence.push(sprite);
+            }
+        }
+        sequence.extend(
+            sprites
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| !placed[index])
+                .map(|(_, sprite)| sprite),
+        );
+        sequence.sort_by_key(|sprite| {
+            (
+                sprite.parent_priority,
+                sprite.subpriority,
+                std::cmp::Reverse(signed_screen_y(sprite.parent_y)),
+            )
+        });
+        self.previous = sequence.iter().filter_map(|sprite| sprite.id).collect();
+        sequence
+            .into_iter()
+            .flat_map(|sprite| sprite.entries.iter().copied())
+            .collect()
+    }
+}
+
+/// [`SpriteOrder::order`] with no earlier frame: ties keep input order.
+#[cfg(test)]
+pub(super) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
+    SpriteOrder::default().order(sprites)
 }
 
 /// [`order_sprites`] for 16x32 OBJs given as `(entry, elevation)`.
@@ -336,6 +441,7 @@ pub(in crate::overworld) fn elevated_oam_entries(
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),
+                id: Some(SpriteId::Object(live.id())),
             })
         })
         .collect()

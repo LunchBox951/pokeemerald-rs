@@ -370,19 +370,21 @@ impl TallGrassEffects {
         });
     }
 
-    /// The effects' OBJs with their subpriorities, for depth ordering against
-    /// `objects`. `first_tile` is the combined tileset's first effect tile.
+    /// The effects' OBJs with their subpriorities and identities, for depth
+    /// ordering against `objects`. `first_tile` is the combined tileset's first
+    /// effect tile.
     pub(super) fn oam_entries(
         &self,
         player: &PlayerState,
         first_tile: u16,
         objects: &[DepthObject],
-    ) -> Vec<(SheetSprite, u16)> {
+    ) -> Vec<(SheetSprite, u16, npc::SpriteId)> {
         let player_tile = player.position();
         let (lag_x, lag_y) = viewport::camera_lag_px(player);
         self.effects
             .iter()
-            .filter_map(|effect| {
+            .enumerate()
+            .filter_map(|(index, effect)| {
                 // The effect covers the tile under the player's lower half:
                 // one metatile below an object event's 16x32 top.
                 let left = i32::from(avatar::PLAYER_OBJ_X)
@@ -412,7 +414,19 @@ impl TallGrassEffects {
                     ),
                     sheet_tile,
                 );
-                Some((entry, effect.subpriority(left, top, objects)))
+                let nth = self.effects[..index]
+                    .iter()
+                    .filter(|earlier| earlier.owner == effect.owner && earlier.tile == effect.tile)
+                    .count();
+                let id = npc::SpriteId::Effect {
+                    owner: match effect.owner {
+                        Owner::Player => None,
+                        Owner::Object(id) => Some(id),
+                    },
+                    tile: effect.tile,
+                    nth: u8::try_from(nth).unwrap_or(u8::MAX),
+                };
+                Some((entry, effect.subpriority(left, top, objects), id))
             })
             .collect()
     }
@@ -580,6 +594,14 @@ impl OverworldScene {
         }
     }
 
+    /// Carries the sprite draw-order history of `departed` into this just-loaded
+    /// scene after a seamless connection crossing, `shift` tiles into this map's
+    /// coordinates; a crossing keeps the sprites and so their order.
+    pub(crate) fn carry_sprite_order_from(&mut self, departed: &Self, shift: (i32, i32)) {
+        self.sprites
+            .carry_sprite_order_from(&departed.sprites, shift);
+    }
+
     /// Carries the live effects of `departed` into this just-loaded scene after
     /// a seamless connection crossing (`UpdateTallGrassFieldEffect`,
     /// `field_effect_helpers.c:325-330`). `shift` translates the departed map's
@@ -643,8 +665,12 @@ impl OverworldScene {
     /// again, the player's included, as a return to the field does
     /// (`ResetSpriteData`, `overworld.c:2134`, then `ResetObjectEventFldEffData`,
     /// `event_object_movement.c:1795-1806`).
+    ///
+    /// The sprites' draw-order history goes with them: `ResetSpriteData`
+    /// also resets `sSpriteOrder` to the identity (`sprite.c:848-858`).
     pub(crate) fn reset_field_effects(&mut self) {
         self.grass = TallGrassEffects::new();
+        self.sprites.reset_sprite_order();
     }
 
     /// Runs every effect's callback and animation for one frame, after the
