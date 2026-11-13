@@ -660,6 +660,13 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_through_the_intr
     use engine::overworld::metatile_behavior::MB_TALL_GRASS;
 
     const GROUND: u8 = 3;
+    fn rhett(phase: &mut OverworldPhase) -> &mut engine::overworld::ObjectEventState {
+        phase
+            .object_events
+            .get_mut(rhetts_object_event().local_id)
+            .expect("Rhett is in the live collection")
+            .state_mut()
+    }
     let (rx, ry) = RHETT_TILE;
     let grass = (u16::try_from(rx).unwrap(), u16::try_from(ry - 1).unwrap());
     let scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
@@ -674,13 +681,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_through_the_intr
         None,
     )
     .with_private_object_event_rng();
-    fn rhett(phase: &mut OverworldPhase) -> &mut engine::overworld::ObjectEventState {
-        phase
-            .object_events
-            .get_mut(rhetts_object_event().local_id)
-            .expect("Rhett is in the live collection")
-            .state_mut()
-    }
 
     // Rhett stands on the grass tile when the scene first admits him, so the
     // spawn-time pass seeds a settled effect owned by him.
