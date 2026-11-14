@@ -284,3 +284,58 @@ fn an_older_effect_expiring_keeps_a_younger_tied_effects_place() {
         "the younger player effect stays behind the other owner's"
     );
 }
+
+/// The screen x of every effect OBJ `scene` draws for `player`, in draw order.
+fn effect_lefts(
+    scene: &OverworldScene,
+    objects: &ObjectEventCollection,
+    player: &PlayerState,
+) -> Vec<i16> {
+    scene
+        .sprites
+        .live_entries(objects, player, &EventData::new(), &scene.grass)
+        .iter()
+        .filter(|sprite| sprite.palette_bank() == GENERAL_1_BANK)
+        .map(|sprite| sprite.x())
+        .collect()
+}
+
+/// A crossing that drops an effect leaves its serial in the carried order
+/// history, so the entered scene's next effect must not take that serial: it
+/// would inherit the dropped effect's rank on an exact tie instead of starting
+/// behind every effect that existed.
+#[test]
+fn a_dropped_effects_serial_is_not_reused_by_a_crossing_frame_spawn() {
+    // The player stands on tile (5, 5), so tile (5 + dx, 5) draws at x = 112 + 16 * dx.
+    let player = PlayerState::new((5, 5), ELEVATION, Direction::South);
+    let objects = ObjectEventCollection::from_templates(&[]);
+    let mut departed = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    // Serials 0 and 1 rustle on the player's row, left of it, tied in every
+    // depth key; serial 2 belongs to an object the crossing does not keep and
+    // is one row lower, so it sorts ahead of both.
+    departed
+        .grass
+        .spawn_placement(Owner::Player, (3, 5), ELEVATION);
+    departed
+        .grass
+        .spawn_placement(Owner::Player, (4, 5), ELEVATION);
+    departed
+        .grass
+        .spawn_placement(Owner::Object(9), (2, 6), ELEVATION);
+    assert_eq!(effect_lefts(&departed, &objects, &player), [64, 80, 96]);
+
+    let mut entered = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    entered.carry_tall_grass_from(&departed, (0, 0), &objects);
+    entered.carry_sprite_order_from(&departed);
+    assert_eq!(entered.grass.len(), 2, "the dropped owner's effect is gone");
+
+    // A third effect on the survivors' row, to the player's right.
+    entered
+        .grass
+        .spawn_placement(Owner::Player, (6, 5), ELEVATION);
+    assert_eq!(
+        effect_lefts(&entered, &objects, &player),
+        [80, 96, 128],
+        "the new effect draws behind the tied survivors"
+    );
+}

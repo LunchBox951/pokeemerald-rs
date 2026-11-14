@@ -652,11 +652,11 @@ impl OverworldScene {
             })
             .collect();
         // The carried effects keep their serials, so the order history that names
-        // them still does; this scene's own serials start after them.
-        self.grass.next_serial = carried
-            .iter()
-            .map(|effect| effect.serial + 1)
-            .fold(self.grass.next_serial, u32::max);
+        // them still does; this scene's own serials start after every serial the
+        // departed scene issued. That includes an effect the crossing drops, whose
+        // serial stays in the carried history: reusing it would hand the new effect
+        // the dropped one's rank on an exact tie.
+        self.grass.next_serial = self.grass.next_serial.max(departed.grass.next_serial);
         self.grass.effects.extend(carried);
         for live in objects.iter().filter(|live| live.is_active()) {
             if let Some(&(x, y)) = departed.grass.object_passes.get(&live.id()) {
