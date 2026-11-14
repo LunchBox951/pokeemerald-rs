@@ -69,12 +69,15 @@ The ROM itself is read once and never copied, referenced, or logged.
 
 If something goes wrong, the message says what and what to do: a wrong or
 damaged ROM is refused before anything is written, a missing pack tells you to
-import, and a pack from an older build tells you to import again. Re-importing
+import, and a pack with an unsupported format or incompatible content tells you to
+import again. Re-importing
 replaces the pack atomically, so an interrupted import never leaves a broken
 one behind. Developers with a `pret/pokeemerald` checkout can build the same
 pack from source with `cargo xtask extract` instead (see
 [Building](#building)); the ROM import's output is held to that pack by the
 equivalence harness.
+
+Compatible packs keep working across application updates. Extract again when the game reports incompatible, incomplete, or damaged game data; extraction does not change your saved game.
 
 ## Building
 
