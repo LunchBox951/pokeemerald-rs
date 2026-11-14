@@ -20,7 +20,7 @@ mod speech;
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use assets::KeypadIconSheet;
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
@@ -190,6 +190,9 @@ pub struct IntroScene {
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
     ops: Vec<WindowOp>,
+    /// The colors the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     finished: bool,
     /// The boot-recovered options (issue #1125) this NEW GAME will hand to
     /// [`crate::new_game::init_save_blocks_with_options`] once the intro
@@ -234,6 +237,7 @@ impl IntroScene {
             page_index: 0,
             printer,
             ops: Vec::new(),
+            window_fill: None,
             finished: false,
             new_game_options,
             new_game_identity: NewGameIdentity::DEFAULT,
@@ -350,14 +354,18 @@ impl IntroScene {
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
             self.ops.clear();
+            self.window_fill = self.printer.cleared_window_colors();
         }
         match event {
             TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
-            TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
-            }
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
+            TickEvent::Scrolling { dy } => textbox::scroll_window_ops(
+                &mut self.ops,
+                dy,
+                self.printer.colors(),
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            ),
             TickEvent::Finished => self.advance_page(),
             TickEvent::Idle
             | TickEvent::Cleared
@@ -400,6 +408,7 @@ impl IntroScene {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
             self.ops.clear();
+            self.window_fill = None;
             self.printer.restart(self.pages[self.page_index].clone());
         } else {
             self.finished = true;
@@ -412,6 +421,8 @@ impl IntroScene {
         let mut fb = Framebuffer::new();
         fb.fill(Rgb888::BLACK);
 
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| fb.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(
@@ -419,9 +430,9 @@ impl IntroScene {
             &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
-            &self.frame.glyph_colors(),
             &self.icons,
             &self.frame.palette,
+            textbox::WindowBackdrop::message_box(self.window_fill, scene.as_ref()),
         );
 
         fb
