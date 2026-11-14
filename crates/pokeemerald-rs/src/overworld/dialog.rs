@@ -1169,6 +1169,31 @@ mod tests {
     }
 
     #[test]
+    fn a_decoded_color_change_between_glyphs_paints_each_glyph_its_own_color() {
+        const ENCODED_A: u8 = 0xBB;
+        // A, `{COLOR BLUE}` (FC 01 08), A: the first glyph keeps the default
+        // foreground, the second takes palette index 8.
+        let composed = compose_decoded(&[ENCODED_A, 0xFC, 0x01, 0x08, ENCODED_A, 0xFF]);
+        let probe = |x: i32| {
+            let (x, y) = box_pixel((
+                textbox::STANDARD_PRINTER_ORIGIN.0 + x,
+                textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+            ));
+            composed.pixel(x, y)
+        };
+        assert_eq!(
+            probe(2),
+            Some(OPAQUE_GLYPH_COLOR),
+            "first glyph keeps the default"
+        );
+        assert_eq!(
+            probe(NORMAL_A_ADVANCE_WIDTH + 2),
+            Some(BLUE_COLOR),
+            "second glyph takes the colour set between them"
+        );
+    }
+
+    #[test]
     fn a_decoded_highlight_changes_the_color_a_clear_erases_with() {
         const ENCODED_A: u8 = 0xBB;
         // A, HIGHLIGHT 4, SHIFT_RIGHT 0, CLEAR 6: the erase back over the A.
