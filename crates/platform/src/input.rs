@@ -353,7 +353,10 @@ mod tests {
         let mut state = ButtonState::new();
         state.update(Buttons::L);
         let mapped = state.with_l_equals_a();
-        assert!(mapped.is_newly_pressed(Buttons::A | Buttons::L));
+        // `is_newly_pressed` intersects, so assert A and L apart: the
+        // physical L edge must not satisfy the A check.
+        assert!(mapped.is_newly_pressed(Buttons::A));
+        assert!(mapped.is_newly_pressed(Buttons::L));
         assert!(mapped.is_held(Buttons::A) && mapped.is_held(Buttons::L));
 
         // Held L: no new edge, but A stays held.
