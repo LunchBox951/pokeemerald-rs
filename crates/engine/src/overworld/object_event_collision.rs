@@ -41,9 +41,11 @@ pub struct MovementRange {
 }
 
 impl MovementRange {
+    /// Upstream holds `s16` coordinates and a 4-bit range; the unsigned distance here is exact
+    /// for every `i32` pair, so nothing wraps.
     fn contains(self, (x, y): TilePos) -> bool {
         let within = |tile: i32, initial: i32, range: u8| {
-            range == 0 || (tile - initial).abs() <= i32::from(range)
+            range == 0 || tile.abs_diff(initial) <= u32::from(range)
         };
         within(x, self.initial.0, self.x) && within(y, self.initial.1, self.y)
     }
