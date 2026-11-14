@@ -363,13 +363,8 @@ mod tests {
         assert!(!gone, "the legacy delete must not have run");
     }
 
-    /// The plain delete refuses a read-only file. The ignoring variant
-    /// deletes it where the volume and Windows release accept the POSIX
-    /// attempt with `FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE`, and
-    /// otherwise falls back to the legacy delete, which refuses it. Which of
-    /// the two applies is read off a probe of that same attempt on a sibling
-    /// read-only file, so the expectation matches the host without ever
-    /// accepting the deletion on the legacy path.
+    /// A sibling probe tells which contract this host has: the legacy
+    /// fallback cannot ignore the read-only attribute.
     #[test]
     fn a_read_only_file_is_deleted_only_where_the_ignore_flag_is_supported() {
         let dir = private_dir("read-only");
