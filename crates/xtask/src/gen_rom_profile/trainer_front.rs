@@ -185,7 +185,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
                 .to_vec(),
         );
     }
-    let hits = ctx.lz77.find_all(&needles);
+    let hits = ctx.lz77.find_all_uncapped(&needles);
     TRAINER_FRONT_PICS
         .iter()
         .zip(&hits)

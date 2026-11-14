@@ -7,6 +7,7 @@ use platform::{ButtonState, Buttons};
 
 use crate::flow::tests::held;
 
+use super::super::OverworldPhase;
 use super::support::*;
 
 // -- The approach sequence (S-5, issue #300) ---------------------------------
@@ -604,4 +605,44 @@ fn a_standing_trigger_walks_its_first_tile_after_the_icon_dispatch_frames() {
         rng_after_trigger,
         "the approach draws no RNG"
     );
+}
+
+/// An intermediate walked tile settles its elevation before the next tile begins
+/// (`UpdateMovementNormal` -> `ShiftStillObjectEventCoords`, then
+/// `DoGroundEffects_OnFinishStep`, `event_object_movement.c:5116-5125,8119-8132`; the
+/// trainer-see task starts the next tile a frame later, `trainer_see.c:490-505`), through the
+/// real [`OverworldPhase::step`]. Rhett leaves a multi-level cell onto elevation 5 and then onto
+/// a transition cell, so he keeps 5 rather than his authored 3.
+#[test]
+fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
+    let (rx, ry) = RHETT_TILE;
+    let (x, y) = (u16::try_from(rx).unwrap(), u16::try_from(ry).unwrap());
+    let scene = crate::overworld::test_support::synthetic_scene_with_cell_elevations(
+        80,
+        16,
+        &[((x, y), 15), ((x, y + 1), 5), ((x, y + 2), 0)],
+    );
+    let player = PlayerState::new((rx, ry + 3), 3, Direction::South);
+    let mut phase =
+        OverworldPhase::for_test(scene, ROUTE_103, player, None).with_private_object_event_rng();
+    seed_approach(&mut phase, 2);
+    assert_eq!(
+        (
+            approaching_trainer(&phase).elevation(),
+            approaching_trainer(&phase).previous_elevation()
+        ),
+        (3, 3),
+        "a multi-level spawn cell is skipped"
+    );
+
+    for _ in 0..=LOCK_HANDOFF_AT_REST
+        + EXCLAMATION_ICON_FRAMES
+        + ICON_DISPATCH_FRAMES
+        + 2 * usize::from(WALK_FRAMES_PER_TILE)
+    {
+        phase.step(ButtonState::new());
+    }
+    let trainer = approaching_trainer(&phase);
+    assert_eq!(trainer.position(), (rx, ry + 2));
+    assert_eq!((trainer.elevation(), trainer.previous_elevation()), (0, 5));
 }

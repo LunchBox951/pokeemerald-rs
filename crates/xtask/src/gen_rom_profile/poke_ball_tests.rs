@@ -330,3 +330,22 @@ fn a_surplus_or_missing_entry_is_refused_before_any_report_line() {
         });
     }
 }
+
+#[test]
+fn a_palette_named_by_its_table_after_sixteen_lower_copies_is_still_found() {
+    let mut fixture = fixture();
+    for copy in 0..16usize {
+        fixture = fixture.write(0x0A_0000 + copy * 0x100, &lz77_literals(&color_bytes()));
+    }
+    let rom = fixture.finish();
+    with_context("poke-ball-seventeen-palettes", &rom, entries(), |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located");
+        assert_eq!(plan.palette.addr, bus(PALETTE));
+        let line = report
+            .iter()
+            .find(|line| line.id == "poke-ball/palette/poke")
+            .expect("a report line");
+        assert_eq!(line.resolution, Resolution::StructDerived);
+    });
+}

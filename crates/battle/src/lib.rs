@@ -165,7 +165,7 @@
 //! `Random() % 5` draw after the sleep canceller and before confusion and
 //! paralysis ([`status1::draw_freeze_canceller`]); a frozen Magma Armor
 //! participant is refused at admission for the same unmodelled move-end cure. A burned participant with Water Veil
-//! is refused at admission, as a poisoned Immunity holder is, because the
+//! is refused at admission, as a poisoned or badly poisoned Immunity holder is, because the
 //! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
@@ -205,7 +205,10 @@
 //! move, which is refused the way `IsHMMove2` refuses it
 //! ([`error::BattleError::HmMoveCantBeForgotten`]). What this crate still
 //! does not own is the *asking* — there is no message layer or summary
-//! screen here, and there is deliberately no default answer baked in.
+//! screen here, and there is deliberately no default answer baked in. A move
+//! a free slot takes without asking is reported too:
+//! [`pokemon::BattlePokemon::apply_experience_reporting`] lists it and
+//! [`battle::BattleEvent::MoveLearned`] announces it, in learning order.
 //!
 //! Out of scope (see each module's own docs for exactly what is/isn't
 //! modelled): the *general* trainer AI beyond the four scripts above and
@@ -214,7 +217,8 @@
 //! battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
+//! (its end-turn stage in `Battle::residual_effects`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
@@ -234,11 +238,13 @@
 //! the effect of any held item but Oran Berry's end-turn heal (a mon carries
 //! one, and [`ensure_held_item_playable`] refuses every other item that has
 //! an effect), every primary status but [`status1::Status1::Paralysed`],
-//! [`status1::Status1::Poisoned`], [`status1::Status1::Burned`],
+//! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
+//! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
-//! [`status1::Status1::Asleep`] (toxic — see [`status1`]'s module
-//! docs; no modelled move inflicts sleep or freeze yet, and burn comes only from a
-//! burn secondary, so those arrive only
+//! [`status1::Status1::Asleep`] (a loaded bad poison ticks through
+//! [`status1::bad_poison_residual_damage`] between poison and burn — see
+//! [`status1`]'s module docs; no modelled move inflicts toxic, sleep or freeze
+//! yet, and burn comes only from a burn secondary, so those arrive only
 //! through [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s tracked set
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
@@ -269,6 +275,7 @@
 
 pub mod ability;
 pub mod accuracy;
+pub mod attract;
 pub mod battle;
 pub mod confuse;
 pub mod critical;
@@ -287,6 +294,7 @@ pub mod leech_seed;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
+pub mod obedience;
 pub mod paralyze;
 pub mod pokemon;
 pub mod rollout;
@@ -302,6 +310,9 @@ pub mod wild;
 mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
+pub use attract::{
+    draws_love_immobility, is_attract_effect, resolve_attract_move, AttractOutcome, EFFECT_ATTRACT,
+};
 pub use battle::admission::ensure_participant_admissible;
 pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{
@@ -332,12 +343,13 @@ pub use leech_seed::{
 };
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
+pub use obedience::{LoafMessage, PlayerObedience};
 pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
 pub use pokemon::{
-    calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
-    MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
-    Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
-    SPECIES_SHEDINJA,
+    calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, ExperienceAward, Ivs,
+    LearnedMove, MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses,
+    StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE,
+    SPECIES_NONE, SPECIES_SHEDINJA,
 };
 pub use rollout::{
     is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,

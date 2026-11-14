@@ -647,8 +647,6 @@ mod tests {
             (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::NINJASK, SLOT_0, assets::AbilityId::SPEED_BOOST),
-            (SpeciesId::YANMA, SLOT_0, assets::AbilityId::SPEED_BOOST),
             (SpeciesId::KECLEON, SLOT_0, assets::AbilityId::COLOR_CHANGE),
             (SpeciesId::KECLEON, SLOT_1, assets::AbilityId::COLOR_CHANGE),
             (SpeciesId::PORYGON, SLOT_0, assets::AbilityId::TRACE),
@@ -698,6 +696,8 @@ mod tests {
         for (species, personality) in [
             (SpeciesId::EKANS, SLOT_1),
             (SpeciesId::MAWILE, SLOT_0),
+            (SpeciesId::NINJASK, SLOT_0),
+            (SpeciesId::YANMA, SLOT_0),
             (SpeciesId::YANMA, SLOT_1),
             (SpeciesId::RALTS, SLOT_0),
             (SpeciesId::KIRLIA, SLOT_0),
@@ -708,6 +708,13 @@ mod tests {
             (SpeciesId::BRELOOM, SLOT_1),
             (SpeciesId::SLAKOTH, SLOT_0),
             (SpeciesId::SLAKING, SLOT_1),
+            // Miguel's Skitty carries Cute Charm in both slots, which the
+            // turn engine now models (`ABILITY_CUTE_CHARM`,
+            // `battle_util.c:2851`-`:2870`).
+            (SpeciesId::SKITTY, SLOT_0),
+            (SpeciesId::SKITTY, SLOT_1),
+            (SpeciesId::DELCATTY, SLOT_0),
+            (SpeciesId::CLEFAIRY, SLOT_0),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,

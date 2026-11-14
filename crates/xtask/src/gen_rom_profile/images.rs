@@ -117,6 +117,9 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     if id.starts_with("sprite/") {
         return vec!["gObjectEventPic_".to_owned()];
     }
+    if id.starts_with("field-effect/image/") {
+        return vec!["gFieldEffectObjectPic_".to_owned()];
+    }
     if let Some(species) = id.strip_prefix("pokemon/") {
         if let Some((name, direction)) = species.split_once('/') {
             // `front.png` is `gMonStillFrontPic_*`; `gMonFrontPic_*` is the animation sheet.
@@ -613,6 +616,10 @@ mod tests {
         assert_eq!(
             symbol_fragments("sprite/brendan/walking"),
             ["gObjectEventPic_"]
+        );
+        assert_eq!(
+            symbol_fragments("field-effect/image/tall_grass"),
+            ["gFieldEffectObjectPic_"]
         );
         assert_eq!(
             symbol_fragments("text-window/image/12"),

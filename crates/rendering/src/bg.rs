@@ -256,6 +256,7 @@ impl<'a> BgLayer<'a> {
 #[cfg(test)]
 mod tests {
     use super::BgLayer;
+    use crate::error::RenderError;
     use crate::framebuffer::Framebuffer;
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
@@ -281,6 +282,24 @@ mod tests {
             }
         }
         bytes
+    }
+
+    #[test]
+    fn an_8bpp_tile_relabelled_4bpp_keeps_index_16_transparent() {
+        let mut bytes = [0u8; 64];
+        bytes[0] = 16;
+        let wide = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        // The set refuses the relabel, so index 16 never reaches the
+        // transparency test with a 4bpp palette lookup behind it.
+        let err = Tileset::from_tiles(BitDepth::Bpp4, vec![*wide.tile(0).unwrap()]).unwrap_err();
+        assert_eq!(
+            err,
+            RenderError::TileIndexExceedsBitDepth {
+                bit_depth: BitDepth::Bpp4,
+                tile: 0,
+                index: 16,
+            }
+        );
     }
 
     #[test]

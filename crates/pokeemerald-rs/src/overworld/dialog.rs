@@ -19,7 +19,7 @@
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use assets::KeypadIconSheet;
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
@@ -95,6 +95,9 @@ pub(crate) struct NpcDialog {
     icons: KeypadIconSheet,
     printer: Printer<OwnedFontGlyphSheet>,
     ops: Vec<WindowOp>,
+    /// The colors the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     state: DialogState,
     wait_for_button_press: bool,
 }
@@ -124,6 +127,7 @@ impl NpcDialog {
             icons,
             printer,
             ops: Vec::new(),
+            window_fill: None,
             state: DialogState::Printing,
             wait_for_button_press: false,
         }
@@ -207,14 +211,18 @@ impl NpcDialog {
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
             self.ops.clear();
+            self.window_fill = self.printer.cleared_window_colors();
         }
         match event {
-            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
-            TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
-            }
+            TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
+            TickEvent::Scrolling { dy } => textbox::scroll_window_ops(
+                &mut self.ops,
+                dy,
+                self.printer.colors(),
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            ),
             TickEvent::Finished => {
                 if self.wait_for_button_press {
                     self.state = DialogState::AwaitingButtonPress;
@@ -238,12 +246,12 @@ impl NpcDialog {
         // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
         // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
         if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
+            self.push_clipped(WindowOp::ClearSpan(span));
         }
         // A keypad icon also ends its frame as `TickEvent::Idle`
         // (`Printer::keypad_icon`), so it never competes with a glyph either.
         if let Some(icon) = self.printer.keypad_icon() {
-            self.ops.push(WindowOp::KeypadIcon(icon));
+            self.push_clipped(WindowOp::KeypadIcon(icon));
         }
 
         if self.state == DialogState::Closed {
@@ -253,9 +261,17 @@ impl NpcDialog {
         }
     }
 
+    /// Retains `op` with the rows below the window removed, once, at reveal
+    /// time; see [`WindowOp::clipped_below`].
+    fn push_clipped(&mut self, op: WindowOp) {
+        textbox::push_clipped(&mut self.ops, op, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1);
+    }
+
     /// Draws the message box and visible glyphs over `base`.
     #[must_use]
     pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| base.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut base, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(
@@ -263,9 +279,9 @@ impl NpcDialog {
             &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
-            &self.frame.glyph_colors(),
             &self.icons,
             &self.frame.palette,
+            textbox::WindowBackdrop::message_box(self.window_fill, scene.as_ref()),
         );
         base
     }
@@ -1113,5 +1129,225 @@ mod tests {
             "a field dialog given the FAST saved option must print in fewer frames than one \
              given SLOW, but they took {fast} and {slow} frames"
         );
+    }
+
+    /// Palette entries the colour-control regressions tell apart.
+    const COLOR_BLUE_PALETTE_INDEX: usize = 8;
+    const HIGHLIGHT_PALETTE_INDEX: usize = 4;
+    const BLUE_COLOR: Rgb888 = Rgb888 { r: 0, g: 0, b: 240 };
+    const HIGHLIGHT_COLOR: Rgb888 = Rgb888 {
+        r: 240,
+        g: 240,
+        b: 0,
+    };
+
+    /// Runs a decoded stream to its end in an [`opaque_synthetic_dialog`]
+    /// whose palette also holds `BLUE_COLOR` and `HIGHLIGHT_COLOR`, and
+    /// composes it.
+    fn compose_decoded(bytes: &[u8]) -> Framebuffer {
+        let mut dialog = opaque_synthetic_dialog(engine::text::decode(bytes).unwrap());
+        dialog.frame.palette[COLOR_BLUE_PALETTE_INDEX] = BLUE_COLOR;
+        dialog.frame.palette[HIGHLIGHT_PALETTE_INDEX] = HIGHLIGHT_COLOR;
+        for _ in 0..16 {
+            dialog.tick(NO_INPUT);
+        }
+        dialog.compose_over(Framebuffer::new())
+    }
+
+    #[test]
+    fn a_decoded_color_blue_stream_paints_its_glyph_with_palette_index_8() {
+        const ENCODED_A: u8 = 0xBB;
+        // `{COLOR BLUE}` is FC 01 08 (`pokeemerald/src/strings.c:1234`).
+        let plain = compose_decoded(&[ENCODED_A, 0xFF]);
+        let blue = compose_decoded(&[0xFC, 0x01, 0x08, ENCODED_A, 0xFF]);
+        let (x, y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + 2,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(plain.pixel(x, y), Some(OPAQUE_GLYPH_COLOR));
+        assert_eq!(blue.pixel(x, y), Some(BLUE_COLOR));
+    }
+
+    #[test]
+    fn a_decoded_highlight_changes_the_color_a_clear_erases_with() {
+        const ENCODED_A: u8 = 0xBB;
+        // A, HIGHLIGHT 4, SHIFT_RIGHT 0, CLEAR 6: the erase back over the A.
+        let stream = |highlight: &[u8]| {
+            let mut bytes = vec![ENCODED_A];
+            bytes.extend_from_slice(highlight);
+            bytes.extend_from_slice(&[0xFC, 0x0D, 0x00, 0xFC, 0x11, 0x06, 0xFF]);
+            bytes
+        };
+        let (x, y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + 2,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        let default = compose_decoded(&stream(&[]));
+        let highlighted = compose_decoded(&stream(&[0xFC, 0x02, 0x04]));
+        assert_eq!(default.pixel(x, y), Some(FRAME_INTERIOR_COLOR));
+        assert_eq!(highlighted.pixel(x, y), Some(HIGHLIGHT_COLOR));
+    }
+
+    #[test]
+    fn a_decoded_fill_window_erases_the_whole_window_with_the_highlight_in_force() {
+        const ENCODED_A: u8 = 0xBB;
+        let composed = compose_decoded(&[ENCODED_A, 0xFC, 0x02, 0x04, 0xFC, 0x0F, 0xFF]);
+        let (x, y) = box_pixel((40, 20));
+        assert_eq!(composed.pixel(x, y), Some(HIGHLIGHT_COLOR));
+        let (glyph_x, glyph_y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + 2,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(composed.pixel(glyph_x, glyph_y), Some(HIGHLIGHT_COLOR));
+    }
+
+    #[test]
+    fn a_scroll_after_highlight_fills_the_exposed_rows_with_the_highlight() {
+        // `ScrollWindow(..., PIXEL_FILL(bgColor))` (`pokeemerald/src/text.c:1196-1201`).
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x02,
+                args: vec![4],
+            },
+            Token::PromptScroll,
+            Token::End,
+        ]);
+        dialog.frame.palette[HIGHLIGHT_PALETTE_INDEX] = HIGHLIGHT_COLOR;
+        for _ in 0..8 {
+            dialog.tick(NO_INPUT);
+        }
+        dialog.tick(A_PRESS);
+        for _ in 0..16 {
+            dialog.tick(NO_INPUT);
+        }
+        let fb = dialog.compose_over(Framebuffer::new());
+        let (x, y) = box_pixel((150, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1 - 2));
+        assert_eq!(fb.pixel(x, y), Some(HIGHLIGHT_COLOR));
+    }
+
+    #[test]
+    fn a_scroll_after_highlight_zero_fills_the_exposed_rows_transparently() {
+        // `ScrollWindow(..., PIXEL_FILL(0))` writes palette index 0, which a
+        // window shows as transparent (`pokeemerald/src/text.c:1196-1201`), so
+        // the scene beneath the box shows through the rows the scroll exposed.
+        const SCENE_COLOR: Rgb888 = Rgb888 {
+            r: 10,
+            g: 200,
+            b: 10,
+        };
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x02,
+                args: vec![0],
+            },
+            Token::PromptScroll,
+            Token::End,
+        ]);
+        for _ in 0..8 {
+            dialog.tick(NO_INPUT);
+        }
+        dialog.tick(A_PRESS);
+        for _ in 0..16 {
+            dialog.tick(NO_INPUT);
+        }
+        let mut base = Framebuffer::new();
+        base.fill(SCENE_COLOR);
+        let fb = dialog.compose_over(base);
+        let (x, y) = box_pixel((150, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1 - 2));
+        assert_eq!(fb.pixel(x, y), Some(SCENE_COLOR));
+    }
+
+    /// `{SHIFT_DOWN n}A\l` then a long pause, as an open dialog: the scroll's
+    /// 16 pixels finish within the pause.
+    fn shifted_glyph_then_scroll(shift_down: u8) -> NpcDialog {
+        opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: 0x0E,
+                args: vec![shift_down],
+            },
+            Token::Char('A'),
+            Token::PromptScroll,
+            Token::ExtCtrl {
+                sub: 0x08,
+                args: vec![u8::MAX],
+            },
+            Token::End,
+        ])
+    }
+
+    /// Runs `dialog` to the prompt, answers it, and lets the scroll run out.
+    fn scroll_past_the_prompt(dialog: &mut NpcDialog) {
+        const FRAMES_AFTER_THE_ANSWER: usize = 8;
+        dialog.tick(NO_INPUT);
+        dialog.tick(NO_INPUT);
+        dialog.tick(A_PRESS);
+        for _ in 0..FRAMES_AFTER_THE_ANSWER {
+            dialog.tick(NO_INPUT);
+        }
+    }
+
+    /// The glyph-wide strip of the standard box's content, one colour per
+    /// window row.
+    fn glyph_column_rows(dialog: &NpcDialog) -> Vec<Vec<Option<Rgb888>>> {
+        let composed = dialog.compose_over(Framebuffer::new());
+        (0..textbox::STANDARD_BOX_CONTENT_SIZE_PX.1)
+            .map(|row| {
+                (0..i32::try_from(assets::fonts::GLYPH_SIZE).unwrap())
+                    .map(|column| {
+                        let (x, y) = box_pixel((column, row));
+                        composed.pixel(x, y)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_glyph_clipped_below_the_window_stays_hidden_after_a_scroll() {
+        let background = glyph_column_rows(&opaque_synthetic_dialog(vec![Token::End]));
+        // A lands at window y = 32, wholly below the 32-pixel window.
+        let mut dialog = shifted_glyph_then_scroll(31);
+        dialog.tick(NO_INPUT);
+        assert_eq!(glyph_column_rows(&dialog), background, "before scroll");
+
+        scroll_past_the_prompt(&mut dialog);
+
+        assert_eq!(glyph_column_rows(&dialog), background, "after scroll");
+    }
+
+    #[test]
+    fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scroll() {
+        const LAST_WINDOW_ROW: usize = 31;
+        const SCROLL_PX: usize = 16;
+        let background = glyph_column_rows(&opaque_synthetic_dialog(vec![Token::End]));
+        // A lands at window y = 31: only its top row is inside the window.
+        let mut dialog = shifted_glyph_then_scroll(30);
+        dialog.tick(NO_INPUT);
+        let before = glyph_column_rows(&dialog);
+        for (row, pixels) in before.iter().enumerate() {
+            let expected = if row == LAST_WINDOW_ROW {
+                assert_ne!(pixels, &background[row], "the revealed row is drawn");
+                pixels
+            } else {
+                &background[row]
+            };
+            assert_eq!(pixels, expected, "before scroll row {row}");
+        }
+
+        scroll_past_the_prompt(&mut dialog);
+
+        // The scroll moved the revealed row up; rows clipped at reveal never
+        // come back.
+        let after = glyph_column_rows(&dialog);
+        for (row, pixels) in after.iter().enumerate() {
+            let expected = if row == LAST_WINDOW_ROW - SCROLL_PX {
+                &before[LAST_WINDOW_ROW]
+            } else {
+                &background[row]
+            };
+            assert_eq!(pixels, expected, "after scroll row {row}");
+        }
     }
 }

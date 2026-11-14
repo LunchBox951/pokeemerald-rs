@@ -150,3 +150,41 @@ fn a_pack_entry_the_domain_does_not_cover_is_refused() {
         "{err}"
     );
 }
+
+/// Plant `count` suffix-only copies of the stream (each preceded by a
+/// non-`EOS` byte), starting just past [`STRING`].
+fn with_suffix_matches(mut rom: RomFixture, count: usize) -> RomFixture {
+    for i in 0..count {
+        let at = STRING + 0x100 + i * 0x20;
+        rom = rom.write(at, &[0xAD]).write(at + 1, &FAINTED);
+    }
+    rom
+}
+
+#[test]
+fn suffix_matches_past_the_search_cap_do_not_hide_a_second_start() {
+    // One string start, fifteen suffix matches, then a second string start:
+    // the second start is the sixteenth-plus raw hit.
+    let rom = with_string(with_suffix_matches(full_rom(), 15), STRING + 0x800);
+    let err = locate_in("fm-capped", rom, pack()).map(|(plan, _)| plan.messages[0].addr);
+    match err {
+        Err(GenRomProfileError::Ambiguous { addrs, .. }) => {
+            assert_eq!(addrs, [bus(STRING), bus(STRING + 0x800)]);
+        }
+        other => panic!("expected Ambiguous, got {other:?}"),
+    }
+}
+
+#[test]
+fn sixteen_leading_suffix_matches_do_not_hide_the_only_start() {
+    // The suffix matches sit at lower offsets than the only real start, so
+    // they would fill the raw-hit cap before the start is reached.
+    let mut rom = RomFixture::new().emerald_header();
+    for i in 0..16 {
+        let at = 0x1000 + i * 0x20;
+        rom = rom.write(at, &[0xAD]).write(at + 1, &FAINTED);
+    }
+    let rom = with_string(rom, STRING);
+    let (plan, _) = locate_in("fm-leading", rom, pack()).expect("the only start is found");
+    assert_eq!(plan.messages[0].addr, bus(STRING));
+}

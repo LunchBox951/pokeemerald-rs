@@ -77,6 +77,8 @@ mod tests {
             Status1::Paralysed,
             Status1::Poisoned,
             Status1::Burned,
+            Status1::BadPoisoned { counter: 0 },
+            Status1::BadPoisoned { counter: 15 },
             Status1::Asleep { turns: 2 },
         ] {
             for thaw_hit in [false, true] {

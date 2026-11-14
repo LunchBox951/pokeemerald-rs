@@ -132,7 +132,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<u32>, GenRomProfileError>
         .palette_payload(PALETTE_ID)?
         .0
         .to_vec();
-    let hits = ctx.lz77.find_all(&[needle]);
+    let hits = ctx.lz77.find_all_uncapped(&[needle]);
     if hits[0].is_empty() {
         return Err(GenRomProfileError::NotFound {
             id: PALETTE_ID.to_owned(),

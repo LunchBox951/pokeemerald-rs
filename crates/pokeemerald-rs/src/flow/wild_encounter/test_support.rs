@@ -102,10 +102,12 @@ pub(super) fn route_101_phase_with_grass_from_source(
         None,
         source,
     )
+    .with_private_object_event_rng()
 }
 
 /// The seed used below, chosen (by enumeration over the LCG) so the first
-/// *rolled* step produces an encounter. Its first four draws are
+/// *rolled* step produces an encounter. Its first four draws, without a slot-0 level
+/// bias coin, are
 /// `24107, 54858, 56010, 31`:
 ///
 /// - `24107 % 100 = 7 < 60` — `AllowWildCheckOnNewMetatile` allows the check
