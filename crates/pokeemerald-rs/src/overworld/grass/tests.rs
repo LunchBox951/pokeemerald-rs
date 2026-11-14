@@ -309,7 +309,8 @@ fn a_dropped_effects_serial_is_not_reused_by_a_crossing_frame_spawn() {
     // The player stands on tile (5, 5), so tile (5 + dx, 5) draws at x = 112 + 16 * dx.
     let player = PlayerState::new((5, 5), ELEVATION, Direction::South);
     let objects = ObjectEventCollection::from_templates(&[]);
-    let mut departed = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    let mut departed =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
     // Serials 0 and 1 rustle on the player's row, left of it, tied in every
     // depth key; serial 2 belongs to an object the crossing does not keep and
     // is one row lower, so it sorts ahead of both.
@@ -324,7 +325,8 @@ fn a_dropped_effects_serial_is_not_reused_by_a_crossing_frame_spawn() {
         .spawn_placement(Owner::Object(9), (2, 6), ELEVATION);
     assert_eq!(effect_lefts(&departed, &objects, &player), [64, 80, 96]);
 
-    let mut entered = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    let mut entered =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
     entered.carry_tall_grass_from(&departed, (0, 0), &objects);
     entered.carry_sprite_order_from(&departed);
     assert_eq!(entered.grass.len(), 2, "the dropped owner's effect is gone");
