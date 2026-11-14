@@ -673,7 +673,7 @@ pub struct SaveBlock1 {
     pub player_party: [Pokemon; PARTY_SIZE],
     /// Plaintext money.
     pub money: u32,
-    /// Plaintext Game Corner coin balance, stored at 0x494 as a `u16` XORed
+    /// Plaintext Game Corner coin balance, stored at 0x494 as a `u16` xor-ed
     /// with the key's low 16 bits (`coins`,
     /// `pokeemerald/include/global.h:1003`, `pokeemerald/src/coins.c:41-49`).
     pub coins: Coins,
@@ -1846,10 +1846,10 @@ mod tests {
         let before = image;
         let mut block = SaveBlock1::from_bytes(&image, key).unwrap();
         let (money, registered) = (block.money, block.registered_item);
-        block.coins.set(321);
+        block.coins.set(0x0141);
         block.patch_bytes(&mut image, key);
 
-        assert_eq!(&image[0x494..0x496], &(321_u16 ^ 0xBEEF).to_le_bytes());
+        assert_eq!(&image[0x494..0x496], &(0x0141_u16 ^ 0xBEEF).to_le_bytes());
         assert_eq!(block.money, money);
         assert_eq!(block.registered_item, registered);
         let changed: Vec<usize> = (0..image.len())
