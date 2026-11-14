@@ -124,7 +124,7 @@ pub fn choose_wild_mon_level(
         mon.min_level.min(mon.max_level),
         mon.min_level.max(mon.max_level),
     );
-    if rng.next_u16() % 2 == 0 {
+    if rng.next_u16().is_multiple_of(2) {
         max
     } else if level > min {
         level - 1

@@ -17,9 +17,9 @@ const HEADER_FLAGS_BYTE: usize = 19;
 const HEADER_BAD_EGG_BIT: u8 = 1 << 0;
 const HEADER_EGG_BIT: u8 = 1 << 2;
 
-struct Scripted(std::vec::IntoIter<u16>);
+struct Scripted<I>(I);
 
-impl RandomSource for Scripted {
+impl<I: ExactSizeIterator<Item = u16>> RandomSource for Scripted<I> {
     fn next_u16(&mut self) -> u16 {
         self.0.next().expect("the script covers every draw")
     }
@@ -56,7 +56,7 @@ fn level_and_unspent_draws(
         max_level,
         species: SpeciesId(1),
     };
-    let mut rng = Scripted(script.to_vec().into_iter());
+    let mut rng = Scripted(script.iter().copied());
     let ability = slot_zero_wild_level_ability(&Dex::new(), party);
     let level = choose_wild_mon_level(&mon, ability, &mut rng);
     (level, rng.0.len())

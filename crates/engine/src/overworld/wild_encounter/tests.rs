@@ -422,12 +422,12 @@ fn band(min_level: u8, max_level: u8) -> WildPokemon {
 }
 
 fn level_and_draws(
-    mon: &WildPokemon,
+    mon: WildPokemon,
     ability: Option<AbilityId>,
     script: impl IntoIterator<Item = u16>,
 ) -> (u8, usize) {
     let mut rng = ScriptedRng::new(script);
-    let level = choose_wild_mon_level(mon, ability, &mut rng);
+    let level = choose_wild_mon_level(&mon, ability, &mut rng);
     (level, rng.draws())
 }
 
@@ -444,7 +444,7 @@ fn each_level_bias_ability_draws_a_coin_after_the_level() {
             ([65535, 3], 12),
         ] {
             assert_eq!(
-                level_and_draws(&mon, Some(ability), script),
+                level_and_draws(mon, Some(ability), script),
                 (expected_level, 2),
                 "{ability:?} {script:?}"
             );
@@ -456,7 +456,7 @@ fn each_level_bias_ability_draws_a_coin_after_the_level() {
 fn other_slot_zero_abilities_and_no_slot_zero_draw_only_the_level() {
     let mon = band(10, 13);
     for ability in [None, Some(AbilityId::OVERGROW), Some(AbilityId::NONE)] {
-        assert_eq!(level_and_draws(&mon, ability, [2]), (12, 1), "{ability:?}");
+        assert_eq!(level_and_draws(mon, ability, [2]), (12, 1), "{ability:?}");
     }
 }
 
@@ -464,15 +464,15 @@ fn other_slot_zero_abilities_and_no_slot_zero_draw_only_the_level() {
 fn a_reversed_band_is_ordered_before_the_bias() {
     let mon = band(13, 10);
     assert_eq!(
-        level_and_draws(&mon, Some(AbilityId::PRESSURE), [1, 0]),
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [1, 0]),
         (13, 2)
     );
     assert_eq!(
-        level_and_draws(&mon, Some(AbilityId::PRESSURE), [2, 1]),
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [2, 1]),
         (11, 2)
     );
     assert_eq!(
-        level_and_draws(&mon, Some(AbilityId::PRESSURE), [0, 1]),
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [0, 1]),
         (10, 2)
     );
 }
@@ -482,7 +482,7 @@ fn a_one_level_band_still_spends_the_coin() {
     let mon = band(7, 7);
     for coin in [0, 1] {
         assert_eq!(
-            level_and_draws(&mon, Some(AbilityId::HUSTLE), [65535, coin]),
+            level_and_draws(mon, Some(AbilityId::HUSTLE), [65535, coin]),
             (7, 2)
         );
     }
