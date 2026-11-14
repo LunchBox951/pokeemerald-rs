@@ -35,7 +35,7 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
     let player = (10, 8);
 
     for frame in 1..ICON_STAGE_FRAMES {
-        approach.advance_movement(trainer_mut(&mut objects), player);
+        approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
         assert_eq!(
             approach.stage,
             ApproachStage::ExclamationIcon {
@@ -52,7 +52,7 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
 
     // The frame the task sees the icon removed is also the first walked
     // tile's own start.
-    approach.advance_movement(trainer_mut(&mut objects), player);
+    approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
     assert_eq!(
         approach.stage,
         ApproachStage::WalkUp {
@@ -63,17 +63,27 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
     assert_eq!(trainer(&objects).position(), (10, 6));
     assert_eq!(trainer(&objects).previous_position(), (10, 5));
 
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        approach.advance_movement(trainer_mut(&mut objects), player);
+    for frame in 1..WALK_FRAMES_PER_TILE {
+        assert_eq!(
+            trainer(&objects).previous_position(),
+            (10, 5),
+            "frame {frame}: the source tile is held until the tile's last frame"
+        );
+        approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
     }
     assert_eq!(
         trainer(&objects).position(),
         (10, 6),
         "still animating the first tile"
     );
+    assert_eq!(
+        trainer(&objects).previous_position(),
+        (10, 6),
+        "the sixteenth frame shifts previous onto current"
+    );
 
     // Frame 16 of that tile starts the second one.
-    approach.advance_movement(trainer_mut(&mut objects), player);
+    approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
     assert_eq!(trainer(&objects).position(), (10, 7));
     assert_eq!(
         approach.stage,
@@ -84,12 +94,12 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
     );
 
     for _ in 1..WALK_FRAMES_PER_TILE {
-        approach.advance_movement(trainer_mut(&mut objects), player);
+        approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
     }
     assert!(matches!(approach.stage, ApproachStage::WalkUp { .. }));
 
     // ...and the frame after it is `MOVEMENT_ACTION_FACE_PLAYER`.
-    approach.advance_movement(trainer_mut(&mut objects), player);
+    approach.advance_movement(trainer_mut(&mut objects), player, |_| {});
     assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
     assert_eq!(
         trainer(&objects).position(),
@@ -106,7 +116,7 @@ fn the_walk_up_spends_sixteen_frames_per_tile_after_the_icon() {
 fn an_adjacent_trainer_walks_nothing() {
     let (mut approach, mut objects) = approaching_from((10, 5), Direction::South, 0);
     for _ in 0..ICON_STAGE_FRAMES {
-        approach.advance_movement(trainer_mut(&mut objects), (10, 6));
+        approach.advance_movement(trainer_mut(&mut objects), (10, 6), |_| {});
     }
     assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
     assert_eq!(trainer(&objects).position(), (10, 5));
@@ -123,7 +133,7 @@ fn an_adjacent_trainer_walks_nothing() {
 fn stopping_pins_the_movement_type_and_writes_the_template_back() {
     let (mut approach, mut objects) = approaching_from((10, 5), Direction::East, 1);
     for _ in 0..ICON_STAGE_FRAMES + WALK_FRAMES_PER_TILE {
-        approach.advance_movement(trainer_mut(&mut objects), (12, 5));
+        approach.advance_movement(trainer_mut(&mut objects), (12, 5), |_| {});
     }
     assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
     assert_eq!(trainer(&objects).position(), (11, 5));
@@ -227,4 +237,73 @@ fn stand_in_battle() -> battle::Battle {
         &mut rng,
     )
     .expect("the stand-in trainer's party is constructible today")
+}
+
+/// `UpdateMovementNormal` ends every walked tile with
+/// `ShiftStillObjectEventCoords` (`event_object_movement.c:5116-5125`), so a
+/// trainer whose walk-up has finished stands with its previous coords on its
+/// own tile, and the finish-step elevation update reads `(dest, dest)`.
+#[test]
+fn a_finished_walk_up_settles_the_previous_tile_on_the_destination() {
+    let (mut approach, mut objects) = approaching_from((10, 5), Direction::South, 1);
+    for _ in 0..ICON_STAGE_FRAMES + WALK_FRAMES_PER_TILE {
+        approach.advance_movement(trainer_mut(&mut objects), (10, 7), |_| {});
+    }
+    assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
+    assert_eq!(trainer(&objects).position(), (10, 6));
+    assert_eq!(
+        trainer(&objects).previous_position(),
+        (10, 6),
+        "the completed walk must settle previousCoords on currentCoords"
+    );
+}
+
+/// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`) over a column of cells,
+/// standing in for the scene's grid: a multi-level cell on either side skips the update, and a
+/// transition cell keeps `previousElevation`.
+fn update_elevation_on_column(state: &mut ObjectEventState) {
+    const fn cell(tile: TilePos) -> u8 {
+        match tile.1 {
+            5 => 15,
+            6 => 5,
+            _ => 0,
+        }
+    }
+    state.update_elevation(cell(state.position()), cell(state.previous_position()));
+}
+
+/// Each walked tile ends with its finish-step elevation update on `(dest, dest)` before the
+/// next tile begins (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`; the
+/// trainer-see task starts the next tile on a later frame, `trainer_see.c:490-505`). The trainer
+/// leaves a multi-level cell (15) onto 5 and then onto a transition cell (0), so it must keep
+/// 5 rather than its authored 3.
+#[test]
+fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
+    let (mut approach, mut objects) = approaching_from((10, 5), Direction::South, 2);
+    update_elevation_on_column(trainer_mut(&mut objects));
+    assert_eq!(
+        (
+            trainer(&objects).elevation(),
+            trainer(&objects).previous_elevation()
+        ),
+        (3, 3),
+        "a multi-level spawn cell is skipped"
+    );
+    for _ in 0..ICON_STAGE_FRAMES + 2 * WALK_FRAMES_PER_TILE {
+        approach.advance_movement(
+            trainer_mut(&mut objects),
+            (10, 8),
+            update_elevation_on_column,
+        );
+        // The frame's own begin-step update, as the scene runs it after the scheduler.
+        update_elevation_on_column(trainer_mut(&mut objects));
+    }
+    assert_eq!(trainer(&objects).position(), (10, 7));
+    assert_eq!(
+        (
+            trainer(&objects).elevation(),
+            trainer(&objects).previous_elevation()
+        ),
+        (0, 5)
+    );
 }

@@ -255,7 +255,7 @@ fn find_sight_trainer(
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(live, objects, runtime, player, event_data) {
+        if !trainer_can_see_player(live, objects, runtime, player) {
             continue;
         }
         scan.any_cone_reached = true;
@@ -497,6 +497,7 @@ impl OverworldPhase {
         // screened").
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 let walk_tiles =
                     approach_walk_tiles(live.state().position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(

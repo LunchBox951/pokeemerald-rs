@@ -27,13 +27,14 @@ pub use interaction::{select_interaction_target, InteractionTarget, ObjectIntera
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use metatile_interaction::{classify_metatile_interaction, MetatileInteractionTarget};
 pub use object_event::{
-    facing_object_event, initial_facing_direction, object_event_is_in_view,
-    object_event_is_visible, trainer_facing_movement_type, visible_object_event_at,
-    visible_object_events, ObjectEventState,
+    blocking_object_event_at, facing_object_event, initial_facing_direction,
+    object_event_is_in_view, object_event_is_visible, trainer_facing_movement_type,
+    visible_object_event_at, visible_object_events, ObjectEventState,
 };
 pub use player::{
-    PlayerState, StepOutcome, TilePos, BUMP_IN_PLACE_FRAMES, RUN_FRAMES_PER_TILE,
-    SLIDE_FRAMES_PER_TILE, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE,
+    ForcedMat, PlayerState, StepOutcome, TilePos, BUMP_IN_PLACE_FRAMES, MAT_JUMP_FRAMES,
+    RUN_FRAMES_PER_TILE, SLIDE_FRAMES_PER_TILE, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE,
+    WALK_SLOW_FRAMES_PER_TILE,
 };
 pub use trainer_sight::trainer_can_see_player;
 pub use warp::{

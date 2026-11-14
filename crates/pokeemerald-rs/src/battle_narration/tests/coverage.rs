@@ -2,7 +2,7 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
 use crate::battle_narration::string_ids::PKMNLEARNEDMOVE;
@@ -15,7 +15,22 @@ fn every_event() -> Vec<BattleEvent> {
     let mut events = move_events();
     events.extend(ability_and_status_events());
     events.extend(party_events());
+    events.extend(disobedience_events());
     events
+}
+
+fn disobedience_events() -> Vec<BattleEvent> {
+    vec![
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+        BattleEvent::DisobedientSelfHit {
+            by_player: BY_PLAYER,
+            damage: 3,
+        },
+    ]
 }
 
 fn move_events() -> Vec<BattleEvent> {
@@ -175,6 +190,10 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             status: Status1::Poisoned,
         },
+        BattleEvent::SpeedBoostActivated {
+            by_player,
+            new_stage: StatStage::new(1).unwrap(),
+        },
     ]
 }
 
@@ -226,7 +245,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 83;
+const VARIANTS: usize = 88;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -316,6 +335,11 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::Infatuated { .. } => 80,
         BattleEvent::ObliviousPreventsAttraction { .. } => 81,
         BattleEvent::InfatuatedByCuteCharm { .. } => 82,
+        BattleEvent::Disobeyed { .. } => 83,
+        BattleEvent::DisobedientSelfHit { .. } => 84,
+        BattleEvent::IgnoredOrders => 85,
+        BattleEvent::DisobedientNap => 86,
+        BattleEvent::SpeedBoostActivated { .. } => 87,
     }
 }
 

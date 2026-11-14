@@ -3,7 +3,7 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{
     battler, narrator, render, request, scene, upstream_fixture, Fixture, RATTATA, SPECIALS,
@@ -196,6 +196,46 @@ fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
 }
 
 #[test]
+fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Disobeyed {
+            message: LoafMessage::Loafing,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::WontObey,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::Disobeyed {
+            message: LoafMessage::PretendedNotToNotice,
+        },
+        BattleEvent::DisobedientSelfHit {
+            by_player: true,
+            damage: 3,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "TORCHIC is\nloafing around!",
+            "TORCHIC won't\nobey!",
+            "TORCHIC turned away!",
+            "TORCHIC pretended\nnot to notice!",
+            "TORCHIC won't\nobey!",
+            "It hurt itself in its\nconfusion!",
+            "TORCHIC ignored\norders!",
+            "TORCHIC began to nap!",
+            "TORCHIC\nfell asleep!",
+        ]
+    );
+}
+
+#[test]
 fn a_stat_change_expands_its_nested_stat_and_degree_buffers() {
     let mut narrator = narrator(BattleKind::Wild);
     let fell = BattleEvent::StatFell {
@@ -293,6 +333,36 @@ fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
             "Wild PARAS's EFFECT SPORE\nmade TORCHIC sleep!",
             "Wild PARAS's EFFECT SPORE\npoisoned TORCHIC!",
             "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!",
+        ]
+    );
+}
+
+/// `BattleScript_SpeedBoostActivates` names the holder as the scripting
+/// battler (`data/battle_scripts_1.s:3965`-`:3969`).
+#[test]
+fn speed_boost_names_its_holder() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("NINJASK", Some(AbilityId::SPEED_BOOST));
+    let mut narrator = Narrator::new(scene);
+    let new_stage = StatStage::new(1).unwrap();
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::SpeedBoostActivated {
+                    by_player: false,
+                    new_stage,
+                },
+                BattleEvent::SpeedBoostActivated {
+                    by_player: true,
+                    new_stage,
+                },
+            ]
+        )),
+        [
+            "Wild NINJASK's SPEED BOOST\nraised its SPEED!",
+            "TORCHIC's SPEED BOOST\nraised its SPEED!",
         ]
     );
 }
