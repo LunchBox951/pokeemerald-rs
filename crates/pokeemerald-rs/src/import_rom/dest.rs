@@ -348,6 +348,84 @@ pub(super) fn restore_owner_access(file: &File) -> io::Result<()> {
     Ok(())
 }
 
+/// Give the directory `level` the owner's read, write and search if the
+/// umask took any, and leave every other mode bit as it is.
+///
+/// `mkdirat` asks for `0o777`, so a umask such as `0444` leaves a level its
+/// owner cannot list and `0277` one the owner cannot create the next level
+/// in. The mode is set through the descriptor held for the level, never by
+/// its name, so a swap since the level was verified cannot redirect it; and
+/// only when an owner bit is missing.
+///
+/// The level must already be held, so this reaches only a level the
+/// platform's [`open_created_directory_at`] can pin: on Apple platforms
+/// that needs the owner's search bit, and on other Unix systems the read bit
+/// too. A mask that takes the bit the pin needs fails the pin, and the level
+/// is left as it was made.
+///
+/// # Errors
+///
+/// Whatever `fstat(2)` or the setter reports.
+#[cfg(unix)]
+pub(super) fn restore_directory_owner_access(level: &std::os::fd::OwnedFd) -> io::Result<()> {
+    let mode = rustix::fs::Mode::from_raw_mode(rustix::fs::fstat(level)?.st_mode);
+    if mode.contains(rustix::fs::Mode::RWXU) {
+        return Ok(());
+    }
+    set_held_directory_mode(level, mode | rustix::fs::Mode::RWXU)
+}
+
+/// [`restore_directory_owner_access`]'s setter on Linux and Android, where
+/// the held level is an `O_PATH` descriptor and `fchmod(2)` refuses it:
+/// `fchmodat(level, ".")` acts on the held inode, and needs only the search
+/// bit the umasks above leave. With that bit gone too, the descriptor's
+/// `/proc/self/fd` link names the same inode. Rollback also grants a held
+/// level's owner the bits to list it through this.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+
+    match rustix::fs::chmodat(level, ".", mode, rustix::fs::AtFlags::empty()) {
+        Err(rustix::io::Errno::ACCESS) => rustix::fs::chmod(
+            format!("/proc/self/fd/{}", level.as_raw_fd()).as_str(),
+            mode,
+        )
+        .map_err(|_| rustix::io::Errno::ACCESS.into()),
+        result => Ok(result?),
+    }
+}
+
+/// [`set_held_directory_mode`] on FreeBSD, where `fchmodat(2)` takes the
+/// held `O_PATH` descriptor itself with an empty path.
+#[cfg(target_os = "freebsd")]
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
+    Ok(rustix::fs::chmodat(
+        level,
+        "",
+        mode,
+        rustix::fs::AtFlags::EMPTY_PATH,
+    )?)
+}
+
+/// [`set_held_directory_mode`] on every other Unix: `fchmod(2)` on the
+/// descriptor opened for the level.
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "freebsd"))
+))]
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
+    Ok(rustix::fs::fchmod(level, mode)?)
+}
+
 /// Off Unix a file has no owner mode bits to restore.
 #[cfg(not(unix))]
 #[expect(

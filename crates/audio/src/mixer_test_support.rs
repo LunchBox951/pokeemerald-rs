@@ -11,6 +11,8 @@ use crate::sample::WaveData;
 
 pub(super) const MAX_MASTER_VOLUME: u8 = 15;
 pub(super) const FULL_TRACK_VOLUME: u8 = u8::MAX;
+/// The largest unmodulated track volume: wave envelope level 15, inside `gCgb3Vol`.
+pub(super) const MAX_TRACK_VOLUME: u8 = 127;
 pub(super) const MUTED_TRACK_VOLUME: u8 = 0;
 pub(super) const TEST_VELOCITY: u8 = 127;
 pub(super) const TIED_GATE_TIME: u16 = 0;

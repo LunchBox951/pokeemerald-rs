@@ -279,3 +279,138 @@ fn a_stranded_capture_is_reported_under_the_quarantines_own_current_name() {
         )
     );
 }
+
+/// Sets a capture of `name` aside in a quarantine holding `keep`, retakes
+/// `name`, and puts the capture back. Returns the temp dir, the warning, and
+/// the quarantine entry's path.
+#[cfg(unix)]
+fn restore_after_retake(label: &str, name: &str) -> (TempDir, Option<String>, std::path::PathBuf) {
+    let dir = TempDir::new(label);
+    let created = super::create_directories(&dir.join(name)).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::take_back::QUARANTINE_ENTRY);
+    fs::rename(dir.join(name), &capture).unwrap();
+    fs::write(capture.join("keep"), b"x").unwrap();
+    fs::create_dir(dir.join(name)).unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
+        parent,
+        &created[0],
+    );
+    (dir, warning, capture)
+}
+
+/// The names in `dir` other than the retaken `name` and the quarantine.
+#[cfg(unix)]
+fn restored_names(dir: &TempDir, name: &str) -> Vec<std::ffi::OsString> {
+    fs::read_dir(dir.join(""))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|entry| entry != name && entry != ".undo-held")
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_capture_puts_back_beside_a_retaken_name_max_length_name() {
+    // A valid NAME_MAX (255-byte) level name is retaken: the capture must
+    // still come back beside it, under a name that fits, not stay hidden in
+    // the quarantine.
+    let long = "n".repeat(255);
+    let (dir, warning, capture) = restore_after_retake("restore-long", &long);
+
+    assert!(
+        !capture.exists(),
+        "capture stranded in quarantine: {warning:?}"
+    );
+    let restored = restored_names(&dir, &long);
+    assert_eq!(restored.len(), 1, "{restored:?}");
+    let aside = restored[0].to_str().unwrap();
+    assert!(
+        aside.len() <= 255 && aside.ends_with(".restored-0"),
+        "{aside}"
+    );
+    assert!(aside.starts_with(&"n".repeat(244)), "{aside}");
+    assert!(dir.join(aside).join("keep").is_file());
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: {} was recreated during cleanup; its contents are in {}",
+                dir.join(&long).display(),
+                dir.join(aside).display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shortened_restored_name_is_cut_at_a_character_boundary() {
+    // 85 three-byte characters is 255 bytes. The room left for the original
+    // is 244 bytes, which lands inside a character: the name is cut before
+    // it, so the recovery name stays valid UTF-8.
+    let long = "€".repeat(85);
+    let (dir, warning, capture) = restore_after_retake("restore-long-utf8", &long);
+
+    assert!(
+        !capture.exists(),
+        "capture stranded in quarantine: {warning:?}"
+    );
+    let restored = restored_names(&dir, &long);
+    assert_eq!(restored.len(), 1, "{restored:?}");
+    let aside = restored[0].to_str().expect("recovery name is valid UTF-8");
+    assert_eq!(aside, format!("{}.restored-0", "€".repeat(81)));
+    assert!(dir.join(aside).join("keep").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shortened_restored_name_stays_unique_among_taken_names() {
+    let long = "n".repeat(255);
+    let taken = format!("{}.restored-0", "n".repeat(244));
+    let dir = TempDir::new("restore-long-taken");
+    let created = super::create_directories(&dir.join(&long)).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::take_back::QUARANTINE_ENTRY);
+    fs::rename(dir.join(&long), &capture).unwrap();
+    fs::create_dir(dir.join(&long)).unwrap();
+    fs::write(dir.join(&taken), b"theirs").unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
+        parent,
+        &created[0],
+    );
+
+    let second = format!("{}.restored-1", "n".repeat(244));
+    assert!(!capture.exists(), "{warning:?}");
+    assert!(dir.join(&second).is_dir());
+    assert_eq!(fs::read(dir.join(&taken)).unwrap(), b"theirs");
+}

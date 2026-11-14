@@ -2,9 +2,10 @@
 //! per-track state, and drives the [`Mixer`] one V-blank frame at a time
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
-//! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`),
-//! the sample-progress command (kind `0x0D`) and the terminal reserved kinds
-//! 0 and 3 decode but never execute.
+//! `PORT` and every `XCMD` besides the ADSR overrides (`xATTA`..`xRELE`),
+//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), the sample-progress
+//! command (kind `0x0D`) and the terminal reserved kinds 0 and 3 decode but
+//! never execute.
 
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -15,12 +16,18 @@ use crate::song::{Instrument, Song, SquareTone};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 
+mod adsr_override;
+
+use adsr_override::{AdsrOverride, XCMD_ATTA, XCMD_RELE};
+
 /// `XCMD` sub-command number for `xIECV` (pseudo-echo volume,
 /// `m4a_tables.c:252`).
 const XCMD_IECV: u8 = 0x08;
 /// `XCMD` sub-command number for `xIECL` (pseudo-echo length,
 /// `m4a_tables.c:253`).
 const XCMD_IECL: u8 = 0x09;
+/// `XCMD` sub-command number for `xWAIT` (`m4a_tables.c:305`).
+const XCMD_WAIT: u8 = 0x0C;
 /// `XCMD` sub-command number for `ply_xcmd_0D`, the DirectSound sample start
 /// (`m4a_tables.c:306`; `m4a.c:1639`..`:1653`).
 const XCMD_SAMPLE_PROGRESS: u8 = 0x0D;
@@ -158,11 +165,17 @@ impl ModulationTarget {
 struct TrackState {
     cursor: usize,
     wait: u16,
+    /// Ticks `xWAIT` has already held this track (`MusicPlayerTrack::timer`,
+    /// `m4a_internal.h:309`); zeroed when the wait completes.
+    xwait_timer: u16,
     ended: bool,
     /// The `VOICE`-selected bank entry; `None` is the cleared startup tone
     /// (`Clear64byte` then `tone.type = 1`, `m4a_1.s:1218`..`:1230`), which
     /// never reads the voicegroup.
     voice: Option<usize>,
+    /// The `xATTA`..`xRELE` bytes written to this track's local tone copy
+    /// since the last `VOICE` (`m4a.c:1567`..`:1589`).
+    adsr_override: AdsrOverride,
     vol: u8,
     /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`).
     vol_x: u8,
@@ -210,8 +223,10 @@ impl TrackState {
         Self {
             cursor: 0,
             wait: 0,
+            xwait_timer: 0,
             ended: false,
             voice: None,
+            adsr_override: AdsrOverride::default(),
             vol: DEFAULT_TRACK_VOLUME,
             vol_x: TRACK_VOLUME_SCALE,
             pan: 0,
@@ -236,6 +251,18 @@ impl TrackState {
             sample_progress: 0,
             vol_dirty: false,
             pitch_dirty: false,
+        }
+    }
+
+    /// `ply_xwait` (`m4a.c:1615`..`:1636`): the command re-executes once per
+    /// tick for `len` ticks, then the next command runs on that same tick.
+    fn xwait(&mut self, len: u16) {
+        if self.xwait_timer < len {
+            self.xwait_timer += 1;
+            self.cursor -= 1;
+            self.wait = 1;
+        } else {
+            self.xwait_timer = 0;
         }
     }
 
@@ -371,17 +398,38 @@ impl Sequencer {
 
     /// Whether every track has ended, all voices have decayed to silence, and
     /// the master-mix reverb tail has drained.
+    ///
+    /// A completion policy over finite tails ([`Self::is_sounding`]): a wave
+    /// note's held sample keeps mixing after this returns `true`, which
+    /// [`Self::is_silent`] reports.
     #[must_use]
     pub fn is_finished(&self) -> bool {
         self.tracks.iter().all(|t| t.ended) && !self.is_sounding()
     }
 
-    /// Whether mixing another frame still produces sound with no track
-    /// ticking: a voice an ended track left in release, or delayed samples
-    /// the master-mix reverb ring still holds.
+    /// Whether mixing another frame still produces a finite tail with no
+    /// track ticking: a voice an ended track left in release, an unsettled
+    /// noise latch, or delayed samples the master-mix reverb ring still holds.
+    ///
+    /// A vacated wave slot's held sample is excluded on purpose. It is a
+    /// constant level the hardware presents until a retrigger or a route write
+    /// replaces it (`mgba/src/gb/audio.c:246-253,768-774`), so it never decays
+    /// and counting it would make [`Self::is_finished`] and callers that render
+    /// out a tail (`MusicPlayer::tail_sounding`) wait forever. Callers that
+    /// need the literal answer use [`Self::is_silent`].
     #[must_use]
     pub fn is_sounding(&self) -> bool {
         !self.mixer.is_idle() || self.mixer.has_pending_reverb()
+    }
+
+    /// A snapshot of the mixer: whether another frame would render only zeros
+    /// without advancing tracks (a track's next event can still start a note):
+    /// no finite tail
+    /// ([`Self::is_sounding`]) and no held wave sample
+    /// ([`Mixer::has_held_wave_output`]).
+    #[must_use]
+    pub fn is_silent(&self) -> bool {
+        self.mixer.is_silent()
     }
 
     /// Whether a fade's terminal step has paused this sequencer
@@ -741,7 +789,12 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Goto(index) => track.cursor = index,
-            Event::Voice(v) => track.voice = Some(usize::from(v)),
+            // `ply_voice` overwrites the whole local tone copy, discarding the
+            // ADSR overrides (`m4a_1.s:945`..`:965`).
+            Event::Voice(v) => {
+                track.voice = Some(usize::from(v));
+                track.adsr_override = AdsrOverride::default();
+            }
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -847,6 +900,16 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Xcmd {
+                kind: kind @ XCMD_ATTA..=XCMD_RELE,
+                value,
+            } => track
+                .adsr_override
+                .set(kind, u8::try_from(value).unwrap_or(0)),
+            Event::Xcmd {
+                kind: XCMD_WAIT,
+                value,
+            } => track.xwait(u16::try_from(value & 0xFFFF).unwrap_or(0)),
+            Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
             } => track.pseudo_echo_volume = u8::try_from(value).unwrap_or(0),
@@ -868,7 +931,8 @@ impl Sequencer {
                 target,
             } => Self::exec_memacc(mem_acc, track, op, addr, value, target),
             // Canonical `mid2agb` songs emit neither `PORT` nor other `XCMD`s
-            // (`tools/mid2agb/agb.cpp:338`..`:341`); they remain decode-only.
+            // (`tools/mid2agb/agb.cpp:338`..`:341`) besides the ones above;
+            // they remain decode-only.
             Event::Xcmd { .. } | Event::Port { .. } => {}
         }
     }
@@ -1063,6 +1127,14 @@ impl Sequencer {
             startup = startup_tone();
             &startup
         };
+        // Only a direct tone snapshots the track's local copy; a key-split or
+        // rhythm child is read from the bank, so it never sees an override
+        // (`m4a_1.s:1580`..`:1609`, `:1750`..`:1758`).
+        let overrides = if matches!(instrument, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
+            AdsrOverride::default()
+        } else {
+            track.adsr_override
+        };
         let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
             return false;
         };
@@ -1087,7 +1159,7 @@ impl Sequencer {
                 let freq = pitch::midi_key_to_freq(tone.wave.freq(), note_key, pit_m);
                 let voice = Voice::new(
                     tone.wave.clone(),
-                    tone.adsr,
+                    overrides.direct(tone.adsr),
                     freq,
                     right,
                     left,
@@ -1116,7 +1188,7 @@ impl Sequencer {
                     CgbChannelNumber::Square1,
                     sq.duty,
                     Some(admitted_sweep_byte(sq.sweep)),
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1139,7 +1211,7 @@ impl Sequencer {
                     CgbChannelNumber::Square2,
                     sq.duty,
                     None,
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1163,7 +1235,7 @@ impl Sequencer {
                     CgbVoice::wave(
                         w.wave_id.clone(),
                         samples,
-                        w.adsr,
+                        overrides.cgb(w.adsr),
                         w.fixed_rate,
                         note_key,
                         pit_m,
@@ -1177,13 +1249,14 @@ impl Sequencer {
                         echo_volume,
                         echo_length,
                     )
+                    .with_length(w.length)
                     .with_pitch_key(pitch_key)
                     .with_priority(priority),
                 )
             }
             Instrument::CgbNoise(n) => mixer.add_cgb_voice(
                 CgbVoice::noise(
-                    n.adsr,
+                    overrides.cgb(n.adsr),
                     note_key,
                     n.lfsr_width_selector,
                     vol_mr,
@@ -1333,6 +1406,8 @@ fn scale_lfo(depth: u8, triangle: i32) -> i8 {
     i8::from_ne_bytes([scaled as u32 as u8])
 }
 
+#[cfg(test)]
+mod adsr_override_tests;
 #[cfg(test)]
 mod cgb_psg_tests;
 #[cfg(test)]

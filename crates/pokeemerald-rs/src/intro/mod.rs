@@ -19,7 +19,8 @@ mod speech;
 
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use assets::KeypadIconSheet;
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
@@ -113,7 +114,7 @@ const fn traversal_frames(runs: &[TraversalRun]) -> usize {
 pub enum IntroSceneError {
     /// The asset pack could not be loaded or read.
     Pack(PackError),
-    /// The font glyph sheet could not be decoded.
+    /// The font glyph sheet or keypad-icon sheet could not be decoded.
     Font(assets::AssetError),
 }
 
@@ -184,10 +185,14 @@ const fn normalized_text_speed(raw: u8) -> u8 {
 #[derive(Debug)]
 pub struct IntroScene {
     frame: FrameAssets,
+    icons: KeypadIconSheet,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
     ops: Vec<WindowOp>,
+    /// The colors the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     finished: bool,
     /// The boot-recovered options (issue #1125) this NEW GAME will hand to
     /// [`crate::new_game::init_save_blocks_with_options`] once the intro
@@ -211,6 +216,7 @@ impl IntroScene {
     pub(crate) fn new(
         sources: OwnedGlyphSources,
         frame: FrameAssets,
+        icons: KeypadIconSheet,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
@@ -226,10 +232,12 @@ impl IntroScene {
         .with_ab_speed_up_print();
         Self {
             frame,
+            icons,
             pages,
             page_index: 0,
             printer,
             ops: Vec::new(),
+            window_fill: None,
             finished: false,
             new_game_options,
             new_game_identity: NewGameIdentity::DEFAULT,
@@ -259,7 +267,7 @@ impl IntroScene {
     /// # Errors
     ///
     /// Returns [`IntroSceneError::Pack`] if an asset is missing or malformed,
-    /// or [`IntroSceneError::Font`] if the font sheet cannot be decoded.
+    /// or [`IntroSceneError::Font`] if the font or keypad-icon sheet cannot be decoded.
     pub fn from_pack(pack: &AssetPack) -> Result<Self, IntroSceneError> {
         Self::from_pack_with_options(pack, NewGameOptions::DEFAULT)
     }
@@ -294,12 +302,13 @@ impl IntroScene {
             Ok::<_, IntroSceneError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
+        let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sources, frame, speed, options))
+        Ok(Self::new(sources, frame, icons, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -345,20 +354,18 @@ impl IntroScene {
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
             self.ops.clear();
-        }
-        // Polled right after `tick`: a positive `CLEAR`/`CLEAR_TO` always
-        // ends the frame as `TickEvent::Idle` (`Printer::cleared_span`), so
-        // this never competes with a same-tick glyph.
-        if let Some(span) = self.printer.cleared_span() {
-            self.ops.push(WindowOp::ClearSpan(span));
+            self.window_fill = self.printer.cleared_window_colors();
         }
         match event {
-            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
-            TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
-            }
+            TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
+            TickEvent::Scrolling { dy } => textbox::scroll_window_ops(
+                &mut self.ops,
+                dy,
+                self.printer.colors(),
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            ),
             TickEvent::Finished => self.advance_page(),
             TickEvent::Idle
             | TickEvent::Cleared
@@ -371,6 +378,18 @@ impl IntroScene {
             | TickEvent::Paused
             | TickEvent::PauseFinished => {}
         }
+        // Polled right after `tick`. Upstream draws a glyph before clearing the
+        // minimum-spacing gap behind it (`text.c:1146-1156`), so the span goes
+        // on after the glyph the same tick pushed; a positive `CLEAR`/`CLEAR_TO`
+        // ends its frame as `TickEvent::Idle` with no glyph (`Printer::cleared_span`).
+        if let Some(span) = self.printer.cleared_span() {
+            self.push_clipped(WindowOp::ClearSpan(span));
+        }
+        // A keypad icon also ends its frame as `TickEvent::Idle`
+        // (`Printer::keypad_icon`), so it never competes with a glyph either.
+        if let Some(icon) = self.printer.keypad_icon() {
+            self.push_clipped(WindowOp::KeypadIcon(icon));
+        }
 
         if self.finished {
             IntroStatus::Finished
@@ -379,10 +398,17 @@ impl IntroScene {
         }
     }
 
+    /// Retains `op` with the rows below the window removed, once, at reveal
+    /// time; see [`WindowOp::clipped_below`].
+    fn push_clipped(&mut self, op: WindowOp) {
+        textbox::push_clipped(&mut self.ops, op, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1);
+    }
+
     fn advance_page(&mut self) {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
             self.ops.clear();
+            self.window_fill = None;
             self.printer.restart(self.pages[self.page_index].clone());
         } else {
             self.finished = true;
@@ -395,6 +421,8 @@ impl IntroScene {
         let mut fb = Framebuffer::new();
         fb.fill(Rgb888::BLACK);
 
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| fb.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(
@@ -402,7 +430,9 @@ impl IntroScene {
             &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
-            &self.frame.glyph_colors(),
+            &self.icons,
+            &self.frame.palette,
+            textbox::WindowBackdrop::message_box(self.window_fill, scene.as_ref()),
         );
 
         fb
@@ -474,7 +504,13 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; 16],
     };
-    let mut scene = IntroScene::new(sources, frame, TextSpeed::Instant, NewGameOptions::DEFAULT);
+    let mut scene = IntroScene::new(
+        sources,
+        frame,
+        textbox::test_keypad_icons(&[]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
     let confirm_a = PrinterInput {
         a_pressed: true,
         b_pressed: false,

@@ -6,16 +6,9 @@
 
 use std::path::Path;
 
+use super::scope::{GENERAL_1_PALETTE_ID, TALL_GRASS_IMAGE_ID};
 use super::{push_palette_entry, push_png_entry, ExtractError};
 use pack_format::PackWriter;
-
-/// The tall-grass picture: five 16x16 frames
-/// (`gFieldEffectObjectPic_TallGrass`, `sPicTable_TallGrass`).
-const TALL_GRASS_IMAGE_ID: &str = "field-effect/image/tall_grass";
-
-/// `gFieldEffectObjectPalette1`, which `FLDEFF_PAL_TAG_GENERAL_1` names and the
-/// tall-grass template binds (`field_effect_objects.h:2,96`).
-const GENERAL_1_PALETTE_ID: &str = "field-effect/palette/general_1";
 
 pub(super) fn extract_field_effects(
     upstream: &Path,

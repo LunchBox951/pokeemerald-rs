@@ -2,7 +2,7 @@
 //! truck's twelve pieces, and the parent-based depth order that stands in for
 //! upstream's subpriority sort.
 //!
-//! [`elevated_oam_entries`] turns each visible, bound object event into a
+//! [`elevated_oam_entries`] turns each active, bound object event into a
 //! [`DepthSprite`], and [`order_sprites`] orders the player, those sprites and
 //! any field-effect sprites as `SortSprites` hands them to the PPU
 //! (`sprite.c:413-419`). Every OBJ is a [`SheetSprite`] carrying the unmasked
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use engine::event_data::EventData;
 use engine::overworld::object_event::{tile_is_in_view, ObjectEventCollection};
-use engine::overworld::{object_event_is_visible, PlayerState};
+use engine::overworld::PlayerState;
 use rendering::{BitDepth, OamEntry};
 
 use super::super::avatar;
@@ -120,22 +120,29 @@ pub(in crate::overworld) struct DepthSprite {
     parent_y: u8,
     /// The parent's subpriority.
     pub(super) subpriority: u16,
+    /// The parent's frame size in pixels (`graphicsInfo->width`/`->height`),
+    /// from which upstream derives `centerToCornerVecX`/`Y`.
+    width: u16,
+    height: u16,
 }
 
 impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
     pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
-        Self::with_subpriority(
-            entry,
-            subpriority_from_bottom(
-                i32::from(entry.y()) + 32,
-                elevation,
-                OBJECT_EVENT_SUBPRIORITY,
-            ),
-        )
+        Self {
+            height: 32,
+            ..Self::with_subpriority(
+                entry,
+                subpriority_from_bottom(
+                    i32::from(entry.y()) + 32,
+                    elevation,
+                    OBJECT_EVENT_SUBPRIORITY,
+                ),
+            )
+        }
     }
 
-    /// A single-OBJ sprite whose subpriority is already known, such as a
+    /// A single-OBJ 16x16 sprite whose subpriority is already known, such as a
     /// field effect's, which competes beside the object events.
     pub(in crate::overworld) fn with_subpriority(entry: SheetSprite, subpriority: u16) -> Self {
         Self {
@@ -143,6 +150,8 @@ impl DepthSprite {
             parent_y: entry.y(),
             subpriority,
             entries: vec![entry],
+            width: 16,
+            height: 16,
         }
     }
 
@@ -161,18 +170,42 @@ impl DepthSprite {
     pub(in crate::overworld) const fn parent_subpriority(&self) -> u16 {
         self.subpriority
     }
+
+    /// The parent's frame width in pixels.
+    pub(in crate::overworld) const fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// The parent's frame height in pixels.
+    pub(in crate::overworld) const fn height(&self) -> u16 {
+        self.height
+    }
+}
+
+/// The first wrapped OAM `y` upstream reads as negative (`DISPLAY_HEIGHT`).
+const SORT_WRAP_Y: u8 = 160;
+
+/// A wrapped OAM `y` as `SortSprites` compares it: values at or beyond
+/// `DISPLAY_HEIGHT` are `y - 256` (`sprite.c:385-389`).
+fn signed_screen_y(y: u8) -> i16 {
+    if y >= SORT_WRAP_Y {
+        i16::from(y) - 256
+    } else {
+        i16::from(y)
+    }
 }
 
 /// Orders sprites as upstream emits OAM: ascending parent OBJ priority, then
-/// subpriority, then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`);
-/// ties keep input order and each sprite's OBJs stay together.
+/// subpriority, then lower on-screen signed `y` (`SortSprites`,
+/// `sprite.c:413-419`); ties keep input order and each sprite's OBJs stay
+/// together. The emitted OBJs keep their wrapped `y`.
 pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
     let mut ordered: Vec<&DepthSprite> = sprites.iter().collect();
     ordered.sort_by_key(|sprite| {
         (
             sprite.parent_priority,
             sprite.subpriority,
-            std::cmp::Reverse(sprite.parent_y),
+            std::cmp::Reverse(signed_screen_y(sprite.parent_y)),
         )
     });
     ordered
@@ -259,7 +292,8 @@ const fn single_obj_shape(width: u16, height: u16) -> (rendering::ObjShape, u8) 
 /// it selects the OBJ priority and the subpriority base.
 ///
 /// Position and facing come from each entry's live state; the template keeps
-/// the graphics id and hide flag. The standing frame follows the live facing
+/// the graphics id. Only active entries draw: the hide flag was applied at admission, and a flag
+/// set afterwards leaves the sprite until a script retires the entry. The standing frame follows the live facing
 /// (`GetFaceDirectionAnimNum`, `event_object_movement.c`), and the spawn window
 /// is evaluated at the live tile.
 #[must_use]
@@ -268,7 +302,7 @@ pub(in crate::overworld) fn elevated_oam_entries(
     elevations: &[u8],
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
-    event_data: &EventData,
+    _event_data: &EventData,
 ) -> Vec<DepthSprite> {
     let player_pos = player.position();
     let camera_lag = super::super::viewport::camera_lag_px(player);
@@ -276,8 +310,7 @@ pub(in crate::overworld) fn elevated_oam_entries(
         .iter()
         .enumerate()
         .filter(|(_, live)| {
-            object_event_is_visible(live.template(), event_data)
-                && tile_is_in_view(live.state().position(), player_pos)
+            live.is_active() && tile_is_in_view(live.state().position(), player_pos)
         })
         .filter_map(|(index, live)| {
             let state = live.state();
@@ -322,6 +355,8 @@ pub(in crate::overworld) fn elevated_oam_entries(
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),
+                width: binding.width,
+                height: binding.height,
             })
         })
         .collect()
