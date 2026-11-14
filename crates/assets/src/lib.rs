@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
+//! Pokénav city-map selector entries (see [`pokenav_city_maps`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -61,6 +62,7 @@ pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
 pub mod pokedex;
+pub mod pokenav_city_maps;
 pub mod script_refs;
 pub mod species;
 pub mod species_names;
@@ -115,6 +117,7 @@ pub use new_game_flags::{
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
+pub use pokenav_city_maps::{CityMapCatalog, CityMapEntry, CityMapId, CITY_MAP_COUNT};
 pub use script_refs::{MapScriptTableRef, ScriptRef};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
