@@ -31066,7 +31066,10 @@
     "src/data/region_map/city_map_entries.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "The 22 sPokenavCityMaps records (src/data/region_map/city_map_entries.h:1-113) are transcribed in upstream order as assets::CityMapCatalog entries: section (assets::RegionMapSectionId), position index, and a CityMapId naming the tilemap symbol. CityMapCatalog::find mirrors the section-and-position match in DrawCityMap (src/pokenav_region_map.c:637-643) and returns None for an unsupported pair. NOT covered: the city-map tilemap bytes (src/data/region_map/city_map_tilemaps.h, still pending), so a CityMapId loads no graphics, and the Pokenav zoom view that draws them. Nothing consumes the catalog yet.",
+      "rust_target": "crates/assets/src/pokenav_city_maps.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/region_map/city_map_tilemaps.h": {
       "category": "code.header",
