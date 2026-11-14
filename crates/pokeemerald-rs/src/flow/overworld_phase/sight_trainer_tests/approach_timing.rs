@@ -646,3 +646,80 @@ fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
     assert_eq!(trainer.position(), (rx, ry + 2));
     assert_eq!((trainer.elevation(), trainer.previous_elevation()), (0, 5));
 }
+
+/// The icon's face action settles Rhett's previous tile, retiring its tall-grass
+/// effect while the icon is up (`trainer_see.c:465-466`;
+/// `event_object_movement.c:5048-5068`; `field_effect_helpers.c:332-355`).
+#[test]
+fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes_up() {
+    use engine::overworld::metatile_behavior::MB_TALL_GRASS;
+
+    const GROUND: u8 = 3;
+    fn rhett(phase: &mut OverworldPhase) -> &mut engine::overworld::ObjectEventState {
+        phase
+            .object_events
+            .get_mut(rhetts_object_event().local_id)
+            .expect("Rhett is in the live collection")
+            .state_mut()
+    }
+    let (rx, ry) = RHETT_TILE;
+    let grass = (u16::try_from(rx).unwrap(), u16::try_from(ry - 1).unwrap());
+    let scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
+        80,
+        16,
+        &[(grass, MB_TALL_GRASS, GROUND)],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ROUTE_103,
+        PlayerState::new((rx, ry + 1), GROUND, Direction::North),
+        None,
+    )
+    .with_private_object_event_rng();
+
+    rhett(&mut phase).walk(Direction::North);
+    phase.step(ButtonState::new());
+    assert_eq!(
+        rhett(&mut phase).position(),
+        (rx, ry - 1),
+        "setup: on grass"
+    );
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1, "setup: seeded");
+
+    rhett(&mut phase).walk(Direction::South);
+    assert_eq!(rhett(&mut phase).position(), RHETT_TILE);
+    assert_eq!(rhett(&mut phase).previous_position(), (rx, ry - 1));
+    seed_approach(&mut phase, 0);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "setup: the departed tile's effect stands before the icon"
+    );
+    for _ in 0..LOCK_HANDOFF_AT_REST {
+        phase.step(ButtonState::new());
+    }
+    phase.step(ButtonState::new());
+    assert_eq!(
+        approaching_trainer(&phase).previous_position(),
+        RHETT_TILE,
+        "the icon's face-direction movement settled the previous tile"
+    );
+    for _ in 0..20 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        0,
+        "the departed tile's grass effect retires while the icon is still up"
+    );
+    assert_eq!(approaching_trainer(&phase).position(), RHETT_TILE);
+    for _ in 0..EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES + 2 - 20 {
+        phase.step(ButtonState::new());
+    }
+    assert!(
+        phase.sight_approach.is_some(),
+        "the approach is still running"
+    );
+    assert_eq!(approaching_trainer(&phase).previous_position(), RHETT_TILE);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0);
+}

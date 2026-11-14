@@ -127,6 +127,52 @@ fn an_adjacent_trainer_walks_nothing() {
     );
 }
 
+/// The icon's face-direction movement settles a stale previous tile
+/// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`).
+#[test]
+fn the_exclamation_mark_settles_a_stale_previous_tile() {
+    let (_, mut objects) = approaching_from((10, 4), Direction::South, 0);
+    let _ = objects.admit_on_map_load((10, 6), &engine::event_data::EventData::new());
+    trainer_mut(&mut objects).walk(Direction::South);
+    assert_eq!(trainer(&objects).previous_position(), (10, 4));
+    SightApproach::exclamation_mark(trainer_mut(&mut objects));
+    assert_eq!(trainer(&objects).position(), (10, 5));
+    assert_eq!(trainer(&objects).previous_position(), (10, 5));
+    assert_eq!(trainer(&objects).facing(), Direction::South);
+    assert!(
+        objects.collision_objects_at(10, 4, 3).next().is_none(),
+        "the vacated tile is no longer held for collision"
+    );
+}
+
+/// A zero-tile approach's face-player action settles a stale previous tile
+/// (`event_object_movement.c:5048-5056,2162-2165,6181-6189`).
+#[test]
+fn an_adjacent_trainer_settles_a_stale_previous_tile_when_it_faces_the_player() {
+    let (mut approach, mut objects) = approaching_from((10, 4), Direction::South, 0);
+    let _ = objects.admit_on_map_load((10, 6), &engine::event_data::EventData::new());
+    trainer_mut(&mut objects).walk(Direction::South);
+    assert!(
+        objects.collision_objects_at(10, 4, 3).next().is_some(),
+        "setup: the departed tile is held for collision"
+    );
+    assert_eq!(trainer(&objects).previous_position(), (10, 4));
+    for _ in 0..ICON_STAGE_FRAMES {
+        approach.advance_movement(trainer_mut(&mut objects), (10, 6), |_| {});
+    }
+    assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
+    assert_eq!(trainer(&objects).position(), (10, 5));
+    assert_eq!(
+        trainer(&objects).previous_position(),
+        (10, 5),
+        "the face action must settle previousCoords on currentCoords"
+    );
+    assert!(
+        objects.collision_objects_at(10, 4, 3).next().is_none(),
+        "the vacated tile is no longer held for collision"
+    );
+}
+
 /// `PlayerFaceApproachingTrainer`'s write-backs, and the direction it
 /// hands back for the player.
 #[test]

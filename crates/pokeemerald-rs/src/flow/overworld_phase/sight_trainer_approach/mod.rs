@@ -252,6 +252,12 @@ impl SightApproach {
         };
     }
 
+    /// `TrainerExclamationMark` re-faces the trainer, settling its previous tile
+    /// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`).
+    pub(super) fn exclamation_mark(trainer: &mut ObjectEventState) {
+        trainer.face_in_place();
+    }
+
     /// Spend one frame of the icon or the walk-up
     /// (`WaitTrainerExclamationMark`, `TrainerMoveToPlayer`).
     ///
@@ -357,8 +363,12 @@ impl SightApproach {
     /// that a zero-tile approach (the trainer was already adjacent, possibly
     /// having been *walked into* rather than having walked) turns the same
     /// way upstream would.
+    ///
+    /// `FaceDirection` also settles the previous tile
+    /// (`event_object_movement.c:5048-5056,2162-2165`).
     fn face_player(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
         trainer.face(direction_to_face(trainer.position(), player_position));
+        trainer.settle_previous_position();
         self.stage = ApproachStage::PlayerFacesTrainer;
     }
 
