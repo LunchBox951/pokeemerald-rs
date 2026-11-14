@@ -3,6 +3,7 @@
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
 use crate::ability::{burn_halves_damage, huge_power_attack};
+use crate::attract::is_attract_effect;
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -36,7 +37,9 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod attract;
 mod burn;
+mod cute_charm;
 mod effect_spore;
 mod pipelines;
 mod rollout;
@@ -92,6 +95,7 @@ pub(super) enum MovePipeline {
     Confuse,
     LeechSeed,
     Rollout,
+    Attract,
     OrdinaryHit,
 }
 
@@ -139,6 +143,8 @@ impl MovePipeline {
             (Self::LeechSeed, crate::leech_seed::ensure_resolvable)
         } else if is_rollout_effect(effect) {
             (Self::Rollout, crate::rollout::ensure_resolvable)
+        } else if is_attract_effect(effect) {
+            (Self::Attract, crate::attract::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -238,6 +244,7 @@ impl Battle {
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
@@ -459,6 +466,9 @@ impl Battle {
             }
             MovePipeline::Rollout => {
                 self.execute_rollout_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Attract => {
+                self.execute_attract_move(attacker_is_player, move_id, rng, events)
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -754,13 +764,16 @@ impl Battle {
     /// `CalculateBaseDamage` tests `gBattleMoves[gCurrentMove].effect` for
     /// `EFFECT_EXPLOSION` and halves the raw Defense before the stage scales
     /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
-    /// confused Selfdestruct or Explosion user takes the larger self-hit
-    /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
-    /// depleted slot reaches it too). The same call halves a burned battler's
-    /// damage unless it has Guts (`:3262`-`:3264`).
-    pub(super) fn apply_confusion_self_hit(
+    /// confused or disobedient Selfdestruct or Explosion user takes the larger
+    /// self-hit (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort,
+    /// so a depleted slot reaches it too). The same call halves a burned
+    /// battler's damage unless it has Guts (`:3262`-`:3264`). `disobedient`
+    /// selects the [`BattleEvent::DisobedientSelfHit`] report over the confusion
+    /// one (`IsMonDisobedient`, `src/battle_util.c:4023`-`:4030`).
+    pub(super) fn apply_self_hit(
         &mut self,
         battler_is_player: bool,
+        disobedient: bool,
         selected_move: MoveId,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
@@ -789,7 +802,7 @@ impl Battle {
             defense_stage,
             // `CalculateBaseDamage` halves a burned non-Guts attacker's
             // damage after the division by 50 (`pokeemerald/src/pokemon.c:3262`
-            // -`:3264`); the confused battler is the attacker here.
+            // -`:3264`); the self-hitting battler is the attacker here.
             attacker_burned: burn_halves_damage(battler.ability(), battler.status1()),
             reflect: false,
             light_screen: false,
@@ -808,9 +821,16 @@ impl Battle {
         };
         let hp_lost = damage.min(battler.current_hp());
         battler.apply_damage(hp_lost);
-        events.push(BattleEvent::ConfusionSelfHit {
-            by_player: battler_is_player,
-            damage: hp_lost,
+        events.push(if disobedient {
+            BattleEvent::DisobedientSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
+        } else {
+            BattleEvent::ConfusionSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
         });
         self.settle_faint(battler_is_player, events);
         Ok(())
@@ -847,6 +867,7 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
+        self.clear_infatuation_from(BattlerSide::from_is_player(fainted_is_player));
         // `FaintClearSetData` resets the battler's history, Perish Song
         // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
@@ -1237,6 +1258,7 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (&[84], MovePipeline::LeechSeed),
         (&[117], MovePipeline::Rollout),
+        (&[120], MovePipeline::Attract),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
@@ -1273,7 +1295,8 @@ mod pipeline_agreement_tests {
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
                     || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
                     || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::attract::ensure_resolvable(dex, move_id).is_ok();
                 if accepted {
                     Ok(())
                 } else {

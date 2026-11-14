@@ -70,6 +70,7 @@ pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_103_phase`] that retains the checkout pack, for the real-pack
@@ -82,6 +83,7 @@ pub(super) fn repo_route_103_phase(player: PlayerState) -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, mirroring
@@ -226,7 +228,6 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
         rhetts_object_event().local_id,
-        ObjectEventState::from_template(rhetts_object_event()),
         walk_tiles,
         "Whoa!\nHow'd you get into a space this small?",
         battle,
@@ -234,14 +235,23 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     ));
 }
 
-/// The approaching trainer's live object-event state, for the approach tests'
-/// assertions.
-pub(super) fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
+/// The live collection state of the entry `local_id` names.
+pub(super) fn live_trainer(phase: &OverworldPhase, local_id: u8) -> &ObjectEventState {
     phase
+        .object_events
+        .get(local_id)
+        .expect("the live collection holds the entry")
+        .state()
+}
+
+/// The approaching trainer's live object-event state in the phase's own
+/// collection, for the approach tests' assertions.
+pub(super) fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
+    let approach = phase
         .sight_approach
         .as_ref()
-        .expect("the approach must still be running")
-        .trainer()
+        .expect("the approach must still be running");
+    live_trainer(phase, approach.local_id())
 }
 
 /// How many consecutive frames the multi-frame RNG tests stand still for --

@@ -4,6 +4,10 @@ use std::sync::Arc;
 
 pub(super) const TEST_KEY: u8 = 60;
 pub(super) const FULL_TRACK_VOLUME: u8 = u8::MAX;
+/// The largest track volume an unmodulated track reaches; two such sides centre
+/// to envelope level 15, the last `gCgb3Vol` entry. `FULL_TRACK_VOLUME` is an
+/// amplitude-modulated extreme that lifts a centred wave past the table.
+pub(super) const MAX_TRACK_VOLUME: u8 = 127;
 pub(super) const FULL_VELOCITY: u8 = 127;
 pub(super) const MAX_ADSR_LEVEL: u8 = 15;
 pub(super) const HALF_DUTY: u8 = 2;
@@ -28,6 +32,15 @@ pub(super) struct TestNote {
 }
 
 impl TestNote {
+    /// A centred note whose wave envelope stays inside `gCgb3Vol`.
+    pub(super) fn unmodulated() -> Self {
+        Self {
+            track_right: MAX_TRACK_VOLUME,
+            track_left: MAX_TRACK_VOLUME,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn at_key(key: u8) -> Self {
         Self {
             note_key: key,

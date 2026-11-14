@@ -1,4 +1,5 @@
-//! Object-event sprites: `sprite/*` sheets and `sprite/palette/*` banks.
+//! Object-event sprites: `sprite/*` sheets and `sprite/palette/*` banks, and
+//! the tall-grass `field-effect/*` sheet and palette.
 //!
 //! The sheets are the plainest art in the ROM: raw 4bpp tiles in `gbagfx`'s
 //! metatile order, one per `gObjectEventPic_*`, with nothing pointing at
@@ -19,6 +20,12 @@
 //! `OBJ_EVENT_PAL_TAG_NONE` instead, a bug the retail build ships with
 //! (`BUGFIX` writes `{NULL, OBJ_EVENT_PAL_TAG_NONE}`). The walk stops at a
 //! `NULL` `data` pointer, which both spellings share.
+//!
+//! The tall-grass field effect rides along: its sheet is one more root in
+//! [`SpriteRoots::sheets`], and its palette, `gFieldEffectObjectPalette1`,
+//! is in [`SpriteRoots::field_effect_palettes`]. That bank is bound through
+//! a field-effect template and is not in `sObjectEventSpritePalettes`, so it
+//! is written without that table's corroboration.
 
 use pack_format::PackWriter;
 
@@ -54,7 +61,7 @@ pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result
     for root in sprites.sheets {
         writer.push(image(&reader, root)?);
     }
-    for root in sprites.palettes {
+    for root in sprites.palettes.iter().chain(sprites.field_effect_palettes) {
         writer.push(palette(&reader, root)?);
     }
     Ok(())
@@ -81,7 +88,14 @@ fn corroborate(reader: &RomReader<'_>, sprites: &SpriteRoots) -> Result<(), Impo
 }
 
 /// Every `data` pointer in the table, up to its terminator.
-fn palette_table(reader: &RomReader<'_>, table: GbaPtr) -> Result<Vec<GbaPtr>, ImportError> {
+///
+/// # Errors
+///
+/// Returns [`ImportError::Truncated`] when a record runs past the ROM, a
+/// pointer error when a live record's `data` does not parse as a ROM
+/// pointer, and [`ImportError::StructMismatch`] when no terminator appears
+/// within the first `MAX_RECORDS` records.
+pub fn palette_table(reader: &RomReader<'_>, table: GbaPtr) -> Result<Vec<GbaPtr>, ImportError> {
     let mut named = Vec::new();
     for index in 0..MAX_RECORDS {
         let record = reader.table_entry(TABLE, table, index, MAX_RECORDS, RECORD_BYTES)?;

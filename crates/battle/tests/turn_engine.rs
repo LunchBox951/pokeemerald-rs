@@ -10,12 +10,18 @@ mod absorbing_abilities;
 mod accuracy_down_hit;
 #[path = "turn_engine/announcement.rs"]
 mod announcement;
+#[path = "turn_engine/attract/mod.rs"]
+mod attract;
+#[path = "turn_engine/bad_poison.rs"]
+mod bad_poison;
 #[path = "turn_engine/burn.rs"]
 mod burn;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
 #[path = "turn_engine/confusion_explosion.rs"]
 mod confusion_explosion;
+#[path = "turn_engine/cute_charm_contact/mod.rs"]
+mod cute_charm_contact;
 #[path = "turn_engine/effect_spore_contact/mod.rs"]
 mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
@@ -32,6 +38,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/obedience.rs"]
+mod obedience;
 #[path = "turn_engine/oran_berry.rs"]
 mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
@@ -64,6 +72,8 @@ mod rough_skin_contact;
 mod shed_skin;
 #[path = "turn_engine/sleep.rs"]
 mod sleep;
+#[path = "turn_engine/speed_boost.rs"]
+mod speed_boost;
 #[path = "turn_engine/speed_down_hit.rs"]
 mod speed_down_hit;
 #[path = "turn_engine/stat_changes.rs"]

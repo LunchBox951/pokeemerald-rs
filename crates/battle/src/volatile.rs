@@ -1,5 +1,5 @@
-//! Focus Energy, Charge, Defense Curl, Confusion, Flash Fire, and Leech Seed
-//! state carried by one battler.
+//! Focus Energy, Charge, Defense Curl, Confusion, Flash Fire, Leech Seed, and
+//! infatuation state carried by one battler.
 //!
 //! Ordinary switches clear every one of them. Baton Pass preserves Focus Energy but
 //! clears Charge's timer and Defense Curl's flag: its `status2` mask keeps
@@ -12,6 +12,13 @@
 //! Charge's timer is also its active flag because upstream raises and clears
 //! `STATUS3_CHARGED_UP` in lockstep with `chargeTimer`
 //! (`src/battle_script_commands.c:9102`; `src/battle_util.c:1743`).
+//!
+//! Infatuation records the attracting battler beside `STATUS2_INFATUATION`
+//! (`Cmd_tryinfatuating`, `src/battle_script_commands.c:7693`). It clears with
+//! the infatuated battler's own scratch, and it also clears when the
+//! attracting battler leaves the field ([`Volatiles::clear_infatuation_from`]),
+//! which Leech Seed does not (`SwitchInClearSetData`, `src/battle_main.c:3195`
+//! -`:3200`).
 //!
 //! Confusion decrements once per attacker action, not once per end-of-turn
 //! tick like Charge (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
@@ -44,6 +51,9 @@ pub struct Volatiles {
     /// -`:6734`), so the drain's receiver is whoever occupies that slot at
     /// end of turn, not the Pokémon that seeded.
     pub leech_seed_source: Option<BattlerSide>,
+    /// The field slot whose Attract infatuated this battler, or `None` when
+    /// it is not infatuated (`STATUS2_INFATUATED_WITH`).
+    pub infatuated_by: Option<BattlerSide>,
 }
 
 impl Volatiles {
@@ -87,6 +97,27 @@ impl Volatiles {
     /// `:6734`).
     pub const fn set_seeded_by(&mut self, seeder: BattlerSide) {
         self.leech_seed_source = Some(seeder);
+    }
+
+    /// Whether Attract holds this battler.
+    #[must_use]
+    pub const fn infatuated(self) -> bool {
+        self.infatuated_by.is_some()
+    }
+
+    /// Records `attractor` as the slot this battler is infatuated with
+    /// (`STATUS2_INFATUATED_WITH`, `src/battle_script_commands.c:7693`).
+    pub const fn set_infatuated_by(&mut self, attractor: BattlerSide) {
+        self.infatuated_by = Some(attractor);
+    }
+
+    /// Ends the infatuation held for `attractor`, which has left the field
+    /// (`src/battle_main.c:3195`-`:3200`, `:3277`-`:3280`). An infatuation
+    /// held for the other slot stays.
+    pub fn clear_infatuation_from(&mut self, attractor: BattlerSide) {
+        if self.infatuated_by == Some(attractor) {
+            self.infatuated_by = None;
+        }
     }
 
     /// Activates or refreshes Charge.
@@ -189,6 +220,29 @@ mod tests {
         assert_eq!(volatiles.confusion_turns, 0);
         assert!(!volatiles.seeded());
         assert_eq!(volatiles.leech_seed_source, None);
+        assert!(!volatiles.infatuated());
+        assert_eq!(volatiles.infatuated_by, None);
+    }
+
+    #[test]
+    fn infatuation_remembers_its_attractor_slot() {
+        let mut volatiles = Volatiles::default();
+        volatiles.set_infatuated_by(BattlerSide::Player);
+        assert!(volatiles.infatuated());
+        assert_eq!(volatiles.infatuated_by, Some(BattlerSide::Player));
+    }
+
+    #[test]
+    fn infatuation_clears_only_for_the_attractor_that_left() {
+        let mut volatiles = Volatiles::default();
+        volatiles.set_infatuated_by(BattlerSide::Player);
+        volatiles.clear_infatuation_from(BattlerSide::Enemy);
+        assert!(
+            volatiles.infatuated(),
+            "another slot leaving changes nothing"
+        );
+        volatiles.clear_infatuation_from(BattlerSide::Player);
+        assert!(!volatiles.infatuated());
     }
 
     #[test]

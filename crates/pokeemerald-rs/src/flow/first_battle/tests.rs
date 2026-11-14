@@ -328,3 +328,20 @@ fn start_first_battle_refuses_an_inadmissible_lead_before_any_draw() {
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());
 }
+
+#[test]
+fn start_first_battle_refuses_a_fainted_lead_before_any_draw() {
+    let mut rng = Rng::new(DEFAULT_RNG_SEED);
+    let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead is fainted");
+
+    let result = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng);
+
+    assert!(matches!(result, Err(BattleError::FaintedBattler(true))));
+    assert_eq!(
+        rng.state(),
+        Rng::new(DEFAULT_RNG_SEED).state(),
+        "a refused lead draws nothing"
+    );
+}

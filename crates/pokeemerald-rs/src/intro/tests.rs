@@ -320,6 +320,98 @@ fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
     );
 }
 
+/// A scene printing `{SHIFT_DOWN shift_down}A\l` and then a long pause, so the
+/// scroll's 16 pixels finish before the page ends.
+fn scene_with_a_shifted_glyph_then_scroll(shift_down: u8) -> IntroScene {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: 0x0E,
+            args: vec![shift_down],
+        },
+        Token::Char('A'),
+        Token::PromptScroll,
+        Token::ExtCtrl {
+            sub: 0x08,
+            args: vec![u8::MAX],
+        },
+        Token::End,
+    ]);
+    scene
+}
+
+/// Reveals the glyph, answers the scroll prompt, and lets the scroll run out.
+fn scroll_past_the_prompt(scene: &mut IntroScene) {
+    const FRAMES_AFTER_THE_ANSWER: usize = 8;
+    scene.tick(NO_INPUT);
+    scene.tick(NO_INPUT);
+    scene.tick(PRESS_A);
+    for _ in 0..FRAMES_AFTER_THE_ANSWER {
+        scene.tick(NO_INPUT);
+    }
+}
+
+/// The glyph-wide strip of the speech window's content, one colour per window
+/// row.
+fn glyph_column_rows(scene: &IntroScene) -> Vec<Vec<Option<Rgb888>>> {
+    let fb = scene.compose();
+    (0..crate::textbox::STANDARD_BOX_CONTENT_SIZE_PX.1)
+        .map(|row| {
+            (0..i32::try_from(assets::fonts::GLYPH_SIZE).unwrap())
+                .map(|column| {
+                    let (x, y) = box_pixel((column, row));
+                    fb.pixel(x, y)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_glyph_clipped_below_the_window_stays_hidden_after_a_scroll() {
+    let blank = synthetic_scene(&transparent_glyph_sheet_pixels(), TextSpeed::Instant);
+    let background = glyph_column_rows(&blank);
+    // A lands at window y = 32, wholly below the 32-pixel window.
+    let mut scene = scene_with_a_shifted_glyph_then_scroll(31);
+    scene.tick(NO_INPUT);
+    assert_eq!(glyph_column_rows(&scene), background, "before scroll");
+
+    scroll_past_the_prompt(&mut scene);
+
+    assert_eq!(glyph_column_rows(&scene), background, "after scroll");
+}
+
+#[test]
+fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scroll() {
+    const LAST_WINDOW_ROW: usize = 31;
+    const SCROLL_PX: usize = 16;
+    let blank = synthetic_scene(&transparent_glyph_sheet_pixels(), TextSpeed::Instant);
+    let background = glyph_column_rows(&blank);
+    // A lands at window y = 31: only its top row is inside the window.
+    let mut scene = scene_with_a_shifted_glyph_then_scroll(30);
+    scene.tick(NO_INPUT);
+    let before = glyph_column_rows(&scene);
+    assert_ne!(before[LAST_WINDOW_ROW], background[LAST_WINDOW_ROW]);
+    for (row, pixels) in before.iter().enumerate().take(LAST_WINDOW_ROW) {
+        assert_eq!(pixels, &background[row], "before scroll row {row}");
+    }
+
+    scroll_past_the_prompt(&mut scene);
+
+    // The scroll moved the revealed row up; rows clipped at reveal never come
+    // back.
+    let after = glyph_column_rows(&scene);
+    for (row, pixels) in after.iter().enumerate() {
+        let expected = if row == LAST_WINDOW_ROW - SCROLL_PX {
+            &before[LAST_WINDOW_ROW]
+        } else {
+            &background[row]
+        };
+        assert_eq!(pixels, expected, "after scroll row {row}");
+    }
+}
+
 /// Upstream's message printer starts at window-local (0, 1)
 /// (`pokeemerald/src/menu.c:169-180`) in a window at tilemap (2, 15)
 /// (`pokeemerald/src/main_menu.c` `sNewGameBirchSpeechTextWindows`), so the

@@ -745,3 +745,101 @@ fn other_species_live_stats_stay_zero_ev_after_adopting_evs() {
     let trained = sample_mon(&dex).with_evs(DEOXYS_ATTACK_TRAINED);
     assert_eq!(trained.stats(), untrained.stats());
 }
+
+/// `ENDTURN_BAD_POISON` advances only the battle copy's counter; the party's
+/// stored word is what a switch-in reloads and a save writes
+/// (`pokeemerald/src/battle_util.c:1536`-`:1549`,
+/// `pokeemerald/src/battle_script_commands.c:4606`-`:4657`).
+#[test]
+fn the_toxic_residual_advances_a_battle_counter_the_stored_word_never_sees() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 5 });
+
+    assert_eq!(mon.advance_toxic_turns(), Some(6));
+    assert_eq!(mon.advance_toxic_turns(), Some(7));
+    assert_eq!(
+        mon.status1(),
+        Status1::BadPoisoned { counter: 5 },
+        "no status write-back"
+    );
+
+    mon.clear_battle_scratch();
+    assert_eq!(
+        mon.status1(),
+        Status1::BadPoisoned { counter: 5 },
+        "the stored word survives the scratch clear"
+    );
+    assert_eq!(mon.advance_toxic_turns(), Some(6), "re-entry reloads five");
+}
+
+#[test]
+fn the_toxic_battle_counter_saturates_at_fifteen() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 13 });
+
+    assert_eq!(mon.advance_toxic_turns(), Some(14));
+    assert_eq!(mon.advance_toxic_turns(), Some(15));
+    assert_eq!(mon.advance_toxic_turns(), Some(15), "not 16, not zero");
+    assert_eq!(mon.advance_toxic_turns(), Some(15));
+}
+
+#[test]
+fn a_battler_without_bad_poison_has_no_toxic_counter_to_advance() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    for status in [Status1::Healthy, Status1::Poisoned, Status1::Burned] {
+        mon.set_status1(status);
+        assert_eq!(mon.advance_toxic_turns(), None, "{status:?}");
+    }
+}
+
+#[test]
+fn a_cure_or_a_fresh_toxic_drops_the_battle_counter() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 5 });
+    mon.advance_toxic_turns();
+
+    mon.set_status1(Status1::Healthy);
+    mon.set_status1(Status1::BadPoisoned { counter: 0 });
+    assert_eq!(
+        mon.advance_toxic_turns(),
+        Some(1),
+        "a fresh toxic starts over"
+    );
+
+    mon.set_status1(Status1::BadPoisoned { counter: 9 });
+    mon.advance_toxic_turns();
+    mon.heal(&dex).unwrap();
+    assert_eq!(mon.status1(), Status1::Healthy);
+    mon.set_status1(Status1::BadPoisoned { counter: 0 });
+    assert_eq!(
+        mon.advance_toxic_turns(),
+        Some(1),
+        "a heal leaves no scratch"
+    );
+}
+
+#[test]
+fn the_battle_counter_is_part_of_a_battlers_identity() {
+    let dex = Dex::new();
+    let mut ticked = sample_mon(&dex);
+    ticked.set_status1(Status1::BadPoisoned { counter: 0 });
+    let fresh = ticked.clone();
+    assert_eq!(ticked, fresh);
+
+    ticked.advance_toxic_turns();
+    assert_ne!(ticked, fresh, "the next tick would deal different damage");
+
+    ticked.clear_battle_scratch();
+    assert_eq!(ticked, fresh);
+}
+
+#[test]
+#[should_panic(expected = "four bits")]
+fn a_toxic_counter_beyond_four_bits_is_refused() {
+    let mut mon = sample_mon(&Dex::new());
+    mon.set_status1(Status1::BadPoisoned { counter: 16 });
+}
