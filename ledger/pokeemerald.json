@@ -30758,7 +30758,10 @@
     "src/data/pokemon_graphics/enemy_mon_elevation.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEnemyMonElevation re-expressed as a species-indexed accessor (61 nonzero elevations, zero elsewhere, out-of-range species refused). Table only: no battler or shadow positioning consumes it yet.",
+      "rust_target": "crates/assets/src/enemy_elevation.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon_graphics/footprint_table.h": {
       "category": "code.header",
