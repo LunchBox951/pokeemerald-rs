@@ -232,13 +232,9 @@ impl<H: OutputHost> Transport<H> {
     }
 
     /// The current default output as a stable identity plus the device, or
-    /// `None` when there is none, found by the separate calls of
-    /// [`OutputHost`]. Cancellation is read after the host connection and
-    /// after the default query, so a driver detached in either call makes no
-    /// further one; a discovery cancelled there stops and returns `Ok(None)`.
-    /// The identity query is the last call, so nothing follows it to stop.
-    /// Whatever this returns, the caller reads [`Self::cancelled`] before
-    /// using it, never treating a cancelled `Ok(None)` as an absent output.
+    /// `None` when there is none. A cancelled discovery also returns
+    /// `Ok(None)`, so the caller reads [`Self::cancelled`] before treating
+    /// that as an absent output.
     fn discover(&mut self) -> Discovered<H> {
         let backend = self.host.backend();
         if self.cancelled() {
