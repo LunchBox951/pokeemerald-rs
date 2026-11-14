@@ -155,12 +155,20 @@ pub fn volume_supports_open_by_file_id(handle: &std::fs::File) -> std::io::Resul
 mod tests {
     use super::list_directory_by_file_id;
     use crate::{
-        delete_through_handle, delete_through_handle_ignoring_read_only, open_for_verified_delete,
-        wide_file_id, VerifiedRemoval,
+        delete_through_handle, delete_through_handle_ignoring_read_only, delete_through_handle_via,
+        falls_back_to_legacy, open_for_verified_delete, set_posix_disposition, wide_file_id,
+        VerifiedRemoval,
     };
+    use std::io::ErrorKind;
     use std::os::windows::fs::OpenOptionsExt as _;
-    use std::path::PathBuf;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use std::path::{Path, PathBuf};
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_LEVEL, ERROR_INVALID_PARAMETER,
+        ERROR_NOT_SUPPORTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_FLAG_BACKUP_SEMANTICS,
+    };
 
     /// A directory private to one test of this process.
     fn private_dir(tag: &str) -> PathBuf {
@@ -206,41 +214,207 @@ mod tests {
         );
     }
 
-    /// The plain delete refuses a read-only file; the ignoring variant
-    /// removes it through the same kind of handle.
+    fn os_error(code: u32) -> std::io::Error {
+        std::io::Error::from_raw_os_error(i32::try_from(code).unwrap())
+    }
+
+    fn failed_with(result: &std::io::Result<VerifiedRemoval>, code: u32) -> bool {
+        matches!(result, Err(error) if error.raw_os_error() == Some(i32::try_from(code).unwrap()))
+    }
+
+    /// `NotFound` only: a delete-pending name answers access denied, not gone.
+    fn is_gone(path: &Path) -> bool {
+        matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == ErrorKind::NotFound)
+    }
+
+    fn write_read_only(path: &Path) {
+        std::fs::write(path, b"x").unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// A read-only file would keep `dir` from being removed.
+    fn clean_up(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                let mut permissions = metadata.permissions();
+                #[expect(
+                    clippy::permissions_set_readonly_false,
+                    reason = "Windows has no mode bits; this only clears the read-only attribute"
+                )]
+                permissions.set_readonly(false);
+                let _ = std::fs::set_permissions(entry.path(), permissions);
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Exactly the three codes that mean "no POSIX semantics here" send the
+    /// delete to the legacy path; any other failure, including the codes the
+    /// identity query also tolerates, is not a fallback.
     #[test]
-    fn a_read_only_file_is_deleted_only_when_the_attribute_is_ignored() {
+    fn only_the_unsupported_disposition_codes_fall_back_to_the_legacy_delete() {
+        for code in [
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_FUNCTION,
+        ] {
+            assert!(falls_back_to_legacy(&os_error(code)), "code {code}");
+        }
+        for code in [ERROR_ACCESS_DENIED, ERROR_INVALID_LEVEL] {
+            assert!(!falls_back_to_legacy(&os_error(code)), "code {code}");
+        }
+        assert!(!falls_back_to_legacy(&std::io::Error::other("no OS code")));
+    }
+
+    /// When the POSIX attempt is refused as unsupported, the legacy delete
+    /// has no way past the read-only attribute: the call fails access
+    /// denied and the file stays. This is the documented fallback of the
+    /// ignoring variant, forced here whatever the host volume supports.
+    #[test]
+    fn the_legacy_fallback_cannot_delete_a_read_only_file() {
+        let dir = private_dir("legacy-read-only");
+        let mut outcomes = Vec::new();
+        for (index, code) in [
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_FUNCTION,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = dir.join(format!("locked-{index}.txt"));
+            write_read_only(&path);
+            let handle = open_for_verified_delete(&path).unwrap();
+            let result = delete_through_handle_via(&handle, |_| Err(os_error(code)));
+            drop(handle);
+            outcomes.push((code, result, is_gone(&path)));
+        }
+        clean_up(&dir);
+        for (code, result, gone) in outcomes {
+            assert!(
+                failed_with(&result, ERROR_ACCESS_DENIED),
+                "after {code}: {result:?}"
+            );
+            assert!(!gone, "after {code}: the read-only file must survive");
+        }
+    }
+
+    /// The same fallback on an ordinary file marks it delete-on-close, which
+    /// is why it is reported as pending, and the name is gone once every
+    /// handle to it closes.
+    #[test]
+    fn the_legacy_fallback_deletes_an_ordinary_file_on_close() {
+        let dir = private_dir("legacy-ordinary");
+        let path = dir.join("plain.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let result = delete_through_handle_via(&handle, |_| Err(os_error(ERROR_NOT_SUPPORTED)));
+        drop(handle);
+        // A scanner or indexer holding the file keeps the name until it lets
+        // go, so give the name a bounded time to leave.
+        let gone = (0..100).any(|_| {
+            is_gone(&path) || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                false
+            }
+        });
+        clean_up(&dir);
+        assert!(matches!(result, Ok(VerifiedRemoval::Pending)), "{result:?}");
+        assert!(gone, "the file is gone once every handle to it closes");
+    }
+
+    /// A POSIX-attempt failure that is not a fallback code is returned as it
+    /// is and the legacy delete is not tried: the writable file would be
+    /// deleted by it, so its survival shows the legacy call never ran.
+    #[test]
+    fn a_non_fallback_failure_propagates_without_the_legacy_delete() {
+        let dir = private_dir("no-fallback");
+        let path = dir.join("plain.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let result = delete_through_handle_via(&handle, |_| Err(os_error(ERROR_ACCESS_DENIED)));
+        drop(handle);
+        let gone = is_gone(&path);
+        clean_up(&dir);
+        assert!(failed_with(&result, ERROR_ACCESS_DENIED), "{result:?}");
+        assert!(!gone, "the legacy delete must not have run");
+    }
+
+    /// A POSIX attempt that succeeds is the whole delete: it is reported as
+    /// unlinked and the legacy delete is not tried. The injected success
+    /// deletes nothing itself, so the writable file's survival shows the
+    /// legacy call never ran.
+    #[test]
+    fn a_successful_posix_attempt_skips_the_legacy_delete() {
+        let dir = private_dir("posix-only");
+        let path = dir.join("plain.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let result = delete_through_handle_via(&handle, |_| Ok(()));
+        drop(handle);
+        let gone = is_gone(&path);
+        clean_up(&dir);
+        assert!(
+            matches!(result, Ok(VerifiedRemoval::Unlinked)),
+            "{result:?}"
+        );
+        assert!(!gone, "the legacy delete must not have run");
+    }
+
+    /// The plain delete refuses a read-only file. The ignoring variant
+    /// deletes it where the volume and Windows release accept the POSIX
+    /// attempt with `FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE`, and
+    /// otherwise falls back to the legacy delete, which refuses it. Which of
+    /// the two applies is read off a probe of that same attempt on a sibling
+    /// read-only file, so the expectation matches the host without ever
+    /// accepting the deletion on the legacy path.
+    #[test]
+    fn a_read_only_file_is_deleted_only_where_the_ignore_flag_is_supported() {
         let dir = private_dir("read-only");
         let path = dir.join("locked.txt");
-        std::fs::write(&path, b"x").unwrap();
-        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions).unwrap();
-        let plain = delete_through_handle(&open_for_verified_delete(&path).unwrap());
-        let ignoring =
-            delete_through_handle_ignoring_read_only(&open_for_verified_delete(&path).unwrap());
-        let survived = path.exists();
-        if survived {
-            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-            #[expect(
-                clippy::permissions_set_readonly_false,
-                reason = "Windows has no mode bits; this only clears the read-only attribute"
-            )]
-            permissions.set_readonly(false);
-            let _ = std::fs::set_permissions(&path, permissions);
+        let probe = dir.join("probe.txt");
+        write_read_only(&path);
+        write_read_only(&probe);
+
+        let handle = open_for_verified_delete(&path).unwrap();
+        let plain = delete_through_handle(&handle);
+        drop(handle);
+        let plain_gone = is_gone(&path);
+
+        let handle = open_for_verified_delete(&probe).unwrap();
+        let supported =
+            set_posix_disposition(&handle, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE);
+        drop(handle);
+        let probe_gone = is_gone(&probe);
+
+        let handle = open_for_verified_delete(&path).unwrap();
+        let ignoring = delete_through_handle_ignoring_read_only(&handle);
+        drop(handle);
+        let gone = is_gone(&path);
+        clean_up(&dir);
+
+        assert!(failed_with(&plain, ERROR_ACCESS_DENIED), "{plain:?}");
+        assert!(
+            !plain_gone,
+            "the plain delete must leave the read-only file"
+        );
+        match supported {
+            Ok(()) => {
+                assert!(probe_gone, "the probe attempt reported success");
+                assert!(
+                    matches!(ignoring, Ok(VerifiedRemoval::Unlinked)),
+                    "{ignoring:?}"
+                );
+                assert!(gone, "the read-only file is gone once its handle closes");
+            }
+            Err(unsupported) if falls_back_to_legacy(&unsupported) => {
+                assert!(!probe_gone, "the probe attempt reported {unsupported:?}");
+                assert!(failed_with(&ignoring, ERROR_ACCESS_DENIED), "{ignoring:?}");
+                assert!(!gone, "the legacy fallback cannot delete a read-only file");
+            }
+            Err(failed) => panic!("the ignore-flag probe failed outright: {failed:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(plain.is_err(), "{plain:?}");
-        assert!(
-            matches!(
-                ignoring,
-                Ok(VerifiedRemoval::Unlinked | VerifiedRemoval::Pending)
-            ),
-            "{ignoring:?}"
-        );
-        assert!(
-            !survived,
-            "the read-only file is gone once its handle closes"
-        );
     }
 }

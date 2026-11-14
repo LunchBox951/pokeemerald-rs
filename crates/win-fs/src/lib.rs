@@ -283,12 +283,20 @@ fn delete_through_handle_with_flags(
     handle: &std::fs::File,
     extra_posix_flags: windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO_EX_FLAGS,
 ) -> std::io::Result<VerifiedRemoval> {
-    use windows_sys::Win32::Foundation::{
-        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-    };
+    delete_through_handle_via(handle, |handle| {
+        set_posix_disposition(handle, extra_posix_flags)
+    })
+}
+
+/// The POSIX-semantics attempt of [`delete_through_handle`]:
+/// `FileDispositionInfoEx` with `extra_posix_flags` added to its flags.
+fn set_posix_disposition(
+    handle: &std::fs::File,
+    extra_posix_flags: windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO_EX_FLAGS,
+) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfo, FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE,
-        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+        FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        FILE_DISPOSITION_INFO_EX,
     };
 
     let posix = FILE_DISPOSITION_INFO_EX {
@@ -297,18 +305,39 @@ fn delete_through_handle_with_flags(
             | extra_posix_flags,
     };
     // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
-    match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {
+    unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) }
+}
+
+/// Whether a failed POSIX-semantics attempt means the volume or Windows
+/// release does not offer it (or one of its flags), so the legacy delete is
+/// tried, rather than a real failure to propagate.
+fn falls_back_to_legacy(refused: &std::io::Error) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+
+    refused
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok())
+        .is_some_and(|code| {
+            matches!(
+                code,
+                ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+            )
+        })
+}
+
+/// The delete of [`delete_through_handle`], with the POSIX-semantics attempt
+/// supplied as `posix` so a test can force either outcome of it.
+fn delete_through_handle_via(
+    handle: &std::fs::File,
+    posix: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<VerifiedRemoval> {
+    use windows_sys::Win32::Storage::FileSystem::{FileDispositionInfo, FILE_DISPOSITION_INFO};
+
+    match posix(handle) {
         Ok(()) => return Ok(VerifiedRemoval::Unlinked),
-        Err(refused)
-            if refused
-                .raw_os_error()
-                .and_then(|code| u32::try_from(code).ok())
-                .is_some_and(|code| {
-                    matches!(
-                        code,
-                        ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
-                    )
-                }) => {}
+        Err(refused) if falls_back_to_legacy(&refused) => {}
         Err(failed) => return Err(failed),
     }
     let legacy = FILE_DISPOSITION_INFO { DeleteFile: true };
