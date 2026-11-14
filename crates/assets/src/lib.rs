@@ -38,6 +38,7 @@
 
 pub mod abilities;
 pub mod audio;
+pub mod bard_events;
 pub mod battle_anim;
 pub mod battle_moves;
 pub mod bundled_overworld;
@@ -79,6 +80,7 @@ pub use audio::{
     ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice,
     Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
+pub use bard_events::{BardEventsError, BardSlot, BardSoundTemplate, EventsBardTemplates};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
