@@ -505,20 +505,16 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_just_below_one_at_the_scratch_cap_never_reads_undrained_scratch() {
-        // 200 output frames at step 163.84 advance the cursor by exactly
-        // `MAX_SCRATCH_SOURCE_FRAMES` (200 * 163.84 == 32768.0 in f64), so
-        // `Resampler::new` accepts the step and `scratch_layout` keeps the
-        // full 200-frame bound. A cursor resting just under 1.0 from the
-        // previous chunk (`frac` is always in `[0, 1)`, and `1 - 2^-53` is a
-        // value it can take) then carries the chunk to
-        // `MAX_SCRATCH_SOURCE_FRAMES + 1` boundary crossings. The chunk must
-        // drain every source frame it renders from, so a NaN-poisoned
-        // scratch slot never reaches the output.
+    fn an_injected_cursor_one_crossing_past_the_scratch_cap_never_reads_undrained_scratch() {
+        // Defence in depth: probed `fill` histories at this step rest the
+        // cursor no higher than about 0.96, so the start just under 1.0 is
+        // injected (with `next` loaded, as at any fractional rest). 200 *
+        // 163.84 == 32768.0 in f64 keeps the full 200-frame bound, and that
+        // start adds a 32769th crossing.
         let mut resampler = poisoned_resampler_over_a_ramp(163.84, 1, 200, 40_000);
         resampler.primed = true;
         resampler.cursor.need_advance = true;
-        resampler.cursor.next_pending = true;
+        resampler.cursor.next_pending = false;
         resampler.cursor.frac = f64::from_bits(1.0_f64.to_bits() - 1);
         assert!(resampler.cursor.frac < 1.0);
 
@@ -536,14 +532,9 @@ mod tests {
 
     #[test]
     fn every_output_frame_is_interpolated_from_drained_scratch_across_ratios_and_callbacks() {
-        // Prediction (the dry run) and rendering must agree on how many
-        // source frames a chunk consumes, for every cursor history. Run a
-        // spread of ratios (down-, up- and near-unity sampling, including a
-        // ratio that sits on the scratch cap) over callbacks of assorted
-        // sizes against an ample ring and NaN-poisoned scratch: a render
-        // that read past the drained frames emits NaN, one that drained
-        // short underruns, and any drift between the two shows as one of the
-        // two.
+        // Drift between prediction and rendering shows as NaN (a render past
+        // the drain) or an underrun (a drain past the render). 163.84/1 at
+        // bound 200 sits exactly on the scratch cap.
         let cases: [(f64, u32, usize); 6] = [
             (1.0, 3, 64),
             (3.0, 2, 64),
@@ -579,12 +570,8 @@ mod tests {
     #[test]
     fn a_chunk_that_outruns_its_scratch_stalls_instead_of_reading_past_the_drain() {
         // Defence in depth: a validly constructed `Resampler` never asks for
-        // more crossings than its scratch holds, so shrink the scratch to
-        // force it. Eight outputs at step 3.0 want 21 crossings; the scratch
-        // carries 4. The dry run and the render loop share one budgeted
-        // transition, so both stop at the same place: the cursor stays
-        // unresolved (`>= 1.0`), no lookahead loads past the drain, and the
-        // stalled outputs hold the last frame instead of extrapolating.
+        // more crossings than its scratch holds, so the scratch is shrunk to
+        // force it (eight outputs at step 3.0 want 21 crossings; it carries 4).
         let mut resampler = poisoned_resampler_over_a_ramp(3.0, 1, 8, 64);
         resampler.scratch.truncate(6);
         let mut out = [0.0_f32; 8];
