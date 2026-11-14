@@ -647,15 +647,9 @@ fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
     assert_eq!((trainer.elevation(), trainer.previous_elevation()), (0, 5));
 }
 
-/// A zero-tile approach settles the trainer's previous tile as the icon goes up
-/// (`TrainerExclamationMark`'s held face-direction movement, `trainer_see.c:
-/// 465-466`, -> `FaceDirection` -> `ShiftStillObjectEventCoords`,
-/// `event_object_movement.c:5048-5068,2162-2165`). Rhett has been walked off a tall-grass tile and still records
-/// it as his previous one, which keeps the grass effect there alive
-/// (`UpdateTallGrassFieldEffect` retires it only once neither of its owner's
-/// tiles is the effect's, `field_effect_helpers.c:332-355`); the icon's
-/// face action must retire that effect while the icon is still up, not
-/// leave it up.
+/// The icon's face action settles Rhett's previous tile, retiring its tall-grass
+/// effect while the icon is up (`trainer_see.c:465-466`;
+/// `event_object_movement.c:5048-5068`; `field_effect_helpers.c:332-355`).
 #[test]
 fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes_up() {
     use engine::overworld::metatile_behavior::MB_TALL_GRASS;
@@ -683,8 +677,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
     )
     .with_private_object_event_rng();
 
-    // Rhett stands on the grass tile when the scene first admits him, so the
-    // spawn-time pass seeds a settled effect owned by him.
     rhett(&mut phase).walk(Direction::North);
     phase.step(ButtonState::new());
     assert_eq!(
@@ -694,9 +686,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
     );
     assert_eq!(phase.scene.tall_grass_effect_count(), 1, "setup: seeded");
 
-    // Then he is moved onto his authored tile without the walk settling, so he
-    // records the grass tile as his previous one -- the shape a zero-tile
-    // approach inherits.
     rhett(&mut phase).walk(Direction::South);
     assert_eq!(rhett(&mut phase).position(), RHETT_TILE);
     assert_eq!(rhett(&mut phase).previous_position(), (rx, ry - 1));
@@ -706,8 +695,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
         1,
         "setup: the departed tile's effect stands before the icon"
     );
-    // The lock handoff's frame is the one the icon goes up on: the trainer's
-    // held face-direction movement settles the previous tile right there.
     for _ in 0..LOCK_HANDOFF_AT_REST {
         phase.step(ButtonState::new());
     }
@@ -717,9 +704,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
         RHETT_TILE,
         "the icon's face-direction movement settled the previous tile"
     );
-    // The effect has left its owner (`owner_moved`) and then runs out its
-    // settled animation (`field_effect_helpers.c:340-355`): a handful of
-    // frames, all well inside the sixty-frame icon.
     for _ in 0..20 {
         phase.step(ButtonState::new());
     }
@@ -729,8 +713,6 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
         "the departed tile's grass effect retires while the icon is still up"
     );
     assert_eq!(approaching_trainer(&phase).position(), RHETT_TILE);
-    // The rest of the icon, the face stage and its wait, stopping before the
-    // speech opens: the approach is still running and nothing is held again.
     for _ in 0..EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES + 2 - 20 {
         phase.step(ButtonState::new());
     }

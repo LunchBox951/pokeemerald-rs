@@ -252,15 +252,8 @@ impl SightApproach {
         };
     }
 
-    /// `TrainerExclamationMark`'s own held movement
-    /// (`ObjectEventSetHeldMovement(trainerObj,
-    /// GetFaceDirectionMovementAction(trainerObj->facingDirection))`,
-    /// `trainer_see.c:465-466`): the trainer re-faces its current direction as
-    /// the icon goes up, and `FaceDirection` ends in
-    /// `ShiftStillObjectEventCoords` (`event_object_movement.c:5048-5068,
-    /// 2162-2165`), so a previous tile it still records is settled from the
-    /// first icon frame, not only when it later faces the player. Called by
-    /// the driver on the frame [`Self::advance_lock_handoff`] starts the icon.
+    /// `TrainerExclamationMark` re-faces the trainer, settling its previous tile
+    /// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`).
     pub(super) fn exclamation_mark(trainer: &mut ObjectEventState) {
         trainer.face_in_place();
     }
@@ -371,10 +364,8 @@ impl SightApproach {
     /// having been *walked into* rather than having walked) turns the same
     /// way upstream would.
     ///
-    /// `FaceDirection` also ends in `ShiftStillObjectEventCoords`
-    /// (`event_object_movement.c:5048-5056,2162-2165`), so the face action
-    /// settles the trainer's previous tile itself. After a walked tile, or
-    /// after [`Self::exclamation_mark`]'s settle, it finds that already done.
+    /// `FaceDirection` also settles the previous tile
+    /// (`event_object_movement.c:5048-5056,2162-2165`).
     fn face_player(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
         trainer.face(direction_to_face(trainer.position(), player_position));
         trainer.settle_previous_position();

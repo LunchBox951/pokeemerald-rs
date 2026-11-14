@@ -127,10 +127,8 @@ fn an_adjacent_trainer_walks_nothing() {
     );
 }
 
-/// `TrainerExclamationMark` holds a face-direction movement on the trainer as the
-/// icon goes up, and `FaceDirection` ends in `ShiftStillObjectEventCoords`
-/// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`): a
-/// trainer recording a stale previous tile has it settled when the icon starts.
+/// The icon's face-direction movement settles a stale previous tile
+/// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`).
 #[test]
 fn the_exclamation_mark_settles_a_stale_previous_tile() {
     let (_, mut objects) = approaching_from((10, 4), Direction::South, 0);
@@ -147,17 +145,12 @@ fn the_exclamation_mark_settles_a_stale_previous_tile() {
     );
 }
 
-/// `MOVEMENT_ACTION_FACE_PLAYER` goes through `FaceDirection`, which ends in
-/// `ShiftStillObjectEventCoords` (`event_object_movement.c:5048-5056,2162-2165,
-/// 6181-6189`): a zero-tile approach commits no tile of its own, but its face
-/// action still settles whatever tile the trainer last vacated -- here one it
-/// was shoved off before the approach began.
+/// A zero-tile approach's face-player action settles a stale previous tile
+/// (`event_object_movement.c:5048-5056,2162-2165,6181-6189`).
 #[test]
 fn an_adjacent_trainer_settles_a_stale_previous_tile_when_it_faces_the_player() {
     let (mut approach, mut objects) = approaching_from((10, 4), Direction::South, 0);
-    // Position queries return admitted entries only (map-load admission).
     let _ = objects.admit_on_map_load((10, 6), &engine::event_data::EventData::new());
-    // Stands on (10, 5) having just left (10, 4): the hold is still recorded.
     trainer_mut(&mut objects).walk(Direction::South);
     assert!(
         objects.collision_objects_at(10, 4, 3).next().is_some(),
