@@ -190,6 +190,10 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             status: Status1::Poisoned,
         },
+        BattleEvent::SpeedBoostActivated {
+            by_player,
+            new_stage: StatStage::new(1).unwrap(),
+        },
     ]
 }
 
@@ -241,7 +245,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 87;
+const VARIANTS: usize = 88;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -335,6 +339,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::DisobedientSelfHit { .. } => 84,
         BattleEvent::IgnoredOrders => 85,
         BattleEvent::DisobedientNap => 86,
+        BattleEvent::SpeedBoostActivated { .. } => 87,
     }
 }
 

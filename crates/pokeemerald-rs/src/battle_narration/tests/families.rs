@@ -337,6 +337,36 @@ fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
     );
 }
 
+/// `BattleScript_SpeedBoostActivates` names the holder as the scripting
+/// battler (`data/battle_scripts_1.s:3965`-`:3969`).
+#[test]
+fn speed_boost_names_its_holder() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("NINJASK", Some(AbilityId::SPEED_BOOST));
+    let mut narrator = Narrator::new(scene);
+    let new_stage = StatStage::new(1).unwrap();
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::SpeedBoostActivated {
+                    by_player: false,
+                    new_stage,
+                },
+                BattleEvent::SpeedBoostActivated {
+                    by_player: true,
+                    new_stage,
+                },
+            ]
+        )),
+        [
+            "Wild NINJASK's SPEED BOOST\nraised its SPEED!",
+            "TORCHIC's SPEED BOOST\nraised its SPEED!",
+        ]
+    );
+}
+
 /// `BattleScript_BurnTurnDmg` and `BattleScript_PoisonTurnDmg` name the
 /// battler taking the tick as the attacker (`data/battle_scripts_1.s:3736`-`:3753`).
 #[test]

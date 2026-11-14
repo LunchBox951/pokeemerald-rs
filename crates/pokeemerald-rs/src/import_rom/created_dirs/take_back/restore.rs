@@ -150,7 +150,7 @@ pub(super) fn take_back_unwritable_in_place(
 /// unlink acts on a name, so a swap after the check is an accepted residual
 /// (module doc); a level holding anything is left standing, with the
 /// error.
-fn unlink_in_place(parent: &OwnedFd, dir: &CreatedDirectory) -> Outcome {
+pub(super) fn unlink_in_place(parent: &OwnedFd, dir: &CreatedDirectory) -> Outcome {
     let looked_up = rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
         .and_then(|stat| is_this_level(dir, &stat));
     match looked_up {

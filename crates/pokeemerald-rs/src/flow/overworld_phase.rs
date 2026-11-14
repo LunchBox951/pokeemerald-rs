@@ -716,6 +716,11 @@ impl OverworldPhase {
         // which poll the on-frame map script like any other frame, so this
         // runs here too rather than only on a map transition.
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut phase.save1.event_data);
+        connections::admit_object_events_at_map_load(
+            &mut phase.object_events,
+            &phase.player,
+            &phase.save1.event_data,
+        );
         phase
     }
 
@@ -800,7 +805,12 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene);
+        let mut object_events = connections::seed_object_events(&scene);
+        connections::admit_object_events_at_map_load(
+            &mut object_events,
+            &player,
+            &save1.event_data,
+        );
         Self {
             scene,
             player,
@@ -1079,6 +1089,8 @@ mod forced_landing_field_input_gate_tests;
 mod forced_movement_encounter_tests;
 #[cfg(test)]
 mod frame_tests;
+#[cfg(test)]
+mod game_stat_steps_tests;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]
