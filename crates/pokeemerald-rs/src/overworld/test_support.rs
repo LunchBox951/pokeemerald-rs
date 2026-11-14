@@ -42,6 +42,32 @@ impl super::OverworldScene {
             .collect()
     }
 
+    /// Whether `graphics_id`'s OBJ precedes the player's (palette bank 0) in the live draw
+    /// order, recording it as history as `compose_live` does.
+    #[must_use]
+    pub(crate) fn live_order_leads_for_test(
+        &self,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        player: &engine::overworld::PlayerState,
+        event_data: &engine::event_data::EventData,
+        graphics_id: &str,
+    ) -> bool {
+        let binding = self.sprites.bindings()[graphics_id];
+        let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
+        let drawn = self
+            .sprites
+            .live_entries(objects, player, event_data, &self.grass);
+        let npc = drawn
+            .iter()
+            .position(|entry| frame_block.contains(&entry.tile_index()))
+            .expect("the NPC is drawn");
+        let player = drawn
+            .iter()
+            .position(|entry| entry.palette_bank() == 0)
+            .expect("the player is drawn");
+        npc < player
+    }
+
     /// The palette bank `graphics_id` is bound to.
     #[must_use]
     pub(crate) fn npc_palette_bank_for_test(&self, graphics_id: &str) -> u8 {

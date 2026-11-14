@@ -123,6 +123,7 @@ fn an_effect_on_a_tile_that_is_no_longer_tall_grass_is_removed_at_once() {
 
 fn effect(elevation: u8, on_first_command: bool) -> TallGrassEffect {
     TallGrassEffect {
+        serial: 0,
         owner: Owner::Player,
         tile: TILE,
         elevation,
@@ -225,4 +226,118 @@ fn each_effect_is_judged_against_its_own_owners_tiles() {
         "only the owner that left loses its effect"
     );
     assert_eq!(effects.effects[0].owner, Owner::Object(0));
+}
+
+/// The effects' OBJs, tagged by palette bank with their creation rank, in the
+/// order `order` draws them. Each is tied in every depth key with the others.
+fn drawn_ranks(effects: &TallGrassEffects, order: &mut npc::SpriteOrder) -> Vec<u8> {
+    let sprites: Vec<npc::DepthSprite> = effects
+        .oam_entries(&owner_on_tile(), 0, &[])
+        .into_iter()
+        .map(|(entry, subpriority, id)| {
+            let npc::SpriteId::Effect(serial) = id else {
+                panic!("an effect names itself by serial");
+            };
+            let tagged = SheetSprite::new(
+                OamEntry::new(
+                    entry.x().unsigned_abs(),
+                    entry.y(),
+                    0,
+                    u8::try_from(serial).unwrap(),
+                    BitDepth::Bpp4,
+                    false,
+                    false,
+                    OBJ_SHAPE,
+                    OBJ_SIZE,
+                    OBJ_PRIORITY,
+                    true,
+                ),
+                0,
+            );
+            npc::DepthSprite::with_subpriority(tagged, subpriority).with_id(id)
+        })
+        .collect();
+    order
+        .order(&sprites)
+        .iter()
+        .map(|sprite| sprite.palette_bank())
+        .collect()
+}
+
+/// An effect keeps the draw-order identity it was created with: when an older
+/// effect on the same tile expires, a survivor is not renumbered into the
+/// expired one's history slot, so it does not jump ahead of a tied effect.
+#[test]
+fn an_older_effect_expiring_keeps_a_younger_tied_effects_place() {
+    let mut effects = TallGrassEffects::new();
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
+    effects.spawn_placement(Owner::Object(7), TILE, ELEVATION);
+    effects.spawn_placement(Owner::Player, TILE, ELEVATION);
+    let mut order = npc::SpriteOrder::default();
+    assert_eq!(drawn_ranks(&effects, &mut order), [0, 1, 2]);
+
+    // The first effect expires, as `advance` drops an ended effect.
+    effects.effects.remove(0);
+    assert_eq!(
+        drawn_ranks(&effects, &mut order),
+        [1, 2],
+        "the younger player effect stays behind the other owner's"
+    );
+}
+
+/// The screen x of every effect OBJ `scene` draws for `player`, in draw order.
+fn effect_lefts(
+    scene: &OverworldScene,
+    objects: &ObjectEventCollection,
+    player: &PlayerState,
+) -> Vec<i16> {
+    scene
+        .sprites
+        .live_entries(objects, player, &EventData::new(), &scene.grass)
+        .iter()
+        .filter(|sprite| sprite.palette_bank() == GENERAL_1_BANK)
+        .map(|sprite| sprite.x())
+        .collect()
+}
+
+/// A crossing that drops an effect leaves its serial in the carried order
+/// history, so the entered scene's next effect must not take that serial: it
+/// would inherit the dropped effect's rank on an exact tie instead of starting
+/// behind every effect that existed.
+#[test]
+fn a_dropped_effects_serial_is_not_reused_by_a_crossing_frame_spawn() {
+    // The player stands on tile (5, 5), so tile (5 + dx, 5) draws at x = 112 + 16 * dx.
+    let player = PlayerState::new((5, 5), ELEVATION, Direction::South);
+    let objects = ObjectEventCollection::from_templates(&[]);
+    let mut departed =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    // Serials 0 and 1 rustle on the player's row, left of it, tied in every
+    // depth key; serial 2 belongs to an object the crossing does not keep and
+    // is one row lower, so it sorts ahead of both.
+    departed
+        .grass
+        .spawn_placement(Owner::Player, (3, 5), ELEVATION);
+    departed
+        .grass
+        .spawn_placement(Owner::Player, (4, 5), ELEVATION);
+    departed
+        .grass
+        .spawn_placement(Owner::Object(9), (2, 6), ELEVATION);
+    assert_eq!(effect_lefts(&departed, &objects, &player), [64, 80, 96]);
+
+    let mut entered =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]);
+    entered.carry_tall_grass_from(&departed, (0, 0), &objects);
+    entered.carry_sprite_order_from(&departed);
+    assert_eq!(entered.grass.len(), 2, "the dropped owner's effect is gone");
+
+    // A third effect on the survivors' row, to the player's right.
+    entered
+        .grass
+        .spawn_placement(Owner::Player, (6, 5), ELEVATION);
+    assert_eq!(
+        effect_lefts(&entered, &objects, &player),
+        [80, 96, 128],
+        "the new effect draws behind the tied survivors"
+    );
 }

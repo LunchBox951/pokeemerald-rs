@@ -213,6 +213,11 @@ type OwnerTiles = (TilePos, TilePos);
 
 #[derive(Debug, Clone, Copy)]
 struct TallGrassEffect {
+    /// Names this effect for its whole life, across a connection crossing:
+    /// [`TallGrassEffects::push`] numbers effects in creation order. The depth
+    /// order's history keys on it, so an older effect's expiry cannot renumber
+    /// a survivor.
+    serial: u32,
     owner: Owner,
     tile: TilePos,
     /// `sElevation`: the owner's `previousElevation` when the effect began.
@@ -244,6 +249,8 @@ pub(super) struct DepthObject {
 #[derive(Debug, Default)]
 pub(super) struct TallGrassEffects {
     effects: Vec<TallGrassEffect>,
+    /// The [`TallGrassEffect::serial`] the next effect takes.
+    next_serial: u32,
     /// Whether the player's object event has not yet had its spawn-time
     /// ground effects (`triggerGroundEffectsOnMove`, `:1301`).
     placement_pending: bool,
@@ -261,6 +268,7 @@ impl TallGrassEffects {
     pub(super) fn new() -> Self {
         Self {
             effects: Vec::new(),
+            next_serial: 0,
             placement_pending: true,
             object_passes: BTreeMap::new(),
             admission_pending: true,
@@ -328,7 +336,10 @@ impl TallGrassEffects {
     }
 
     fn push(&mut self, owner: Owner, tile: TilePos, elevation: u8, animation: Animation) {
+        let serial = self.next_serial;
+        self.next_serial += 1;
         self.effects.push(TallGrassEffect {
+            serial,
             owner,
             tile,
             elevation,
@@ -370,14 +381,15 @@ impl TallGrassEffects {
         });
     }
 
-    /// The effects' OBJs with their subpriorities, for depth ordering against
-    /// `objects`. `first_tile` is the combined tileset's first effect tile.
+    /// The effects' OBJs with their subpriorities and identities, for depth
+    /// ordering against `objects`. `first_tile` is the combined tileset's first
+    /// effect tile.
     pub(super) fn oam_entries(
         &self,
         player: &PlayerState,
         first_tile: u16,
         objects: &[DepthObject],
-    ) -> Vec<(SheetSprite, u16)> {
+    ) -> Vec<(SheetSprite, u16, npc::SpriteId)> {
         let player_tile = player.position();
         let (lag_x, lag_y) = viewport::camera_lag_px(player);
         self.effects
@@ -412,7 +424,8 @@ impl TallGrassEffects {
                     ),
                     sheet_tile,
                 );
-                Some((entry, effect.subpriority(left, top, objects)))
+                let id = npc::SpriteId::Effect(effect.serial);
+                Some((entry, effect.subpriority(left, top, objects), id))
             })
             .collect()
     }
@@ -580,6 +593,14 @@ impl OverworldScene {
         }
     }
 
+    /// Carries the sprite draw-order history of `departed` into this just-loaded
+    /// scene after a seamless connection crossing, which keeps the sprites and
+    /// so their order. Objects and effects keep the identities the history names
+    /// them by ([`Self::carry_tall_grass_from`] keeps each effect's serial).
+    pub(crate) fn carry_sprite_order_from(&mut self, departed: &Self) {
+        self.sprites.carry_sprite_order_from(&departed.sprites);
+    }
+
     /// Carries the live effects of `departed` into this just-loaded scene after
     /// a seamless connection crossing (`UpdateTallGrassFieldEffect`,
     /// `field_effect_helpers.c:325-330`). `shift` translates the departed map's
@@ -630,6 +651,12 @@ impl OverworldScene {
                 })
             })
             .collect();
+        // The carried effects keep their serials, so the order history that names
+        // them still does; this scene's own serials start after every serial the
+        // departed scene issued. That includes an effect the crossing drops, whose
+        // serial stays in the carried history: reusing it would hand the new effect
+        // the dropped one's rank on an exact tie.
+        self.grass.next_serial = self.grass.next_serial.max(departed.grass.next_serial);
         self.grass.effects.extend(carried);
         for live in objects.iter().filter(|live| live.is_active()) {
             if let Some(&(x, y)) = departed.grass.object_passes.get(&live.id()) {
@@ -643,8 +670,12 @@ impl OverworldScene {
     /// again, the player's included, as a return to the field does
     /// (`ResetSpriteData`, `overworld.c:2134`, then `ResetObjectEventFldEffData`,
     /// `event_object_movement.c:1795-1806`).
+    ///
+    /// The sprites' draw-order history goes with them: `ResetSpriteData`
+    /// also resets `sSpriteOrder` to the identity (`sprite.c:848-858`).
     pub(crate) fn reset_field_effects(&mut self) {
         self.grass = TallGrassEffects::new();
+        self.sprites.reset_sprite_order();
     }
 
     /// Runs every effect's callback and animation for one frame, after the

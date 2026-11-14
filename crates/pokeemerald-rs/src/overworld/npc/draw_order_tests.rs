@@ -185,3 +185,135 @@ fn order_sprites_keeps_larger_y_first_when_no_boundary_is_crossed() {
     let near = DepthSprite::with_subpriority(tagged_at(248, 3), 100);
     assert_eq!(banks_in_order(&[far, near]), [3, 2]);
 }
+
+/// A 16x16 OBJ of OBJ `priority` at OAM `y` whose palette bank tags it.
+fn prioritised_at(y: u8, bank: u8, priority: u8) -> SheetSprite {
+    SheetSprite::new(
+        OamEntry::new(
+            120,
+            y,
+            0,
+            bank,
+            rendering::BitDepth::Bpp4,
+            false,
+            false,
+            rendering::ObjShape::Square,
+            1,
+            priority,
+            true,
+        ),
+        0,
+    )
+}
+
+/// A sprite named by object `n`, tagged with bank `n`, at subpriority 100
+/// and OAM `y` (OBJ priority 2).
+fn object(n: u8, y: u8) -> DepthSprite {
+    DepthSprite::with_subpriority(tagged_at(y, n), 100).with_id(SpriteId::Object(u32::from(n)))
+}
+
+fn banks(order: &mut SpriteOrder, sprites: &[DepthSprite]) -> Vec<u8> {
+    order
+        .order(sprites)
+        .iter()
+        .map(|sprite| sprite.palette_bank())
+        .collect()
+}
+
+/// `SortSprites` swaps only on a strictly greater key or a strictly smaller
+/// `y` (`sprite.c:413-415`): sprites tied in everything keep last frame's order
+/// whatever order they are listed in.
+#[test]
+fn sprite_order_keeps_the_previous_order_on_an_exact_tie() {
+    let mut order = SpriteOrder::default();
+    // Object 1 is lower (larger y) and leads.
+    assert_eq!(banks(&mut order, &[object(0, 40), object(1, 70)]), [1, 0]);
+    // The tie: listed player-first, but object 1 was ahead.
+    assert_eq!(banks(&mut order, &[object(0, 40), object(1, 40)]), [1, 0]);
+    // Still tied, listed the other way round.
+    assert_eq!(banks(&mut order, &[object(1, 40), object(0, 40)]), [1, 0]);
+    // A strictly lower object 0 takes the lead and keeps it through a tie.
+    assert_eq!(banks(&mut order, &[object(0, 90), object(1, 40)]), [0, 1]);
+    assert_eq!(banks(&mut order, &[object(0, 40), object(1, 40)]), [0, 1]);
+}
+
+/// A first frame has no history: ties keep the listing order, as the identity
+/// `sSpriteOrder` does after `ResetAllSprites` (`sprite.c:848-858`).
+#[test]
+fn sprite_order_breaks_a_first_frame_tie_in_listing_order() {
+    let mut order = SpriteOrder::default();
+    assert_eq!(banks(&mut order, &[object(0, 40), object(1, 40)]), [0, 1]);
+    let mut order = SpriteOrder::default();
+    assert_eq!(banks(&mut order, &[object(1, 40), object(0, 40)]), [1, 0]);
+}
+
+/// A sprite that disappears leaves the others' relative order alone, and one
+/// that returns is new: its slot sorts after every drawn sprite (an unused
+/// sprite has OBJ priority 3, `sprite.c:101-115`), so it loses an exact tie.
+#[test]
+fn sprite_order_treats_a_returning_sprite_as_new_and_leaves_the_rest_alone() {
+    let mut order = SpriteOrder::default();
+    assert_eq!(
+        banks(&mut order, &[object(0, 70), object(1, 40), object(2, 10)]),
+        [0, 1, 2]
+    );
+    // Object 0 goes away; 1 and 2 keep their order through a tie.
+    assert_eq!(banks(&mut order, &[object(1, 40), object(2, 40)]), [1, 2]);
+    assert_eq!(banks(&mut order, &[object(2, 40), object(1, 40)]), [1, 2]);
+    // Object 0 returns tied: it is new, so it sorts behind both.
+    assert_eq!(
+        banks(&mut order, &[object(0, 40), object(1, 40), object(2, 40)]),
+        [1, 2, 0]
+    );
+}
+
+/// A new sprite loses an exact tie to an existing one at every OBJ priority,
+/// including 0, whatever the listing order.
+#[test]
+fn sprite_order_puts_a_new_sprite_behind_a_tied_one_at_any_priority() {
+    for priority in 0..=2 {
+        let sprite = |n: u8| {
+            DepthSprite::with_subpriority(prioritised_at(40, n, priority), 100)
+                .with_id(SpriteId::Object(u32::from(n)))
+        };
+        let mut order = SpriteOrder::default();
+        assert_eq!(banks(&mut order, &[sprite(0)]), [0]);
+        assert_eq!(banks(&mut order, &[sprite(1), sprite(0)]), [0, 1]);
+    }
+}
+
+/// A sprite with no id has no history: it is new on every frame, so it loses
+/// an exact tie to a named one.
+#[test]
+fn sprite_order_gives_an_unnamed_sprite_no_history() {
+    let anonymous = |n: u8, y: u8| DepthSprite::with_subpriority(tagged_at(y, n), 100);
+    let mut order = SpriteOrder::default();
+    assert_eq!(
+        banks(&mut order, &[anonymous(0, 40), object(1, 70)]),
+        [1, 0]
+    );
+    assert_eq!(
+        banks(&mut order, &[anonymous(0, 40), object(1, 40)]),
+        [1, 0]
+    );
+}
+
+/// A tall-grass effect is named by its serial alone, so a cloned history (the
+/// connection crossing's carry) keeps an effect's place beside an object.
+#[test]
+fn sprite_order_clone_keeps_an_effects_place() {
+    let effect = |serial: u32, bank: u8, y: u8| {
+        DepthSprite::with_subpriority(tagged_at(y, bank), 100).with_id(SpriteId::Effect(serial))
+    };
+    let mut order = SpriteOrder::default();
+    assert_eq!(
+        banks(&mut order, &[effect(3, 0, 70), object(1, 40)]),
+        [0, 1]
+    );
+    let mut carried = order.clone();
+    // Both tied now: the effect still leads, whatever the listing order.
+    assert_eq!(
+        banks(&mut carried, &[object(1, 40), effect(3, 0, 40)]),
+        [0, 1]
+    );
+}

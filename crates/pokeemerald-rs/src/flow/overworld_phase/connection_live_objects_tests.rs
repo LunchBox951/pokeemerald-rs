@@ -582,3 +582,59 @@ fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
     assert!(entry_of(&phase, &templates[0]).is_active());
     assert_eq!(entry_of(&phase, &templates[0]).carried_from(), None);
 }
+
+/// The production crossing (`cross_connection`) carries the draw-order history: an NPC that led
+/// the player before the crossing keeps an exact tie it reaches after it (`sSpriteOrder`,
+/// `sprite.c:372-440`; `LoadMapFromCameraTransition` never calls `ResetSpriteData`).
+#[test]
+fn the_production_crossing_carries_the_draw_order_history() {
+    // One tile east of the landing column and one row below the player's landing row.
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 14, 1)]);
+    // The departed scene binds the youngster's sheet, so it is drawn before the crossing.
+    let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+        id: assets::MapId("MAP_ROUTE122"),
+        shared_events_map: None,
+        object_events: templates,
+        warp_events: &[],
+        coord_events: &[],
+        bg_events: &[],
+    }));
+    phase.scene =
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites_and_events(
+            20,
+            20,
+            &[],
+            events,
+            &["youngster"],
+        )
+        .in_room_for_test(ROUTE_101);
+    idle(&mut phase, 1);
+    let leads = |phase: &OverworldPhase| {
+        phase.scene.live_order_leads_for_test(
+            &phase.object_events,
+            &phase.player,
+            &phase.save1.event_data,
+            "OBJ_EVENT_GFX_YOUNGSTER",
+        )
+    };
+    assert!(leads(&phase), "setup: the NPC one row below leads");
+    cross_north(&mut phase);
+    idle(&mut phase, 32);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(phase.player.position(), (LANDING_X, 19));
+    let carried_from = entry_of(&phase, &templates[0]).carried_from();
+    let moved = phase
+        .object_events
+        .find_mut(carried_from, templates[0].local_id)
+        .expect("the carried entry");
+    moved.state_mut().walk(Direction::North);
+    moved.state_mut().walk(Direction::North);
+    assert_eq!(moved.state().position(), (LANDING_X + 1, 19));
+    phase
+        .scene
+        .update_object_elevations(&mut phase.object_events);
+    assert!(
+        leads(&phase),
+        "the tie reached after the crossing keeps the departed scene's order"
+    );
+}
