@@ -46,7 +46,7 @@ fn initial_live_state_selects_rhett_and_the_approach_keeps_his_local_id() {
     let phase = phase_after((rx, ry + 1), rhett_id(), |_| {});
     let approach = phase.sight_approach.as_ref().expect("Rhett's cone reaches");
     assert_eq!(approach.local_id(), rhett_id());
-    assert_eq!(approach.trainer().position(), (67, 5));
+    assert_eq!(approaching_trainer(&phase).position(), (67, 5));
 }
 
 /// Rhett walked three tiles east: his cone is now `(70, 6..=7)`, and the old
@@ -65,7 +65,7 @@ fn a_live_trainer_tile_moves_the_cone_with_it() {
     let new = phase_after((70, 7), rhett_id(), walked);
     let approach = new.sight_approach.as_ref().expect("(70, 7) is in the cone");
     assert_eq!(approach.local_id(), rhett_id());
-    assert_eq!(approach.trainer().position(), (70, 5));
+    assert_eq!(approaching_trainer(&new).position(), (70, 5));
 }
 
 /// Rhett turned east: `(69, 5)` is now two tiles ahead of him, `(67, 6)` is
@@ -102,5 +102,5 @@ fn a_live_blocker_on_the_line_stops_the_trainer_seeing_the_player() {
         .as_ref()
         .expect("the other cone holds");
     assert_ne!(approach.local_id(), rhett_id(), "Rhett's line is blocked");
-    assert_eq!(approach.trainer().position(), (67, 9));
+    assert_eq!(approaching_trainer(&blocked).position(), (67, 9));
 }

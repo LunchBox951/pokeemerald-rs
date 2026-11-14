@@ -76,8 +76,10 @@ const BOTH_TACKLES_MISS: [u16; 5] = [
     TACKLE_ACCURACY_ROLL_MISSES,
 ];
 /// The player's hit, then the enemy's forced Struggle: no pick draw once
-/// every move is spent, and no trailing effect-chance draw.
-const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 9] = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+/// every move is spent, but one `GetMoveTarget` draw (0: the player,
+/// accepted first try; `battle_util.c:100`-`:105`, `:3849`-`:3853`), and no
+/// trailing effect-chance draw.
+const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 10] = [0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
 /// Both battlers' ordinary hit draws in turn order. An immunity or ability
 /// block still spends all four, so which hit lands is the consuming test's
 /// to assert.

@@ -139,6 +139,49 @@ fn a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable() {
     }
 }
 
+// Same platform boundary as the tests above; this pins
+// `Dest::open_pinned` reaching a destination its pin cannot read.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_destination_acquired_from_a_pin_on_a_writable_but_not_readable_directory_takes_a_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = TempDir::new("pinned-unreadable-destination");
+    let drop_box = dir.join("drop-box");
+    fs::create_dir(&drop_box).expect("the destination is created");
+
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o300))
+        .expect("the destination closes");
+    // A privileged user ignores directory permissions; see the tests above.
+    let unreadable = fs::read_dir(&drop_box).is_err();
+    let acquired = super::dest::open_traversal_directory(&drop_box)
+        .and_then(|pin| super::dest::Dest::open_pinned(&pin));
+    let created = acquired
+        .as_ref()
+        .map(|dest| dest.create_new(std::ffi::OsStr::new("probe")));
+    let syncable = acquired.as_ref().is_ok_and(|dest| dest.handle().is_some());
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o755))
+        .expect("the destination reopens");
+
+    if unreadable {
+        created
+            .expect("pinning and acquiring need only write and search")
+            .expect("a writable, searchable destination takes a new name");
+        assert!(drop_box.join("probe").is_file());
+        assert!(!syncable, "an unreadable directory has no handle to sync");
+    } else {
+        eprintln!(
+            "a_destination_acquired_from_a_pin_on_a_writable_but_not_readable_directory_takes_a_file: \
+             skipped -- running privileged, 0o300 did not close the destination off"
+        );
+    }
+}
+
 #[test]
 fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
     // The overlong component trips the create after `new/` is on disk, and
@@ -243,6 +286,60 @@ fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
         !target.exists(),
         "a level was created inside the replacement directory swapped in after the stat"
     );
+}
+
+// The simulated modes drop the owner's read bit, so they need the platforms
+// whose traversal opens pin a level on write and search alone; every other
+// Unix falls back to a read-requiring open.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // The hook runs on each level right after `mkdirat` and before the
+    // reopen, so it stands in for the umask having taken those bits.
+    // Each level must be usable by the time the next is made inside it. All
+    // keep the owner search bit, as the Apple pin needs.
+    let dir = TempDir::new("owner-access");
+    let levels: Vec<PathBuf> = ["a", "b", "c", "d"]
+        .iter()
+        .scan(dir.path.clone(), |parent, name| {
+            *parent = parent.join(name);
+            Some(parent.clone())
+        })
+        .collect();
+    let left_by_umask = [0o333, 0o500, 0o555, 0o750];
+    let mut next = 0;
+    let mut hook = || -> Option<std::io::Error> {
+        fs::set_permissions(
+            &levels[next],
+            fs::Permissions::from_mode(left_by_umask[next]),
+        )
+        .unwrap();
+        next += 1;
+        None
+    };
+
+    let created = super::create_directories_with_hooks(
+        levels.last().unwrap(),
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    )
+    .expect("every level is created, whatever the mode left");
+
+    assert_eq!(created.len(), 4);
+    let modes: Vec<u32> = levels
+        .iter()
+        .map(|level| fs::metadata(level).unwrap().permissions().mode() & 0o7777)
+        .collect();
+    assert_eq!(modes, [0o733, 0o700, 0o755, 0o750]);
 }
 
 #[cfg(unix)]

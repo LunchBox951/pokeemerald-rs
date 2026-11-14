@@ -55,11 +55,11 @@ fn max_iv_player_mon(species: SpeciesId, level: u8, moves: Vec<MoveId>) -> Battl
 fn start_first_battle_refuses_a_loaded_battle_item_before_any_draw() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let treecko = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
-    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&treecko, ItemId::SITRUS_BERRY);
 
     assert_eq!(
         start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());
 
@@ -327,4 +327,21 @@ fn start_first_battle_refuses_an_inadmissible_lead_before_any_draw() {
         )),
     );
     assert_eq!(rng.state(), Rng::new(DEFAULT_RNG_SEED).state());
+}
+
+#[test]
+fn start_first_battle_refuses_a_fainted_lead_before_any_draw() {
+    let mut rng = Rng::new(DEFAULT_RNG_SEED);
+    let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead is fainted");
+
+    let result = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng);
+
+    assert!(matches!(result, Err(BattleError::FaintedBattler(true))));
+    assert_eq!(
+        rng.state(),
+        Rng::new(DEFAULT_RNG_SEED).state(),
+        "a refused lead draws nothing"
+    );
 }

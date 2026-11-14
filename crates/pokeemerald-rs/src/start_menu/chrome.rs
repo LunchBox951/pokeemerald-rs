@@ -2,6 +2,7 @@
 
 use assets::fonts::{FontGlyphSheet, FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::AssetPack;
+use assets::KeypadIconSheet;
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::Token;
@@ -58,6 +59,7 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 #[derive(Debug)]
 pub(crate) struct StartMenuChrome {
     font_sources: OwnedGlyphSources,
+    keypad_icons: KeypadIconSheet,
     pub(super) std_frame: FrameAssets,
     pub(super) message_frame: FrameAssets,
 }
@@ -73,12 +75,13 @@ impl StartMenuChrome {
     /// # Errors
     ///
     /// Returns [`StartMenuError::Pack`] when an entry is missing or malformed,
-    /// or [`StartMenuError::Font`] when the font sheet does not decode.
+    /// or [`StartMenuError::Font`] when the font or keypad-icon sheet does not decode.
     pub(super) fn from_pack(pack: &AssetPack, window_frame: u8) -> Result<Self, StartMenuError> {
         Ok(Self {
             font_sources: GlyphSources::try_from_fn(|font| {
                 Ok::<_, StartMenuError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
             })?,
+            keypad_icons: KeypadIconSheet::new(pack.keypad_icons()?)?,
             std_frame: FrameAssets::from_handle(pack.text_window_frame(window_frame)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
@@ -89,6 +92,7 @@ impl StartMenuChrome {
         NpcDialog::new(
             self.font_sources.clone(),
             self.message_frame.clone(),
+            self.keypad_icons.clone(),
             tokens,
             text_speed,
         )
@@ -215,6 +219,7 @@ impl StartMenuChrome {
         .expect("this is the exact real glyph-sheet shape");
         Self {
             font_sources,
+            keypad_icons: textbox::test_keypad_icons(&[]),
             std_frame: synthetic_frame(STANDARD_FRAME_SIZE_TILES),
             message_frame: synthetic_frame(MESSAGE_FRAME_SIZE_TILES),
         }
