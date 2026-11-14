@@ -44,11 +44,16 @@
 //!    `FLAG_HIDE_ROUTE_101_ZIGZAGOON`, is what upstream's earlier
 //!    `removeobject LOCALID_ROUTE101_ZIGZAGOON` (`:224`) persists as
 //!    (`RemoveObjectEventByLocalIdAndMap` -> `FlagSet`,
-//!    `src/event_object_movement.c:1389-1397`); it is written first.
-//!    [`assets::MapEventsTable`] templates carry these flag names, and
-//!    `engine::overworld::object_event` drops a template whose flag is set
-//!    from rendering and collision. [`crate::new_game`] starts a save with
-//!    the lab-Birch flag set, so clearing it places Birch in the lab.
+//!    `src/event_object_movement.c:1389-1397`); it is written first. The same
+//!    call also retires the admitted Zigzagoon entry
+//!    (`ObjectEventCollection::remove_by_local_id`, `RemoveObjectEvent`'s
+//!    `active = FALSE`), so a lab warp that fails and leaves the player on the
+//!    route does not leave it queryable or drawn.
+//!    [`assets::MapEventsTable`] templates carry these flag names, and the
+//!    scheduler consults a template's flag when it admits the object, so a
+//!    set flag keeps a later admission from spawning it. [`crate::new_game`]
+//!    starts a save with the lab-Birch flag set, so clearing it places Birch
+//!    in the lab.
 //! 3. `VAR_STARTER_MON` is set to the encoding of
 //!    [`new_game::PROVISIONAL_STARTER_SPECIES`] through
 //!    [`PlayerStarter::var_value`]. Upstream writes it before the fight in
@@ -105,6 +110,10 @@ const ROUTE101_STATE_CONCLUDED: u16 = 3;
 /// Route 101 events).
 const FLAG_HIDE_ROUTE_101_ZIGZAGOON: u16 = 0x2EE;
 
+/// `LOCALID_ROUTE101_ZIGZAGOON`, the rescue Zigzagoon's local id in the
+/// generated Route 101 events.
+const ROUTE_101_ZIGZAGOON_LOCAL_ID: u8 = 4;
+
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`), the hide flag of the rescue-battle
 /// Birch template (local id 2).
@@ -139,6 +148,11 @@ impl OverworldPhase {
             FLAG_HIDE_ROUTE_101_ZIGZAGOON,
             true,
         );
+        // `removeobject` also deactivates the object, and the scheduler does not retire an
+        // admitted entry for its flag (`event_object_movement.c:1383-1397`), so the Zigzagoon
+        // stays queryable and drawn if the lab warp below does not replace the collection.
+        self.object_events
+            .remove_by_local_id(ROUTE_101_ZIGZAGOON_LOCAL_ID);
         Self::write_flag(
             &mut self.save1.event_data,
             FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,

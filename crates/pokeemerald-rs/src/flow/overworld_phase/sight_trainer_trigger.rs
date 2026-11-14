@@ -255,7 +255,7 @@ fn find_sight_trainer(
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(live, objects, runtime, player, event_data) {
+        if !trainer_can_see_player(live, objects, runtime, player) {
             continue;
         }
         scan.any_cone_reached = true;

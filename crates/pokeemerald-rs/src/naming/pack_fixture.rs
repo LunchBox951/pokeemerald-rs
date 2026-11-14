@@ -247,7 +247,38 @@ pub(super) fn entries() -> Vec<PackEntry> {
     all.push(palette("text-window/palette/text_pal2", pal::TEXT_WINDOW));
     all.push(marked_font("normal"));
     all.push(marked_font("small"));
+    all.push(marked_keypad_icons());
     all
+}
+
+/// A keypad-icon sheet that is transparent except for a few marks. Icon `A`
+/// (sheet origin `(0, 0)`) carries index 3 at its top-left pixel and 9 at its
+/// last, and a stray index 7 one row below its height; icon `B` (origin
+/// `(8, 0)`) carries 1 then 2 along its top row; icon `DPAD_NONE` (origin
+/// `(16, 16)`) carries 3 at its top-left and 9 at its last pixel.
+fn marked_keypad_icons() -> PackEntry {
+    let width = assets::keypad_icons::SHEET_WIDTH as usize;
+    let height = assets::keypad_icons::SHEET_HEIGHT as usize;
+    let mut pixels = vec![0u8; width * height];
+    for (x, y, index) in [
+        (0, 0, 3),
+        (7, 11, 9),
+        (0, 12, 7),
+        (8, 0, 1),
+        (9, 0, 2),
+        (16, 16, 3),
+        (23, 27, 9),
+    ] {
+        pixels[y * width + x] = index;
+    }
+    pack_format::image_entry(
+        "font/keypad_icons".into(),
+        assets::keypad_icons::SHEET_WIDTH,
+        assets::keypad_icons::SHEET_HEIGHT,
+        BIT_DEPTH,
+        pixels,
+    )
+    .unwrap()
 }
 
 /// Removes the scratch pack when dropped, even if the test panics.
