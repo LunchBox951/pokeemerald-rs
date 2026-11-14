@@ -115,7 +115,12 @@ fn a_range_anchored_at_an_extreme_tile_refuses_a_distant_step() {
         x: 2,
         y: 2,
     };
-    for initial in [(i32::MIN, 20), (20, i32::MIN), (i32::MAX, 20), (20, i32::MAX)] {
+    for initial in [
+        (i32::MIN, 20),
+        (20, i32::MIN),
+        (i32::MAX, 20),
+        (20, i32::MAX),
+    ] {
         assert_eq!(
             collision_in_direction(
                 &terrain.runtime(),
