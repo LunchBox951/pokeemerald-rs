@@ -486,13 +486,16 @@ impl OverworldPhase {
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
         let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
+        let rolled_landing = wild_encounter::roll_eligible_landing(tile_center, door_warp)
+            .filter(|_| wild_table_fightable && wild_lead_admissible);
+        let slot_zero_ability = rolled_landing.and_then(|_| self.slot_zero_wild_level_ability());
         let encounter = wild_encounter::roll_for_step(
             &mut self.wild,
             &mut self.rng,
             self.map_id,
             &runtime,
-            wild_encounter::roll_eligible_landing(tile_center, door_warp)
-                .filter(|_| wild_table_fightable && wild_lead_admissible),
+            rolled_landing,
+            slot_zero_ability,
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp
