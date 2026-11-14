@@ -7,7 +7,8 @@
 //! [`items`]), the per-species evolution table (see [`evolution`]), the
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
-//! egg-move lists (see [`egg_moves`]), the species/move/ability display text
+//! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
+//! [`enemy_elevation`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
@@ -43,6 +44,7 @@ pub mod battle_moves;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod egg_moves;
+pub mod enemy_elevation;
 pub mod error;
 pub mod event_scripts;
 pub mod evolution;
@@ -86,6 +88,7 @@ pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
     EGG_MOVE_SPECIES_COUNT,
 };
+pub use enemy_elevation::{enemy_elevation, ENEMY_ELEVATED_SPECIES_COUNT};
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
