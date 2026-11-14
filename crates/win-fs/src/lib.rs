@@ -14,8 +14,13 @@
 //!   [`remove_through_verified_handle_with`]: verify a path still reaches an
 //!   identity and delete through that same handle, reporting a
 //!   [`VerifiedRemoval`].
-//! - [`delete_through_handle`]: the delete alone, for a handle the caller has
-//!   already verified.
+//! - [`delete_through_handle`] and
+//!   [`delete_through_handle_ignoring_read_only`]: the delete alone, for a
+//!   handle the caller has already verified.
+//! - [`wide_file_id`], [`list_directory_by_file_id`], and
+//!   [`volume_supports_open_by_file_id`]: the strict 128-bit ID of a handle,
+//!   a directory's entries listed through its handle with that same ID, and
+//!   whether the volume's IDs are stable enough to verify against.
 //!
 //! What a missing path or a pending delete means is the caller's decision:
 //! these primitives report `NotFound` as an error and a pending delete as
@@ -25,6 +30,10 @@
 #![cfg(windows)]
 
 use std::path::Path;
+
+mod listing;
+
+pub use listing::{list_directory_by_file_id, volume_supports_open_by_file_id, DirectoryEntry};
 
 /// The identity Windows reads off an open handle: volume serial number and
 /// file ID, the one per-object identity it exposes to a handle regardless of
@@ -60,29 +69,18 @@ impl WindowsFileIdentity {
     pub fn of(handle: &std::fs::File) -> std::io::Result<Self> {
         use std::os::windows::io::AsRawHandle as _;
         use windows_sys::Win32::Storage::FileSystem::{
-            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
         };
 
-        let mut wide = FILE_ID_INFO::default();
-        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
-            .expect("FILE_ID_INFO is far smaller than u32::MAX");
-        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                handle.as_raw_handle(),
-                FileIdInfo,
-                std::ptr::from_mut(&mut wide).cast(),
-                size,
-            )
+        let refused = match query_file_id_info(handle) {
+            Ok(wide) => {
+                return Ok(Self {
+                    volume_serial_number: wide.VolumeSerialNumber,
+                    file_id: wide.FileId.Identifier,
+                });
+            }
+            Err(refused) => refused,
         };
-        if ok != 0 {
-            return Ok(Self {
-                volume_serial_number: wide.VolumeSerialNumber,
-                file_id: wide.FileId.Identifier,
-            });
-        }
-        let refused = std::io::Error::last_os_error();
         let unsupported = refused
             .raw_os_error()
             .and_then(|code| u32::try_from(code).ok())
@@ -105,6 +103,50 @@ impl WindowsFileIdentity {
             file_id,
         })
     }
+}
+
+/// `GetFileInformationByHandleEx(FileIdInfo)` on `handle`, with no fallback.
+///
+/// # Panics
+///
+/// Never in practice: `FILE_ID_INFO` is far smaller than `u32::MAX`.
+fn query_file_id_info(
+    handle: &std::fs::File,
+) -> std::io::Result<windows_sys::Win32::Storage::FileSystem::FILE_ID_INFO> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+
+    let mut wide = FILE_ID_INFO::default();
+    let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+        .expect("FILE_ID_INFO is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileIdInfo,
+            std::ptr::from_mut(&mut wide).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(wide)
+    }
+}
+
+/// The 128-bit file ID (`FileIdInfo`) of the object `handle` refers to, the
+/// same ID a [`list_directory_by_file_id`] listing reports for that entry.
+/// Unlike [`WindowsFileIdentity::of`] there is no 64-bit fallback: a caller
+/// comparing against a listing needs the one form the listing carries.
+///
+/// # Errors
+///
+/// The `FileIdInfo` query failing for any reason.
+pub fn wide_file_id(handle: &std::fs::File) -> std::io::Result<[u8; 16]> {
+    Ok(query_file_id_info(handle)?.FileId.Identifier)
 }
 
 /// Whether `code` means a failed `FileIdInfo` query rejected that class.
@@ -216,6 +258,31 @@ pub enum VerifiedRemoval {
 /// Either disposition call failing for a reason other than the POSIX
 /// semantics fallback codes.
 pub fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<VerifiedRemoval> {
+    delete_through_handle_with_flags(handle, 0)
+}
+
+/// [`delete_through_handle`], with the POSIX-semantics attempt also passing
+/// `FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE`, so an object marked
+/// read-only is deleted rather than refused. The legacy fallback has no such
+/// flag and still refuses a read-only object.
+///
+/// # Errors
+///
+/// As [`delete_through_handle`].
+pub fn delete_through_handle_ignoring_read_only(
+    handle: &std::fs::File,
+) -> std::io::Result<VerifiedRemoval> {
+    use windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE;
+
+    delete_through_handle_with_flags(handle, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE)
+}
+
+/// The delete of [`delete_through_handle`], with `extra_posix_flags` added to
+/// the POSIX-semantics attempt's flags.
+fn delete_through_handle_with_flags(
+    handle: &std::fs::File,
+    extra_posix_flags: windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO_EX_FLAGS,
+) -> std::io::Result<VerifiedRemoval> {
     use windows_sys::Win32::Foundation::{
         ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
     };
@@ -225,7 +292,9 @@ pub fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<Verified
     };
 
     let posix = FILE_DISPOSITION_INFO_EX {
-        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        Flags: FILE_DISPOSITION_FLAG_DELETE
+            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | extra_posix_flags,
     };
     // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
     match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {

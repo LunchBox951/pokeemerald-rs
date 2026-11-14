@@ -92,9 +92,14 @@ fn an_attacker_that_fainted_to_its_own_recoil_draws_no_roll() {
         attacker.deduct_pp(0).unwrap();
     }
 
-    // The all-spent enemy's forced Struggle pick skips the selection draw, and
-    // its recoil faints it before any contact draw.
-    let (battle, events) = player_turn(holder, attacker, &[0, 0, 0, 1, 0]);
+    // The all-spent enemy's forced Struggle pick skips the selection draw but
+    // draws its `GetMoveTarget` once (`battle_util.c:100`-`:105`), and its
+    // recoil faints it before any contact draw.
+    let (battle, events) = player_turn(
+        holder,
+        attacker,
+        &[0, 0, crate::common::STRUGGLE_TARGET_PLAYER, 0, 1, 0],
+    );
 
     assert!(battle.enemy().is_fainted(), "{events:?}");
     assert!(cute_charm_events(&events).is_empty(), "{events:?}");

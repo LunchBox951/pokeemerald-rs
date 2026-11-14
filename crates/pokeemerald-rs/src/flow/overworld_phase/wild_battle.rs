@@ -242,6 +242,16 @@ impl OverworldPhase {
         (owners, unplayable_member_remains)
     }
 
+    /// The ability party slot 0 brings to wild level selection: the saved slot even when it
+    /// is fainted behind another battle lead, or the live lead of an unsaved party.
+    pub(super) fn slot_zero_wild_level_ability(&self) -> Option<assets::AbilityId> {
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        if stored == 0 {
+            return self.lead_battler().map(battle::BattlePokemon::ability);
+        }
+        crate::party::slot_zero_wild_level_ability(&Dex::new(), &self.save1.player_party[..stored])
+    }
+
     /// Starts a wild battle from a fired encounter, taking the party lead into
     /// it. Nothing starts, and the lead stays in place, when the encounter is
     /// `None`, when no lead exists (a bare [`OverworldPhase::new`] phase), or
@@ -310,6 +320,7 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Wild(WildBattle {
                     battle,
                     reserves,

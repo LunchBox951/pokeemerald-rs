@@ -99,6 +99,9 @@ fn rng_state_after(seed: u32, draws: usize) -> u32 {
     rng.state()
 }
 
+/// The synthetic scene's uniform ground elevation, which every admitted object settles on.
+const FIXTURE_GROUND_ELEVATION: u8 = 3;
+
 fn assert_never_displaced(phase: &OverworldPhase, local_id: u8, what: &str) {
     let entry = phase.object_events.get(local_id).unwrap();
     let tile = (i32::from(entry.template().x), i32::from(entry.template().y));
@@ -109,9 +112,14 @@ fn assert_never_displaced(phase: &OverworldPhase, local_id: u8, what: &str) {
         "{what}: never leaves its tile"
     );
     assert_eq!(entry.state().previous_position(), tile, "{what}");
+    // Settled elevation follows the fixture's terrain, not the authored one;
+    // turning leaves both stored elevations as the first settle left them.
     assert_eq!(
-        entry.state().elevation(),
-        entry.template().elevation,
+        (
+            entry.state().elevation(),
+            entry.state().previous_elevation()
+        ),
+        (FIXTURE_GROUND_ELEVATION, FIXTURE_GROUND_ELEVATION),
         "{what}"
     );
     assert!(

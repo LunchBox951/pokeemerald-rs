@@ -5,6 +5,8 @@ use super::block::SaveError;
 
 /// `NUM_GAME_STATS` (`pokeemerald/include/constants/game_stat.h:58`).
 const GAME_STAT_COUNT: usize = 64;
+/// `IncrementGameStat`'s saturation value (`pokeemerald/src/overworld.c:438`).
+const GAME_STAT_CEILING: u32 = 0xFF_FFFF;
 const STAT_LEN: usize = std::mem::size_of::<u32>();
 
 /// The menu-visible `GAME_STAT_*` slots
@@ -17,6 +19,10 @@ pub enum GameStat {
     SavedGame = 0,
     /// `GAME_STAT_FIRST_HOF_PLAY_TIME`.
     FirstHofPlayTime = 1,
+    /// `GAME_STAT_STEPS`, bumped once per completed non-forced field step
+    /// (`pokeemerald/include/constants/game_stat.h:9`,
+    /// `pokeemerald/src/field_control_avatar.c:89-122,155-163`).
+    Steps = 5,
     /// `GAME_STAT_ENTERED_HOF`.
     EnteredHof = 10,
     /// `GAME_STAT_POKEMON_TRADES`.
@@ -59,11 +65,22 @@ impl GameStats {
         self.values[stat as usize]
     }
 
-    /// Replaces the stored count for `stat`. No cap is applied:
-    /// `IncrementGameStat`'s 24-bit ceiling belongs to its producer
-    /// (`pokeemerald/src/overworld.c:433-443`).
+    /// Replaces the stored count for `stat`. No cap is applied: the 24-bit
+    /// ceiling belongs to [`Self::increment`].
     pub const fn set(&mut self, stat: GameStat, value: u32) {
         self.values[stat as usize] = value;
+    }
+
+    /// `IncrementGameStat`: one more, saturating at `0xFFFFFF`. A stored value
+    /// already at or above the ceiling reads back as exactly the ceiling
+    /// (`pokeemerald/src/overworld.c:433-445`).
+    pub const fn increment(&mut self, stat: GameStat) {
+        let value = self.values[stat as usize];
+        self.values[stat as usize] = if value < GAME_STAT_CEILING {
+            value + 1
+        } else {
+            GAME_STAT_CEILING
+        };
     }
 
     /// Zeroes every slot, as when the key that encrypted them is lost.
@@ -92,5 +109,36 @@ impl GameStats {
             *value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ encryption_key;
         }
         Ok(Self { values })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn increment_counts_up_from_zero_and_touches_only_its_slot() {
+        let mut stats = GameStats::default();
+        stats.increment(GameStat::Steps);
+        stats.increment(GameStat::Steps);
+        assert_eq!(stats.get(GameStat::Steps), 2);
+        let mut expected = GameStats::default();
+        expected.set(GameStat::Steps, 2);
+        assert_eq!(stats, expected);
+    }
+
+    /// `IncrementGameStat` holds `0xFFFFFF` and pulls a larger stored value
+    /// down to it (`pokeemerald/src/overworld.c:438-442`).
+    #[test]
+    fn increment_saturates_at_the_24_bit_ceiling() {
+        let mut stats = GameStats::default();
+        stats.set(GameStat::Steps, 0xFF_FFFE);
+        stats.increment(GameStat::Steps);
+        assert_eq!(stats.get(GameStat::Steps), 0xFF_FFFF);
+        stats.increment(GameStat::Steps);
+        assert_eq!(stats.get(GameStat::Steps), 0xFF_FFFF);
+        stats.set(GameStat::Steps, u32::MAX);
+        stats.increment(GameStat::Steps);
+        assert_eq!(stats.get(GameStat::Steps), 0xFF_FFFF);
     }
 }

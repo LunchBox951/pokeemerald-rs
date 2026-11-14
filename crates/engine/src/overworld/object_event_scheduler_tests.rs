@@ -1,7 +1,9 @@
 use assets::MovementType;
 
 use crate::overworld::direction::Direction;
-use crate::overworld::object_event_harness::{template, Rig};
+use crate::overworld::object_event_harness::{template, Rig, ScriptedRng};
+
+use super::Lifecycle;
 
 const FIXED_FACING: [(MovementType, Direction); 4] = [
     (MovementType::FaceUp, Direction::North),
@@ -393,4 +395,221 @@ fn a_freshly_seeded_collection_forgets_every_prior_visit() {
     let entry = revisit.collection.get(1).unwrap();
     assert!(!entry.is_active());
     assert_eq!(entry.state().facing(), Direction::North);
+}
+
+/// Upstream has `OBJECT_EVENTS_COUNT` (16) object-event slots, one held by the player
+/// (`overworld.c:2173-2176`), and `GetAvailableObjectEventId` refuses admission when all are
+/// active (`event_object_movement.c:1367-1374`), so at most 15 NPCs can be active.
+#[test]
+fn admission_never_exceeds_the_fifteen_npc_slots_left_beside_the_player() {
+    let templates = (1..=16u8)
+        .map(|id| {
+            template(
+                id,
+                10 + i16::from(id),
+                20,
+                MovementType::FaceUp,
+                NEVER_HIDDEN,
+            )
+        })
+        .collect();
+    let mut rig = Rig::new(templates, (18, 20));
+    rig.tick(1);
+
+    let active = (1..=16u8)
+        .filter(|&id| rig.collection.get(id).unwrap().is_active())
+        .count();
+    assert!(
+        active <= 15,
+        "{active} NPCs active; upstream admits at most 15"
+    );
+}
+
+/// Fixed-facing NPCs `1..=count` on the player's tile, so all are in view.
+fn crowd(count: u8) -> Vec<assets::ObjectEvent> {
+    (1..=count)
+        .map(|id| template(id, 20, 20, MovementType::FaceUp, NEVER_HIDDEN))
+        .collect()
+}
+
+fn active_count(rig: &Rig) -> usize {
+    rig.collection
+        .entries()
+        .filter(|entry| entry.is_active())
+        .count()
+}
+
+fn object_slot(rig: &Rig, local_id: u8) -> Option<usize> {
+    rig.collection.get(local_id).unwrap().object_slot()
+}
+
+fn sprite_slot(rig: &Rig, local_id: u8) -> Option<usize> {
+    rig.collection
+        .get(local_id)
+        .unwrap()
+        .lifecycle
+        .sprite_slot()
+}
+
+fn is_unadmitted(rig: &Rig, local_id: u8) -> bool {
+    rig.collection.get(local_id).unwrap().lifecycle == Lifecycle::Unadmitted
+}
+
+/// Fifteen fixed-facing NPCs fill every object slot the player leaves
+/// (`global.h:46`, `field_player_avatar.c:1399-1401`), then `overflow` as local id 16, which
+/// first walks east so any callback or reinitialisation it later ran would show.
+fn full_pool_with_overflow(overflow: MovementType) -> Rig {
+    let mut templates = crowd(15);
+    templates.push(template(16, 20, 20, overflow, NEVER_HIDDEN));
+    let mut rig = Rig::new(templates, (20, 20));
+    rig.collection
+        .get_mut(16)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    rig
+}
+
+const RANDOM_FACING: [(MovementType, i16); 2] = [
+    // The first delay draw of each type, for `Random() = 1`
+    // (`MovementType_LookAround_Step2`, `MovementType_FaceDownAndRight_Step2`,
+    // `event_object_movement.c:2844-2892,3434-3481`).
+    (MovementType::LookAround, 64),
+    (MovementType::FaceDownAndRight, 48),
+];
+
+#[test]
+fn a_full_pool_gives_each_of_fifteen_npcs_the_lowest_free_object_slot() {
+    let mut rig = Rig::new(crowd(15), (20, 20));
+
+    assert!(rig
+        .collection
+        .admit_on_map_load(rig.player, &rig.event_data));
+    assert_eq!(active_count(&rig), 15);
+    assert!(!rig
+        .collection
+        .admit_on_map_load(rig.player, &rig.event_data));
+    rig.tick(1);
+
+    for id in 1..=15u8 {
+        // `GetAvailableObjectEventId` skips slot 0, the player's (`:1367-1374`).
+        assert_eq!(object_slot(&rig, id), Some(usize::from(id)), "{id}");
+        assert_eq!(sprite_slot(&rig, id), Some(usize::from(id) - 1), "{id}");
+        assert_eq!(phase(&rig, id), 2, "{id}");
+    }
+    assert!(rig.rng.is_untouched());
+}
+
+#[test]
+fn a_refused_template_runs_no_callback_and_spends_no_random_draw() {
+    for (overflow, _) in RANDOM_FACING {
+        let mut rig = full_pool_with_overflow(overflow);
+        let before = rig.collection.get(16).unwrap().state().previous_position();
+        assert_eq!(before, (20, 20));
+
+        // An exhausted RNG panics on any draw.
+        rig.tick(1);
+        rig.tick(40);
+
+        assert_eq!(active_count(&rig), 15, "{overflow:?}");
+        assert!(is_unadmitted(&rig, 16), "{overflow:?}");
+        assert_eq!(phase(&rig, 16), 0, "{overflow:?}");
+        let state = rig.collection.get(16).unwrap().state();
+        assert_eq!(state.position(), (21, 20), "{overflow:?}");
+        assert_eq!(state.previous_position(), before, "{overflow:?}");
+        assert!(rig.rng.is_untouched(), "{overflow:?}");
+    }
+}
+
+#[test]
+fn a_refused_template_is_admitted_on_the_camera_pass_after_a_removal() {
+    for (overflow, expected_delay) in RANDOM_FACING {
+        let mut templates = crowd(15);
+        templates[0].flag = HIDDEN_FLAG;
+        templates.push(template(16, 20, 20, overflow, NEVER_HIDDEN));
+        let mut rig = Rig::new(templates, (20, 20));
+        rig.tick(1);
+        assert!(is_unadmitted(&rig, 16));
+
+        // The script verb removes the object and sets its hide flag (`:1383-1397`), so the
+        // earlier template does not reclaim the slot.
+        assert!(rig.collection.remove_by_local_id(1));
+        let flag = assets::object_event_flags::resolve(HIDDEN_FLAG).unwrap();
+        rig.event_data.flag_set(flag).unwrap();
+
+        // Admission is a camera pass; a still camera offers the freed slot to no one.
+        rig.tick(5);
+        assert_eq!(active_count(&rig), 14, "{overflow:?}");
+        assert!(is_unadmitted(&rig, 16), "{overflow:?}");
+
+        rig.player = (21, 20);
+        rig.tick(1);
+        assert_eq!(active_count(&rig), 15, "{overflow:?}");
+        assert_eq!(object_slot(&rig, 16), Some(1), "{overflow:?}");
+        assert_eq!(sprite_slot(&rig, 16), Some(0), "{overflow:?}");
+        assert_eq!(
+            phase(&rig, 16),
+            0,
+            "admission runs no callback, {overflow:?}"
+        );
+        assert!(rig.rng.is_untouched(), "{overflow:?}");
+
+        rig.rng = ScriptedRng::new([1]);
+        rig.tick(1);
+        assert_eq!(phase(&rig, 16), 3, "{overflow:?}");
+        assert_eq!(rig.rng.draws(), 1, "{overflow:?}");
+        let Lifecycle::Active { delay, .. } = rig.collection.get(16).unwrap().lifecycle else {
+            panic!("{overflow:?} is not active");
+        };
+        assert_eq!(delay, expected_delay, "{overflow:?}");
+    }
+}
+
+#[test]
+fn an_object_leaving_the_view_frees_its_slot_for_a_later_pass_not_its_own() {
+    // Upstream spawns before it removes (`:1645-1675`, `:1677-1710`), so the slot an outgoing
+    // object frees is not seen by the pass that removes it.
+    let mut templates = vec![template(1, 11, 20, MovementType::FaceUp, NEVER_HIDDEN)];
+    templates.extend(crowd(15).into_iter().skip(1));
+    templates.push(template(16, 20, 20, MovementType::LookAround, NEVER_HIDDEN));
+    let mut rig = Rig::new(templates, (20, 20));
+    rig.tick(1);
+    assert_eq!(active_count(&rig), 15);
+    assert!(is_unadmitted(&rig, 16));
+
+    // Object 1 is 10 columns left of the player: out of the spawn window (`:1645-1675`).
+    rig.player = (21, 20);
+    rig.tick(1);
+    assert_eq!(active_count(&rig), 14);
+    assert!(is_unadmitted(&rig, 16));
+    rig.tick(5);
+    assert!(is_unadmitted(&rig, 16));
+
+    rig.player = (22, 20);
+    rig.tick(1);
+    assert_eq!(active_count(&rig), 15);
+    assert_eq!(object_slot(&rig, 16), Some(1));
+    assert_eq!(sprite_slot(&rig, 16), Some(0));
+    assert_eq!(phase(&rig, 16), 0);
+    assert!(rig.rng.is_untouched());
+}
+
+#[test]
+fn an_admitted_object_keeps_its_object_slot_while_a_later_one_takes_the_gap() {
+    let mut templates = crowd(3);
+    templates[1].flag = HIDDEN_FLAG;
+    let mut rig = Rig::new(templates, (20, 20));
+    let flag = assets::object_event_flags::resolve(HIDDEN_FLAG).unwrap();
+    rig.event_data.flag_set(flag).unwrap();
+    rig.tick(1);
+    assert_eq!(object_slot(&rig, 1), Some(1));
+    assert_eq!(object_slot(&rig, 2), None);
+    assert_eq!(object_slot(&rig, 3), Some(2));
+
+    rig.event_data.flag_clear(flag).unwrap();
+    rig.player = (21, 20);
+    rig.tick(1);
+    assert_eq!(object_slot(&rig, 1), Some(1));
+    assert_eq!(object_slot(&rig, 2), Some(3));
+    assert_eq!(object_slot(&rig, 3), Some(2));
 }

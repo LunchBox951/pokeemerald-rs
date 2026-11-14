@@ -422,7 +422,7 @@ fn failed_warp_preserves_live_object_event_edits() {
 }
 
 #[test]
-fn successful_warp_and_connection_replace_live_object_events() {
+fn a_successful_warp_replaces_live_object_events_and_a_crossing_keeps_the_admitted_ones() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -452,7 +452,7 @@ fn successful_warp_and_connection_replace_live_object_events() {
             .walk(Direction::North);
         local_id
     };
-    let assert_replaced = |phase: &OverworldPhase, local_id, what: &str| {
+    let assert_transitioned = |phase: &OverworldPhase, local_id, tile: (i32, i32), what: &str| {
         assert_eq!(phase.map_id, OLDALE_TOWN, "{what} must complete");
         assert_eq!(
             phase
@@ -461,8 +461,8 @@ fn successful_warp_and_connection_replace_live_object_events() {
                 .unwrap()
                 .state()
                 .position(),
-            FOOTPRINTS_MAN_NEW_TILE,
-            "{what} must reseed, discarding the pre-transition live edit"
+            tile,
+            "{what}: the footprints man's tile"
         );
         for template in phase.scene.map_events().object_events {
             let entry = phase.object_events.get(template.local_id).unwrap();
@@ -477,13 +477,22 @@ fn successful_warp_and_connection_replace_live_object_events() {
     phase.pack_source = PackSource::Test(leaked_path);
     let local_id = walk_footprints_man(&mut phase);
     phase.warp_to(OLDALE_TOWN, 0);
-    assert_replaced(&phase, local_id, "the warp");
+    // A warp is a map load: it reseeds, discarding the pre-transition live edit.
+    assert_transitioned(&phase, local_id, FOOTPRINTS_MAN_NEW_TILE, "the warp");
 
     let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     phase.pack_source = PackSource::Test(leaked_path);
     let local_id = walk_footprints_man(&mut phase);
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
-    assert_replaced(&phase, local_id, "the connection crossing");
+    // A crossing is not: map load admitted the footprints man, and upstream leaves an active
+    // object in place (`LoadMapFromCameraTransition`, `src/overworld.c:784-825`), so he keeps the
+    // tile he walked to while taking the reloaded template.
+    assert_transitioned(
+        &phase,
+        local_id,
+        (FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1 - 1),
+        "the connection crossing",
+    );
 
     let _ = std::fs::remove_file(&path);
 }

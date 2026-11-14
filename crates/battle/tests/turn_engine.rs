@@ -38,6 +38,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/obedience.rs"]
+mod obedience;
 #[path = "turn_engine/oran_berry.rs"]
 mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
@@ -70,6 +72,8 @@ mod rough_skin_contact;
 mod shed_skin;
 #[path = "turn_engine/sleep.rs"]
 mod sleep;
+#[path = "turn_engine/speed_boost.rs"]
+mod speed_boost;
 #[path = "turn_engine/speed_down_hit.rs"]
 mod speed_down_hit;
 #[path = "turn_engine/stat_changes.rs"]
