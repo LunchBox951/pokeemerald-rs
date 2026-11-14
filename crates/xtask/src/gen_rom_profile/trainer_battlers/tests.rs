@@ -10,7 +10,7 @@ use super::{locate, BACK_PICTURE_SIZE, BACK_TABLE_ROWS};
 use crate::extract::scope::{trainer_battler_ids, TRAINER_BATTLERS, TRAINER_FRONT_PICS};
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::inventory::require_trainer_battlers;
-use crate::gen_rom_profile::plan::{ReportLine, SymbolExpectation, TrainerBattlerPlan};
+use crate::gen_rom_profile::plan::{ReportLine, Resolution, SymbolExpectation, TrainerBattlerPlan};
 use crate::gen_rom_profile::tests::with_context;
 use crate::gen_rom_profile::trainer_front;
 
@@ -23,6 +23,8 @@ const BACK_PALETTE_TABLE: u32 = 0x13_0000;
 const OTHER_BACK_TABLE: u32 = 0x14_0000;
 const FRAME_ROWS: u32 = 0x15_0000;
 const PALETTE_COPY: u32 = 0x18_0000;
+/// Unreferenced back sheet copies, below the ones the table names.
+const STRAY_BACK: u32 = 0x0A_0000;
 /// Each trainer's front, palette and back sheet sit `0x4000` apart per slot.
 const ART: u32 = 0x20_0000;
 
@@ -335,6 +337,30 @@ fn a_back_palette_row_must_point_at_the_front_palette_not_a_copy() {
         located("trainer-battlers-palette-tag", &rom, entries()),
         "gTrainerBackPicPaletteTable",
     );
+}
+
+#[test]
+fn a_back_sheet_stored_twice_takes_the_copy_its_table_row_names() {
+    // The stray copies sit at lower addresses than the ones the table names.
+    let mut fixture = base_fixture();
+    for index in 0..TRAINER_BATTLERS.len() {
+        fixture = fixture.write(
+            STRAY_BACK as usize + index * 0x4000,
+            &tiles(index + 10, 256),
+        );
+    }
+    let (plan, report) =
+        located("trainer-battlers-stray-back", &fixture.finish(), entries()).expect("located");
+    assert_eq!(plan.back_table, BUS + BACK_TABLE);
+    for (index, trainer) in TRAINER_BATTLERS.iter().enumerate() {
+        assert_eq!(plan.backs[index].back.addr, BUS + back_at(index));
+        let line = report
+            .iter()
+            .find(|line| line.id == trainer.back_id)
+            .expect("a report line");
+        assert_eq!(line.addr, BUS + back_at(index));
+        assert_eq!(line.resolution, Resolution::StructDerived);
+    }
 }
 
 #[test]
