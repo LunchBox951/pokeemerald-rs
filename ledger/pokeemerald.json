@@ -21020,6 +21020,14 @@
       "status": "pending"
     },
     "include/bard_music.h": {
+      "artifacts": {
+        "BardSoundTemplate": {
+          "reason": "BardSoundTemplate fields (include/bard_music.h:12-18) as a typed slot plus length adjustment, unused and volume, with the six-slot word size from MAX_BARD_SOUNDS_PER_WORD. The rest of the header (BardSound, BardSong, pitch tables) is not ported and the file row stays pending.",
+          "rust_target": "crates/assets/src/bard_events.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -28635,6 +28643,14 @@
       "status": "pending"
     },
     "src/bard_music.c": {
+      "artifacts": {
+        "sound_template_markers": {
+          "reason": "PREV_BARD_SOUND and NULL_BARD_SOUND (src/bard_music.c:6-10) as distinct Hold and End slots, upstream song ids 51 and 255. Group dispatch, sound calculation and playback are not ported and the file row stays pending.",
+          "rust_target": "crates/assets/src/bard_events.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29708,7 +29724,10 @@
     "src/data/bard_music/events.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 29 six-slot Events Bard templates (src/data/bard_music/events.h:3-236) in Events word-index order as phoneme ids, Hold and End slots with zero lengthAdjustment, unused and volume. Nothing consumes the table yet: Bard playback, the other word groups and the group dispatch are not ported.",
+      "rust_target": "crates/assets/src/bard_events.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/bard_music/feelings.h": {
       "category": "code.header",
