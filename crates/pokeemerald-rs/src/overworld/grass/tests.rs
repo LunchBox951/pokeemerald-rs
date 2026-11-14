@@ -141,10 +141,17 @@ fn subpriority_is_the_elevation_base_plus_a_first_command_bias() {
     assert_eq!(effect(3, false).subpriority(112, 72, &[]), 115 + 20);
 }
 
+/// A 16x32 object, the size of the player and of most people.
 fn object(left: i32, top: i32, subpriority: u16) -> DepthObject {
+    sized_object(left, top, (16, 32), subpriority)
+}
+
+fn sized_object(left: i32, top: i32, (width, height): (i32, i32), subpriority: u16) -> DepthObject {
     DepthObject {
         left,
         top,
+        width,
+        height,
         subpriority,
     }
 }
@@ -225,4 +232,50 @@ fn each_effect_is_judged_against_its_own_owners_tiles() {
         "only the owner that left loses its effect"
     );
     assert_eq!(effects.effects[0].owner, Owner::Object(0));
+}
+
+#[test]
+fn a_colocated_16x16_object_does_not_pull_the_effect() {
+    // A 16x16 object (e.g. OBJ_EVENT_GFX_ITEM_BALL) standing on the effect's
+    // tile: sprite top-left (112, 72), bottom 88, subpriority 115 + 20 + 1.
+    // Upstream (`field_effect_helpers.c:1676-1687`): linked centre y = 80,
+    // centerToCornerVecY = -8, so yhi = 88 - 8 = 80 and `80 > 80` is false;
+    // the effect keeps its own 135.
+    let item_ball = sized_object(112, 72, (16, 16), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[item_ball]), 135);
+}
+
+#[test]
+fn a_16x16_object_pulls_the_effect_only_once_its_centre_passes_the_effects_midline() {
+    // `var > yhi` with var = top + 8 and yhi = 80: top 73 is the first row.
+    let just_below = sized_object(112, 73, (16, 16), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[just_below]), 138);
+    // The 16x32 formula would already have pulled at top 72 and above.
+    let above = sized_object(112, 60, (16, 16), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[above]), 135);
+    // `lyhi < ylo`: a top at the effect's bottom edge never overlaps.
+    let at_bottom = sized_object(112, 88, (16, 16), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[at_bottom]), 135);
+}
+
+#[test]
+fn an_objects_centre_follows_its_width() {
+    // A 32-wide object's centre is `left + 16`: left 96 puts it on the
+    // effect's left edge (112, excluded) and left 97 just inside it.
+    let on_edge = sized_object(96, 60, (32, 32), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[on_edge]), 135);
+    let inside = sized_object(97, 60, (32, 32), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[inside]), 138);
+    // A 16-wide object at left 97 has its centre at 105, outside the effect.
+    let narrow = sized_object(97, 60, (16, 32), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[narrow]), 135);
+}
+
+#[test]
+fn a_taller_object_reaches_the_effect_from_further_above() {
+    // A 48x48 truck: centre row top + 24 must pass 88 - 24 = 64.
+    let reaching = sized_object(96, 41, (48, 48), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[reaching]), 138);
+    let short = sized_object(96, 40, (48, 48), 136);
+    assert_eq!(effect(3, false).subpriority(112, 72, &[short]), 135);
 }
