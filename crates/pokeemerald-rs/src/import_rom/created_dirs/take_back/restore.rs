@@ -24,13 +24,12 @@
 //!   `unlinkat(.., REMOVEDIR)` removes only an empty directory, so the
 //!   worst outcome is the loss of one empty directory. A level that writer
 //!   moved out of the quarantine before that unlink is reported where it
-//!   went on Linux and Android, where the held original's link count says
-//!   whether it was moved or removed; elsewhere (Apple), a directory
-//!   removed while held open still reads a nonzero `st_nlink`, so the two
-//!   cannot be told apart without a trace after every rollback, and that
-//!   moved level goes unreported. Where a level is reported missing from
-//!   its name on such a platform, the warning says it may have been moved
-//!   rather than claiming it was.
+//!   went, where the held original's link count says whether it was moved
+//!   or removed (Linux, Android), or where the path the platform gives for
+//!   it still resolves to it (Apple, whose removed directories keep a
+//!   nonzero `st_nlink`). On a platform with neither, that moved level goes
+//!   unreported, and where a level is reported missing from its name the
+//!   warning says it may have been moved rather than claiming it was.
 //!
 //! The other name-based steps here are the no-replace renames, which fail
 //! rather than replace anything, so they cannot destroy data.
@@ -151,7 +150,7 @@ pub(super) fn take_back_unwritable_in_place(
 /// unlink acts on a name, so a swap after the check is an accepted residual
 /// (module doc); a level holding anything is left standing, with the
 /// error.
-fn unlink_in_place(parent: &OwnedFd, dir: &CreatedDirectory) -> Outcome {
+pub(super) fn unlink_in_place(parent: &OwnedFd, dir: &CreatedDirectory) -> Outcome {
     let looked_up = rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
         .and_then(|stat| is_this_level(dir, &stat));
     match looked_up {
@@ -283,9 +282,9 @@ pub(super) fn take_back_into_revalidating(
             // The unlink acts on a name: had another writer moved this level
             // out and put an empty directory in its place, the replacement
             // went and the level stands wherever it was moved, so it is
-            // reported there. Only where a removed directory's link count
-            // reads 0 can that be told apart from the level's own removal;
-            // elsewhere this is an accepted residual (module doc).
+            // reported there. Only where a link count of 0 or a path that
+            // resolves to the held level tells it from the level's own
+            // removal; elsewhere this is an accepted residual (module doc).
             Ok(()) => {
                 if matches!(standing(dir), Standing::Linked(_) | Standing::Unexamined(_)) {
                     warn_if_moved_away(dir);
@@ -463,6 +462,33 @@ pub(super) enum PutBack {
     Gone(String),
 }
 
+/// The longest a single path component may be on the platforms this runs
+/// on (`NAME_MAX`: 255 bytes on Linux, Android and Apple filesystems).
+const NAME_MAX: usize = 255;
+
+/// The `n`th recovery name for `name`: `<name>.restored-<n>`, with `name`
+/// cut short (at a character boundary if it is valid UTF-8) so the result
+/// fits [`NAME_MAX`]; a full-length name would otherwise get `ENAMETOOLONG`
+/// for every candidate.
+fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    let suffix = format!(".restored-{n}");
+    let room = NAME_MAX.saturating_sub(suffix.len());
+    let bytes = name.as_bytes();
+    let mut keep = bytes.len().min(room);
+    if keep < bytes.len() && std::str::from_utf8(bytes).is_ok() {
+        // Valid UTF-8: back off to the start of the character the cut fell in.
+        while keep > 0 && (bytes[keep] & 0xC0) == 0x80 {
+            keep -= 1;
+        }
+    }
+    let mut aside = Vec::with_capacity(keep + suffix.len());
+    aside.extend_from_slice(&bytes[..keep]);
+    aside.extend_from_slice(suffix.as_bytes());
+    std::ffi::OsString::from_vec(aside)
+}
+
 /// [`restore_capture`], telling a capture that vanished from the
 /// quarantine apart from one stranded there.
 fn put_back(
@@ -478,8 +504,7 @@ fn put_back(
         return PutBack::InPlace;
     }
     for n in 0..16 {
-        let mut aside = dir.name.clone();
-        aside.push(format!(".restored-{n}"));
+        let aside = restored_name(&dir.name, n);
         if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &aside).is_ok() {
             return PutBack::Aside {
                 warning: format!(

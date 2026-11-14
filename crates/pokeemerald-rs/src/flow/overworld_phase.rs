@@ -181,8 +181,10 @@ pub(crate) struct OverworldPhase {
     pub(super) map_id: assets::MapId,
     /// Live object events for the current map visit, seeded from the same
     /// resolved events the scene simulates
-    /// ([`connections::seed_object_events`]) and replaced only by a
-    /// completed map transition.
+    /// ([`connections::seed_object_events`]) and replaced by a warp; a
+    /// connection crossing instead carries the in-view entries forward beside
+    /// the entered map's seeds
+    /// ([`ObjectEventCollection::carry_across_connection`]).
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
@@ -714,6 +716,11 @@ impl OverworldPhase {
         // which poll the on-frame map script like any other frame, so this
         // runs here too rather than only on a map transition.
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut phase.save1.event_data);
+        connections::admit_object_events_at_map_load(
+            &mut phase.object_events,
+            &phase.player,
+            &phase.save1.event_data,
+        );
         phase
     }
 
@@ -798,7 +805,12 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene);
+        let mut object_events = connections::seed_object_events(&scene);
+        connections::admit_object_events_at_map_load(
+            &mut object_events,
+            &player,
+            &save1.event_data,
+        );
         Self {
             scene,
             player,
@@ -943,6 +955,17 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
+    /// Whether the player's standing field state closes `FieldGetPlayerInput`'s
+    /// button block: a forced landing's tile-centre frame
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), or a Secret
+    /// Base mat sequence, whose spin holds `LockPlayerFieldControls` and whose
+    /// jump is never tile-centre or at rest (`field_player_avatar.c:1587-1594,
+    /// 1640`, `field_control_avatar.c:95-113`, `overworld.c:1445-1447`).
+    #[must_use]
+    pub(super) fn field_input_closed(&self) -> bool {
+        self.player.field_input_suppressed() || self.player.forced_mat().is_some()
+    }
+
     /// Restart the field's animations on return to the field.
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
@@ -1034,6 +1057,8 @@ mod animation_tick_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
+mod connection_live_objects_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod cute_charm_slot_zero_tests;
@@ -1065,6 +1090,8 @@ mod forced_movement_encounter_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod game_stat_steps_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod interaction_tests;
@@ -1078,6 +1105,8 @@ mod lead_owner_tests;
 /// overtake the text before it.
 #[cfg(test)]
 mod live_first_battle_tests;
+#[cfg(test)]
+mod mat_field_input_gate_tests;
 #[cfg(test)]
 mod mom_faceplayer_tests;
 #[cfg(test)]

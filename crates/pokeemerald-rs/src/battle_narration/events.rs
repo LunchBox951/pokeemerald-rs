@@ -393,6 +393,12 @@ fn ability_results(
             context.scripting = Some(side);
             table(id::PKMNSXCUREDYPROBLEM, context)
         }
+        BattleEvent::SpeedBoostActivated { by_player, .. } => {
+            let side = Side::user(by_player);
+            let mut context = base.with_ability(side, AbilityId::SPEED_BOOST);
+            context.scripting = Some(side);
+            table(id::PKMNRAISEDSPEED, context)
+        }
         BattleEvent::RoughSkinDamage { by_player, .. } => table(
             id::PKMNHURTSWITH,
             base.user_vs_target(Side::user(by_player))

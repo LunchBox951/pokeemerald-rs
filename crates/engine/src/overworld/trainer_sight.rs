@@ -16,18 +16,18 @@ use super::collision::{directionally_impassable, elevation_mismatch, elevations_
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::MB_NORMAL;
-use super::object_event::{object_event_is_visible, LiveObjectEvent, ObjectEventCollection};
+use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 use super::player::PlayerState;
-use crate::event_data::EventData;
 
 /// Whether `trainer` -- a [`TrainerType::Normal`] live object event on
 /// `runtime`'s map -- currently sees `player`: its live facing-direction
 /// cone, out to its template sight range, reaches `player`'s tile along a
 /// clear, elevation-compatible line. `objects` supplies the other live
-/// object events that can stand on the line (`trainer_see.c:301-312`).
+/// object events that can stand on the line (`trainer_see.c:301-312`). Hide flags are the
+/// scheduler's admission concern, so none is read here.
 ///
-/// Returns `false` when `trainer`'s hide flag is set, for any other
-/// [`TrainerType`], a sight range of `0`, or an
+/// Returns `false` when `trainer` is not active (the scheduler has not admitted it, or has
+/// retired it), for any other [`TrainerType`], a sight range of `0`, or an
 /// [`assets::ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
 /// a `u8` -- the berry-tree half of that overloaded field reaching this
 /// function is a caller error, not a panic.
@@ -37,14 +37,13 @@ pub fn trainer_can_see_player(
     objects: &ObjectEventCollection,
     runtime: &MapRuntime<'_>,
     player: &PlayerState,
-    event_data: &EventData,
 ) -> bool {
     let template = trainer.template();
     let state = trainer.state();
     if template.trainer_type != TrainerType::Normal {
         return false;
     }
-    if !object_event_is_visible(template, event_data) {
+    if !trainer.is_active() {
         return false;
     }
     let Some(sight_range) = template.trainer_sight_or_berry_tree_id.parse::<u8>().ok() else {
@@ -63,7 +62,6 @@ pub fn trainer_can_see_player(
         trainer_elevation: state.elevation(),
         objects,
         runtime,
-        event_data,
     };
     sight_line_clear(&world, trainer_pos, facing, distance, player)
 }
@@ -98,7 +96,6 @@ struct SightWorld<'a> {
     /// The live object events that can block an intermediate tile.
     objects: &'a ObjectEventCollection,
     runtime: &'a MapRuntime<'a>,
-    event_data: &'a EventData,
 }
 
 /// Whether the straight line from `trainer_pos` to the tile `distance`
@@ -160,7 +157,7 @@ fn sight_line_clear(
 /// Whether intermediate tile `(x, y)` -- one step along `facing`, strictly
 /// between the trainer and the player -- blocks the sight line: any
 /// collision bit, a directional wall, an elevation mismatch, or another
-/// currently visible object event occupying it. An undecodable cell fails
+/// active object event occupying it. An undecodable cell fails
 /// closed (`true`).
 fn tile_blocks_intermediate_sight(
     world: &SightWorld<'_>,
@@ -173,7 +170,6 @@ fn tile_blocks_intermediate_sight(
         trainer_elevation,
         objects,
         runtime,
-        event_data,
     } = *world;
     let Some(cell) = runtime.metatile_cell(x, y) else {
         return true;
@@ -189,14 +185,17 @@ fn tile_blocks_intermediate_sight(
         return true;
     }
     objects
-        .object_events_at(x, y, trainer_elevation)
-        .any(|other| object_event_is_visible(other.template(), event_data))
+        .collision_objects_at(x, y, trainer_elevation)
+        .next()
+        .is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_data::EventData;
     use crate::overworld::collision::ELEVATION_TRANSITION;
+    use crate::overworld::object_event_harness::{admit, admitted};
     use assets::{MapConnection, MapEvents, MapHeader, MapId, MovementType, ObjectEvent};
 
     fn cell(metatile_id: u16, collision: u8, elevation: u8) -> u16 {
@@ -343,9 +342,14 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );
-        let objects = ObjectEventCollection::from_templates(templates);
+        let mut objects = ObjectEventCollection::from_templates(templates);
+        admit(
+            &mut objects,
+            (i32::from(trainer.x), i32::from(trainer.y)),
+            event_data,
+        );
         let live = *objects.get(trainer.local_id).unwrap();
-        trainer_can_see_player(&live, &objects, runtime, player, event_data)
+        trainer_can_see_player(&live, &objects, runtime, player)
     }
 
     #[test]
@@ -470,6 +474,69 @@ mod tests {
             assets::object_event_flags::resolve("FLAG_HIDE_LITTLEROOT_TOWN_BIRCH").unwrap();
         event_data.flag_set(hide_flag).unwrap();
         assert!(can_see(&t, blocker, &runtime, &player, &event_data));
+    }
+
+    /// The scheduler applies a hide flag at admission only, so a flag set afterwards leaves both
+    /// the trainer's cone and a blocker on the line in place until a script removes them.
+    #[test]
+    fn hide_flags_set_after_admission_change_neither_the_cone_nor_the_blocker() {
+        const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BIRCH";
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 10, 10, cell(0, 0, 3));
+        let mut t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        t.flag = HIDE;
+        let mut blocker = trainer(5, 7, 3, MovementType::FaceDown, "0");
+        blocker.local_id = 2;
+        blocker.trainer_type = TrainerType::None;
+        blocker.flag = HIDE;
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([t, blocker]));
+        let mut objects = admitted(templates, (5, 5));
+        let mut event_data = EventData::new();
+        event_data
+            .flag_set(assets::object_event_flags::resolve(HIDE).unwrap())
+            .unwrap();
+        // The scheduler reads the set flag on a frame whose camera move reconciles the view; the
+        // sight query takes no flags of its own, so this pass is the only reader there is.
+        admit(&mut objects, (5, 8), &event_data);
+        assert!(
+            [1, 2]
+                .iter()
+                .all(|&local_id| objects.get(local_id).unwrap().is_active()),
+            "the reconciling frame retired neither flagged entry"
+        );
+        let live = *objects.get(1).unwrap();
+        let player = player_at(5, 8, 3);
+        assert!(
+            !trainer_can_see_player(&live, &objects, &runtime, &player),
+            "the admitted blocker still stands on the line"
+        );
+        // The blocker holds the tile it leaves until its step settles.
+        let blocker_state = objects.get_mut(2).unwrap().state_mut();
+        blocker_state.walk(Direction::East);
+        blocker_state.settle_previous_position();
+        let live = *objects.get(1).unwrap();
+        assert!(
+            trainer_can_see_player(&live, &objects, &runtime, &player),
+            "the admitted trainer still sees once the line is clear"
+        );
+    }
+
+    #[test]
+    fn a_trainer_the_scheduler_never_admitted_does_not_see_the_player() {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 10, 10, cell(0, 0, 3));
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([t]));
+        let objects = ObjectEventCollection::from_templates(templates);
+        let live = *objects.get(1).unwrap();
+        assert!(!trainer_can_see_player(
+            &live,
+            &objects,
+            &runtime,
+            &player_at(5, 8, 3)
+        ));
     }
 
     #[test]
@@ -619,8 +686,8 @@ mod tests {
         }
     }
 
-    /// A trainer hidden by its own set hide flag has no cone at all,
-    /// matching upstream's scan guard (`trainer_see.c:202-203`).
+    /// A trainer the scheduler never admitted (here, hidden by its set flag at admission) has no
+    /// cone at all, matching upstream's scan of active slots only (`trainer_see.c:202-203`).
     #[test]
     fn a_hidden_trainer_does_not_see_the_player() {
         let hdr = header(&[]);
@@ -667,10 +734,10 @@ mod tests {
         let events = empty_events();
         let runtime = runtime_over(&hdr, &events, 20, 20, cell(0, 0, 3));
         let templates: &'static [ObjectEvent] = Box::leak(templates.into_boxed_slice());
-        let mut objects = ObjectEventCollection::from_templates(templates);
+        let mut objects = admitted(templates, (5, 5));
         edit(objects.get_mut(local_id).unwrap().state_mut());
         let live = *objects.get(1).unwrap();
-        trainer_can_see_player(&live, &objects, &runtime, player, &EventData::new())
+        trainer_can_see_player(&live, &objects, &runtime, player)
     }
 
     #[test]
@@ -721,7 +788,30 @@ mod tests {
         assert!(!live_sees(vec![t, blocker], |_| {}, 2, &player));
         let off = |s: &mut crate::overworld::object_event::ObjectEventState| {
             s.walk(Direction::East);
+            s.settle_previous_position();
         };
         assert!(live_sees(vec![t, blocker], off, 2, &player));
+    }
+
+    #[test]
+    fn a_blocker_still_leaving_the_line_keeps_blocking_until_its_step_settles() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let mut blocker = trainer(5, 7, 3, MovementType::FaceDown, "0");
+        blocker.local_id = 2;
+        blocker.trainer_type = TrainerType::None;
+        let player = player_at(5, 8, 3);
+        let mid_step = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.begin_normal_walk(Direction::East);
+        };
+        let settled = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.begin_normal_walk(Direction::East);
+            while !s.advance_step() {}
+        };
+
+        assert!(
+            !live_sees(vec![t, blocker], mid_step, 2, &player),
+            "the walker still holds (5, 7), as `GetCollisionFlagsAtCoords` sees it"
+        );
+        assert!(live_sees(vec![t, blocker], settled, 2, &player));
     }
 }

@@ -45,7 +45,7 @@ fn eastward_phase(specials: &[((u16, u16), u8)]) -> OverworldPhase {
     phase_with((4, 4), Direction::East, specials)
 }
 
-fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
+pub(super) fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
     phase
         .scene
         .sprite_entries(&phase.player, &phase.save1.event_data)
@@ -56,7 +56,7 @@ fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
 }
 
 /// The image (0 to 4) the one effect on screen shows.
-fn shown_image(phase: &OverworldPhase) -> u16 {
+pub(super) fn shown_image(phase: &OverworldPhase) -> u16 {
     let first = phase
         .scene
         .tall_grass_first_tile()
@@ -488,11 +488,11 @@ fn a_player_placed_on_route_101_grass_shows_the_real_effect() {
     assert_eq!(shown_image(&phase), 0);
 }
 
-const ROUTE_101: MapId = MapId("MAP_ROUTE101");
-const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
+pub(super) const ROUTE_101: MapId = MapId("MAP_ROUTE101");
+pub(super) const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
 /// Oldale's south-edge column the crossing lands on, clear of its coord events
 /// and its hidden rival object.
-const LANDING_X: i32 = 13;
+pub(super) const LANDING_X: i32 = 13;
 /// The object-event sheets Oldale Town and Route 101 load.
 const CROSSING_SPRITES: [&str; 8] = [
     "girl_3",
@@ -508,7 +508,7 @@ const CROSSING_SPRITES: [&str; 8] = [
 /// A phase at rest on Route 101's north edge facing Oldale Town, whose pack
 /// puts `landing_behavior` on Oldale's landing tile and carries the tall-grass
 /// sheet.
-fn route_101_phase_crossing_into_oldale(
+pub(super) fn route_101_phase_crossing_into_oldale(
     landing_behavior: u8,
 ) -> (OverworldPhase, std::path::PathBuf) {
     let path = std::env::temp_dir().join(format!(

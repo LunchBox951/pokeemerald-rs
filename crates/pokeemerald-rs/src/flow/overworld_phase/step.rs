@@ -21,9 +21,9 @@
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp, Direction, MapRuntime,
-    PlayerState, StepOutcome, WarpTrigger,
+    PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
-use engine::save::Coords16;
+use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
@@ -323,6 +323,10 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        // Map load has already spawned the objects in view, so a crossing on the first frame
+        // carries them.
+        self.admit_object_events_on_map_load();
+
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
@@ -410,6 +414,7 @@ impl OverworldPhase {
         let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
         let stepped_onto = self.take_stepped_onto();
+        self.count_took_step(stepped_onto);
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
@@ -533,6 +538,8 @@ impl OverworldPhase {
         let maps = MapConnections {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
+            departed: self.map_id,
+            departed_objects: &self.object_events,
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check
@@ -603,6 +610,18 @@ impl OverworldPhase {
         self.sync_saved_position();
     }
 
+    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
+    /// (`field_control_avatar.c:116-118`), ahead of
+    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
+    /// (`:155-163`), so a landing those then claim still counts.
+    /// [`Self::take_stepped_onto`] already withholds the forced landing and
+    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
+        if stepped_onto.is_some() {
+            self.save1.game_stats.increment(GameStat::Steps);
+        }
+    }
+
     /// Mirrors the player's logical tile into the retained save state.
     fn sync_saved_position(&mut self) {
         let (x, y) = self.player.position();
@@ -655,7 +674,7 @@ impl OverworldPhase {
         // forced-movement tile that closes the first of those two states
         // (method doc, issue #926).
         let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
+            && !self.field_input_closed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -676,7 +695,7 @@ impl OverworldPhase {
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
         let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+            (!landing_claimed && arrow_trigger.is_none() && !self.field_input_closed())
                 .then(|| self.interaction_tokens_this_frame(buttons, runtime))
                 .flatten();
 

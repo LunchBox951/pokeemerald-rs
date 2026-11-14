@@ -127,6 +127,39 @@ impl Bitmap {
 }
 
 impl Bitmap {
+    /// Draws the square picture whose first row is `first_row`, as wide as
+    /// the sheet, turned by `angle` about its centre: each pixel of the
+    /// square is looked up from the source under the rotation, as the
+    /// hardware's affine sprites do, so no turn accumulates error. Source
+    /// pixels beyond the square's own edges are clear.
+    fn draw_rotated(
+        &self,
+        fb: &mut Framebuffer,
+        top_left: (i32, i32),
+        first_row: usize,
+        angle: u8,
+    ) {
+        let side = i32::try_from(self.width).unwrap_or(0);
+        let half = side / 2;
+        let matrix = rotation(angle);
+        let first_row = i32::try_from(first_row).unwrap_or(0);
+        for y in -half..half {
+            for x in -half..half {
+                let (source_x, source_y) = matrix.apply(x, y);
+                let column = half + (source_x >> AffineMatrix::FRAC_BITS);
+                let row = half + (source_y >> AffineMatrix::FRAC_BITS);
+                if !(0..side).contains(&column) || !(0..side).contains(&row) {
+                    continue;
+                }
+                if let Some(color) = self.color_at(column, first_row + row) {
+                    put(fb, top_left.0 + half + x, top_left.1 + half + y, color);
+                }
+            }
+        }
+    }
+}
+
+impl Bitmap {
     /// Draws the part of `rect` that fits `clip` pixels, with its top-left at
     /// `origin`; index 0 stays transparent.
     fn blit_rect(
@@ -353,31 +386,29 @@ impl BagChrome {
         }
     }
 
-    /// Draws the bag picture: frame 0 is the idle bag, frames 1-5 the pockets.
-    pub(super) fn draw_bag(&self, fb: &mut Framebuffer, origin: (i32, i32), frame: usize) {
+    /// Draws the bag picture turned by `angle`: frame 0 is the idle bag,
+    /// frames 1-5 the pockets.
+    pub(super) fn draw_bag(
+        &self,
+        fb: &mut Framebuffer,
+        origin: (i32, i32),
+        frame: usize,
+        angle: u8,
+    ) {
         let side = self.bag.width;
-        if (frame + 1) * side <= self.bag.height {
+        if (frame + 1) * side > self.bag.height {
+            return;
+        }
+        if angle == 0 {
             self.bag.blit_rows(fb, origin, frame * side, side);
+        } else {
+            self.bag.draw_rotated(fb, origin, frame * side, angle);
         }
     }
 
-    /// Draws the rotating ball turned by `angle` about its centre: each
-    /// pixel of the square is looked up from the source under the rotation,
-    /// as the hardware's affine sprites do, so no turn accumulates error.
+    /// Draws the rotating ball turned by `angle` about its centre.
     pub(super) fn draw_ball(&self, fb: &mut Framebuffer, top_left: (i32, i32), angle: u8) {
-        let ball = &self.ball;
-        let half = i32::try_from(ball.width / 2).unwrap_or(0);
-        let matrix = rotation(angle);
-        for y in -half..half {
-            for x in -half..half {
-                let (source_x, source_y) = matrix.apply(x, y);
-                let column = half + (source_x >> AffineMatrix::FRAC_BITS);
-                let row = half + (source_y >> AffineMatrix::FRAC_BITS);
-                if let Some(color) = ball.color_at(column, row) {
-                    put(fb, top_left.0 + half + x, top_left.1 + half + y, color);
-                }
-            }
-        }
+        self.ball.draw_rotated(fb, top_left, 0, angle);
     }
 
     /// Draws a standard bordered window at a tilemap rectangle.

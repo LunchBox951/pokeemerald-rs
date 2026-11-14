@@ -313,16 +313,17 @@ fn the_menu_closing_frame_runs_object_events_before_the_effect_update() {
 }
 
 #[test]
-fn setting_the_hide_flag_of_an_admitted_npc_retires_its_effect_and_it_gains_no_new_one() {
-    // `removeobject` sets the hide flag and removes the object
-    // (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`);
-    // the scheduler keeps the entry admitted, but it no longer has a sprite.
+fn setting_the_hide_flag_of_an_admitted_npc_keeps_its_effect_until_removeobject_retires_it() {
+    // The scheduler reads the hide flag only at admission, so a flag set on an admitted object
+    // leaves it, and its effect, in place; `removeobject` sets the flag and deactivates the object
+    // (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`).
     let mut phase = boy_phase(&ROUTE101_HIDDEN_BOY_EVENTS, MB_TALL_GRASS, (5, 13));
     phase
         .save1
         .event_data
         .flag_clear(0x3DF)
         .expect("FLAG_HIDE_ROUTE_101_BOY");
+    run_camera_update(&mut phase);
     idle(&mut phase, 2);
     assert_eq!(phase.scene.tall_grass_effect_count(), 1);
 
@@ -332,12 +333,81 @@ fn setting_the_hide_flag_of_an_admitted_npc_retires_its_effect_and_it_gains_no_n
         .flag_set(0x3DF)
         .expect("FLAG_HIDE_ROUTE_101_BOY");
     idle(&mut phase, 2);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "the flag alone does not retire an admitted object"
+    );
+
+    assert!(phase.object_events.remove_by_local_id(6));
+    idle(&mut phase, 2);
     assert!(!boy_drawn(&phase));
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 
-    // A return to the field re-arms every object's spawn pass; a hidden one
-    // still has none.
+    // A return to the field re-arms every object's spawn pass; a removed object whose flag is
+    // set has none.
     phase.scene.reset_field_effects();
     idle(&mut phase, 3);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
+}
+
+/// `GroundEffect_StepOnTallGrass` passes `previousElevation`, which
+/// `ObjectEventUpdateElevation` keeps at the last ordinary cell's 4 on a
+/// transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npcs_rustle_on_transition_grass_takes_the_retained_elevations_subpriority() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_NORMAL, 4), ((3, 13), MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0, "plain ground");
+    phase
+        .object_events
+        .get_mut(6)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    idle(&mut phase, 1);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 4));
+    // `sElevationToSubpriority[4]` is 83, the row term at top 0 is 30, and a
+    // rustle on its first command adds 4.
+    assert_eq!(
+        phase.scene.tall_grass_effect_depths(),
+        vec![(4, 83 + 30 + 4)]
+    );
+}
+
+/// `GroundEffect_SpawnOnTallGrass` passes `previousElevation`, which stays the
+/// template's 3 on a transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npc_admitted_on_transition_grass_places_its_effect_at_the_retained_elevation() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 3));
+    // `sElevationToSubpriority[3]` is 115 and the row term at top 0 is 30.
+    assert_eq!(phase.scene.tall_grass_effect_depths(), vec![(3, 115 + 30)]);
 }
