@@ -180,8 +180,12 @@ impl<H: OutputHost> Transport<H> {
     }
 
     /// Advance to time `now` (a monotonic offset from any fixed origin) and
-    /// return when the driver should call again.
+    /// return when the driver should call again. A cancelled transport
+    /// starts no OS call.
     pub(super) fn step(&mut self, now: Duration) -> Duration {
+        if self.cancelled() {
+            return now;
+        }
         if self.live.is_some() {
             self.supervise(now);
         }

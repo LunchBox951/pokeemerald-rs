@@ -379,3 +379,40 @@ fn shutdown_seen_after_a_failed_supervision_pause_publishes_nothing() {
     assert_eq!(rig.transport.failures, 0);
     assert_eq!(with(&w).log, ["build"]);
 }
+
+#[test]
+fn a_step_entered_after_shutdown_starts_no_supervising_discovery() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    assert!(rig.transport.live.is_some(), "attached");
+    let ops = with(&w).ops;
+    rig.shared.shutdown.store(true, Ordering::Release);
+    // A discovery is due at 1s.
+    rig.transport.step(MS(1_000));
+    let (started, calls) = {
+        let w = with(&w);
+        (w.ops - ops, w.discovery_calls.clone())
+    };
+    drop(rig);
+    assert_eq!(started, 0, "OS calls started after shutdown: {calls:?}");
+}
+
+#[test]
+fn a_step_entered_after_shutdown_starts_no_supervising_play() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    assert!(rig.transport.live.is_some(), "attached");
+    let ops = with(&w).ops;
+    rig.shared.running.store(true, Ordering::Release);
+    rig.shared.shutdown.store(true, Ordering::Release);
+    // No discovery is due yet, so only the play intent is pending.
+    rig.transport.step(MS(10));
+    let (started, plays) = {
+        let w = with(&w);
+        (w.ops - ops, w.plays)
+    };
+    drop(rig);
+    assert_eq!((started, plays), (0, 0), "play started after shutdown");
+}
