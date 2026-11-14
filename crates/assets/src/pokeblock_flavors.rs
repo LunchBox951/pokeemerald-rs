@@ -14,7 +14,7 @@
 //! The flavor order is Spicy, Dry, Sweet, Bitter, Sour
 //! (`include/constants/berry.h:13-18`).
 
-use core::fmt;
+use crate::error::AssetError;
 
 /// A Pokéblock/berry flavor, in upstream column order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,18 +55,6 @@ pub const FLAVOR_COUNT: usize = 5;
 /// The number of natures (`NUM_NATURES`).
 pub const NATURE_COUNT: usize = 25;
 
-/// A nature discriminant outside `0..NATURE_COUNT`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnknownNature(pub u8);
-
-impl fmt::Display for UnknownNature {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown nature id `{}`", self.0)
-    }
-}
-
-impl std::error::Error for UnknownNature {}
-
 /// `gPokeblockFlavorCompatibilityTable`: rows are natures in numeric order,
 /// columns are Spicy, Dry, Sweet, Bitter, Sour.
 #[rustfmt::skip]
@@ -103,12 +91,12 @@ const COMPATIBILITY: [[i8; FLAVOR_COUNT]; NATURE_COUNT] = [
 ///
 /// # Errors
 ///
-/// Returns [`UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
-pub fn nature_row(nature: u8) -> Result<[i8; FLAVOR_COUNT], UnknownNature> {
+/// Returns [`AssetError::UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
+pub fn nature_row(nature: u8) -> Result<[i8; FLAVOR_COUNT], AssetError> {
     COMPATIBILITY
         .get(usize::from(nature))
         .copied()
-        .ok_or(UnknownNature(nature))
+        .ok_or(AssetError::UnknownNature(nature))
 }
 
 /// Returns the signed compatibility of `nature` with `flavor`: `1` liked,
@@ -116,8 +104,8 @@ pub fn nature_row(nature: u8) -> Result<[i8; FLAVOR_COUNT], UnknownNature> {
 ///
 /// # Errors
 ///
-/// Returns [`UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
-pub fn compatibility(nature: u8, flavor: Flavor) -> Result<i8, UnknownNature> {
+/// Returns [`AssetError::UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
+pub fn compatibility(nature: u8, flavor: Flavor) -> Result<i8, AssetError> {
     nature_row(nature).map(|row| row[flavor.index()])
 }
 
@@ -125,8 +113,8 @@ pub fn compatibility(nature: u8, flavor: Flavor) -> Result<i8, UnknownNature> {
 ///
 /// # Errors
 ///
-/// Returns [`UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
-pub fn liked_flavor(nature: u8) -> Result<Option<Flavor>, UnknownNature> {
+/// Returns [`AssetError::UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
+pub fn liked_flavor(nature: u8) -> Result<Option<Flavor>, AssetError> {
     flavor_with_sign(nature, 1)
 }
 
@@ -134,12 +122,12 @@ pub fn liked_flavor(nature: u8) -> Result<Option<Flavor>, UnknownNature> {
 ///
 /// # Errors
 ///
-/// Returns [`UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
-pub fn disliked_flavor(nature: u8) -> Result<Option<Flavor>, UnknownNature> {
+/// Returns [`AssetError::UnknownNature`] if `nature` is not below [`NATURE_COUNT`].
+pub fn disliked_flavor(nature: u8) -> Result<Option<Flavor>, AssetError> {
     flavor_with_sign(nature, -1)
 }
 
-fn flavor_with_sign(nature: u8, sign: i8) -> Result<Option<Flavor>, UnknownNature> {
+fn flavor_with_sign(nature: u8, sign: i8) -> Result<Option<Flavor>, AssetError> {
     let row = nature_row(nature)?;
     Ok(Flavor::ALL
         .into_iter()
@@ -250,12 +238,18 @@ mod tests {
     #[test]
     fn invalid_natures_are_rejected() {
         for bad in [25_u8, 26, 100, 255] {
-            assert_eq!(nature_row(bad), Err(UnknownNature(bad)));
-            assert_eq!(compatibility(bad, Spicy), Err(UnknownNature(bad)));
-            assert_eq!(liked_flavor(bad), Err(UnknownNature(bad)));
-            assert_eq!(disliked_flavor(bad), Err(UnknownNature(bad)));
+            assert_eq!(nature_row(bad), Err(AssetError::UnknownNature(bad)));
+            assert_eq!(
+                compatibility(bad, Spicy),
+                Err(AssetError::UnknownNature(bad))
+            );
+            assert_eq!(liked_flavor(bad), Err(AssetError::UnknownNature(bad)));
+            assert_eq!(disliked_flavor(bad), Err(AssetError::UnknownNature(bad)));
         }
-        assert_eq!(UnknownNature(25).to_string(), "unknown nature id `25`");
+        assert_eq!(
+            AssetError::UnknownNature(25).to_string(),
+            "unknown nature id `25`"
+        );
     }
 
     /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
