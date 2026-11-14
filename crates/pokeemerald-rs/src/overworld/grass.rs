@@ -715,6 +715,17 @@ impl OverworldScene {
         self.grass.len()
     }
 
+    /// Each effect's `sElevation` and the elevation-dependent subpriority it
+    /// takes at a fixed screen row with no object overlapping it.
+    #[cfg(test)]
+    pub(crate) fn tall_grass_effect_depths(&self) -> Vec<(u8, u16)> {
+        self.grass
+            .effects
+            .iter()
+            .map(|effect| (effect.elevation, effect.subpriority(0, 0, &[])))
+            .collect()
+    }
+
     /// The first tile of the effect's cells in the combined tileset.
     #[cfg(test)]
     pub(crate) fn tall_grass_first_tile(&self) -> Option<u16> {
