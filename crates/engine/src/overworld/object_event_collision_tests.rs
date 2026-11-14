@@ -105,6 +105,8 @@ fn range_distance_never_overflows_at_extreme_coordinates() {
     assert!(range((i32::MAX, 0), u8::MAX, 0).contains((i32::MAX - 255, 0)));
     assert!(!range((i32::MAX, 0), u8::MAX, 0).contains((i32::MAX - 256, 0)));
     assert!(range((i32::MIN, i32::MAX), 0, 0).contains((i32::MAX, i32::MIN)));
+    assert!(!range((i32::MAX, 0), 1, 0).contains((-1, 0)));
+    assert!(!range((0, i32::MAX), 0, 1).contains((0, -1)));
 }
 
 #[test]
@@ -133,6 +135,33 @@ fn a_range_anchored_at_an_extreme_tile_refuses_a_distant_step() {
             "{initial:?}"
         );
     }
+}
+
+#[test]
+fn a_step_whose_distance_from_the_anchor_is_exactly_i32_min_is_outside_the_range() {
+    let terrain = Terrain::flat();
+    let refused = |initial, from: (i16, i16), direction| {
+        collision_in_direction(
+            &terrain.runtime(),
+            &mover_at(from.0, from.1),
+            Some(MovementRange {
+                initial,
+                x: 1,
+                y: 1,
+            }),
+            direction,
+            [],
+        )
+    };
+
+    assert_eq!(
+        refused((i32::MAX, 20), (-2, 20), East),
+        Some(NpcCollision::OutsideRange)
+    );
+    assert_eq!(
+        refused((20, i32::MAX), (20, -2), South),
+        Some(NpcCollision::OutsideRange)
+    );
 }
 
 #[test]
