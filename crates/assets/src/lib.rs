@@ -14,7 +14,8 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
+//! Easy Chat Events word group (see [`easy_chat_events`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -42,6 +43,7 @@ pub mod battle_anim;
 pub mod battle_moves;
 pub mod bundled_overworld;
 pub mod decorations;
+pub mod easy_chat_events;
 pub mod egg_moves;
 pub mod error;
 pub mod event_scripts;
