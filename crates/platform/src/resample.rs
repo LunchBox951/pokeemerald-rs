@@ -375,17 +375,13 @@ impl Resampler {
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
 
-        // Predict the source frames this call consumes by dry-running a copy
-        // of the cursor through the same `Cursor::advance_frame` the render
-        // loop uses. The bulk drain then matches consumption exactly, never
-        // relying on `floor` agreeing with incremental `f64` accumulation at
-        // an exact boundary.
+        // A closed-form `floor(frac + steps * step)` can disagree with
+        // incremental `f64` accumulation at an exact boundary, and the bulk
+        // drain must match consumption exactly.
         //
-        // The crossing budget is what `scratch` holds beyond the priming
-        // frame and one trailing lookahead. That is one more than
-        // `bound * step` when the cursor rests just under `1.0` and
-        // `bound * step` sits on the cap, which a fixed
-        // `MAX_SCRATCH_SOURCE_FRAMES` budget would cut short.
+        // The budget comes from `scratch`, not `MAX_SCRATCH_SOURCE_FRAMES`: a
+        // cursor just under `1.0` with `bound * step` on the cap needs one
+        // crossing more than the cap.
         let crossing_budget = (self.scratch.len() / self.channels).saturating_sub(2);
         let mut probe = self.cursor;
         let mut crossings = 0usize;
@@ -550,7 +546,7 @@ mod tests {
             for round in 0..40 {
                 let frames = callbacks[round % callbacks.len()].min(bound);
                 let mut out = vec![0.0_f32; frames];
-                // Re-poison so each chunk's read of undrained slots shows.
+                // A slot an earlier chunk drained would hide a stale read.
                 resampler.scratch.fill(f32::NAN);
                 resampler.fill(&mut out);
                 assert!(
