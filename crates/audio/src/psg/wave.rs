@@ -28,6 +28,9 @@ pub struct WaveChannel {
     /// centered on zero. `None` until the first `sample`, since creation does
     /// not know the volume.
     latch: Option<i32>,
+    /// The midpoint `resolve` removed from `latch`: the unsigned output the
+    /// hardware held is `latch + latch_midpoint`. Zero while `latch` is `None`.
+    latch_midpoint: i32,
 }
 
 impl WaveChannel {
@@ -55,6 +58,7 @@ impl WaveChannel {
             step_delta: 0,
             first_clock_delay: 0,
             latch: None,
+            latch_midpoint: 0,
         };
         chan.set_frequency(freq_reg);
         chan
@@ -89,19 +93,23 @@ impl WaveChannel {
         self.samples = previous.samples;
         self.phase = previous.phase & !(PHASE_ONE - 1);
         self.latch = previous.latch;
+        self.latch_midpoint = previous.latch_midpoint;
     }
 
     /// Carries only `previous`'s held output onto a freshly uploaded channel
     /// (`mgba/src/gb/audio.c:300-337`).
     pub(crate) fn continue_latch_from(&mut self, previous: &Self) {
         self.latch = previous.latch;
+        self.latch_midpoint = previous.latch_midpoint;
     }
 
-    /// The output a stopped channel keeps presenting: the latch the last clock
-    /// left, with no phase advance (`mgba/src/gb/audio.c:246-253,768-774`).
-    /// A channel that never rendered holds zero.
-    pub(crate) fn held_output(&self) -> i32 {
-        self.latch.unwrap_or(0)
+    /// The output a stopped channel keeps presenting, with the midpoint it
+    /// was centred on so the unsigned hardware output is their sum: the latch
+    /// the last clock left, with no phase advance
+    /// (`mgba/src/gb/audio.c:246-253,543-574,768-774`). A channel that never
+    /// rendered holds zero.
+    pub(crate) fn held_output_with_midpoint(&self) -> (i32, i32) {
+        (self.latch.unwrap_or(0), self.latch_midpoint)
     }
 
     fn head(&self) -> usize {
@@ -117,6 +125,13 @@ impl WaveChannel {
         shift(i32::from(sample) + zero) - shift(zero)
     }
 
+    /// The midpoint [`Self::resolve`] removes at `gain_256`: the zero nibble
+    /// shifted like any other (`mgba/src/gb/audio.c:567-574`).
+    fn midpoint(gain_256: u32) -> i32 {
+        let gain = i32::try_from(gain_256).unwrap_or(0);
+        (i32::from(NIBBLE_ZERO) * gain) >> GAIN_BITS
+    }
+
     /// Returns the held output, then advances time, so a call on a phase
     /// crossing yields the pre-clock value and stores the crossed nibble for
     /// the next call. Each wave clock latches the nibble it removes from the head at
@@ -124,11 +139,21 @@ impl WaveChannel {
     /// alone leaves the held output (`mgba/src/gba/io.c:633-637`). A cold
     /// channel holds a zero nibble until its first clock (`audio.c:92-95,513-517`).
     pub fn sample(&mut self, gain_256: u32) -> i32 {
+        self.sample_with_midpoint(gain_256).0
+    }
+
+    /// [`Self::sample`] with the midpoint the returned output is centred on,
+    /// so the unsigned hardware output is their sum.
+    pub(crate) fn sample_with_midpoint(&mut self, gain_256: u32) -> (i32, i32) {
         let output = match self.latch {
-            Some(held) => held,
-            None => Self::resolve(-NIBBLE_ZERO, gain_256),
+            Some(held) => (held, self.latch_midpoint),
+            None => (
+                Self::resolve(-NIBBLE_ZERO, gain_256),
+                Self::midpoint(gain_256),
+            ),
         };
-        self.latch = Some(output);
+        self.latch = Some(output.0);
+        self.latch_midpoint = output.1;
         let old_clock = self.phase / PHASE_ONE;
         let absorbed = self.first_clock_delay.min(self.step_delta);
         self.first_clock_delay -= absorbed;
@@ -136,6 +161,7 @@ impl WaveChannel {
         if self.phase / PHASE_ONE != old_clock {
             let outgoing = (self.head() + self.samples.len() - 1) % self.samples.len();
             self.latch = Some(Self::resolve(self.samples[outgoing], gain_256));
+            self.latch_midpoint = Self::midpoint(gain_256);
         }
         output
     }
@@ -236,14 +262,18 @@ mod tests {
     fn a_held_output_neither_clocks_nor_changes_the_latch() {
         let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(wave_ram, 0x400);
-        assert_eq!(wave.held_output(), 0, "a channel that never rendered");
+        assert_eq!(
+            wave.held_output_with_midpoint().0,
+            0,
+            "a channel that never rendered"
+        );
         while wave.phase / PHASE_ONE == 0 {
             wave.sample(FULL);
         }
-        let (phase, held) = (wave.phase, wave.held_output());
+        let (phase, held) = (wave.phase, wave.held_output_with_midpoint().0);
         assert_eq!(held, i32::from(wave_ram[0]));
         for _ in 0..4 {
-            assert_eq!(wave.held_output(), held);
+            assert_eq!(wave.held_output_with_midpoint().0, held);
         }
         assert_eq!(wave.phase, phase);
     }

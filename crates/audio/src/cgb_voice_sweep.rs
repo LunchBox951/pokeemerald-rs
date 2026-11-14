@@ -356,7 +356,7 @@ fn adjudicator_sweep_overflow_holds_the_level_at_the_overflow_tick() {
                     .expect("a square voice")
                     .clone()
                     .sample();
-                let previous = probe.last_contribution;
+                let previous = probe.last_contribution.signal;
                 probe.render(&mut [(0i32, 0i32)], &[0]);
                 rendered = tick + 1;
                 if probe.sweep_held {
@@ -378,7 +378,7 @@ fn adjudicator_sweep_overflow_holds_the_level_at_the_overflow_tick() {
             voice.routing.accumulate(expected, &mut expected_output);
             assert!(voice.sweep_held, "shift {shift} key {key}");
             assert_eq!(
-                voice.last_contribution, expected,
+                voice.last_contribution.signal, expected,
                 "shift {shift} key {key}: the held level is the duty level at tick {tick}"
             );
             assert_eq!(
@@ -424,7 +424,7 @@ fn a_pitch_write_to_a_sweep_stopped_square_latches_its_pre_high_byte_sample() {
                 voice.begin_frame(false);
                 voice.render(&mut vec![(0i32, 0i32); HELD_FRAME_SAMPLES], &[]);
             }
-            let held = voice.last_contribution;
+            let held = voice.last_contribution.signal;
             let mut oracle = voice.square_oscillator().expect("a square voice").clone();
             let old = oracle.frequency();
 
@@ -440,7 +440,7 @@ fn a_pitch_write_to_a_sweep_stopped_square_latches_its_pre_high_byte_sample() {
                     >> SAMPLE_GAIN_BITS;
 
             assert_eq!(
-                voice.last_contribution, expected,
+                voice.last_contribution.signal, expected,
                 "key shift {key_shift}, {held_frames} held frames"
             );
             assert!(voice.hardware_muted, "a pitch write is not a trigger");

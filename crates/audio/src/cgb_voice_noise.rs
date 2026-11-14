@@ -159,10 +159,14 @@ fn expected_contribution(level: u8, centre: u8) -> i32 {
     (2 * i32::from(level) - i32::from(centre)) * 2
 }
 
+/// The mixer saturates the UNIPOLAR output `4 * level` (`mgba/src/gb/audio.c:641`,
+/// `mgba/src/gba/audio.c:343-351`) and only then removes the `2 * centre`
+/// midpoint, so the clamp belongs on the unipolar value. A latch reaches at
+/// most 60, so none of these expectations saturate either way.
 fn expected_mixed(level: u8, centre: u8) -> f32 {
-    let clipped = expected_contribution(level, centre).clamp(-128, 127);
-    #[expect(clippy::cast_precision_loss, reason = "within [-128, 127]")]
-    let value = clipped as f32;
+    let unipolar = (4 * i32::from(level)).clamp(-128, 127);
+    #[expect(clippy::cast_precision_loss, reason = "within [-250, 127]")]
+    let value = (unipolar - 2 * i32::from(centre)) as f32;
     value / 128.0
 }
 

@@ -11,7 +11,10 @@ mod length;
 mod oscillator;
 mod routing;
 
-use self::{oscillator::Oscillator, routing::StereoRouting};
+use self::{
+    oscillator::{Contribution, Oscillator},
+    routing::StereoRouting,
+};
 
 // PSG output in DirectSound accumulator units (one s8 FIFO unit each).
 //
@@ -208,7 +211,7 @@ pub struct CgbVoice {
     /// The frame-sequencer step completed before this voice's next frame.
     sequencer_step: u8,
     /// The last sample contribution rendered, which a stopped channel holds.
-    last_contribution: i32,
+    last_contribution: Contribution,
 }
 
 impl CgbVoice {
@@ -486,7 +489,7 @@ impl CgbVoice {
             },
             length_stopped: false,
             sequencer_step: FrameSequencer::INITIAL_STEP,
-            last_contribution: 0,
+            last_contribution: Contribution::SILENT,
         }
     }
 
@@ -596,7 +599,7 @@ impl CgbVoice {
             && self
                 .oscillator
                 .held_wave_contribution()
-                .is_some_and(|contribution| contribution != 0)
+                .is_some_and(|contribution| contribution.signal != 0)
     }
 
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
@@ -610,22 +613,39 @@ impl CgbVoice {
     pub(crate) fn render_idle_hardware(
         &mut self,
         acc: &mut [StereoAcc],
+        mut offsets: Option<&mut [StereoAcc]>,
         sweep_ticks: &[usize],
         length_ticks: &[usize],
     ) {
         if let Some(contribution) = self.oscillator.held_wave_contribution() {
             self.clock_length_silently(length_ticks.iter().copied());
-            for output in acc.iter_mut() {
-                self.routing.accumulate(contribution, output);
+            for (index, output) in acc.iter_mut().enumerate() {
+                self.accumulate(contribution, output, offsets.as_deref_mut(), index);
             }
         } else if self.oscillator.noise_mut().is_some() {
             let volume = self.hardware_envelope_volume.volume();
-            for output in acc.iter_mut() {
+            for (index, output) in acc.iter_mut().enumerate() {
                 let contribution = self.oscillator.frame_contribution(0, volume, 0);
-                self.routing.accumulate(contribution, output);
+                self.accumulate(contribution, output, offsets.as_deref_mut(), index);
             }
         } else {
             self.advance_idle_duty(acc.len(), sweep_ticks);
+        }
+    }
+
+    /// Routes `contribution` into `output`, and its midpoint into the same
+    /// side(s) of `offsets[index]` when the caller tracks them.
+    fn accumulate(
+        &self,
+        contribution: Contribution,
+        output: &mut StereoAcc,
+        offsets: Option<&mut [StereoAcc]>,
+        index: usize,
+    ) {
+        self.routing.accumulate(contribution.signal, output);
+        if let Some(offsets) = offsets {
+            self.routing
+                .accumulate(contribution.offset, &mut offsets[index]);
         }
     }
 
@@ -863,19 +883,39 @@ impl CgbVoice {
         sweep_ticks: &[usize],
         length_ticks: &[usize],
     ) {
+        self.render_with_offsets(acc, None, sweep_ticks, length_ticks);
+    }
+
+    /// [`Self::render_clocked`] that also accumulates each sample's removed
+    /// midpoint into `offsets` on the same route, so that `acc + offsets` is
+    /// the unipolar PSG sum mGBA saturates (`mgba/src/gb/audio.c:768-793`,
+    /// `mgba/src/gba/audio.c:343-389`). `offsets` must match `acc` in length.
+    pub(crate) fn render_with_offsets(
+        &mut self,
+        acc: &mut [StereoAcc],
+        mut offsets: Option<&mut [StereoAcc]>,
+        sweep_ticks: &[usize],
+        length_ticks: &[usize],
+    ) {
+        assert!(
+            offsets
+                .as_ref()
+                .is_none_or(|offsets| offsets.len() == acc.len()),
+            "the midpoint buffer must match the frame",
+        );
         if !self.length_stopped {
             if self.is_dead_at_zero() {
                 self.advance_idle_duty(acc.len(), sweep_ticks);
-                self.last_contribution = 0;
+                self.last_contribution = Contribution::SILENT;
                 self.clock_length_silently(length_ticks.iter().copied());
                 return;
             }
             if self.hardware_muted {
                 self.oscillator.advance_silently(acc.len());
                 if self.sweep_held {
-                    self.accumulate_held_level(acc);
+                    self.accumulate_held_level(acc, offsets, 0);
                 } else {
-                    self.last_contribution = 0;
+                    self.last_contribution = Contribution::SILENT;
                 }
                 self.clock_length_silently(length_ticks.iter().copied());
                 return;
@@ -946,17 +986,33 @@ impl CgbVoice {
                     self.envelope.volume(),
                 );
             }
-            self.routing.accumulate(self.last_contribution, output);
+            self.accumulate(
+                self.last_contribution,
+                output,
+                offsets.as_deref_mut(),
+                sample_offset,
+            );
         }
         if let Some(sample_offset) = held_from {
-            self.accumulate_held_level(&mut acc[sample_offset..]);
+            self.accumulate_held_level(&mut acc[sample_offset..], offsets, sample_offset);
         }
     }
 
-    /// Mix the level the channel last rendered into each sample of `acc`.
-    fn accumulate_held_level(&self, acc: &mut [StereoAcc]) {
-        for output in acc {
-            self.routing.accumulate(self.last_contribution, output);
+    /// Mix the level the channel last rendered into each sample of `acc`, and
+    /// its midpoint into `offsets` from `start`, where `acc` begins.
+    fn accumulate_held_level(
+        &self,
+        acc: &mut [StereoAcc],
+        mut offsets: Option<&mut [StereoAcc]>,
+        start: usize,
+    ) {
+        for (index, output) in acc.iter_mut().enumerate() {
+            self.accumulate(
+                self.last_contribution,
+                output,
+                offsets.as_deref_mut(),
+                start + index,
+            );
         }
     }
 }

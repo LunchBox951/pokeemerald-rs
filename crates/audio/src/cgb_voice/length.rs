@@ -23,7 +23,7 @@
 //! - on expiry it presents the latch its last clock left
 //!   (`mgba/src/gb/audio.c:768-774`).
 
-use super::{CgbChannelNumber, CgbVoice};
+use super::{oscillator::Contribution, CgbChannelNumber, CgbVoice};
 use crate::psg::{FrameSequencer, LengthWrite};
 
 impl CgbVoice {
@@ -119,7 +119,7 @@ impl CgbVoice {
         if self.length.clock() {
             self.length_stopped = true;
             if self.hardware_muted && !self.sweep_held {
-                self.last_contribution = 0;
+                self.last_contribution = Contribution::SILENT;
             }
         }
     }
@@ -131,7 +131,7 @@ impl CgbVoice {
     /// (`mgba/src/gb/audio.c:649-657,493-512,678-684`). Read it without
     /// stepping: the sample's deferred idle time still steps the phase. `None`
     /// unless a length clock is due at a rendering square.
-    pub(super) fn expiry_square_latch(&mut self, clock_due: bool) -> Option<i32> {
+    pub(super) fn expiry_square_latch(&mut self, clock_due: bool) -> Option<Contribution> {
         if !clock_due || self.length_stopped || self.hardware_muted {
             return None;
         }

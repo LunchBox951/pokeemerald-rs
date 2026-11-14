@@ -436,7 +436,9 @@ fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
 fn square_envelope_gain_at_the_nibble_ceiling_matches_the_wave_arms_full_gain() {
     // This is the internal Q8 envelope gain, not rendered amplitude: the
     // rendered PSG swing is scaled to DirectSound units after it
-    // (`BIPOLAR_SAMPLE_SCALE`), so a loud PSG channel stays far below the s8 clip.
+    // (`BIPOLAR_SAMPLE_SCALE`). A volume-15 channel swings 60 units about a
+    // 30-unit midpoint; whether it clips depends on the FIFO level it is added
+    // to, since the clip acts on the unipolar sum (`Mixer::mix_frame`).
     // `envelope_gain_256`'s square/noise arm must reach a ceiling
     // comparable to the wave arm's full-scale gain (`cgb3_wave_gain_256`)
     // once both read the same 0..=15 nibble domain. The bound
