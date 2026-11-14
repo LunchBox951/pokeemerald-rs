@@ -5,9 +5,10 @@
 pub const MAX_COINS: u16 = 9999;
 
 /// The plaintext coin balance. The key's low 16 bits are applied when the block
-/// is serialized, never here. No cap is applied on load or by [`Self::set`]:
-/// an imported balance above [`MAX_COINS`] reads back as stored, and only
-/// [`Self::add`] pulls a total down to the cap.
+/// is serialized, never here. No cap is applied on load or by [`Self::set`],
+/// and none by [`Self::remove`]: an imported balance above [`MAX_COINS`] reads
+/// back as stored. [`Self::add`] refuses such a balance and leaves it as it is;
+/// it only caps a sum reached from a balance below [`MAX_COINS`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Coins(u16);
 
@@ -30,8 +31,10 @@ impl Coins {
         self.0 = amount;
     }
 
-    /// `AddCoins`: refuses at or above [`MAX_COINS`], leaving the balance
-    /// unchanged. Otherwise the sum caps at [`MAX_COINS`] and the call
+    /// `AddCoins`: refuses at or above [`MAX_COINS`] before touching the
+    /// balance, so an imported balance over the cap (say 12000) makes the call return
+    /// `false` and stays as it is, not pulled down to the cap. From a balance
+    /// below [`MAX_COINS`] the sum caps at [`MAX_COINS`] and the call
     /// succeeds, so adding zero below the cap succeeds and changes nothing
     /// (`pokeemerald/src/coins.c:51-71`).
     ///
@@ -107,6 +110,9 @@ mod tests {
 
     #[test]
     fn add_refuses_an_imported_balance_above_the_cap_without_touching_it() {
+        let mut twelve_thousand = with(12_000);
+        assert!(!twelve_thousand.add(1));
+        assert_eq!(twelve_thousand.get(), 12_000);
         let mut coins = with(10_000);
         assert!(!coins.add(1));
         assert_eq!(coins.get(), 10_000);

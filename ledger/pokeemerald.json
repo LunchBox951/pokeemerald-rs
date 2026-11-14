@@ -29618,7 +29618,7 @@
     "src/coins.c": {
       "artifacts": {
         "AddCoins": {
-          "reason": "coins.c:51-71. Coins::add refuses (false, unchanged) at or above MAX_COINS 9999, otherwise caps the total at 9999 and succeeds, so adding zero below the cap succeeds. Upstream's overflow guard (ownedCoins > ownedCoins + toAdd) compares int-promoted sums and never fires, so the sum is narrowed to u16 before the cap check and an add past 0xFFFF wraps (9998 + 60000 leaves 4462); Coins::add reproduces that with wrapping_add.",
+          "reason": "coins.c:51-71. Coins::add refuses (false, balance unchanged) at or above MAX_COINS 9999 before touching the balance, so an imported balance over the cap (say 12000) stays as stored rather than being pulled down; from a balance below the cap it caps the total at 9999 and succeeds, so adding zero below the cap succeeds. Upstream's overflow guard (ownedCoins > ownedCoins + toAdd) compares int-promoted sums and never fires, so the sum is narrowed to u16 before the cap check and an add past 0xFFFF wraps (9998 + 60000 leaves 4462); Coins::add reproduces that with wrapping_add.",
           "rust_target": "crates/engine/src/save/coins.rs",
           "spec": "S-5",
           "status": "rewritten"
