@@ -322,6 +322,19 @@ fn the_any_slot_ability_screen_admits_both_truant_species() {
 }
 
 #[test]
+fn the_any_slot_ability_screen_admits_every_speed_boost_species() {
+    let dex = Dex::new();
+    for species in [SpeciesId::NINJASK, SpeciesId::YANMA] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::NINJASK, 1), Ok(()));
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
@@ -329,8 +342,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
         (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
         (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::NINJASK, assets::AbilityId::SPEED_BOOST),
-        (SpeciesId::YANMA, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, assets::AbilityId::TRACE),
         (SpeciesId::PORYGON2, assets::AbilityId::TRACE),
