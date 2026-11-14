@@ -21,9 +21,9 @@
 use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, trigger_escalator_warp, Direction, MapRuntime,
-    PlayerState, StepOutcome, WarpTrigger,
+    PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
-use engine::save::Coords16;
+use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
@@ -56,6 +56,21 @@ const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 /// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
 /// (`pokeemerald/src/menu.c:483-484`).
 const OPTIONS_TEXT_SPEED_MID: u8 = 1;
+
+/// The map type of a completed step the poison drain counts: one the door-shaped warp has
+/// not claimed and that is not a forced-movement tile.
+fn poison_step_map_type(
+    runtime: &MapRuntime<'_>,
+    landed: Option<TilePos>,
+    door_warp: Option<WarpTrigger>,
+) -> Option<assets::MapType> {
+    landed
+        .filter(|_| door_warp.is_none())
+        .filter(|&(x, y)| {
+            !is_forced_movement_input_tile(runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL))
+        })
+        .map(|_| runtime.header().map_type)
+}
 
 /// This frame's pre-movement field-input decisions.
 pub(super) struct PreMovementFieldInput {
@@ -414,6 +429,7 @@ impl OverworldPhase {
         let (buttons, walk_off_step) = self.escalator_arrival_buttons(buttons);
         let direction = held_direction(buttons);
         let stepped_onto = self.take_stepped_onto();
+        self.count_took_step(stepped_onto);
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
@@ -461,17 +477,10 @@ impl OverworldPhase {
         // a fainting poison drain claims this frame before the roll below.
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
-        let poison_step = landed
-            .filter(|_| door_warp.is_none())
-            .filter(|&(x, y)| {
-                !is_forced_movement_input_tile(runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL))
-            })
-            .map(|_| runtime.header().map_type);
-        if let Some(map_type) = poison_step {
-            if self.update_poison_step_counter(map_type) {
-                self.sync_saved_position();
-                return;
-            }
+        let poison_step = poison_step_map_type(&runtime, landed, door_warp);
+        if poison_step.is_some_and(|map_type| self.update_poison_step_counter(map_type)) {
+            self.sync_saved_position();
+            return;
         }
         let runtime = self.scene.runtime().with_object_events(&self.object_events);
         // The roll happens only on a completed step the door-shaped warp
@@ -485,13 +494,16 @@ impl OverworldPhase {
         // eligibility"). The landed tile is the player's own tile by
         // now, and it is what `GetPlayerPosition` would report there.
         let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
+        let rolled_landing = wild_encounter::roll_eligible_landing(tile_center, door_warp)
+            .filter(|_| wild_table_fightable && wild_lead_admissible);
+        let slot_zero_ability = rolled_landing.and_then(|_| self.slot_zero_wild_level_ability());
         let encounter = wild_encounter::roll_for_step(
             &mut self.wild,
             &mut self.rng,
             self.map_id,
             &runtime,
-            wild_encounter::roll_eligible_landing(tile_center, door_warp)
-                .filter(|_| wild_table_fightable && wild_lead_admissible),
+            rolled_landing,
+            slot_zero_ability,
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp
@@ -607,6 +619,18 @@ impl OverworldPhase {
         // after any warp above, so this reflects the post-warp tile on the
         // frame a warp lands.
         self.sync_saved_position();
+    }
+
+    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
+    /// (`field_control_avatar.c:116-118`), ahead of
+    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
+    /// (`:155-163`), so a landing those then claim still counts.
+    /// [`Self::take_stepped_onto`] already withholds the forced landing and
+    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
+        if stepped_onto.is_some() {
+            self.save1.game_stats.increment(GameStat::Steps);
+        }
     }
 
     /// Mirrors the player's logical tile into the retained save state.

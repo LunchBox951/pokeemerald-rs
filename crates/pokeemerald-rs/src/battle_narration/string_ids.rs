@@ -49,6 +49,7 @@ pub(super) const PKMNEVADEDATTACK: u16 = 105;
 pub(super) const PKMNSAPPEDBYLEECHSEED: u16 = 106;
 pub(super) const PKMNFASTASLEEP: u16 = 107;
 pub(super) const PKMNWOKEUP: u16 = 108;
+pub(super) const PKMNRAISEDSPEED: u16 = 194;
 pub(super) const PKMNRESTOREDHPUSING: u16 = 197;
 pub(super) const PKMNPREVENTSROMANCEWITH: u16 = 200;
 pub(super) const PKMNPREVENTSPARALYSISWITH: u16 = 199;
