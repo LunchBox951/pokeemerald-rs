@@ -323,6 +323,138 @@ fn a_self_hit_keeps_pp_and_draws_one_variance_roll() {
     assert_eq!(traded.draws, 3 + 3 + 1 + 4);
 }
 
+/// `SPECIES_RATTATA`: its second ability slot is Guts.
+const RATTATA: u16 = 19;
+
+struct SelfHitRun {
+    damage: u32,
+    player_hp: u32,
+    max_hp: u32,
+    pp: u8,
+    draws: usize,
+}
+
+/// The scripted gate draws reach the self-hit branch of `IsMonDisobedient`
+/// (`battle_util.c:3959`-`:4027`): A=255 disobeys, B=255 skips the
+/// alternate-move branch, and C=15 is not below the excess 10 (no nap) with
+/// `15 - 10 < 10` (self-hit). `variance` is then the one `Random() % 16` of
+/// `adjustnormaldamage2` (`ApplyRandomDmgMultiplier`,
+/// `battle_script_commands.c:1639`-`:1651`).
+fn disobedient_self_hit(
+    species: u16,
+    ability_slot: u8,
+    moves: Vec<MoveId>,
+    variance: u16,
+    prepare: impl FnOnce(&mut battle::BattlePokemon),
+) -> SelfHitRun {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, species, 20, moves)
+        .with_original_trainer_id(OTHER_ID)
+        .with_ability_slot(ability_slot);
+    prepare(&mut player);
+    let max_hp = player.stats().max_hp;
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+    let mut values = vec![0, 0, 0, 255, 255, 15, variance];
+    values.extend([0; 32]);
+    let mut rng = SequenceRng::new(values);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .unwrap()
+        .with_player_obedience(no_badges());
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let damages: Vec<u32> = events
+        .iter()
+        .filter_map(|event| match event {
+            BattleEvent::DisobedientSelfHit {
+                by_player: true,
+                damage,
+            } => Some(*damage),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(damages.len(), 1, "exactly one self-hit: {events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::ConfusionSelfHit { .. })),
+        "the disobedience report is not the confusion one: {events:?}"
+    );
+    SelfHitRun {
+        damage: damages[0],
+        player_hp: battle.player().current_hp(),
+        max_hp,
+        pp: battle.player().moves()[0].pp,
+        draws: rng.draws(),
+    }
+}
+
+/// `BattleScript_IgnoresAndHitsItself` -> `BattleScript_DoSelfConfusionDmg`
+/// (`data/battle_scripts_1.s:4252`, `:3801`-`:3803`): the confusion call's
+/// `CalculateBaseDamage` shape (`battle_util.c:2173`, `:4020`) plus one
+/// `Random() % 16` roll (`battle_script_commands.c:1639`-`:1651`).
+#[test]
+fn a_self_hit_deals_the_typeless_forty_power_pound_damage_to_itself() {
+    let full = disobedient_self_hit(GASTLY, 0, vec![TACKLE], 0, |_| {});
+    assert_eq!(full.damage, 10);
+    assert_eq!(full.player_hp, full.max_hp - 10);
+    assert_eq!(full.pp, 35, "a self-hit spends no PP");
+    // Three setup, three gate, one variance draw, the enemy's four.
+    assert_eq!(full.draws, 3 + 3 + 1 + 4);
+
+    let low = disobedient_self_hit(GASTLY, 0, vec![TACKLE], 15, |_| {});
+    assert_eq!(low.damage, 8, "10 * 85 / 100");
+    assert_eq!(low.player_hp, low.max_hp - 8);
+    assert_eq!(low.draws, 3 + 3 + 1 + 4);
+}
+
+/// The burn halving applies after the division by 50 (`pokemon.c:3262`-`:3264`),
+/// with the disobedient battler as both attacker and defender.
+#[test]
+fn a_burned_battlers_self_hit_halves_its_damage() {
+    let burned = |mon: &mut battle::BattlePokemon| mon.set_status1(Status1::Burned);
+    let hit = disobedient_self_hit(GASTLY, 0, vec![TACKLE], 0, burned);
+    assert_eq!(hit.damage, 6);
+    assert_eq!(hit.draws, 3 + 3 + 1 + 4);
+}
+
+/// Guts is exempt from the burn halving and takes the 1.5x Attack of its
+/// status (`pokemon.c:3211`-`:3212`, `:3262`).
+#[test]
+fn a_gutsy_burned_battlers_self_hit_is_neither_halved_nor_unboosted() {
+    let burned = |mon: &mut battle::BattlePokemon| mon.set_status1(Status1::Burned);
+    let plain = disobedient_self_hit(RATTATA, 0, vec![TACKLE], 0, |_| {});
+    assert_eq!(plain.damage, 12);
+    let run_away = disobedient_self_hit(RATTATA, 0, vec![TACKLE], 0, burned);
+    assert_eq!(run_away.damage, 7, "a non-Guts burn halves");
+    let guts_plain = disobedient_self_hit(RATTATA, 1, vec![TACKLE], 0, |_| {});
+    assert_eq!(guts_plain.damage, 12, "Guts boosts only with a status");
+    let guts = disobedient_self_hit(RATTATA, 1, vec![TACKLE], 0, burned);
+    assert_eq!(guts.damage, 17, "Guts: boosted Attack, no burn halving");
+    assert_eq!(guts.draws, 3 + 3 + 1 + 4);
+}
+
+/// Explosion and Selfdestruct have no pipeline, so the turn is refused before
+/// the obedience gate draws (`pokemon.c:3228`-`:3230` halves the Defense).
+#[test]
+fn a_disobedient_explosion_is_unreachable_until_the_move_has_a_pipeline() {
+    for move_id in [MoveId::SELF_DESTRUCT, MoveId::EXPLOSION] {
+        let dex = Dex::new();
+        let player = max_iv_mon(&dex, GASTLY, 20, vec![move_id]).with_original_trainer_id(OTHER_ID);
+        let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+        let mut rng = SequenceRng::new(vec![0; 40]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+            .unwrap()
+            .with_player_obedience(no_badges());
+        let before = rng.draws();
+        let refused = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap_err();
+        assert_eq!(refused.error(), BattleError::UnsupportedMoveEffect(move_id));
+        assert_eq!(rng.draws() - before, 0, "{move_id:?}");
+    }
+}
+
 #[test]
 fn an_ot_name_that_is_a_prefix_of_the_players_name_is_not_traded() {
     // `IsOtherTrainer` walks only the Pokemon's name to its terminator
