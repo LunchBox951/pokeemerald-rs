@@ -3,8 +3,9 @@
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
 //! `PORT` and every `XCMD` besides the ADSR overrides (`xATTA`..`xRELE`),
-//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), and the terminal reserved
-//! kinds 0 and 3 decode but never execute.
+//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), the sample-progress
+//! command (kind `0x0D`) and the terminal reserved kinds 0 and 3 decode but
+//! never execute.
 
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
@@ -27,6 +28,9 @@ const XCMD_IECV: u8 = 0x08;
 const XCMD_IECL: u8 = 0x09;
 /// `XCMD` sub-command number for `xWAIT` (`m4a_tables.c:305`).
 const XCMD_WAIT: u8 = 0x0C;
+/// `XCMD` sub-command number for `ply_xcmd_0D`, the DirectSound sample start
+/// (`m4a_tables.c:306`; `m4a.c:1639`..`:1653`).
+const XCMD_SAMPLE_PROGRESS: u8 = 0x0D;
 
 /// Ticks fire each time the accumulator crosses this threshold
 /// (`subs r0, 150`, `m4a_1.s:1169`).
@@ -201,6 +205,10 @@ struct TrackState {
     /// Combined into each new note's priority by
     /// [`Sequencer::note_priority`].
     priority: u8,
+    /// `MusicPlayerTrack::unk_3C`, set by XCMD 0x0D (`m4a.c:1651`). Snapshotted
+    /// into each new DirectSound voice as its start position; CGB notes never
+    /// read it (`m4a_1.s:1791`..`:1797`). Zero until the command runs.
+    sample_progress: u32,
     /// Set when a volume input changed since the last
     /// [`Sequencer::propagate_dirty_tracks`] pass (`MPT_FLG_VOLCHG`,
     /// `m4a_internal.h:266`).
@@ -240,6 +248,7 @@ impl TrackState {
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
             priority: 0,
+            sample_progress: 0,
             vol_dirty: false,
             pitch_dirty: false,
         }
@@ -908,6 +917,12 @@ impl Sequencer {
                 kind: XCMD_IECL,
                 value,
             } => track.pseudo_echo_length = u8::try_from(value).unwrap_or(0),
+            // Applies only to DirectSound notes started afterwards; a sounding
+            // voice keeps its position (`ply_xcmd_0D`, `m4a.c:1639`..`:1653`).
+            Event::Xcmd {
+                kind: XCMD_SAMPLE_PROGRESS,
+                value,
+            } => track.sample_progress = value,
             Event::Repeat { count, target } => track.repeat(count, target),
             Event::MemAcc {
                 op,
@@ -1159,6 +1174,11 @@ impl Sequencer {
                 .with_rhythm_pan(rhythm_pan)
                 .fixed_rate(tone.is_fixed_rate())
                 .with_priority(priority);
+                // An out-of-range sample start fails closed before allocation,
+                // so the note neither sounds nor steals a channel.
+                let Some(voice) = voice.with_sample_progress(track.sample_progress) else {
+                    return false;
+                };
                 // A refused note simply never sounds -- upstream's `ply_note`
                 // returns without touching any channel (`m4a_1.s:1806`).
                 mixer.add_voice(voice)
@@ -1406,6 +1426,8 @@ mod memacc_tests;
 mod pattern_tests;
 #[cfg(test)]
 mod pseudo_echo_tests;
+#[cfg(test)]
+mod sample_progress_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
