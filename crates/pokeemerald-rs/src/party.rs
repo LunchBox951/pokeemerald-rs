@@ -748,21 +748,20 @@ fn record_is_egg_or_bad_egg(record: &Pokemon) -> bool {
         })
 }
 
-/// Species and personality of party slot 0 when it is a non-egg holder of
-/// `ability`: `CreateWildMon` and `PickWildMonNature` check `gPlayerParty[0]` --
-/// not an egg by the unencrypted header's `isEgg` bit (`MON_DATA_SANITY_IS_EGG`,
-/// `pokeemerald/src/pokemon.c:3805-3806`), ability `ability`
-/// (`pokeemerald/src/wild_encounter.c:367-372,395-398`) -- whether or not that slot
-/// is fainted or is the battle lead. The ability is the stored slot's entry in
+/// Species, personality and ability of party slot 0 when it is not an egg:
+/// `CreateWildMon`, `PickWildMonNature` and `ChooseWildMonLevel` check
+/// `gPlayerParty[0]` -- not an egg by the unencrypted header's `isEgg` bit
+/// (`MON_DATA_SANITY_IS_EGG`, `pokeemerald/src/pokemon.c:3805-3806`), then its ability
+/// (`pokeemerald/src/wild_encounter.c:289-297,367-372,395-398`) -- whether or not that
+/// slot is fainted or is the battle lead. The ability is the stored slot's entry in
 /// the species table, as `GetAbilityBySpecies` reads it (`abilities[abilityNum]`,
 /// `pokeemerald/src/pokemon.c:4546-4553`), so a slot-1 record of a single-ability
-/// species has no ability rather than falling back to the primary. `None` for an
-/// empty party, an egg or Bad Egg, an undecodable record, or any other ability.
-fn slot_zero_ability_holder(
+/// species has [`assets::AbilityId::NONE`] rather than falling back to the primary.
+/// `None` for an empty party, an egg or Bad Egg, or an undecodable record.
+fn slot_zero_non_egg(
     dex: &Dex,
     party: &[Pokemon],
-    ability: assets::AbilityId,
-) -> Option<(assets::SpeciesId, u32)> {
+) -> Option<(assets::SpeciesId, u32, assets::AbilityId)> {
     let slot_zero = party.first()?;
     if slot_zero.box_data.is_egg_header_flag() || slot_zero.box_data.is_bad_egg() {
         return None;
@@ -774,8 +773,29 @@ fn slot_zero_ability_holder(
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
     let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
     let ability_slot = usize::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
-    (dex.species(species).ok()?.abilities[ability_slot] == ability)
-        .then(|| (species, slot_zero.box_data.personality()))
+    let ability = dex.species(species).ok()?.abilities[ability_slot];
+    Some((species, slot_zero.box_data.personality(), ability))
+}
+
+/// Species and personality of party slot 0 when it is a non-egg holder of
+/// `ability`; see [`slot_zero_non_egg`] for which slot-0 records count.
+fn slot_zero_ability_holder(
+    dex: &Dex,
+    party: &[Pokemon],
+    ability: assets::AbilityId,
+) -> Option<(assets::SpeciesId, u32)> {
+    slot_zero_non_egg(dex, party)
+        .filter(|&(_, _, slot_zero_ability)| slot_zero_ability == ability)
+        .map(|(species, personality, _)| (species, personality))
+}
+
+/// The ability party slot 0 brings to wild level selection (`ChooseWildMonLevel`);
+/// see [`slot_zero_non_egg`] for which slot-0 records count.
+pub(crate) fn slot_zero_wild_level_ability(
+    dex: &Dex,
+    party: &[Pokemon],
+) -> Option<assets::AbilityId> {
+    slot_zero_non_egg(dex, party).map(|(_, _, ability)| ability)
 }
 
 /// The nature party slot 0 hands a wild Pokémon through Synchronize

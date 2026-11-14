@@ -3,6 +3,7 @@
 use super::super::*;
 use crate::overworld::map_runtime::MapRuntime;
 use crate::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_SLIDE_EAST};
+use crate::overworld::object_event::ObjectEventCollection;
 use assets::{
     BattleScene, MapConnection, MapEvents, MapHeader, MapType, MetatileAttributeTable,
     MetatileCell, ObjectEvent, RegionMapSectionId, Weather,
@@ -108,6 +109,37 @@ impl ConnectedMapData for SingleConnectedMap {
 
     fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
         (map == self.id && (x, y) == self.landing_position).then_some(self.landing_behavior)
+    }
+}
+
+/// A [`SingleConnectedMap`] whose crossing also carries `departed`'s active live objects,
+/// asked through the same [`ObjectEventCollection::carry_across_connection`] the phase applies
+/// once the step lands.
+#[derive(Debug, Clone)]
+pub(super) struct CarryingConnectedMap {
+    pub(super) map: SingleConnectedMap,
+    pub(super) departed: ObjectEventCollection,
+}
+
+impl ConnectedMapData for CarryingConnectedMap {
+    fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+        self.map.dimensions(map)
+    }
+
+    fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+        self.map.metatile_cell(map, x, y)
+    }
+
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+        self.map.metatile_behavior(map, x, y)
+    }
+
+    fn carried_object_event_blocks(&self, crossing: ConnectionCrossing, elevation: u8) -> bool {
+        self.departed
+            .carry_across_connection(MapId("MAP_TEST"), crossing.target, &[], crossing.shift)
+            .collision_objects_at(crossing.position.0, crossing.position.1, elevation)
+            .next()
+            .is_some()
     }
 }
 

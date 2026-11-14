@@ -516,7 +516,7 @@ pub(super) fn grass_step_draws(
 ) -> bool {
     let header = assets::WildEncounterTable::new().get_by_map(MapId("MAP_ROUTE101"));
     let before = rng.state();
-    state.check_standard_wild_encounter(MB_TALL_GRASS, header, rng);
+    state.check_standard_wild_encounter(MB_TALL_GRASS, header, None, rng);
     rng.state() != before
 }
 
