@@ -29,6 +29,28 @@ pub(super) fn object(
     }
 }
 
+/// `templates` seeded and admitted as map load admits them for a player standing on the first
+/// template's tile with no flag set, so every test object near the first one is a spawned,
+/// drawable object.
+pub(super) fn admitted(
+    templates: &'static [ObjectEvent],
+) -> engine::overworld::object_event::ObjectEventCollection {
+    admitted_with(templates, &engine::event_data::EventData::new())
+}
+
+/// [`admitted`] under `event_data`, whose set hide flags leave their objects unspawned.
+pub(super) fn admitted_with(
+    templates: &'static [ObjectEvent],
+    event_data: &engine::event_data::EventData,
+) -> engine::overworld::object_event::ObjectEventCollection {
+    let mut objects =
+        engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
+    if let Some(first) = templates.first() {
+        let _ = objects.admit_on_map_load((i32::from(first.x), i32::from(first.y)), event_data);
+    }
+    objects
+}
+
 /// The sorted, de-duplicated graphics ids of every object event on every map
 /// whose layout is bundled.
 pub(super) fn bundled_map_graphics_ids() -> Vec<&'static str> {

@@ -4,6 +4,53 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.128.0] - 2026-11-14
+
+- General improvements in preparation for Pokémon cries that start partway through their sample, as the original game's cry data asks.
+
+## [0.0.127.0] - 2026-11-14
+
+- Importing from your ROM now brings in the tall-grass rustle graphics, so the grass animates around you on a ROM-imported pack too.
+
+## [0.0.126.0] - 2026-11-13
+
+- General improvements in preparation for Pokémon with Speed Boost, such as Ninjask and Yanma: the ability now raises Speed at the end of each turn in battle, as in the original game. No Pokémon you can meet yet has it.
+
+## [0.0.125.0] - 2026-11-13
+
+- General improvements in preparation for dialogue text that changes colour mid-line, with highlighted and shadowed words.
+
+## [0.0.124.0] - 2026-11-13
+
+- General improvements in preparation for game statistics, such as a count of the steps you take.
+
+## [0.0.123.0] - 2026-11-13
+
+- General improvements in preparation for faithful music: the sound engine can now follow a song's instructions for how quickly one part's notes swell in, fade, hold and die away. No current song uses them yet, so nothing sounds different.
+
+## [0.0.122.0] - 2026-11-13
+
+- General improvements in preparation for faithful Game Boy sound: a note that slides up past the highest pitch no longer cuts out abruptly, matching the original hardware.
+## [0.0.121.0] - 2026-11-12
+
+- The Bag's pocket arrows now show which way you can switch pockets, and the bag shakes as you move through its lists, as in the original game.
+
+## [0.0.120.0] - 2026-11-11
+
+- General improvements in preparation for the Secret Base jump and spin mats.
+
+## [0.0.119.0] - 2026-11-09
+
+- A traded Pokémon above the level your badges allow can now disobey in battle as in the original game: it may loaf around, use one of its other moves instead, begin to nap and fall asleep, or hurt itself. Obedience for a traded Mew or Deoxys is still being prepared.
+
+## [0.0.118.0] - 2026-11-09
+
+- General improvements in preparation for tossing items from the Bag, with the how-many prompt and confirmation from the original game.
+
+## [0.0.117.0] - 2026-11-08
+
+- People and objects that look around now turn on the spot to a random direction after a random pause, as in the original game, without ever walking: this covers the items and dolls in both upstairs bedrooms, and the people and items on Route 101 and Route 103, where the woman faces only down or right. A trainer of that kind who sees you run close by turns toward you early.
+
 ## [0.0.116.0] - 2026-11-07
 
 - The first battle on Route 101 now shows its battle text and waits on it. The wild Pokémon's appearance, each move, its result, and the experience award print in the battle message box at your text speed, and a turn or the end of the battle begins only once its message has been read and the original game's short pause after it has passed. Press A or B to move on at each prompt. The rest of the battle screen is still being prepared, and battles other than this first one do not show their messages yet.
@@ -530,7 +577,19 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.116.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/0d50ced5328e0baead9be1f45e4884cff1a95a9f...dev
+[0.0.128.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/9e1f2ea174fb045d934c3c32fd60501b838ee75f...dev
+[0.0.127.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/fa501fbcd7d90de6e1d970d041ff3b5278adac57...9e1f2ea174fb045d934c3c32fd60501b838ee75f
+[0.0.126.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c0cb698365891c5b54d49843e672e5f9b9a088eb...fa501fbcd7d90de6e1d970d041ff3b5278adac57
+[0.0.125.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/685d7358aa2372042630ee889f0e731c324296d4...c0cb698365891c5b54d49843e672e5f9b9a088eb
+[0.0.124.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cb63d96e6399c057df86b5e103ad985c772f1d55...685d7358aa2372042630ee889f0e731c324296d4
+[0.0.123.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5bc427b52affc7926f5ef151a6c8f61aea0399a6...cb63d96e6399c057df86b5e103ad985c772f1d55
+[0.0.122.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b97228fd8ec88b037fa676694630a9af1640a005...5bc427b52affc7926f5ef151a6c8f61aea0399a6
+[0.0.121.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf410482c663a1f400e85eeb33694f955affcd51...b97228fd8ec88b037fa676694630a9af1640a005
+[0.0.120.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/47bacf705e7ccb11572430d8d37990d60e44d755...cf410482c663a1f400e85eeb33694f955affcd51
+[0.0.119.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/47e3a59acdd5f80298672b76a54e129f0c92363e...47bacf705e7ccb11572430d8d37990d60e44d755
+[0.0.118.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/560f5c7137223b8e22ee1181afafcb47cd4b6312...47e3a59acdd5f80298672b76a54e129f0c92363e
+[0.0.117.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/3196e94c2fec319d17c718653ac20fbe9fe8f289...560f5c7137223b8e22ee1181afafcb47cd4b6312
+[0.0.116.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/0d50ced5328e0baead9be1f45e4884cff1a95a9f...3196e94c2fec319d17c718653ac20fbe9fe8f289
 [0.0.115.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/2bbf966619c27568282a1b7f3ea6042e21cdb9d4...0d50ced5328e0baead9be1f45e4884cff1a95a9f
 [0.0.114.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e9411c4552d44eaa0ba4de2e094a9a698a4f1a70...2bbf966619c27568282a1b7f3ea6042e21cdb9d4
 [0.0.113.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/745f5d84af92745358a4585851882912e4bdf181...e9411c4552d44eaa0ba4de2e094a9a698a4f1a70

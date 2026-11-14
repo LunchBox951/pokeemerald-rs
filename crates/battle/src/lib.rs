@@ -205,7 +205,10 @@
 //! move, which is refused the way `IsHMMove2` refuses it
 //! ([`error::BattleError::HmMoveCantBeForgotten`]). What this crate still
 //! does not own is the *asking* — there is no message layer or summary
-//! screen here, and there is deliberately no default answer baked in.
+//! screen here, and there is deliberately no default answer baked in. A move
+//! a free slot takes without asking is reported too:
+//! [`pokemon::BattlePokemon::apply_experience_reporting`] lists it and
+//! [`battle::BattleEvent::MoveLearned`] announces it, in learning order.
 //!
 //! Out of scope (see each module's own docs for exactly what is/isn't
 //! modelled): the *general* trainer AI beyond the four scripts above and
@@ -214,7 +217,8 @@
 //! battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
+//! (its end-turn stage in `Battle::residual_effects`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
@@ -290,6 +294,7 @@ pub mod leech_seed;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
+pub mod obedience;
 pub mod paralyze;
 pub mod pokemon;
 pub mod rollout;
@@ -338,12 +343,13 @@ pub use leech_seed::{
 };
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
+pub use obedience::{LoafMessage, PlayerObedience};
 pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
 pub use pokemon::{
-    calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
-    MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
-    Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
-    SPECIES_SHEDINJA,
+    calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, ExperienceAward, Ivs,
+    LearnedMove, MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses,
+    StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE,
+    SPECIES_NONE, SPECIES_SHEDINJA,
 };
 pub use rollout::{
     is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,

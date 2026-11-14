@@ -10,6 +10,23 @@
 //! data, ribbons, and mail. EVs are the battler's: the merge writes
 //! them back from [`battle::BattlePokemon::evs`].
 //!
+//! # Move PP
+//!
+//! A record's remaining-PP byte is adopted as stored, never normalised:
+//! `GetMonData(MON_DATA_PP1 + slot)` returns `substruct1->pp[slot]` with no
+//! clamp to the move's maximum (`pokeemerald/src/pokemon.c:3851-3855`), and
+//! the battle controller copies it into the battler unchanged
+//! (`pokeemerald/src/battle_controller_player.c:1622-1627`). So
+//! [`from_save_pokemon`] hands each known slot's byte to
+//! [`battle::BattlePokemon::with_saved_pp`], including a value above
+//! [`battle::BattlePokemon::max_pp`] (for example after PP Ups were lost),
+//! and the merge writes the battler's PP straight back: a save with no battle
+//! or heal in between leaves the byte as it was. Spending counts down from
+//! the stored value and a heal restores the maximum. This is the choice of
+//! adopting the byte over refusing the record, as the decoder does for an
+//! unsupported status word or an interior empty move slot: nothing in battle
+//! assumes `pp <= max_pp`, so there is no unrepresentable state to refuse.
+//!
 //! # Held item
 //!
 //! [`from_save_pokemon`] reads the growth substructure's held item
@@ -39,7 +56,11 @@
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
-//! trailing six bytes). [`to_save_pokemon`], which has no record to retain
+//! trailing six bytes). The OT name is retained from the record too, but
+//! `battle` does carry a copy: [`from_save_pokemon`] reads it into
+//! [`battle::BattlePokemon::original_trainer_name`] only for the obedience
+//! gate's `IsOtherTrainer` comparison. It is never re-encoded from the
+//! battler (an all-zero name reads back as unrecorded). [`to_save_pokemon`], which has no record to retain
 //! them from, writes upstream's own `CreateMon` default for whichever of
 //! those it can derive from its own two arguments: nickname
 //! (the species' display name), language (`GAME_LANGUAGE`), met level
@@ -554,6 +575,15 @@ impl core::fmt::Display for NotTheBattlersRecord {
     }
 }
 
+/// `BoxPokemon::otName`'s seven saved bytes (`pokemon.h:207`).
+fn saved_ot_name(boxed: &BoxPokemon) -> Option<[u8; 7]> {
+    let bytes = boxed.to_bytes();
+    let mut name = [0u8; 7];
+    name.copy_from_slice(&bytes[BOX_OT_NAME_OFFSET..BOX_OT_NAME_OFFSET + 7]);
+    // `to_save_pokemon` leaves the name zeroed: unrecorded, not a name.
+    (name != [0u8; 7]).then_some(name)
+}
+
 /// Converts a validated save record into a battle-ready party member --
 /// `LoadPlayerParty`'s per-mon half (`src/load_save.c:170-178`).
 ///
@@ -566,8 +596,8 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// ([`evs_from_substruct2`]) are adopted last, through
 /// [`battle::BattlePokemon::with_evs`], which touches only Deoxys's live
 /// Speed Forme stats (`GetDeoxysStat`); the stored block stays as loaded.
-/// Each move slot's PP is then wound back to the saved values through
-/// [`battle::BattlePokemon::deduct_pp`], never by reaching past it.
+/// Each known move slot's PP is then adopted exactly as stored through
+/// [`battle::BattlePokemon::with_saved_pp`], even above the move's maximum.
 ///
 /// # Errors
 ///
@@ -597,11 +627,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     }
     let move_ids = slot_moves[..known_moves].to_vec();
 
-    // Adopted before any PP is wound back: it is what each slot's *capacity*
-    // is, so the spend below counts down from the PP-Up-adjusted maximum
-    // rather than from base PP. Every byte is legal (two-bit fields cannot
-    // overflow), so there is nothing to screen -- `battle::PpBonuses`' own
-    // docs.
+    // `with_pp_bonuses` sets each slot's maximum from these PP Up counts; the
+    // stored PP byte is then adopted unchanged by `with_saved_pp` below. Every
+    // byte is legal (two-bit fields cannot overflow), so there is nothing to
+    // screen -- `battle::PpBonuses`' own docs.
     let pp_bonuses = battle::PpBonuses::from_bits(substructures.growth[GROWTH_PP_BONUSES]);
 
     // `PokemonSubstruct2`'s first six bytes -- this record's own EVs, adopted
@@ -638,15 +667,18 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_held_item(held_item)
     .with_saved_experience(read_u32(&substructures.growth, GROWTH_EXPERIENCE));
 
+    if let Some(name) = saved_ot_name(&saved.box_data) {
+        mon = mon.with_original_trainer_name(name);
+    }
+
     // The saved primary status (`status1_from_word` already screened it), so
     // a loaded poisoned or paralysed member keeps its condition.
     mon.set_status1(status1);
 
+    // Each known slot's stored byte, whatever it is -- including one above the
+    // move's current maximum (module docs, "Move PP").
     for (index, saved_pp) in remaining_pp.iter().copied().take(known_moves).enumerate() {
-        let pp_spent = mon.moves()[index].pp.saturating_sub(saved_pp);
-        for _ in 0..pp_spent {
-            mon.deduct_pp(index)?;
-        }
+        mon = mon.with_saved_pp(index, saved_pp)?;
     }
 
     Ok(mon)
@@ -716,21 +748,20 @@ fn record_is_egg_or_bad_egg(record: &Pokemon) -> bool {
         })
 }
 
-/// Species and personality of party slot 0 when it is a non-egg holder of
-/// `ability`: `CreateWildMon` and `PickWildMonNature` check `gPlayerParty[0]` --
-/// not an egg by the unencrypted header's `isEgg` bit (`MON_DATA_SANITY_IS_EGG`,
-/// `pokeemerald/src/pokemon.c:3805-3806`), ability `ability`
-/// (`pokeemerald/src/wild_encounter.c:367-372,395-398`) -- whether or not that slot
-/// is fainted or is the battle lead. The ability is the stored slot's entry in
+/// Species, personality and ability of party slot 0 when it is not an egg:
+/// `CreateWildMon`, `PickWildMonNature` and `ChooseWildMonLevel` check
+/// `gPlayerParty[0]` -- not an egg by the unencrypted header's `isEgg` bit
+/// (`MON_DATA_SANITY_IS_EGG`, `pokeemerald/src/pokemon.c:3805-3806`), then its ability
+/// (`pokeemerald/src/wild_encounter.c:289-297,367-372,395-398`) -- whether or not that
+/// slot is fainted or is the battle lead. The ability is the stored slot's entry in
 /// the species table, as `GetAbilityBySpecies` reads it (`abilities[abilityNum]`,
 /// `pokeemerald/src/pokemon.c:4546-4553`), so a slot-1 record of a single-ability
-/// species has no ability rather than falling back to the primary. `None` for an
-/// empty party, an egg or Bad Egg, an undecodable record, or any other ability.
-fn slot_zero_ability_holder(
+/// species has [`assets::AbilityId::NONE`] rather than falling back to the primary.
+/// `None` for an empty party, an egg or Bad Egg, or an undecodable record.
+fn slot_zero_non_egg(
     dex: &Dex,
     party: &[Pokemon],
-    ability: assets::AbilityId,
-) -> Option<(assets::SpeciesId, u32)> {
+) -> Option<(assets::SpeciesId, u32, assets::AbilityId)> {
     let slot_zero = party.first()?;
     if slot_zero.box_data.is_egg_header_flag() || slot_zero.box_data.is_bad_egg() {
         return None;
@@ -742,8 +773,29 @@ fn slot_zero_ability_holder(
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
     let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
     let ability_slot = usize::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
-    (dex.species(species).ok()?.abilities[ability_slot] == ability)
-        .then(|| (species, slot_zero.box_data.personality()))
+    let ability = dex.species(species).ok()?.abilities[ability_slot];
+    Some((species, slot_zero.box_data.personality(), ability))
+}
+
+/// Species and personality of party slot 0 when it is a non-egg holder of
+/// `ability`; see [`slot_zero_non_egg`] for which slot-0 records count.
+fn slot_zero_ability_holder(
+    dex: &Dex,
+    party: &[Pokemon],
+    ability: assets::AbilityId,
+) -> Option<(assets::SpeciesId, u32)> {
+    slot_zero_non_egg(dex, party)
+        .filter(|&(_, _, slot_zero_ability)| slot_zero_ability == ability)
+        .map(|(species, personality, _)| (species, personality))
+}
+
+/// The ability party slot 0 brings to wild level selection (`ChooseWildMonLevel`);
+/// see [`slot_zero_non_egg`] for which slot-0 records count.
+pub(crate) fn slot_zero_wild_level_ability(
+    dex: &Dex,
+    party: &[Pokemon],
+) -> Option<assets::AbilityId> {
+    slot_zero_non_egg(dex, party).map(|(_, _, ability)| ability)
 }
 
 /// The nature party slot 0 hands a wild Pokémon through Synchronize

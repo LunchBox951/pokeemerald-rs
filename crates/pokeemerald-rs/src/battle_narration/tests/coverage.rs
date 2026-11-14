@@ -2,10 +2,11 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
-use crate::battle_narration::{AssetNames, BattleKind, NarrationError};
+use crate::battle_narration::string_ids::PKMNLEARNEDMOVE;
+use crate::battle_narration::{AssetNames, BattleKind, NarrationError, TemplateId};
 
 const BY_PLAYER: bool = true;
 const MOVE: MoveId = MoveId::TACKLE;
@@ -14,7 +15,22 @@ fn every_event() -> Vec<BattleEvent> {
     let mut events = move_events();
     events.extend(ability_and_status_events());
     events.extend(party_events());
+    events.extend(disobedience_events());
     events
+}
+
+fn disobedience_events() -> Vec<BattleEvent> {
+    vec![
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+        BattleEvent::DisobedientSelfHit {
+            by_player: BY_PLAYER,
+            damage: 3,
+        },
+    ]
 }
 
 fn move_events() -> Vec<BattleEvent> {
@@ -174,6 +190,10 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             status: Status1::Poisoned,
         },
+        BattleEvent::SpeedBoostActivated {
+            by_player,
+            new_stage: StatStage::new(1).unwrap(),
+        },
     ]
 }
 
@@ -196,6 +216,7 @@ fn party_events() -> Vec<BattleEvent> {
             amount: 10,
             boosted: false,
         },
+        BattleEvent::MoveLearned { move_id },
         BattleEvent::MoveLearnPrompt { move_id },
         BattleEvent::MoveReplaced {
             learned: move_id,
@@ -224,7 +245,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 82;
+const VARIANTS: usize = 88;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -289,30 +310,36 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::TrainerSentOut { .. } => 55,
         BattleEvent::PlayerSentOut { .. } => 56,
         BattleEvent::ExpGained { .. } => 57,
-        BattleEvent::MoveLearnPrompt { .. } => 58,
-        BattleEvent::MoveReplaced { .. } => 59,
-        BattleEvent::MoveLearnDeclined { .. } => 60,
-        BattleEvent::MoneyGained(..) => 61,
-        BattleEvent::Ended(..) => 62,
-        BattleEvent::UsedMove { .. } => 63,
-        BattleEvent::TypeEffectiveness { .. } => 64,
-        BattleEvent::AbsorbMadeMoveUseless { .. } => 65,
-        BattleEvent::LoafingAround { .. } => 66,
-        BattleEvent::FrozenSolid { .. } => 67,
-        BattleEvent::Thawed { .. } => 68,
-        BattleEvent::ThawedByMove { .. } => 69,
-        BattleEvent::Burned { .. } => 70,
-        BattleEvent::TargetDefrosted { .. } => 71,
-        BattleEvent::Seeded { .. } => 72,
-        BattleEvent::SappedByLeechSeed { .. } => 73,
-        BattleEvent::LeechSeedHealed { .. } => 74,
-        BattleEvent::ItemRestoredHealth { .. } => 75,
-        BattleEvent::LeechSeedEvaded { .. } => 76,
-        BattleEvent::InLove { .. } => 77,
-        BattleEvent::ImmobilizedByLove { .. } => 78,
-        BattleEvent::Infatuated { .. } => 79,
-        BattleEvent::ObliviousPreventsAttraction { .. } => 80,
-        BattleEvent::InfatuatedByCuteCharm { .. } => 81,
+        BattleEvent::MoveLearned { .. } => 58,
+        BattleEvent::MoveLearnPrompt { .. } => 59,
+        BattleEvent::MoveReplaced { .. } => 60,
+        BattleEvent::MoveLearnDeclined { .. } => 61,
+        BattleEvent::MoneyGained(..) => 62,
+        BattleEvent::Ended(..) => 63,
+        BattleEvent::UsedMove { .. } => 64,
+        BattleEvent::TypeEffectiveness { .. } => 65,
+        BattleEvent::AbsorbMadeMoveUseless { .. } => 66,
+        BattleEvent::LoafingAround { .. } => 67,
+        BattleEvent::FrozenSolid { .. } => 68,
+        BattleEvent::Thawed { .. } => 69,
+        BattleEvent::ThawedByMove { .. } => 70,
+        BattleEvent::Burned { .. } => 71,
+        BattleEvent::TargetDefrosted { .. } => 72,
+        BattleEvent::Seeded { .. } => 73,
+        BattleEvent::SappedByLeechSeed { .. } => 74,
+        BattleEvent::LeechSeedHealed { .. } => 75,
+        BattleEvent::ItemRestoredHealth { .. } => 76,
+        BattleEvent::LeechSeedEvaded { .. } => 77,
+        BattleEvent::InLove { .. } => 78,
+        BattleEvent::ImmobilizedByLove { .. } => 79,
+        BattleEvent::Infatuated { .. } => 80,
+        BattleEvent::ObliviousPreventsAttraction { .. } => 81,
+        BattleEvent::InfatuatedByCuteCharm { .. } => 82,
+        BattleEvent::Disobeyed { .. } => 83,
+        BattleEvent::DisobedientSelfHit { .. } => 84,
+        BattleEvent::IgnoredOrders => 85,
+        BattleEvent::DisobedientNap => 86,
+        BattleEvent::SpeedBoostActivated { .. } => 87,
     }
 }
 
@@ -348,4 +375,32 @@ fn the_fixture_list_names_each_variant_once() {
             .map(|r| r.len()),
         Ok::<_, NarrationError>(1)
     );
+}
+
+/// A free slot takes the move straight into `BattleScript_LearnedNewMove`
+/// (`data/battle_scripts_1.s:3182`-`:3188`), so the event prints the same
+/// PKMNLEARNEDMOVE line, with the same nickname and move buffers, that
+/// closes a replacement.
+#[test]
+fn a_free_slot_learn_prints_the_learned_line_a_replacement_ends_with() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::EMBER;
+
+    let learned = narrator
+        .requests(&AssetNames, &BattleEvent::MoveLearned { move_id })
+        .unwrap();
+    let replaced = narrator
+        .requests(
+            &AssetNames,
+            &BattleEvent::MoveReplaced {
+                learned: move_id,
+                forgotten: MoveId::SCRATCH,
+                slot: 0,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(learned.len(), 1);
+    assert_eq!(learned[0].template, TemplateId::Table(PKMNLEARNEDMOVE));
+    assert_eq!(Some(&learned[0]), replaced.last());
 }

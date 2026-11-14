@@ -9,14 +9,15 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
-    poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
-    KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
+    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID,
+    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TALL_GRASS_IMAGE_ID,
+    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -40,6 +41,10 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(sprite_sheet_ids())
         // Sprite palettes stay, so deleting a sheet removes only that sheet.
         .chain(sprite_palette_ids())
+        .chain([
+            TALL_GRASS_IMAGE_ID.to_owned(),
+            GENERAL_1_PALETTE_ID.to_owned(),
+        ])
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
@@ -54,6 +59,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(evolution_scene_ids())
         .chain(battle_interface_ids())
         .chain(naming_screen_ids())
+        .chain(party_menu_ids())
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
@@ -97,6 +103,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "naming_screen" {
             naming_screen::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "party_menu" {
+            party_menu::locate(ctx, &mut report).map(|_| ())
         } else if domain == "interface" {
             interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
@@ -160,6 +168,7 @@ fn the_fixed_inventory_ids_are_unique() {
         evolution_scene_ids(),
         battle_interface_ids(),
         naming_screen_ids(),
+        party_menu_ids(),
         poke_ball_ids(),
         trainer_battler_ids(),
     ] {
@@ -528,6 +537,49 @@ fn a_surplus_naming_screen_entry_is_refused_by_id() {
 }
 
 #[test]
+fn the_party_menu_inventory_is_three_sheets_three_palettes_and_eight_maps() {
+    let ids = party_menu_ids();
+    let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
+    assert_eq!(ids.len(), 14);
+    assert_eq!(count("party-menu/image/"), 3);
+    assert_eq!(count("party-menu/palette/"), 3);
+    assert_eq!(count("party-menu/raw/"), 8);
+}
+
+#[test]
+fn a_pack_missing_a_party_menu_entry_is_refused() {
+    for id in party_menu_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "party_menu");
+    }
+}
+
+#[test]
+fn a_surplus_party_menu_entry_is_refused_by_id() {
+    // The small Poké Ball sheet is a later record, not part of this inventory.
+    let surplus = "party-menu/image/pokeball_small";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-party-menu", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = party_menu::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
 fn the_health_box_element_records_are_part_of_the_required_inventory() {
     let elements = healthbox_element_ids();
     assert_eq!(elements.len(), 14, "{elements:?}");
@@ -681,10 +733,39 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
         .collect();
     // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
+    // The profile's sheets are the object-event sheets and the tall-grass sheet.
     let mut actual = sprite_sheet_ids();
+    actual.push(TALL_GRASS_IMAGE_ID.to_owned());
     actual.sort();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 146);
+    assert_eq!(actual.len(), 147);
+}
+
+#[test]
+fn the_field_effect_palette_inventory_matches_the_committed_profile() {
+    let committed: Vec<&str> = rom_import::EMERALD_US_REV0
+        .roots
+        .sprites
+        .field_effect_palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect();
+    assert_eq!(committed, [GENERAL_1_PALETTE_ID]);
+}
+
+#[test]
+fn a_pack_missing_a_tall_grass_entry_is_refused() {
+    for id in [TALL_GRASS_IMAGE_ID, GENERAL_1_PALETTE_ID] {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "sprites");
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_field_effect_family_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.starts_with("field-effect/"));
+    assert_refused("no-field-effect", entries, TALL_GRASS_IMAGE_ID, "sprites");
 }
 
 #[test]

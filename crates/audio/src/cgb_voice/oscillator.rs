@@ -51,6 +51,19 @@ impl Oscillator {
         }
     }
 
+    /// A square's contribution at its current duty position, without stepping
+    /// it: the level the sample about to be emitted would carry. `None` for
+    /// Wave and Noise, whose latch at a length expiry needs no refresh.
+    pub(super) fn square_held_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(square) => {
+                let level = square.held_level();
+                self.relatched_square_contribution(level, frame_gain)
+            }
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
     /// A square's contribution at a `level` its register write latched,
     /// without stepping it; `None` for Wave and Noise.
     pub(super) fn relatched_square_contribution(&self, level: i8, frame_gain: i32) -> Option<i32> {
@@ -273,7 +286,8 @@ mod nr32_attenuation_tests {
     #[test]
     fn full_volume_keeps_the_centered_nibble() {
         assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
-        assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
+        // Levels past the table read `gClockTable`, which mutes (`cgb_voice.rs`).
+        assert_eq!(render(0, 31), 0);
     }
 }
 

@@ -15,6 +15,7 @@ use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
+use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
@@ -355,6 +356,15 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
         .chain(OBJECT_PALETTES.map(|name| format!("sprite/palette/{name}")))
         .collect()
 }
+
+/// The tall-grass picture: five 16x16 frames
+/// (`gFieldEffectObjectPic_TallGrass`, `sPicTable_TallGrass`).
+pub(crate) const TALL_GRASS_IMAGE_ID: &str = "field-effect/image/tall_grass";
+
+/// `gFieldEffectObjectPalette1`, which `FLDEFF_PAL_TAG_GENERAL_1` names and the
+/// tall-grass template binds (`field_effect_objects.h:2,96`). It is outside
+/// `sObjectEventSpritePalettes`, so it is not in [`sprite_palette_ids`].
+pub(crate) const GENERAL_1_PALETTE_ID: &str = "field-effect/palette/general_1";
 
 /// Title sheets built from a PNG, as `title/image/<stem>`.
 pub(crate) const TITLE_SCREEN_IMAGES: [&str; 6] = [
@@ -722,6 +732,12 @@ pub(crate) fn opening_scene_ids() -> Vec<String> {
 /// palettes, and two tilemaps.
 pub(crate) fn evolution_scene_ids() -> Vec<String> {
     evolution_scene_pack_ids()
+}
+
+/// Every `party-menu/` pack id extraction emits: three sheets, three
+/// palettes, and eight maps.
+pub(crate) fn party_menu_ids() -> Vec<String> {
+    party_menu_pack_ids()
 }
 
 /// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its

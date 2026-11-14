@@ -80,3 +80,26 @@ fn an_upgraded_slot_spends_its_whole_upgraded_capacity() {
     assert_eq!(mon.moves()[0].pp, 0);
     assert_eq!(mon.deduct_pp(0), Err(BattleError::NoPpRemaining(0)));
 }
+
+#[test]
+fn saved_pp_above_the_maximum_is_adopted_and_counts_down_from_there() {
+    let dex = Dex::new();
+    let max = sample_mon(&dex).max_pp(&dex, 0).unwrap();
+    let mut mon = sample_mon(&dex).with_saved_pp(0, max + 5).unwrap();
+    assert_eq!(mon.moves()[0].pp, max + 5);
+
+    mon.deduct_pp(0).unwrap();
+    assert_eq!(mon.moves()[0].pp, max + 4);
+
+    mon.heal(&dex).unwrap();
+    assert_eq!(mon.moves()[0].pp, max, "a heal restores the maximum");
+}
+
+#[test]
+fn saved_pp_for_a_slot_the_mon_does_not_have_is_refused() {
+    let dex = Dex::new();
+    assert_eq!(
+        sample_mon(&dex).with_saved_pp(1, 1),
+        Err(BattleError::InvalidMoveSlot(1))
+    );
+}

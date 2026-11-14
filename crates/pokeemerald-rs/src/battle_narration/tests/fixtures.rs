@@ -74,6 +74,26 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                     ]);
                     continue;
                 }
+                if name == "FILL_WINDOW" {
+                    out.extend([0xFC, 0x0F]);
+                    continue;
+                }
+                if let Some(index) = name.strip_prefix("HIGHLIGHT ") {
+                    out.extend([
+                        0xFC,
+                        0x02,
+                        index.parse().expect("HIGHLIGHT takes a palette index"),
+                    ]);
+                    continue;
+                }
+                if let Some(width) = name.strip_prefix("CLEAR ") {
+                    out.extend([
+                        0xFC,
+                        0x11,
+                        width.parse().expect("CLEAR takes a pixel width"),
+                    ]);
+                    continue;
+                }
                 if let Some(frames) = name.strip_prefix("PAUSE ") {
                     out.extend([
                         0xFC,
@@ -218,8 +238,16 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
+    (230, "It hurt itself in its\nconfusion!"),
+    (35, "{B_EFF_NAME_WITH_PREFIX}\nfell asleep!"),
+    (276, "{B_ATK_NAME_WITH_PREFIX} ignored\norders!"),
+    (277, "{B_ATK_NAME_WITH_PREFIX} began to nap!"),
     (278, "{B_ATK_NAME_WITH_PREFIX} is\nloafing around!"),
+    (279, "{B_ATK_NAME_WITH_PREFIX} won't\nobey!"),
+    (280, "{B_ATK_NAME_WITH_PREFIX} turned away!"),
+    (281, "{B_ATK_NAME_WITH_PREFIX} pretended\nnot to notice!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
+    (194, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nraised its SPEED!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
     (209, "sharply "),
     (210, "rose!"),
