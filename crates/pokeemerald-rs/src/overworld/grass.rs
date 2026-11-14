@@ -53,9 +53,7 @@ use assets::pack::{AssetPack, PaletteRef};
 use assets::{ImageRef, PackError};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
-use engine::overworld::object_event::{
-    object_event_is_visible, LiveObjectEvent, ObjectEventCollection,
-};
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
 use engine::overworld::{PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
@@ -232,13 +230,19 @@ struct TallGrassEffect {
 
 /// An object sprite an effect's depth is compared against
 /// (`UpdateGrassFieldEffectSubpriority`, `field_effect_helpers.c:1662-1690`),
-/// with 16x32 bounds from its parent's top-left whatever its graphic's size.
+/// with the size of its graphic, from which upstream takes the linked sprite's
+/// `centerToCornerVecX`/`Y` (`-(width >> 1)`, `-(height >> 1)`,
+/// `event_object_movement.c:1461-1462`).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DepthObject {
     /// Screen x of the object's left edge.
     pub(super) left: i32,
     /// Screen y of the object's top edge.
     pub(super) top: i32,
+    /// The graphic's width in pixels.
+    pub(super) width: i32,
+    /// The graphic's height in pixels.
+    pub(super) height: i32,
     pub(super) subpriority: u16,
 }
 
@@ -267,6 +271,11 @@ impl TallGrassEffects {
             object_passes: BTreeMap::new(),
             admission_pending: true,
         }
+    }
+
+    /// Whether the first-frame admission is still pending, without taking it.
+    pub(super) fn admission_pending(&self) -> bool {
+        self.admission_pending
     }
 
     /// Takes the pending first-frame admission, which runs once per scene.
@@ -444,26 +453,33 @@ impl TallGrassEffect {
             0
         };
         let own = npc::subpriority_from_bottom(top + FRAME_PX, self.elevation, bias);
-        let half = FRAME_PX / 2;
+        // The effect is a 16x16 sprite, so its `sprite->x`/`y` sit 8 in
+        // from its top-left and `centerToCornerVec` is -8 on both axes.
+        // For the linked sprite, `x`/`y` are its centre: `lyhi` is its top,
+        // `var` its centre row, and `yhi = ylo + centerToCornerVecY` the
+        // effect's bottom less half the object's height. Since `yhi < ylo`,
+        // `lyhi < yhi || lyhi < ylo` reduces to `lyhi < ylo`.
+        let bottom = top + FRAME_PX;
         let overlapping = objects.iter().find(|object| {
-            let object_centre = object.left + half;
-            left < object_centre
-                && left + FRAME_PX > object_centre
-                && object.top < top + FRAME_PX
-                && object.top + FRAME_PX > top
+            let object_half = object.height >> 1;
+            let object_centre_x = object.left + (object.width >> 1);
+            let object_centre_y = object.top + object_half;
+            left < object_centre_x
+                && left + FRAME_PX > object_centre_x
+                && object.top < bottom
+                && object_centre_y > bottom - object_half
                 && own <= object.subpriority
         });
         overlapping.map_or(own, |object| object.subpriority + 2)
     }
 }
 
-/// Whether the object has a sprite: the scheduler has admitted it and its hide
-/// flag is still clear. A script that sets the flag removes the object
-/// (`RemoveObjectEventByLocalIdAndMap`, `event_object_movement.c:1389-1397`),
-/// and the scheduler does not retire an admitted entry for it, so the flag is
-/// read here as drawing reads it.
-fn has_sprite(live: &LiveObjectEvent, event_data: &EventData) -> bool {
-    live.is_active() && object_event_is_visible(live.template(), event_data)
+/// Whether the object has a sprite: the scheduler has admitted it and not since retired it. The
+/// hide flag was applied at admission, and a flag set afterwards leaves the sprite until a script's
+/// `removeobject` retires the entry (`RemoveObjectEventByLocalIdAndMap`,
+/// `event_object_movement.c:1389-1397`).
+fn has_sprite(live: &LiveObjectEvent) -> bool {
+    live.is_active()
 }
 
 impl OverworldScene {
@@ -496,6 +512,11 @@ impl OverworldScene {
         }
     }
 
+    /// Whether the scene's first object frame has yet to run, without taking it.
+    pub(crate) fn object_admission_pending(&self) -> bool {
+        self.grass.admission_pending()
+    }
+
     /// Takes the pending first-frame admission: true once per scene, on the
     /// frame whose scheduler pass admits the objects already in view.
     pub(crate) fn take_object_admission_pending(&mut self) -> bool {
@@ -508,19 +529,19 @@ impl OverworldScene {
     /// pass, standing on tall grass. The object's elevation is first settled on
     /// its tile (`UpdateObjectEventElevationAndPriority`, `:8089`), and the
     /// pass runs whether or not object events are frozen. An object without a
-    /// sprite (hidden, outside the view, removed) is forgotten, so its next
+    /// sprite (not admitted, outside the view, removed) is forgotten, so its next
     /// admission runs the pass again (`triggerGroundEffectsOnMove`, `:1301`).
     pub(crate) fn seed_object_tall_grass(
         &mut self,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         self.grass
             .retain_object_passes(|id| objects.by_id(id).is_some());
         for live in objects.iter() {
             let id = live.id();
-            if !has_sprite(live, event_data) {
+            if !has_sprite(live) {
                 self.grass.forget_object(id);
                 continue;
             }
@@ -531,7 +552,7 @@ impl OverworldScene {
             let tile = state.position();
             self.grass.record_object_pass(id, tile);
             if draws && self.is_tall_grass_at(tile) {
-                let elevation = self.sprites.settled_elevation(tile, state.elevation());
+                let elevation = state.previous_elevation();
                 self.grass
                     .spawn_placement(Owner::Object(id), tile, elevation);
             }
@@ -547,12 +568,12 @@ impl OverworldScene {
     pub(crate) fn object_steps_began(
         &mut self,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         for live in objects.iter() {
             let id = live.id();
-            if !has_sprite(live, event_data) {
+            if !has_sprite(live) {
                 self.grass.forget_object(id);
                 continue;
             }
@@ -567,7 +588,7 @@ impl OverworldScene {
             }
             self.grass.record_object_pass(id, tile);
             if draws && self.is_tall_grass_at(tile) {
-                let elevation = self.sprites.settled_elevation(tile, state.elevation());
+                let elevation = state.previous_elevation();
                 self.grass.spawn_step(Owner::Object(id), tile, elevation);
             }
         }
@@ -647,7 +668,7 @@ impl OverworldScene {
         &mut self,
         player: &PlayerState,
         objects: &ObjectEventCollection,
-        event_data: &EventData,
+        _event_data: &EventData,
     ) {
         let mut grass = std::mem::take(&mut self.grass);
         {
@@ -657,7 +678,7 @@ impl OverworldScene {
                     Owner::Player => Some((player.position(), player.previous_position())),
                     Owner::Object(id) => objects
                         .by_id(id)
-                        .filter(|live| has_sprite(live, event_data))
+                        .filter(|live| has_sprite(live))
                         .map(|live| (live.state().position(), live.state().previous_position())),
                 },
                 |(x, y)| runtime.metatile_behavior(x, y),
@@ -675,6 +696,17 @@ impl OverworldScene {
     #[cfg(test)]
     pub(crate) fn tall_grass_effect_count(&self) -> usize {
         self.grass.len()
+    }
+
+    /// Each effect's `sElevation` and the elevation-dependent subpriority it
+    /// takes at a fixed screen row with no object overlapping it.
+    #[cfg(test)]
+    pub(crate) fn tall_grass_effect_depths(&self) -> Vec<(u8, u16)> {
+        self.grass
+            .effects
+            .iter()
+            .map(|effect| (effect.elevation, effect.subpriority(0, 0, &[])))
+            .collect()
     }
 
     /// The first tile of the effect's cells in the combined tileset.

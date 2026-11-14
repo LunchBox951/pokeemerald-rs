@@ -357,6 +357,15 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
         .collect()
 }
 
+/// The tall-grass picture: five 16x16 frames
+/// (`gFieldEffectObjectPic_TallGrass`, `sPicTable_TallGrass`).
+pub(crate) const TALL_GRASS_IMAGE_ID: &str = "field-effect/image/tall_grass";
+
+/// `gFieldEffectObjectPalette1`, which `FLDEFF_PAL_TAG_GENERAL_1` names and the
+/// tall-grass template binds (`field_effect_objects.h:2,96`). It is outside
+/// `sObjectEventSpritePalettes`, so it is not in [`sprite_palette_ids`].
+pub(crate) const GENERAL_1_PALETTE_ID: &str = "field-effect/palette/general_1";
+
 /// Title sheets built from a PNG, as `title/image/<stem>`.
 pub(crate) const TITLE_SCREEN_IMAGES: [&str; 6] = [
     "clouds",

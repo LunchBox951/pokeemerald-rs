@@ -239,6 +239,34 @@ impl Voice {
         self.identity.priority
     }
 
+    /// Start the voice at source sample `progress`, with a zero fractional
+    /// phase: `ply_note` seeds `SoundChannel::count` from the track's XCMD
+    /// 0x0D value, and `SoundMainRAM` starts at `data + count` over
+    /// `size - count` remaining samples (`m4a_1.s:1791`..`:1797`,
+    /// `:184`..`:196`).
+    ///
+    /// Supported offsets are `0..logical_len`, for one-shot and looping waves
+    /// alike. Zero keeps the voice exactly as [`Self::new`] built it. Upstream
+    /// leaves a nonzero offset at or past the wave size unchecked: the
+    /// unsigned `size - count` wraps and the mixer reads past the sample.
+    /// That has no defined result to port, so this fails closed and returns
+    /// `None`: the note never sounds.
+    #[must_use]
+    pub(crate) fn with_sample_progress(mut self, progress: u32) -> Option<Self> {
+        if progress == 0 {
+            return Some(self);
+        }
+        let index = usize::try_from(progress).ok()?;
+        if index >= self.wave.logical_len() {
+            return None;
+        }
+        self.source_position = SourcePosition {
+            sample_index: index,
+            phase: 0,
+        };
+        Some(self)
+    }
+
     #[must_use]
     pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
         // `ply_note` pitches a rhythm voice from its child key, while

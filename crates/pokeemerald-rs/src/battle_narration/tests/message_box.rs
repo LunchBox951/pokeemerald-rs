@@ -206,3 +206,141 @@ fn a_glyph_straddling_the_bottom_edge_keeps_only_its_revealed_rows_after_a_scrol
         assert_ne!(pixel(&framebuffer, LEFT, TOP + y), shadow, "y={y}");
     }
 }
+
+/// A colour no textbox palette entry uses, standing for the layers beneath
+/// BG0.
+const SCENE: Rgb888 = Rgb888 {
+    r: 10,
+    g: 200,
+    b: 30,
+};
+
+fn drawn_over_scene(layer: &BattleMessageLayer<TestSheet>) -> Framebuffer {
+    let mut framebuffer = Framebuffer::new();
+    framebuffer.fill(SCENE);
+    layer.draw(&mut framebuffer);
+    framebuffer
+}
+
+/// Prints `text` as a battle message and runs `frames` idle frames.
+fn printed(text: &str, frames: usize) -> BattleMessageLayer<TestSheet> {
+    let fixture = Fixture::new(&[(110, text)], &[]);
+    let mut layer = layer();
+    submit(&mut layer, &fixture, &[110]);
+    run_same(&mut layer, frames, NONE);
+    layer
+}
+
+// `HIGHLIGHT 1` selects palette index 1, the window's body colour, as the
+// background (`src/text.c:985-990`); the window bitmap then holds index 1
+// wherever a clear writes, not the `B_WIN_MSG` fill index 15.
+
+#[test]
+fn a_clear_under_highlight_one_paints_palette_index_one_not_the_window_fill() {
+    let layer = printed("{HIGHLIGHT 1}{CLEAR 8}", 3);
+
+    let framebuffer = drawn(&layer);
+    // `ClearTextSpan` fills from the cursor at window (0, 1).
+    assert_eq!(pixel(&framebuffer, LEFT, TOP + 1), rgb(color(31, 0, 0)));
+    assert_eq!(pixel(&framebuffer, LEFT + 7, TOP + 1), rgb(color(31, 0, 0)));
+    assert_eq!(pixel(&framebuffer, LEFT + 8, TOP + 1), rgb(color(0, 0, 31)));
+    assert_eq!(pixel(&framebuffer, LEFT, TOP), rgb(color(0, 0, 31)));
+}
+
+#[test]
+fn a_fill_window_under_highlight_one_paints_the_whole_window_with_index_one() {
+    let layer = printed("{HIGHLIGHT 1}{FILL_WINDOW}", 3);
+
+    let framebuffer = drawn(&layer);
+    let body = rgb(color(31, 0, 0));
+    assert_eq!(pixel(&framebuffer, LEFT, TOP), body);
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 1),
+        body
+    );
+    assert_eq!(pixel(&framebuffer, LEFT - 1, TOP), rgb(color(1, 2, 3)));
+}
+
+#[test]
+fn a_scroll_under_highlight_one_fills_the_exposed_rows_with_index_one() {
+    let fixture = Fixture::new(&[(110, "{HIGHLIGHT 1}A\\lB")], &[]);
+    let mut layer = layer();
+    submit(&mut layer, &fixture, &[110]);
+    run(&mut layer, &[NONE, NONE, A_PRESS]);
+    assert_eq!(
+        pixel(&drawn(&layer), LEFT + WIDTH - 1, TOP + HEIGHT - 1),
+        rgb(color(0, 0, 31))
+    );
+
+    // The first scroll frame exposes the bottom 4 rows (`ScrollWindow`'s
+    // `PIXEL_FILL(bgColor)`, `src/text.c:1196-1201`).
+    run_same(&mut layer, 1, NONE);
+
+    let framebuffer = drawn(&layer);
+    let body = rgb(color(31, 0, 0));
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 1),
+        body
+    );
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 4),
+        body
+    );
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 5),
+        rgb(color(0, 0, 31))
+    );
+}
+
+// Index 0 is transparent on BG0, and the window's tiles replace the textbox
+// tilemap inside its rectangle (`PutWindowTilemap`), so a transparent fill
+// shows what lies beneath BG0, not the textbox or the index-15 fill.
+
+#[test]
+fn a_fill_window_under_highlight_zero_shows_the_scene_beneath_the_window() {
+    let layer = printed("{HIGHLIGHT 0}{FILL_WINDOW}", 3);
+
+    let framebuffer = drawn_over_scene(&layer);
+    assert_eq!(pixel(&framebuffer, LEFT, TOP), SCENE);
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 1),
+        SCENE
+    );
+    assert_eq!(pixel(&framebuffer, LEFT - 1, TOP), rgb(color(1, 2, 3)));
+    assert_eq!(pixel(&framebuffer, LEFT, TOP + HEIGHT), rgb(color(1, 2, 3)));
+}
+
+#[test]
+fn a_scroll_under_highlight_zero_shows_the_scene_in_the_exposed_rows() {
+    let fixture = Fixture::new(&[(110, "{HIGHLIGHT 0}A\\lB")], &[]);
+    let mut layer = layer();
+    submit(&mut layer, &fixture, &[110]);
+    run(&mut layer, &[NONE, NONE, A_PRESS]);
+    run_same(&mut layer, 1, NONE);
+
+    let framebuffer = drawn_over_scene(&layer);
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 1),
+        SCENE
+    );
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 4),
+        SCENE
+    );
+    assert_eq!(
+        pixel(&framebuffer, LEFT + WIDTH - 1, TOP + HEIGHT - 5),
+        rgb(color(0, 0, 31))
+    );
+}
+
+#[test]
+fn a_clear_under_highlight_zero_leaves_the_window_fill() {
+    // `ClearTextSpan` skips painting when the background is transparent
+    // (`src/text.c:649-674`).
+    let layer = printed("{HIGHLIGHT 0}{CLEAR 8}", 3);
+
+    assert_eq!(
+        pixel(&drawn_over_scene(&layer), LEFT, TOP + 1),
+        rgb(color(0, 0, 31))
+    );
+}

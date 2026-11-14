@@ -7,6 +7,7 @@
 
 use assets::keypad_icons::KeypadIconSheet;
 use assets::pack::{BattleTextboxHandle, ImageRef};
+use engine::text::render::TextColors;
 use engine::text::window::MessageBoxLayout;
 use rendering::{
     BgLayer, Bgr555, BitDepth, Framebuffer, Palette, RenderError, Rgb888, ScreenEntry, Tilemap,
@@ -26,20 +27,25 @@ pub(super) const MESSAGE_WINDOW: MessageBoxLayout = MessageBoxLayout {
 /// The window's content height in pixels: rows below it are never drawn.
 pub(super) const CONTENT_HEIGHT_PX: i32 = MESSAGE_WINDOW.content_height * TILE_PX;
 
+/// The window's content size in pixels.
+pub(super) const CONTENT_SIZE_PX: (i32, i32) =
+    (MESSAGE_WINDOW.content_width * TILE_PX, CONTENT_HEIGHT_PX);
+
 /// `sTextOnWindowsInfo_Normal[B_WIN_MSG]` places text at `x = 0`, `y = 1`
 /// (`src/battle_message.c:1483`-`:1484`).
 pub(super) const PRINTER_ORIGIN: (i32, i32) = (0, 1);
 
 /// The window's `fgColor`, `bgColor`, and `shadowColor`
-/// (`src/battle_message.c:1486`-`:1488`), indices into palette bank 0.
-const FOREGROUND_INDEX: u8 = 1;
+/// (`src/battle_message.c:1486`-`:1488`), indices into palette bank 0. The
+/// printer starts each message with them; inline colour controls change them.
+pub(super) const TEXT_COLORS: TextColors = TextColors {
+    foreground: 1,
+    background: BACKGROUND_INDEX,
+    shadow: 6,
+};
 const BACKGROUND_INDEX: u8 = 15;
-const SHADOW_INDEX: u8 = 6;
 
 const TILE_PX: i32 = 8;
-/// Glyph pixel roles a font sheet uses: 1 is the body, 2 the shadow.
-const GLYPH_FOREGROUND_ROLE: usize = 1;
-const GLYPH_SHADOW_ROLE: usize = 2;
 const TEXTBOX_MAP_SIDE_TILES: (usize, usize) = (64, 32);
 const BYTES_PER_MAP_ENTRY: usize = 2;
 const TILE_DIM: usize = 8;
@@ -92,8 +98,20 @@ impl BattleTextbox {
     }
 
     /// Draws the textbox, blanks the message window to its background, and
-    /// replays `ops` inside it.
-    pub(super) fn compose(&self, framebuffer: &mut Framebuffer, ops: &[WindowOp]) {
+    /// replays `ops` inside it, each glyph in the colours it carries.
+    /// `window_fill` is the colours the latest whole-window clear erased with.
+    ///
+    /// The window's tiles replace the textbox tilemap on BG0 inside its
+    /// rectangle (`PutWindowTilemap`), so a pixel the text erases to index 0
+    /// shows what lies beneath BG0: `framebuffer` as it was before the
+    /// textbox was drawn.
+    pub(super) fn compose(
+        &self,
+        framebuffer: &mut Framebuffer,
+        ops: &[WindowOp],
+        window_fill: Option<TextColors>,
+    ) {
+        let scene = textbox::needs_scene(ops, window_fill).then(|| framebuffer.clone());
         BgLayer::new(&self.tileset, &self.palette, &self.tilemap).composite(framebuffer);
         let (origin, size) = window_rect();
         textbox::fill_rect(
@@ -103,17 +121,18 @@ impl BattleTextbox {
             size.1,
             self.color(BACKGROUND_INDEX),
         );
-        let mut roles = [None; 4];
-        roles[GLYPH_FOREGROUND_ROLE] = Some(self.color(FOREGROUND_INDEX));
-        roles[GLYPH_SHADOW_ROLE] = Some(self.color(SHADOW_INDEX));
         textbox::compose_window_ops(
             framebuffer,
             ops,
             origin,
             size,
-            &roles,
             &self.icons,
             &self.window_palette(),
+            textbox::WindowBackdrop {
+                interior: BACKGROUND_INDEX,
+                fill: window_fill,
+                scene: scene.as_ref(),
+            },
         );
     }
 
