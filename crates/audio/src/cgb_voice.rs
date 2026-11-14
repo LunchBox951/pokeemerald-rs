@@ -191,9 +191,10 @@ pub struct CgbVoice {
     /// A failed sweep check stopped the channel; a later safe trigger revives it
     /// (`mgba/src/gb/audio.c:180-186,667-672`).
     hardware_muted: bool,
-    /// A sweep tick overflowed this playing square: the channel stops running
-    /// but keeps mixing the level it last rendered until the next trigger or
-    /// register-write catch-up (`mgba/src/gb/audio.c:667-672,745-754`).
+    /// A sweep overflow, at a tick or a trigger, stopped this square: the
+    /// channel stops running but keeps mixing the level it last latched until
+    /// the next trigger or register-write catch-up
+    /// (`mgba/src/gb/audio.c:180-193,667-672,745-754`).
     sweep_held: bool,
     hardware_envelope_volume: HardwareEnvelopeVolume,
     /// The instrument's raw `ToneData::length`; nonzero sets `NRx4` bit 6.
@@ -663,11 +664,19 @@ impl CgbVoice {
         }
     }
 
-    fn apply_retrigger(&mut self) {
+    /// Returns the unit duty level a failed sweep check holds: the position
+    /// the trigger's catch-up reached, which the caller scales by the reset
+    /// initial volume (`mgba/src/gb/audio.c:180-193,916-918`).
+    fn apply_retrigger(&mut self) -> Option<i8> {
         self.settle_owed_noise_clocks();
+        let duty_level = match &mut self.oscillator {
+            Oscillator::Square(square) => Some(square.held_level()),
+            Oscillator::Wave { .. } | Oscillator::Noise(_) => None,
+        };
         self.hardware_muted = !self.oscillator.retrigger();
-        self.sweep_held = false;
+        self.sweep_held = self.hardware_muted && duty_level.is_some();
         self.trigger_length();
+        duty_level.filter(|_| self.sweep_held)
     }
 
     fn settle_owed_noise_clocks(&mut self) {
@@ -781,8 +790,9 @@ impl CgbVoice {
         let skips_trigger = initial_trigger
             && !self.envelope.is_active()
             && matches!(self.oscillator, Oscillator::Square(_));
+        let mut trigger_latch = None;
         if (hardware_write || initial_trigger) && !skips_trigger {
-            self.apply_retrigger();
+            trigger_latch = self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
         if hardware_write || initial_trigger {
@@ -818,7 +828,10 @@ impl CgbVoice {
         // A write's catch-up re-latches a stopped square at the duty position
         // it ran to before the high-byte store; nothing runs the stopped
         // channel after it (`mgba/src/gb/audio.c:162-171,219-224,493-501,916-918`).
-        if let Some(level) = stopped_write_latch.filter(|_| self.is_stopped_square()) {
+        // The trigger follows the pitch write, so its latch supersedes the write's.
+        if let Some(level) =
+            trigger_latch.or(stopped_write_latch.filter(|_| self.is_stopped_square()))
+        {
             if let Some(held) = self
                 .oscillator
                 .relatched_square_contribution(level, self.frame_gain)
@@ -1042,6 +1055,10 @@ mod sweep_tests;
 #[cfg(test)]
 #[path = "cgb_voice_sweep_start.rs"]
 mod sweep_start_tests;
+
+#[cfg(test)]
+#[path = "cgb_voice_trigger_overflow.rs"]
+mod trigger_overflow_tests;
 
 #[cfg(test)]
 #[path = "cgb_voice_pitch.rs"]
