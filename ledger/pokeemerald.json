@@ -29616,6 +29616,32 @@
       "status": "pending"
     },
     "src/coins.c": {
+      "artifacts": {
+        "AddCoins": {
+          "reason": "coins.c:51-71. Coins::add refuses (false, balance unchanged) at or above MAX_COINS 9999 before touching the balance, so an imported balance over the cap (say 12000) stays as stored rather than being pulled down; from a balance below the cap it caps the total at 9999 and succeeds, so adding zero below the cap succeeds. Upstream's overflow guard (ownedCoins > ownedCoins + toAdd) compares int-promoted sums and never fires, so the sum is narrowed to u16 before the cap check and an add past 0xFFFF wraps (9998 + 60000 leaves 4462); Coins::add reproduces that with wrapping_add.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetCoins": {
+          "reason": "coins.c:41-44. Coins::get returns the plaintext balance; the stored u16 is XORed with the low 16 bits of SaveBlock2::encryption_key at the SaveBlock1 boundary (crates/engine/src/save/block.rs, offset 0x494, global.h:1003), so an imported value above MAX_COINS reads back as stored.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RemoveCoins": {
+          "reason": "coins.c:73-82. Coins::remove succeeds and subtracts only when the balance covers the amount, else returns false with the balance unchanged; removing zero always succeeds, and a balance above MAX_COINS is not capped by a removal.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetCoins": {
+          "reason": "coins.c:46-49. Coins::set stores the u16 as given with no cap; the key's low 16 bits are applied when SaveBlock1 serializes (block.rs, offset 0x494). new_game.c:173's SetCoins(0) is SaveBlock1::default() holding Coins::default(). A lost encryption key clears the balance like money (store.rs clear_key_encrypted_fields).",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

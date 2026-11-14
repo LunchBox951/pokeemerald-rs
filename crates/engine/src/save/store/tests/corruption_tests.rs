@@ -296,3 +296,25 @@ fn equal_and_opposite_checksum_byte_mutations_keep_newer_slot_selected() {
     assert_eq!(outcome.block1.money, newer_block1.money);
     assert_eq!(outcome.block1.bag, newer_block1.bag);
 }
+
+#[test]
+fn corrupt_recovery_without_a_recovered_key_clears_the_coin_balance() {
+    let mut store = SaveStore::new();
+    let mut block1 = sample_block1();
+    block1.coins.set(4321);
+    let block2 = sample_block2();
+    assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
+
+    store.save(&block1, &block2);
+    store.save(&block1, &block2);
+
+    let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
+    store.corrupt_byte(0, slot0_block2, 0);
+    let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+    store.corrupt_byte(1, slot1_block2, 0);
+
+    let outcome = store.load();
+    assert_eq!(outcome.status, SaveStatus::Corrupt);
+    assert_eq!(outcome.block2.encryption_key, 0);
+    assert_eq!(outcome.block1.coins.get(), 0);
+}
