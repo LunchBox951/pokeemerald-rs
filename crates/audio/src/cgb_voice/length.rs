@@ -118,7 +118,7 @@ impl CgbVoice {
     pub(super) fn clock_length(&mut self) {
         if self.length.clock() {
             self.length_stopped = true;
-            if self.hardware_muted {
+            if self.hardware_muted && !self.sweep_held {
                 self.last_contribution = 0;
             }
         }
