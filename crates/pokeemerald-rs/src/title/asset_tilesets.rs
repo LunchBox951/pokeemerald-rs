@@ -140,7 +140,7 @@ pub(super) fn build_sprite_tilesets(
     pack: &AssetPack,
 ) -> Result<(Tileset, Tileset), TitleSceneError> {
     const VERSION_ID: &str = "title/image/emerald_version";
-    const PRESS_START_ID: &str = "title/image/press_start";
+    const PRESS_START_ID: &str = super::PRESS_START_IMAGE_ID;
 
     let version_image = pack.image(VERSION_ID)?;
     check_sprite_sheet_dimensions(VERSION_ID, version_image, VERSION_SHEET_W, VERSION_SHEET_H)?;

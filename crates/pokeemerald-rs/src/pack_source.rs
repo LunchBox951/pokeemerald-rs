@@ -4,9 +4,12 @@
 //! of a process-wide `$POKEEMERALD_PACK` mutation.
 //!
 //! [`crate::App::new`] resolves the ordinary runtime order
-//! ([`assets::AssetPack::load_default`]: `$POKEEMERALD_PACK`, then the OS
+//! ([`assets::AssetPack::default_path`]: `$POKEEMERALD_PACK`, then the OS
 //! user-data directory, then the executable's directory, then the checkout's
-//! own pack). [`crate::App::new_headless_real`] pins every one of those
+//! own pack) exactly once, validates that pack's readiness, and pins every
+//! later load to the same path as [`PackSource::Explicit`], so a pack that
+//! appears mid-session never replaces one that crossed the readiness
+//! boundary. [`crate::App::new_headless_real`] pins every one of those
 //! loads to the checkout's own extracted pack
 //! ([`assets::AssetPack::load_repo`]) instead: the scenario and e2e gates
 //! that boot through it promise fixed inputs (`docs/scenarios.md`) and must
@@ -16,8 +19,8 @@
 //! [`crate::App`] resolves this choice once, at construction, and carries it
 //! as plain owned data (`crates/README.md`'s `no-global-mutable-state`
 //! convention) rather than a process-wide override. What is pinned is the
-//! source *choice* -- `Runtime` re-resolves the precedence rungs on each
-//! load, so a pack published mid-session is picked up. The pinned choice
+//! source *choice*; [`PackSource::Runtime`] re-resolves the precedence rungs
+//! on each load and is no longer what [`crate::App::new`] stores. The pinned choice
 //! reaches every lazily-loaded scene, dialog, warp, and map-connection load the
 //! title screen's own [`title::load_repo`](crate::title::load_repo)/
 //! [`title::load_default`](crate::title::load_default) split already models
