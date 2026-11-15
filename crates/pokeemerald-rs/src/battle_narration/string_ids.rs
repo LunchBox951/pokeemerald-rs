@@ -49,6 +49,8 @@ pub(super) const PKMNEVADEDATTACK: u16 = 105;
 pub(super) const PKMNSAPPEDBYLEECHSEED: u16 = 106;
 pub(super) const PKMNFASTASLEEP: u16 = 107;
 pub(super) const PKMNWOKEUP: u16 = 108;
+pub(super) const PKMNRAISEDSPEED: u16 = 194;
+pub(super) const PKMNWASMADEDROWSY: u16 = 182;
 pub(super) const PKMNRESTOREDHPUSING: u16 = 197;
 pub(super) const PKMNPREVENTSROMANCEWITH: u16 = 200;
 pub(super) const PKMNPREVENTSPARALYSISWITH: u16 = 199;
@@ -94,6 +96,7 @@ pub(super) const EMPTYSTRING4: u16 = 329;
 pub(super) const ABOOSTED: u16 = 330;
 pub(super) const PKMNMAKESGROUNDMISS: u16 = 332;
 pub(super) const PKMNFLEDUSING: u16 = 339;
+pub(super) const PKMNSXMADEITINEFFECTIVE: u16 = 346;
 pub(super) const PKMNSXPREVENTSYSZ: u16 = 355;
 pub(super) const PKMNSXHADNOEFFECTONY: u16 = 362;
 /// `STRINGID_TRAINER1LOSETEXT`, the first table slot.

@@ -1,5 +1,5 @@
-//! Focus Energy, Charge, Defense Curl, Confusion, Flash Fire, Leech Seed, and
-//! infatuation state carried by one battler.
+//! Focus Energy, Charge, Defense Curl, Confusion, Flash Fire, Leech Seed,
+//! infatuation and Yawn state carried by one battler.
 //!
 //! Ordinary switches clear every one of them. Baton Pass preserves Focus Energy but
 //! clears Charge's timer and Defense Curl's flag: its `status2` mask keeps
@@ -8,6 +8,12 @@
 //! itself survives the pass. Baton Pass is not modelled, so every switch
 //! clears every one of them (`Battle::switch_enemy_to` and the player's reserve
 //! send-out call `BattlePokemon::clear_battle_scratch`).
+//!
+//! Yawn's drowsiness is `STATUS3_YAWN` (`src/battle_script_commands.c:9352`)
+//! and, unlike a primary status, is neither cleared nor refreshed when
+//! another status lands. [`Volatiles::tick_yawn`] reports only the terminal
+//! zero transition, at which `ENDTURN_YAWN` (`src/battle_util.c:1753`) tries
+//! the guarded sleep.
 //!
 //! Charge's timer is also its active flag because upstream raises and clears
 //! `STATUS3_CHARGED_UP` in lockstep with `chargeTimer`
@@ -54,11 +60,17 @@ pub struct Volatiles {
     /// The field slot whose Attract infatuated this battler, or `None` when
     /// it is not infatuated (`STATUS2_INFATUATED_WITH`).
     pub infatuated_by: Option<BattlerSide>,
+    /// The remaining end-of-turn ticks before Yawn puts this battler to
+    /// sleep. Zero means not drowsy.
+    pub yawn_turns: u8,
 }
 
 impl Volatiles {
     /// The number of end-of-turn ticks before Charge expires.
     pub const CHARGE_TURNS: u8 = 2;
+
+    /// The number of end-of-turn ticks before Yawn's drowsiness expires.
+    pub const YAWN_TURNS: u8 = 2;
 
     /// Whether Charge's Electric-type power boost is active.
     #[must_use]
@@ -130,6 +142,30 @@ impl Volatiles {
         if self.charge_timer > 0 {
             self.charge_timer -= 1;
         }
+    }
+
+    /// Whether Yawn's drowsiness is active.
+    #[must_use]
+    pub const fn drowsy(self) -> bool {
+        self.yawn_turns > 0
+    }
+
+    /// Makes this battler drowsy for [`Self::YAWN_TURNS`] end-of-turn ticks
+    /// (`Cmd_setyawn`, `src/battle_script_commands.c:9352`-`:9364`). The
+    /// caller refuses an already-drowsy battler first.
+    pub const fn set_yawn(&mut self) {
+        self.yawn_turns = Self::YAWN_TURNS;
+    }
+
+    /// Advances Yawn by one end-of-turn tick, reporting whether this tick is
+    /// the one that expired it (`ENDTURN_YAWN`, `src/battle_util.c:1753`-
+    /// `:1771`). An inactive drowsiness reports no transition.
+    pub const fn tick_yawn(&mut self) -> bool {
+        if self.yawn_turns == 0 {
+            return false;
+        }
+        self.yawn_turns -= 1;
+        self.yawn_turns == 0
     }
 
     /// Whether confusion is active.
@@ -222,6 +258,7 @@ mod tests {
         assert_eq!(volatiles.leech_seed_source, None);
         assert!(!volatiles.infatuated());
         assert_eq!(volatiles.infatuated_by, None);
+        assert_eq!(volatiles.yawn_turns, 0);
     }
 
     #[test]
@@ -251,6 +288,22 @@ mod tests {
         volatiles.set_seeded_by(BattlerSide::Enemy);
         assert!(volatiles.seeded());
         assert_eq!(volatiles.leech_seed_source, Some(BattlerSide::Enemy));
+    }
+
+    #[test]
+    fn yawn_drowsiness_expires_on_the_second_tick() {
+        let mut volatiles = Volatiles::default();
+        assert!(!volatiles.drowsy());
+        assert!(!volatiles.tick_yawn(), "inactive drowsiness never expires");
+        volatiles.set_yawn();
+        assert_eq!(volatiles.yawn_turns, 2);
+        assert!(volatiles.drowsy());
+        assert!(!volatiles.tick_yawn(), "first tick leaves one");
+        assert_eq!(volatiles.yawn_turns, 1);
+        assert!(volatiles.tick_yawn(), "second tick expires");
+        assert!(!volatiles.drowsy());
+        assert!(!volatiles.tick_yawn(), "and does not underflow");
+        assert_eq!(volatiles.yawn_turns, 0);
     }
 
     #[test]

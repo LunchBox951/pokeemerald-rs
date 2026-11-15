@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the eleven pipelines
+//! one of the battle scripts this crate reproduces — the twelve pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -43,6 +43,7 @@
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
 //! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
 //! | [`rollout`] | `BattleScript_EffectRollout` ([`rollout::is_rollout_effect`]) |
+//! | `battle::execute::yawn` | `BattleScript_EffectYawn` |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -217,7 +218,8 @@
 //! battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
+//! (its end-turn stage in `Battle::residual_effects`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
@@ -255,7 +257,7 @@
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing, and Leech Seed's defender against Liquid Ooze, whose inverted
 //! drain is unmodelled) —
-//! and the move effects the eleven
+//! and the move effects the twelve
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
