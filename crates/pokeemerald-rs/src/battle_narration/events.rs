@@ -96,6 +96,9 @@ pub(super) fn requests(
     if let Some(requests) = ability_results(narrator, event)? {
         return Ok(requests);
     }
+    if let Some(requests) = yawn_protection_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = status_results(narrator, event) {
         return Ok(requests);
     }
@@ -261,6 +264,10 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         BattleEvent::LiquidOoze { .. } => table(id::ITSUCKEDLIQUIDOOZE, base),
         BattleEvent::NothingHappened { .. } => table(id::BUTNOTHINGHAPPENED, base),
         BattleEvent::ButItFailed { .. } => table(id::BUTITFAILED, base),
+        BattleEvent::MadeDrowsy { by_player, .. } => table(
+            id::PKMNWASMADEDROWSY,
+            base.user_vs_target(Side::user(by_player)),
+        ),
         BattleEvent::GettingPumped { by_player, .. } => table(
             id::PKMNGETTINGPUMPED,
             base.user_vs_target(Side::user(by_player)),
@@ -407,6 +414,29 @@ fn ability_results(
         _ => return Ok(None),
     };
     Ok(Some(vec![request]))
+}
+
+/// `BattleScript_EffectYawn`'s Insomnia and Vital Spirit jump, which names the
+/// target's ability with its holder as the scripting battler
+/// (`BattleScript_PrintBankAbilityMadeIneffective`,
+/// `data/battle_scripts_1.s:2451`-`:2473`).
+fn yawn_protection_results(
+    narrator: &Narrator,
+    event: &BattleEvent,
+) -> Option<Vec<NarrationRequest>> {
+    let BattleEvent::YawnAbilityProtected {
+        by_player, ability, ..
+    } = *event
+    else {
+        return None;
+    };
+    let holder = Side::user(by_player).other();
+    let mut context = narrator
+        .context()
+        .user_vs_target(Side::user(by_player))
+        .with_ability(holder, ability);
+    context.scripting = Some(holder);
+    Some(vec![table(id::PKMNSXMADEITINEFFECTIVE, context)])
 }
 
 /// Status moves and the abilities that pass a status on.
@@ -561,6 +591,11 @@ fn end_turn_and_spore_results(
             AbilityId::EFFECT_SPORE,
             Holder::Target,
         ),
+        BattleEvent::FellAsleepFromYawn { by_player } => {
+            let mut context = base;
+            context.effect = Some(Side::user(by_player));
+            table(id::PKMNFELLASLEEP, context)
+        }
         BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
             id::PKMNPOISONEDBY,
             base,

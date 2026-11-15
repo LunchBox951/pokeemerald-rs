@@ -43,6 +43,7 @@ mod cute_charm;
 mod effect_spore;
 mod pipelines;
 mod rollout;
+mod yawn;
 use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
@@ -96,6 +97,7 @@ pub(super) enum MovePipeline {
     LeechSeed,
     Rollout,
     Attract,
+    Yawn,
     OrdinaryHit,
 }
 
@@ -145,6 +147,8 @@ impl MovePipeline {
             (Self::Rollout, crate::rollout::ensure_resolvable)
         } else if is_attract_effect(effect) {
             (Self::Attract, crate::attract::ensure_resolvable)
+        } else if yawn::is_yawn_effect(effect) {
+            (Self::Yawn, yawn::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -469,6 +473,10 @@ impl Battle {
             }
             MovePipeline::Attract => {
                 self.execute_attract_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Yawn => {
+                self.execute_yawn_move(attacker_is_player, move_id, events);
+                Ok(())
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -1259,6 +1267,7 @@ mod pipeline_agreement_tests {
         (&[84], MovePipeline::LeechSeed),
         (&[117], MovePipeline::Rollout),
         (&[120], MovePipeline::Attract),
+        (&[187], MovePipeline::Yawn),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
@@ -1296,7 +1305,8 @@ mod pipeline_agreement_tests {
                     || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
                     || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
                     || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::attract::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::attract::ensure_resolvable(dex, move_id).is_ok()
+                    || move_id == MoveId::YAWN;
                 if accepted {
                     Ok(())
                 } else {

@@ -1178,6 +1178,7 @@ impl Battle {
             } else {
                 self.enemy.volatiles_mut().tick_charge();
             }
+            self.apply_yawn_residual(is_player, rng, events);
             let now_fainted = if is_player {
                 self.player.is_fainted()
             } else {
@@ -1191,6 +1192,37 @@ impl Battle {
             }
         }
         Ok(())
+    }
+
+    /// `ENDTURN_YAWN` (`pokeemerald/src/battle_util.c:1753`-`:1771`): a living
+    /// drowsy battler ticks once per end of turn, after its own Charge tick.
+    /// The first tick draws nothing. The expiring tick clears the drowsiness
+    /// and, only if sleep can land, draws one `(Random() & 3) + 2` duration
+    /// ([`try_inflict_sleep`]); a refused expiry is silent and draws nothing.
+    /// Landed sleep releases the sleeper's multi-turn lock (`:1761`); a
+    /// refused expiry leaves it.
+    fn apply_yawn_residual(
+        &mut self,
+        is_player: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let battler = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if battler.is_fainted() || !battler.volatiles_mut().tick_yawn() {
+            return;
+        }
+        let Some(asleep) = try_inflict_sleep(battler.status1(), battler.ability(), rng) else {
+            return;
+        };
+        battler.set_status1(asleep);
+        self.cancel_multi_turn_moves(is_player);
+        events.push(BattleEvent::FellAsleepFromYawn {
+            by_player: is_player,
+        });
     }
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
