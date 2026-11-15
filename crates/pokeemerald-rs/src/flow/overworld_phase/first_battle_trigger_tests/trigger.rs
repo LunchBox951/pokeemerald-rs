@@ -511,6 +511,40 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
     phase.assert_lead_at_slot_for_test(0);
 }
 
+/// A fainted lead is a refusal the screen reports before the trigger spends its state, so the
+/// rescue stays armed and neither the Zigzagoon's construction nor the held-item roll draws.
+#[test]
+fn a_fainted_lead_leaves_the_rescue_armed_without_drawing() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    let mut lead = new_game::provisional_starter();
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead is fainted");
+    phase.set_fresh_lead_for_test(lead.clone());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(!phase.is_first_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(4242).state(),
+        "a fainted lead must not draw at all"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue stays armed"
+    );
+    assert_eq!(phase.lead_for_test(), Some(&lead), "the lead stays home");
+    phase.assert_lead_at_slot_for_test(0);
+}
+
 /// A loaded lead holding Sitrus Berry leaves the rescue armed, draws nothing and stays home
 /// -- the item's refusal is as free as an inadmissible lead's.
 #[test]

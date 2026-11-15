@@ -224,6 +224,31 @@ fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
 }
 
 #[test]
+fn a_sheet_whose_plte_exceeds_its_bit_depth_is_truncated_like_libpng() {
+    // Upstream's `birch_speech/shadow.png` is 4-bit with 32 `PLTE` entries.
+    let dir = scratch_dir("oversize-plte");
+    write_checkout(&dir);
+    let image = IMAGES
+        .iter()
+        .find(|image| image.png == "birch_speech/shadow.png")
+        .unwrap();
+    let row = vec![0x11; image.width as usize / 2];
+    let raw: Vec<u8> = (0..image.height)
+        .flat_map(|_| std::iter::once(0).chain(row.iter().copied()))
+        .collect();
+    let plte = vec![7; 32 * 3];
+    std::fs::write(
+        graphics(&dir).join(image.png),
+        indexed_png_from_raw_with_plte(4, image.width, image.height, &raw, &plte),
+    )
+    .unwrap();
+    let mut writer = PackWriter::new();
+    extract_opening_scene(&dir, &mut writer).unwrap();
+    assert_eq!(writer.len(), MANIFEST_ENTRY_COUNT);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn sources_that_are_not_png_are_rejected() {
     let dir = scratch_dir("bad-png");
     write_checkout(&dir);
@@ -249,8 +274,10 @@ fn opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles() {
     let graphics = repo_root().join("pokeemerald/graphics");
 
     let scene = pack.birch_speech().unwrap();
+    // `shadow.png` is 4-bit with a 32-entry PLTE, which libpng truncates.
     let decode = |relative: &str| {
-        super::png::decode(&std::fs::read(graphics.join(relative)).unwrap()).unwrap()
+        super::png::decode_truncating_palette(&std::fs::read(graphics.join(relative)).unwrap())
+            .unwrap()
     };
     assert_eq!(
         scene.shadow.pixels,

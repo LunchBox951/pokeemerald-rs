@@ -227,7 +227,13 @@ mod tests {
             raw.push(0);
             raw.resize(raw.len() + row_bytes, if row < 64 { top } else { below });
         }
-        indexed_png_from_raw_with_plte(bit_depth, 64, height, &raw, &[7; 48])
+        indexed_png_from_raw_with_plte(
+            bit_depth,
+            64,
+            height,
+            &raw,
+            &[7; 48][..48.min(3 << bit_depth)],
+        )
     }
 
     /// Writes `source`'s palettes and the two images into a scratch checkout.

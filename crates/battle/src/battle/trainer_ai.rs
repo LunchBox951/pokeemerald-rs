@@ -26,6 +26,7 @@ use crate::damage::{
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{
@@ -198,6 +199,10 @@ enum ScoreableEffect {
     FocusEnergy,
     /// `AI_CBM_LeechSeed` (`data/battle_ai_scripts.s:410-416`).
     LeechSeed,
+    /// `AI_CBM_Attract` (`data/battle_ai_scripts.s:456-478`). Attract has no
+    /// `AI_CheckViability` branch and is absent from the first-turn setup
+    /// list, so only `CHECK_BAD_MOVE` scores it.
+    Attract,
     /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
     /// (`data/battle_ai_scripts.s:177,368-376`).
     HighRiskForDamage,
@@ -225,6 +230,8 @@ impl ScoreableEffect {
             Some(Self::FocusEnergy)
         } else if effect == MoveEffect::LEECH_SEED {
             Some(Self::LeechSeed)
+        } else if effect == MoveEffect::ATTRACT {
+            Some(Self::Attract)
         } else if effect == MoveEffect::SONICBOOM {
             Some(Self::HighRiskForDamage)
         } else if let Some(label) = ai_stat_label(effect) {
@@ -263,7 +270,7 @@ impl ScoreableEffect {
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
-            Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
+            Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
         };
         if flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect)
         {
@@ -563,8 +570,8 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 ];
 
 /// Refuses a scoring target whose species has two ability slots and whose
-/// true ability is not a trapping one, because upstream's ability read for it
-/// depends on battle history or a random guess the engine does not model
+/// native ability is not a trapping one, because upstream's ability read for
+/// it depends on battle history or a random guess the engine does not model
 /// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
 /// Pull, or Arena Trap is admitted: upstream returns it before the guess
 /// (`src/battle_ai_script_commands.c:1368-1376`).
@@ -575,7 +582,7 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 /// whose selected ability is not a trapping one.
 pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
     let [_, second] = target.ability_slots();
-    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.native_ability()) {
         Ok(())
     } else {
         Err(BattleError::AmbiguousPlayerAbility(target.species()))
@@ -585,7 +592,11 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
 /// targets admission allows: a true trapping ability, read directly
 /// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
-/// species' sole ability. No history lookup, no draw.
+/// species' sole ability. No history lookup, no draw. A Trace copy is the
+/// one history entry the read can reach: the drain ends in `RecordAbilityBattle`
+/// for the copied ability (`src/battle_util.c:3194`-`:3195`, `ABILITYEFFECT_TRACE`
+/// is below `ABILITYEFFECT_CHECK_OTHER_SIDE`), so a single-ability Trace
+/// holder reads as the ability it copied.
 ///
 /// # Errors
 ///
@@ -875,6 +886,7 @@ fn score_bad_move(
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
         ScoreableEffect::LeechSeed => leech_seed_penalty(target),
+        ScoreableEffect::Attract => attract_penalty(user, target)?,
         ScoreableEffect::HighRiskForDamage => {
             high_risk_for_damage_penalty(dex, move_id, user, target)?
         }
@@ -974,6 +986,23 @@ fn leech_seed_penalty(target: &BattlePokemon) -> Option<i8> {
         .then_some(STRONGLY_DISCOURAGE)
 }
 
+/// `AI_CBM_Attract`: an already-infatuated target ends at `-10`, then an
+/// Oblivious target, then any pair that is not exactly one male and one
+/// female (`data/battle_ai_scripts.s:456-478`). It draws nothing.
+fn attract_penalty(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    let opposite_genders = matches!(
+        (user.gender(), target.gender()),
+        (Gender::Male, Gender::Female) | (Gender::Female, Gender::Male)
+    );
+    let blocked = target.volatiles().infatuated()
+        || ai_get_ability(target)? == AbilityId::OBLIVIOUS
+        || !opposite_genders;
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
+}
+
 fn score_try_to_faint(
     dex: &Dex,
     scores: &mut MoveScores,
@@ -1025,7 +1054,8 @@ fn score_viability(
     match scoreable_effect(dex, move_id)? {
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
-        | ScoreableEffect::FocusEnergy => {}
+        | ScoreableEffect::FocusEnergy
+        | ScoreableEffect::Attract => {}
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
@@ -2212,6 +2242,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod attract_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]

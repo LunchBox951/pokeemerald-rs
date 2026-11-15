@@ -18,6 +18,7 @@ use super::error::GenRomProfileError;
 use super::inventory;
 use super::locate::exactly_one;
 use super::plan::{FieldMessagePlan, FieldMessageRootPlan, ReportLine, Resolution};
+use super::search::MATCH_LIMIT;
 use super::Context;
 
 const PACK_ID: &str = rom_import::FIELD_MESSAGE_PACK_ID;
@@ -60,12 +61,16 @@ pub fn locate(
     let mut messages = Vec::with_capacity(FieldMessage::ALL.len());
     for message in FieldMessage::ALL {
         let stream = expected.string(message);
+        // The string-start test runs inside the search, before the hit cap:
+        // suffix-only matches at lower offsets must not use up the cap and
+        // hide a second start or the only one.
         let hits: Vec<u32> = ctx
             .raw
-            .find_all(&[stream.to_vec()])
+            .find_all_up_to_where(&[stream.to_vec()], MATCH_LIMIT, |at| {
+                starts_string(ctx.rom, at)
+            })
             .into_iter()
             .flatten()
-            .filter(|&at| starts_string(ctx.rom, at))
             .collect();
         let addr = exactly_one(message.symbol(), &hits)?;
         let len = u32::try_from(stream.len()).expect("a stream fits in u32");
