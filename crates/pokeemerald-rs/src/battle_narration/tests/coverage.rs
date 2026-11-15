@@ -50,6 +50,7 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FastAsleep { by_player, move_id },
         BattleEvent::WokeUp { by_player },
         BattleEvent::LoafingAround { by_player, move_id },
+        BattleEvent::Flinched { by_player, move_id },
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
@@ -137,6 +138,13 @@ fn move_events() -> Vec<BattleEvent> {
 fn ability_and_status_events() -> Vec<BattleEvent> {
     let (by_player, move_id) = (BY_PLAYER, MOVE);
     vec![
+        BattleEvent::MadeDrowsy { by_player, move_id },
+        BattleEvent::YawnAbilityProtected {
+            by_player,
+            move_id,
+            ability: AbilityId::INSOMNIA,
+        },
+        BattleEvent::FellAsleepFromYawn { by_player },
         BattleEvent::SoundproofProtected { by_player, move_id },
         BattleEvent::Paralyzed { by_player, move_id },
         BattleEvent::AlreadyParalyzed { by_player, move_id },
@@ -212,6 +220,10 @@ fn party_events() -> Vec<BattleEvent> {
             species: RATTATA,
             reserves_remaining: 1,
         },
+        BattleEvent::TracedAbility {
+            by_player,
+            ability: AbilityId::LIMBER,
+        },
         BattleEvent::ExpGained {
             amount: 10,
             boosted: false,
@@ -245,7 +257,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 88;
+const VARIANTS: usize = 93;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -340,6 +352,11 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::IgnoredOrders => 85,
         BattleEvent::DisobedientNap => 86,
         BattleEvent::SpeedBoostActivated { .. } => 87,
+        BattleEvent::MadeDrowsy { .. } => 88,
+        BattleEvent::YawnAbilityProtected { .. } => 89,
+        BattleEvent::FellAsleepFromYawn { .. } => 90,
+        BattleEvent::TracedAbility { .. } => 91,
+        BattleEvent::Flinched { .. } => 92,
     }
 }
 
