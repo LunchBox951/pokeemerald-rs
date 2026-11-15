@@ -38,7 +38,11 @@ fn run(rig: &mut Rig, voice: &mut CgbVoice, frames: usize) -> Vec<StereoAcc> {
 /// stopped channel holds the last sample it emitted while its duty position
 /// keeps its place in time for the next register write to catch up
 /// (`mgba/src/gb/audio.c:162-171,493-510,781-789`). `playing` lists the
-/// half-open sample ranges between the hand-scheduled stop and trigger writes.
+/// half-open sample ranges the channel was run for before each stop. A square
+/// stopped by its length clock was run to the expiry sample first
+/// (`mgba/src/gb/audio.c:649-657,678-684`), so its range ends one past the
+/// expiry; a noise channel is not (`0x7` leaves out channel 4's `0x8`), so its
+/// range ends at the expiry.
 fn written_oracle(
     reference: &[StereoAcc],
     playing: &[(usize, usize)],
@@ -144,7 +148,7 @@ fn a_square_note_cut_by_its_length_holds_its_last_output() {
             rendered,
             written_oracle(
                 &reference,
-                &[(0, CUT_SAMPLE)],
+                &[(0, CUT_SAMPLE + 1)],
                 CUT_FRAMES * SAMPLES_PER_FRAME
             ),
             "{channel:?}"
@@ -211,7 +215,10 @@ fn a_tied_square_outlives_its_first_count_until_a_volume_write_reloads_it() {
         // sustain refresh writes nothing, so nothing revives it after.
         let expected = written_oracle(
             &reference,
-            &[(0, FIRST_EXPIRY), (SECOND_FRAME_START, RELOADED_EXPIRY)],
+            &[
+                (0, FIRST_EXPIRY + 1),
+                (SECOND_FRAME_START, RELOADED_EXPIRY + 1),
+            ],
             TIED_FRAMES * SAMPLES_PER_FRAME,
         );
         let mismatch = rendered.iter().zip(&expected).position(|(a, b)| a != b);
@@ -248,9 +255,9 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
                 // The pitch write at frame 1's start re-latches the held sample
                 // at that moment's duty position (one refresh sample).
                 &[
-                    (0, FIRST_EXPIRY),
+                    (0, FIRST_EXPIRY + 1),
                     (SECOND_FRAME_START, SECOND_FRAME_START + 1),
-                    (2 * SAMPLES_PER_FRAME, 3762),
+                    (2 * SAMPLES_PER_FRAME, 3762 + 1),
                 ],
                 TIED_FRAMES * SAMPLES_PER_FRAME,
             ),
@@ -259,11 +266,135 @@ fn a_same_value_live_volume_write_reloads_the_stopped_counter_from_zero() {
     }
 }
 
+fn wave(adsr: CgbAdsr, length: u8) -> CgbVoice {
+    wave_voice_with_adsr(adsr, false, TestNote::unmodulated()).with_length(length)
+}
+
+/// Raw wave length 240 loads `256 - 240 = 16` into `NR31` (`mgba/src/gb/audio.c:255-258`);
+/// the first pass's enable edge leaves 15 on an even step, so the 15th 256 Hz
+/// clock from the seeded epoch (sample 783, like [`CUT_LENGTH`]) stops it.
+const WAVE_CUT_LENGTH: u8 = 240;
+/// Raw wave length 252 loads 4, 3 after the enable edge: sample 156 again.
+const WAVE_TIED_LENGTH: u8 = 252;
+
+/// The wave oracle: a stopped channel presents the latch its last clock left,
+/// which is the sample the reference emits at the stop
+/// (`mgba/src/gb/audio.c:246-253,768-774`).
+fn wave_held_oracle(reference: &[StereoAcc], stop: usize, total: usize) -> Vec<StereoAcc> {
+    (0..total)
+        .map(|sample| reference[sample.min(stop)])
+        .collect()
+}
+
 #[test]
-fn the_wave_channel_ignores_a_length() {
-    let mut voice = wave_voice(false, TestNote::default()).with_length(CUT_LENGTH);
-    run(&mut Rig::at_step(6), &mut voice, 40);
+fn a_wave_note_cut_by_its_length_holds_its_latch() {
+    let reference = run(
+        &mut Rig::at_step(6),
+        &mut wave(CgbAdsr::flat(), 0),
+        CUT_FRAMES,
+    );
+    let mut voice = wave(CgbAdsr::flat(), WAVE_CUT_LENGTH);
+    let rendered = run(&mut Rig::at_step(6), &mut voice, CUT_FRAMES);
+
+    assert_eq!(
+        rendered,
+        wave_held_oracle(&reference, CUT_SAMPLE, CUT_FRAMES * SAMPLES_PER_FRAME)
+    );
+    assert!(
+        reference[CUT_SAMPLE..]
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]),
+        "sanity: the uncut note keeps oscillating after the cut"
+    );
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.is_length_stopped());
+    assert!(voice.is_active(), "the counter does not retire the note");
+    assert!(voice.is_end_tie_eligible());
+}
+
+#[test]
+fn a_wave_note_without_a_length_is_never_cut() {
+    // Without the enable bit the loaded 256 steps never count.
+    let mut voice = wave(CgbAdsr::flat(), 0);
+    run(&mut Rig::at_step(6), &mut voice, 100);
+    assert_eq!(voice.length_counter().remaining(), 256);
+    assert!(!voice.length_counter().is_enabled());
     assert!(!voice.is_length_stopped());
+}
+
+#[test]
+fn a_wave_counter_runs_the_full_256_steps() {
+    // Raw length 1 loads 255 and the enable edge takes it to 254; a frame
+    // holds about 4.3 length clocks, so a 64-step counter would stop within
+    // 15 frames and this one runs on until about frame 60.
+    let mut voice = wave(CgbAdsr::flat(), 1);
+    let mut rig = Rig::at_step(6);
+    run(&mut rig, &mut voice, 50);
+    assert!(!voice.is_length_stopped(), "254 counts outlast 50 frames");
+    assert!(voice.length_counter().remaining() > 30);
+    run(&mut rig, &mut voice, 20);
+    assert!(voice.is_length_stopped(), "and run out by frame 70");
+}
+
+#[test]
+fn a_tied_wave_is_not_retriggered_by_later_writes_after_its_count() {
+    // `CgbSound` triggers a wave only on the note's first pass and clears
+    // `n4` bit 7 after it (`m4a.c:1213-1216`), so the decay-to-sustain store,
+    // a live volume write, and a pitch write never revive the counter the way
+    // they revive a square's.
+    let write = |voice: &mut CgbVoice, rig: &mut Rig| -> Vec<StereoAcc> {
+        let mut rendered = run(rig, voice, 2);
+        voice.set_track_volume(MAX_TRACK_VOLUME, MAX_TRACK_VOLUME);
+        voice.set_track_pitch(0, 0);
+        rendered.extend(run(rig, voice, TIED_FRAMES - 2));
+        rendered
+    };
+    let reference = write(&mut wave(tied_adsr(), 0), &mut Rig::at_step(6));
+    let mut voice = wave(tied_adsr(), WAVE_TIED_LENGTH);
+    let rendered = write(&mut voice, &mut Rig::at_step(6));
+
+    let expected = wave_held_oracle(&reference, FIRST_EXPIRY, TIED_FRAMES * SAMPLES_PER_FRAME);
+    let mismatch = rendered.iter().zip(&expected).position(|(a, b)| a != b);
+    assert_eq!(mismatch, None);
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.is_length_stopped());
+    assert!(voice.is_end_tie_eligible(), "the tie stays held throughout");
+}
+
+#[test]
+fn a_wave_first_pass_loads_the_256_step_length_and_clocks_the_enable_edge() {
+    // Raw 255 loads 1; the enable edge empties it on an even step and the same
+    // pass's trigger reloads 256, less the owed extra clock
+    // (`m4a.c:1013-1018,1201-1216`; `mgba/src/gb/audio.c:300-313`).
+    for (step, remaining) in [(6, 255), (5, 1)] {
+        let mut voice = wave(CgbAdsr::flat(), 255);
+        first_pass(&mut voice, step);
+        assert_eq!(voice.length_counter().remaining(), remaining, "step {step}");
+        assert!(voice.length_counter().is_enabled());
+        assert!(!voice.is_length_stopped());
+    }
+}
+
+#[test]
+fn the_idle_off_write_leaves_a_wave_counter_alone() {
+    // `CgbOscOff(3)` writes only `NR30` (`m4a.c:869-871`).
+    let mut voice = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    run(&mut Rig::at_step(6), &mut voice, 1);
+    assert!(voice.is_length_stopped());
+    voice.apply_hardware_off_write();
+    assert_eq!(voice.length_counter().remaining(), 0);
+    assert!(voice.length_counter().is_enabled());
+    assert!(voice.is_length_stopped());
+}
+
+#[test]
+fn a_wave_replacement_inherits_the_enable_bit_so_its_load_is_not_clocked_again() {
+    let mut predecessor = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    run(&mut Rig::at_step(6), &mut predecessor, 1);
+    let mut replacement = wave(CgbAdsr::flat(), WAVE_TIED_LENGTH);
+    replacement.carry_hardware_state_from(&predecessor);
+    first_pass(&mut replacement, 6);
+    assert_eq!(replacement.length_counter().remaining(), 4);
 }
 
 fn first_pass(voice: &mut CgbVoice, step: u8) {
@@ -468,5 +599,169 @@ fn replacing_a_length_expired_noise_voice_keeps_its_held_latch() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn a_square_length_expiry_holds_the_latch_refreshed_at_its_expiry_sample() {
+    // `GBAudioUpdateFrame` runs channels 0x7 up to the step's timestamp
+    // before the length clock stops them (`mgba/src/gb/audio.c:649-657,493-501`),
+    // so the held latch is the duty level at the expiry sample, not the one before.
+    let voice_at = |channel, key, length| {
+        let sweep = (channel == CgbChannelNumber::Square1).then_some(0x08);
+        square_voice_with_adsr(channel, sweep, CgbAdsr::flat(), TestNote::at_key(key))
+            .with_length(length)
+    };
+    for channel in SQUARES {
+        let (key, reference) = (40..=100)
+            .map(|key| {
+                (
+                    key,
+                    run(&mut Rig::at_step(6), &mut voice_at(channel, key, 0), 1),
+                )
+            })
+            .find(|(_, r)| r[FIRST_EXPIRY - 1] != r[FIRST_EXPIRY])
+            .expect("some key steps its duty level at the expiry sample");
+        let mut voice = voice_at(channel, key, TIED_LENGTH);
+        let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
+        assert!(voice.is_length_stopped());
+        assert_eq!(
+            rendered[..FIRST_EXPIRY],
+            reference[..FIRST_EXPIRY],
+            "{channel:?}"
+        );
+        assert_eq!(
+            rendered[FIRST_EXPIRY],
+            reference[FIRST_EXPIRY],
+            "{channel:?} key {key}: ref[155]={:?}",
+            reference[FIRST_EXPIRY - 1]
+        );
+    }
+}
+
+#[test]
+fn a_noise_length_expiry_holds_the_latch_of_the_sample_before_it() {
+    // Unlike the squares and the wave, channel 4 is not run to the expiry
+    // timestamp: `GBAudioUpdateFrame` passes `0x7` (`mgba/src/gb/audio.c:657`)
+    // and channel 4's run is gated on `0x8` (`:585`), so the length clock
+    // stops it holding the latch of its last run, the sample before.
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let voice_at = |key, length| {
+            noise_voice(CgbAdsr::flat(), width, TestNote::at_key(key)).with_length(length)
+        };
+        let (key, reference) = (0..=127)
+            .map(|key| (key, run(&mut Rig::at_step(6), &mut voice_at(key, 0), 1)))
+            .find(|(_, r)| r[FIRST_EXPIRY - 1] != r[FIRST_EXPIRY])
+            .expect("some key steps its noise level at the expiry sample");
+        let mut voice = voice_at(key, TIED_LENGTH);
+        let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
+        assert!(voice.is_length_stopped());
+        assert_eq!(
+            rendered[..FIRST_EXPIRY],
+            reference[..FIRST_EXPIRY],
+            "width {width} key {key}"
+        );
+        assert!(
+            rendered[FIRST_EXPIRY..]
+                .iter()
+                .all(|&sample| sample == reference[FIRST_EXPIRY - 1]),
+            "width {width} key {key}"
+        );
+    }
+}
+
+#[test]
+fn a_wave_length_expiry_holds_the_latch_of_its_expiry_sample() {
+    // The wave latch the expiry sample presents is held
+    // (`mgba/src/gb/audio.c:649-657,768-774`); see `wave_held_oracle`.
+    let voice_at = |key, length| {
+        // An unmodulated track volume keeps the wave envelope inside `gCgb3Vol`;
+        // the default full volume centres past it and mutes the channel.
+        let note = TestNote {
+            note_key: key,
+            played_key: key,
+            ..TestNote::unmodulated()
+        };
+        wave_voice_with_adsr(CgbAdsr::flat(), false, note).with_length(length)
+    };
+    let (key, reference) = (0..=127)
+        .map(|key| (key, run(&mut Rig::at_step(6), &mut voice_at(key, 0), 1)))
+        .find(|(_, r)| r[FIRST_EXPIRY - 1] != r[FIRST_EXPIRY])
+        .expect("some key steps its wave level at the expiry sample");
+    let mut voice = voice_at(key, WAVE_TIED_LENGTH);
+    let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
+    assert!(voice.is_length_stopped());
+    assert_eq!(
+        rendered,
+        wave_held_oracle(&reference, FIRST_EXPIRY, SAMPLES_PER_FRAME),
+        "key {key}"
+    );
+}
+
+#[test]
+fn a_square_length_expiry_latches_before_a_coincident_sweep_retune() {
+    // `GBAudioUpdateFrame` runs the channels to the frame event (`mgba/src/gb/audio.c:657`)
+    // before it steps the sweep and then the length clock (`:663-691`), so a
+    // sweep that retunes channel 1 at the expiry sample does not move the
+    // latch: it is the duty level at the pre-sweep frequency. Length 61 on a
+    // step-6 epoch expires at sample 104, where the first sweep clock lands.
+    //
+    // No sounding sweep and key here both steps the pre-sweep duty level at
+    // the expiry sample and has the retune move it there, so two fixtures pin
+    // the two ways to get the latch wrong: one where the expiry sample's level
+    // differs from the sample before it (holding that earlier sample fails),
+    // and one where the retune moves the expiry sample's level (latching
+    // after the retune fails). Each requires the sweep to act first at the
+    // expiry sample and to leave the channel sounding.
+    const COINCIDENT_EXPIRY: usize = 104;
+    let voice_at = |key, sweep, length| {
+        square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            Some(sweep),
+            CgbAdsr::flat(),
+            TestNote::at_key(key),
+        )
+        .with_length(length)
+    };
+    let fixtures = || {
+        (0x11..=0x17)
+            .flat_map(|sweep| (40..=110).map(move |key| (key, sweep)))
+            .map(|(key, sweep)| {
+                (
+                    key,
+                    sweep,
+                    run(&mut Rig::at_step(6), &mut voice_at(key, sweep, 0), 1),
+                    run(&mut Rig::at_step(6), &mut voice_at(key, 0x08, 0), 1),
+                )
+            })
+            .filter(|(_, _, swept, unswept)| {
+                swept[..COINCIDENT_EXPIRY] == unswept[..COINCIDENT_EXPIRY]
+                    && swept[COINCIDENT_EXPIRY] != (0, 0)
+            })
+    };
+    let duty_step = fixtures()
+        .find(|(_, _, _, unswept)| unswept[COINCIDENT_EXPIRY] != unswept[COINCIDENT_EXPIRY - 1])
+        .expect("some sweep and key step the duty level at the coincident expiry");
+    let retune_step = fixtures()
+        .find(|(_, _, swept, unswept)| swept[COINCIDENT_EXPIRY] != unswept[COINCIDENT_EXPIRY])
+        .expect("some sweep and key have the retune move the level at the coincident expiry");
+
+    for (key, sweep, swept, unswept) in [duty_step, retune_step] {
+        let mut voice = voice_at(key, sweep, 61);
+        let rendered = run(&mut Rig::at_step(6), &mut voice, 1);
+        assert!(voice.is_length_stopped(), "key {key} sweep {sweep:#04x}");
+        assert_eq!(
+            rendered[..COINCIDENT_EXPIRY],
+            swept[..COINCIDENT_EXPIRY],
+            "key {key} sweep {sweep:#04x}"
+        );
+        assert!(
+            rendered[COINCIDENT_EXPIRY..]
+                .iter()
+                .all(|&sample| sample == unswept[COINCIDENT_EXPIRY]),
+            "key {key} sweep {sweep:#04x}: held {:?}, pre-sweep latch {:?}",
+            rendered[COINCIDENT_EXPIRY],
+            unswept[COINCIDENT_EXPIRY]
+        );
     }
 }

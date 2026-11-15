@@ -640,6 +640,18 @@ fn a_single_png_keeps_its_dimensions_whatever_the_registered_size() {
 }
 
 #[test]
+fn a_sheet_whose_plte_exceeds_its_bit_depth_is_read_like_libpng() {
+    // Upstream's `music_notes_2.png` is 4-bit with 80 `PLTE` entries, which
+    // libpng truncates to 16; its pixels are still the sheet.
+    let mut fixture = Fixture::new("oversize-plte");
+    fixture.write("alpha.png", &png(4, 16, 16, 80, RED, |_, _| 7));
+    fixture.pictures[2] = picture_row("Alpha", "0x0100", "A");
+    let pack = fixture.extracted(&[3]);
+    let image = pack.battle_effect(sprite(3)).unwrap().art.image;
+    assert_eq!(image.pixels.len(), 256);
+}
+
+#[test]
 fn an_empty_inventory_emits_nothing() {
     let fixture = Fixture::new("empty");
     fixture.extracted(&[]);

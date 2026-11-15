@@ -170,6 +170,16 @@ fn party(
                 );
             Ok(vec![table(id::PKMNGAINEDEXP, context)])
         }
+        BattleEvent::MoveLearned { move_id } => {
+            // A free slot takes the move without a question: the script goes
+            // straight to `BattleScript_LearnedNewMove`'s PKMNLEARNEDMOVE
+            // print (`data/battle_scripts_1.s:3182`-`:3188`).
+            let context = narrator
+                .context()
+                .with_buffer(0, mon_nick(&player_nick))
+                .with_buffer(1, BattleBuffer::Program(vec![BufferOp::Move(move_id)]));
+            Ok(vec![table(id::PKMNLEARNEDMOVE, context)])
+        }
         BattleEvent::MoveLearnPrompt { move_id } => {
             let context = narrator
                 .context()

@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate, Speed Boost,
-//! Color Change, Trace, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate,
+//! Color Change, Trace, Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 25] {
+fn refused() -> [(BattlePokemon, AbilityId); 24] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -28,8 +28,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 25] {
             mon(SpeciesId::MAWILE, 1, Status1::Healthy),
             AbilityId::INTIMIDATE,
         ),
-        (healthy(SpeciesId::NINJASK), AbilityId::SPEED_BOOST),
-        (healthy(SpeciesId::YANMA), AbilityId::SPEED_BOOST),
         (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
         (healthy(SpeciesId::PORYGON), AbilityId::TRACE),
         (healthy(SpeciesId::PORYGON2), AbilityId::TRACE),
@@ -47,8 +45,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 25] {
             mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
             AbilityId::FLAME_BODY,
         ),
-        (healthy(SpeciesId::CLEFAIRY), AbilityId::CUTE_CHARM),
-        (healthy(SpeciesId::SKITTY), AbilityId::CUTE_CHARM),
         (healthy(SpeciesId::KYOGRE), AbilityId::DRIZZLE),
         (healthy(SpeciesId::GROUDON), AbilityId::DROUGHT),
         (healthy(SpeciesId::TYRANITAR), AbilityId::SAND_STREAM),
@@ -58,6 +54,20 @@ fn refused() -> [(BattlePokemon, AbilityId); 25] {
         ),
         (
             mon(SpeciesId::SNORLAX, 0, Status1::Poisoned),
+            AbilityId::IMMUNITY,
+        ),
+        // Immunity cures bad poison too, whatever its stored counter
+        // (`battle_util.c:2878`-`:2883`).
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 0 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 5 }),
+            AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::SNORLAX, 0, Status1::BadPoisoned { counter: 15 }),
             AbilityId::IMMUNITY,
         ),
         (
@@ -278,6 +288,60 @@ fn effect_spore_holders_are_admitted_on_every_participant_path() {
     }
 }
 
+/// Cute Charm's whole species pool: its contact infatuation is modelled
+/// (`battle_util.c:2851`-`:2870`), so every holder is admitted wherever it stands.
+const CUTE_CHARM_HOLDERS: [SpeciesId; 3] =
+    [SpeciesId::CLEFAIRY, SpeciesId::SKITTY, SpeciesId::DELCATTY];
+
+#[test]
+fn cute_charm_holders_are_admitted_on_every_participant_path() {
+    for species in CUTE_CHARM_HOLDERS {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            let holder = || {
+                let holder = mon(species, 0, status);
+                assert_eq!(holder.ability(), AbilityId::CUTE_CHARM);
+                holder
+            };
+            let opponent = || healthy(SpeciesId::ZIGZAGOON);
+            let lead = || healthy(SpeciesId::MUDKIP);
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+            wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+            trainer(holder(), vec![], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+            trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(
+                lead(),
+                vec![],
+                vec![opponent(), opponent(), holder()],
+                &mut rng,
+            )
+            .unwrap();
+            rng.assert_exhausted();
+
+            let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+            trainer(lead(), vec![holder()], vec![opponent()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+    }
+}
+
 #[test]
 fn truant_holders_are_admitted_on_every_participant_path() {
     for species in TRUANT_HOLDERS {
@@ -392,11 +456,9 @@ fn confusion_is_refused_only_for_own_tempo() {
 fn an_always_refused_ability_is_refused_whatever_the_status() {
     for (species, ability) in [
         (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
-        (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, AbilityId::TRACE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
-        (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, AbilityId::SAND_STREAM),
@@ -453,4 +515,65 @@ fn the_selected_ability_slot_decides_not_the_species_pool() {
     let mut rng = SequenceRng::new(admission_script(false));
     wild(snorlax, vec![], enemy, false, &mut rng).unwrap();
     rng.assert_exhausted();
+}
+
+/// Speed Boost is modelled: its end-turn stage and first-turn counter live in
+/// `Battle`, so every side and bench slot admits it while unrelated refusals stay.
+#[test]
+fn speed_boost_holders_are_admitted_on_every_side_and_slot() {
+    let tie_script = |player: &BattlePokemon, enemy: &BattlePokemon| {
+        SequenceRng::new(admission_script(
+            player.speed_for_turn_order() == enemy.speed_for_turn_order(),
+        ))
+    };
+    for species in [SpeciesId::NINJASK, SpeciesId::YANMA] {
+        let holder = || healthy(species);
+        assert_eq!(holder().ability(), AbilityId::SPEED_BOOST);
+        let foe = || healthy(SpeciesId::ZIGZAGOON);
+
+        let mut rng = tie_script(&holder(), &foe());
+        wild(holder(), vec![], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        wild(foe(), vec![], holder(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        wild(foe(), vec![holder()], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        // The trainer AI cannot score against a two-ability player (Yanma) it
+        // cannot tell apart, an unrelated refusal that stays.
+        if species == SpeciesId::NINJASK {
+            let mut rng = tie_script(&foe(), &foe());
+            trainer(foe(), vec![holder()], vec![foe()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![], vec![foe(), holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        trainer(foe(), vec![], vec![holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+    }
+}
+
+#[test]
+fn a_speed_boost_holder_does_not_excuse_an_unrelated_refusal() {
+    let holder = || healthy(SpeciesId::NINJASK);
+    let mut rng = SequenceRng::new([]);
+    let result = wild(
+        holder(),
+        vec![healthy(SpeciesId::MIGHTYENA)],
+        healthy(SpeciesId::ZIGZAGOON),
+        false,
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
+    let mut rng = SequenceRng::new([]);
+    let result = trainer(
+        healthy(SpeciesId::ZIGZAGOON),
+        vec![],
+        vec![holder(), healthy(SpeciesId::KECLEON)],
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, AbilityId::COLOR_CHANGE, &rng);
 }

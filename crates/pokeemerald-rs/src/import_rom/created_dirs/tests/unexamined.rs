@@ -293,3 +293,68 @@ fn a_capture_whose_held_original_cannot_be_examined_is_reported_with_the_error()
     assert!(level.is_dir(), "the level is put back under its name");
     assert_eq!(entry_names(&dir.path), ["new"], "no quarantine is left");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_moved_level_whose_mode_was_left_and_that_proc_cannot_locate_is_reported_elsewhere() {
+    // The held original is still linked, but `/proc` cannot say where (a
+    // `Linked(None)` standing given through a test seam), and its name is
+    // vacant: that is no proof of removal, so the mode the listing could not
+    // put back is reported, with the level left elsewhere.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::unexamined::a_moved_level_whose_mode_was_left_and_that_proc_cannot_locate_is_reported_elsewhere",
+        );
+        let io = std::io::Error::from(rustix::io::Errno::IO).to_string();
+        assert!(
+            stderr.contains(&format!(
+                "/new was moved away before rollback could take it back; the directory rollback made is left elsewhere and keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o300: {io}"
+            )),
+            "the mode left is not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("mode-left-unlocated");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    fs::rename(&level, dir.join("original")).unwrap();
+    super::take_back::warn_mode_left_unlocated(
+        created[0].parent.as_deref().unwrap(),
+        &created[0],
+        rustix::fs::Mode::from_raw_mode(0o300),
+        rustix::io::Errno::IO.into(),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_moved_level_whose_mode_was_left_and_that_cannot_be_examined_is_reported_with_the_error() {
+    // The name is vacant and the held original's `fstat` fails (ESTALE
+    // through a test seam): it may stand elsewhere with the mode the
+    // listing could not put back (EIO), so both errors are reported.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::unexamined::a_moved_level_whose_mode_was_left_and_that_cannot_be_examined_is_reported_with_the_error",
+        );
+        let io = std::io::Error::from(rustix::io::Errno::IO).to_string();
+        let stale = std::io::Error::from(rustix::io::Errno::STALE).to_string();
+        assert!(
+            stderr.contains(&format!(
+                "/new is no longer under its name, and the directory rollback made for it could not be examined: {stale}; if it was moved rather than removed, it is left elsewhere and keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o300: {io}"
+            )),
+            "the mode left is not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("mode-left-unexamined");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    fs::rename(&level, dir.join("original")).unwrap();
+    super::take_back::warn_mode_left_held_stat_failing(
+        created[0].parent.as_deref().unwrap(),
+        &created[0],
+        rustix::fs::Mode::from_raw_mode(0o300),
+        rustix::io::Errno::IO.into(),
+        rustix::io::Errno::STALE,
+    );
+}

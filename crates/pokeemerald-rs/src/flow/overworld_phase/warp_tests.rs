@@ -5,3 +5,4 @@ mod arrow;
 mod checkpoint;
 mod door;
 mod ordinary;
+mod step_completion_aliases;

@@ -52,7 +52,7 @@ pub(super) fn sync_shed_parents_with(
             &mut synced,
             &here,
             true,
-            above.as_ref().unwrap_or_else(|| dest.handle()),
+            above.as_ref().or_else(|| dest.handle()),
             fsync,
         );
         if !shed_parent_pending(created, &synced) {
@@ -71,7 +71,7 @@ pub(super) fn sync_shed_parents_with(
                         &mut synced,
                         &here,
                         false,
-                        above.as_ref().unwrap_or_else(|| dest.handle()),
+                        above.as_ref().or_else(|| dest.handle()),
                         fsync,
                     );
                     if !release_a_descriptor(created, &synced) {
@@ -103,16 +103,20 @@ fn shed_parent_pending(created: &[CreatedDirectory], synced: &[bool]) -> bool {
 }
 
 /// [`mark_entries_in`], then `fsync`s `directory` when any were marked; a
-/// failed `fsync` takes the marks back, so the entries stay unsynced.
+/// failed `fsync` takes the marks back, so the entries stay unsynced. With
+/// no readable `directory` there is nothing to sync and nothing is marked.
 #[cfg(unix)]
 fn sync_entries_in(
     created: &[CreatedDirectory],
     synced: &mut [bool],
     here: &rustix::fs::Stat,
     shed_only: bool,
-    directory: &std::os::fd::OwnedFd,
+    directory: Option<&std::os::fd::OwnedFd>,
     fsync: &mut dyn FnMut(&std::os::fd::OwnedFd) -> bool,
 ) {
+    let Some(directory) = directory else {
+        return;
+    };
     let before = synced.to_vec();
     if mark_entries_in(created, synced, here, shed_only) && !fsync(directory) {
         synced.copy_from_slice(&before);

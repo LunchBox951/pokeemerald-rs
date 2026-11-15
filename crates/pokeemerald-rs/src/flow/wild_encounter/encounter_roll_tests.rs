@@ -326,7 +326,8 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         assets::MapId("MAP_ROUTE102"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
@@ -656,14 +657,14 @@ fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }
 
-/// A loaded lead holding Oran Berry (`HoldEffect` it does not model) disables the roll
+/// A loaded lead holding Sitrus Berry (`HoldEffect` it does not model) disables the roll
 /// like an Intimidate lead: refused and reported, never silently played without the effect.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
     let treecko = player_mon(277, 50, vec![MoveId::POUND]);
-    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&treecko, ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     let immunity_before = phase.wild.immunity_steps();
 
@@ -684,7 +685,7 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     );
     assert_eq!(
         phase.wild_lead_refusal,
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
 
     phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::NUGGET));
@@ -692,12 +693,42 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild_lead_refusal, None);
 }
 
+/// Taking the refused item through the start menu's hook re-enables the roll, and the
+/// handoff then builds the battle with the same lead.
+#[test]
+fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    let treecko = player_mon(277, 50, vec![MoveId::POUND]);
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::SITRUS_BERRY));
+    assert!(!phase.wild_lead_admissible(), "setup: the item is refused");
+
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::SITRUS_BERRY))
+    );
+
+    assert!(phase.wild_lead_admissible());
+    assert_eq!(phase.wild_lead_refusal, None);
+    let lead = phase.lead_for_test().cloned().expect("the lead stays home");
+    assert_eq!(lead.held_item(), ItemId::NONE);
+
+    // The same grass walk the refused lead blocked now rolls and starts the
+    // battle with that lead.
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    walk_east_and_land(&mut phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(
+        phase.is_wild_battle_active(),
+        "the grass roll must start a battle once the item is gone"
+    );
+}
+
 #[test]
 fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
     let mut rng = Rng::new(ENCOUNTER_SEED);
     let lead = loaded_holding(
         &player_mon(277, 50, vec![MoveId::POUND]),
-        ItemId::ORAN_BERRY,
+        ItemId::SITRUS_BERRY,
     );
     let encounter = WildEncounter {
         slot: 0,
@@ -706,7 +737,7 @@ fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
     };
     assert_eq!(
         start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }
