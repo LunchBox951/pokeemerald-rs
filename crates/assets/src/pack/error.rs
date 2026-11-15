@@ -115,6 +115,15 @@ pub enum PackError {
     },
     /// The pack carries no trainer picture for this identity.
     UnsupportedTrainerPic(TrainerPicId),
+    /// A PC wallpaper entry differs from the upstream graphic's shape.
+    MalformedPcWallpaperAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The byte is not one of the non-default standard wallpapers (4 to 15).
+    UnsupportedPcWallpaper(u8),
     /// A trainer battler entry differs from the upstream graphic's shape.
     MalformedTrainerBattlerAsset {
         /// Asset id.
@@ -340,6 +349,13 @@ impl fmt::Display for PackError {
             Self::MalformedTrainerPicAsset { id, detail } => {
                 write!(f, "asset pack: trainer picture entry `{id}` {detail}")
             }
+            Self::MalformedPcWallpaperAsset { id, detail } => {
+                write!(f, "asset pack: PC wallpaper entry `{id}` {detail}")
+            }
+            Self::UnsupportedPcWallpaper(byte) => write!(
+                f,
+                "asset pack: unsupported PC wallpaper id {byte}: expected 4..=15"
+            ),
             Self::UnsupportedTrainerPic(pic) => write!(
                 f,
                 "asset pack: no trainer picture for index {}",
@@ -455,6 +471,8 @@ impl std::error::Error for PackError {
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
             | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedPcWallpaperAsset { .. }
+            | Self::UnsupportedPcWallpaper(_)
             | Self::MalformedTrainerBattlerAsset { .. }
             | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }

@@ -350,3 +350,109 @@ fn setting_the_hide_flag_of_an_admitted_npc_keeps_its_effect_until_removeobject_
     idle(&mut phase, 3);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 }
+
+/// `GroundEffect_StepOnTallGrass` passes `previousElevation`, which
+/// `ObjectEventUpdateElevation` keeps at the last ordinary cell's 4 on a
+/// transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npcs_rustle_on_transition_grass_takes_the_retained_elevations_subpriority() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_NORMAL, 4), ((3, 13), MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0, "plain ground");
+    phase
+        .object_events
+        .get_mut(6)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::East);
+    idle(&mut phase, 1);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 4));
+    // `sElevationToSubpriority[4]` is 83, the row term at top 0 is 30, and a
+    // rustle on its first command adds 4.
+    assert_eq!(
+        phase.scene.tall_grass_effect_depths(),
+        vec![(4, 83 + 30 + 4)]
+    );
+}
+
+/// `GroundEffect_SpawnOnTallGrass` passes `previousElevation`, which stays the
+/// template's 3 on a transition cell (`event_object_movement.c:7759-7771`).
+#[test]
+fn an_npc_admitted_on_transition_grass_places_its_effect_at_the_retained_elevation() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_TALL_GRASS, 0)],
+        &ROUTE101_BOY_EVENTS,
+        &["boy_2"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    let state = phase.object_events.get(6).unwrap().state();
+    assert_eq!((state.elevation(), state.previous_elevation()), (0, 3));
+    // `sElevationToSubpriority[3]` is 115 and the row term at top 0 is 30.
+    assert_eq!(phase.scene.tall_grass_effect_depths(), vec![(3, 115 + 30)]);
+}
+
+/// Birch's bag, a 16x16 object, standing on tall grass at the boy's tile.
+static BAG_ON_GRASS: [assets::ObjectEvent; 1] = [assets::ObjectEvent {
+    graphics_id: "OBJ_EVENT_GFX_BIRCHS_BAG",
+    movement_type: assets::MovementType::FaceDown,
+    ..route_101_boy("0")
+}];
+static ROUTE101_BAG_EVENTS: assets::MapEvents = route_101_events(&BAG_ON_GRASS);
+
+/// Through the scene's own sprite path, a 16x16 object's settled grass effect
+/// keeps its own subpriority and draws in front of the object: its depth bounds
+/// are the graphic's 16x16 (`field_effect_helpers.c:1676-1687`), not 16x32.
+#[test]
+fn a_16x16_objects_own_grass_effect_draws_in_front_of_it_through_the_scene() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_TALL_GRASS, GROUND)],
+        &ROUTE101_BAG_EVENTS,
+        &["misc/birchs_bag"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1);
+    let entries = phase
+        .scene
+        .sprite_entries(&phase.player, &phase.save1.event_data);
+    let grass = entries
+        .iter()
+        .position(|entry| entry.palette_bank() == GENERAL_1_BANK)
+        .expect("the bag's grass effect is drawn");
+    let bag = entries
+        .iter()
+        .position(|entry| !matches!(entry.palette_bank(), 0 | GENERAL_1_BANK))
+        .expect("the bag is drawn");
+    assert!(
+        grass < bag,
+        "the effect (OAM {grass}) must precede the bag (OAM {bag})"
+    );
+}

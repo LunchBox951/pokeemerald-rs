@@ -21,6 +21,9 @@ pub struct ConnectionCrossing {
     pub target: MapId,
     /// The landing tile position within `target`'s own coordinate space.
     pub position: (i32, i32),
+    /// The translation from the departed map's coordinates to `target`'s, the shift every
+    /// live object carried across the crossing follows.
+    pub shift: (i32, i32),
 }
 
 /// Provides geometry, cells, and behaviors for maps connected to the current
@@ -42,6 +45,17 @@ pub trait ConnectedMapData {
     /// the counterpart of [`MapRuntime::metatile_behavior`] across a
     /// connection.
     fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8>;
+
+    /// Returns whether a live object carried across `crossing` holds the landing tile at
+    /// `elevation` for collision, queried in `crossing.target`'s coordinates
+    /// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4724-4741`).
+    ///
+    /// Only the already-active objects the crossing keeps answer: the destination's own
+    /// templates have not spawned, so a first crossing onto an authored object's tile stays
+    /// passable. The default carries none, as a resolver with no live set does.
+    fn carried_object_event_blocks(&self, _crossing: ConnectionCrossing, _elevation: u8) -> bool {
+        false
+    }
 }
 
 impl<F> ConnectedMapData for F
@@ -331,9 +345,15 @@ impl<'a> MapRuntime<'a> {
             else {
                 continue;
             };
+            let (Some(shift_x), Some(shift_y)) =
+                (position.0.checked_sub(x), position.1.checked_sub(y))
+            else {
+                continue;
+            };
             return Some(ConnectionCrossing {
                 target: connection.target,
                 position,
+                shift: (shift_x, shift_y),
             });
         }
         None
@@ -902,6 +922,8 @@ mod tests {
             .expect("south connection should resolve");
         assert_eq!(crossing.target, MapId("MAP_SOUTH_NEIGHBOR"));
         assert_eq!(crossing.position, (3, 0));
+        // The landing is the departed tile moved by the shift: (3, 10) + (0, -10).
+        assert_eq!(crossing.shift, (0, -10));
 
         assert!(runtime
             .resolve_connection(Direction::North, 3, -1, &dims)

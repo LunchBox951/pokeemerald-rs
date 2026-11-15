@@ -137,8 +137,14 @@ impl OverworldPhase {
                 // `lockfortrainer` (`scrcmd.c:2193-2208`) holds
                 // `DoTrainerApproach`'s icon (`trainer_battle.inc:1-7`) back
                 // until the handoff constants' frames have passed.
-                if let Some(approach) = &mut self.sight_approach {
+                if let (Some(approach), Some(live)) = (
+                    &mut self.sight_approach,
+                    self.object_events.get_mut(local_id),
+                ) {
                     approach.advance_lock_handoff(player_was_moving);
+                    if matches!(approach.stage, ApproachStage::ExclamationIcon { .. }) {
+                        super::SightApproach::exclamation_mark(live.state_mut());
+                    }
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }

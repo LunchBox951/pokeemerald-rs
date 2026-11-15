@@ -1106,6 +1106,8 @@ mod forced_movement_encounter_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod game_stat_steps_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod interaction_tests;

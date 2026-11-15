@@ -60,6 +60,7 @@ pub mod move_names;
 pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
+pub mod pokeblock_flavors;
 pub mod pokedex;
 pub mod script_refs;
 pub mod species;
@@ -133,9 +134,10 @@ pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
-    PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot, PokeBallHandle,
-    PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
-    TextPrinterDownArrow, TilesetHandle, TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot, PcWallpaperHandle,
+    PcWallpaperId, PcWallpaperTile, PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle,
+    StarterPreviewHandle, StarterSpecies, TextPrinterDownArrow, TilesetHandle,
+    TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,

@@ -1,4 +1,7 @@
-use assets::{LandEncounters, MapId, SpeciesId, WildEncounterTable, WildPokemon};
+use assets::{
+    AbilityId, LandEncounters, MapId, SpeciesId, WildEncounterHeader, WildEncounterTable,
+    WildPokemon,
+};
 
 use super::{
     allow_wild_check_on_new_metatile, choose_land_mon_index, choose_wild_mon_level,
@@ -129,8 +132,8 @@ fn choosing_a_level_costs_exactly_one_draw() {
         species: SpeciesId(1),
     };
     let mut rng = ScriptedRng::new([2, 7]);
-    assert_eq!(choose_wild_mon_level(&mon, &mut rng), 12);
-    assert_eq!(choose_wild_mon_level(&mon, &mut rng), 13);
+    assert_eq!(choose_wild_mon_level(&mon, None, &mut rng), 12);
+    assert_eq!(choose_wild_mon_level(&mon, None, &mut rng), 13);
     assert_eq!(rng.draws(), 2);
 }
 
@@ -185,14 +188,14 @@ fn generating_a_land_mon_draws_the_slot_then_the_level() {
     let land = route_101_land();
 
     let mut first_slot_rng = ScriptedRng::new([0, 0]);
-    let first_slot_encounter = try_generate_wild_mon_land(land, &mut first_slot_rng);
+    let first_slot_encounter = try_generate_wild_mon_land(land, None, &mut first_slot_rng);
     assert_eq!(first_slot_encounter.slot, 0);
     assert_eq!(first_slot_encounter.species, land.mons[0].species);
     assert_eq!(first_slot_encounter.level, 2);
     assert_eq!(first_slot_rng.draws(), 2);
 
     let mut last_slot_rng = ScriptedRng::new([99, 0]);
-    let last_slot_encounter = try_generate_wild_mon_land(land, &mut last_slot_rng);
+    let last_slot_encounter = try_generate_wild_mon_land(land, None, &mut last_slot_rng);
     assert_eq!(last_slot_encounter.slot, 11);
     assert_eq!(last_slot_encounter.species, land.mons[11].species);
     assert_eq!(last_slot_encounter.level, 3);
@@ -215,8 +218,9 @@ fn a_same_behavior_step_in_grass_costs_rate_slot_and_level_draws() {
         .get_by_map(MapId("MAP_ROUTE101"))
         .expect("Route 101 header");
     let mut rng = ScriptedRng::new([0, 20, 0]);
-    let encounter = standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut rng)
-        .expect("a rate roll of 0 always passes 320/2880");
+    let encounter =
+        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, None, &mut rng)
+            .expect("a rate roll of 0 always passes 320/2880");
     assert_eq!(rng.draws(), 3);
     assert_eq!(encounter.slot, 1, "20 % 100 = 20 -> slot 1");
     assert_eq!(encounter.level, 2);
@@ -229,17 +233,26 @@ fn a_changed_behavior_step_draws_permission_before_rate_slot_and_level() {
         .expect("Route 101 header");
 
     let mut allowed_rng = ScriptedRng::new([0, 0, 20, 0]);
-    let encounter =
-        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_NORMAL, &mut allowed_rng)
-            .expect("the new-metatile check allowed the roll");
+    let encounter = standard_wild_encounter(
+        Some(header),
+        MB_TALL_GRASS,
+        MB_NORMAL,
+        None,
+        &mut allowed_rng,
+    )
+    .expect("the new-metatile check allowed the roll");
     assert_eq!(allowed_rng.draws(), 4);
     assert_eq!(encounter.slot, 1);
 
     let mut rejected_rng = ScriptedRng::new([60]);
-    assert!(
-        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_NORMAL, &mut rejected_rng)
-            .is_none()
-    );
+    assert!(standard_wild_encounter(
+        Some(header),
+        MB_TALL_GRASS,
+        MB_NORMAL,
+        None,
+        &mut rejected_rng
+    )
+    .is_none());
     assert_eq!(rejected_rng.draws(), 1);
 }
 
@@ -250,7 +263,8 @@ fn a_failed_rate_check_costs_one_draw_and_nothing_more() {
         .expect("Route 101 header");
     let mut rng = ScriptedRng::new([320]);
     assert!(
-        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut rng).is_none()
+        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, None, &mut rng)
+            .is_none()
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -262,10 +276,11 @@ fn missing_headers_and_non_encounter_metatiles_cost_no_draws() {
         .expect("Route 101 header");
     let mut rng = ScriptedRng::new([]);
 
-    assert!(standard_wild_encounter(None, MB_TALL_GRASS, MB_TALL_GRASS, &mut rng).is_none());
-    assert!(standard_wild_encounter(Some(header), MB_NORMAL, MB_NORMAL, &mut rng).is_none());
+    assert!(standard_wild_encounter(None, MB_TALL_GRASS, MB_TALL_GRASS, None, &mut rng).is_none());
+    assert!(standard_wild_encounter(Some(header), MB_NORMAL, MB_NORMAL, None, &mut rng).is_none());
     assert!(
-        standard_wild_encounter(Some(header), MB_SOUTH_ARROW_WARP, MB_NORMAL, &mut rng).is_none()
+        standard_wild_encounter(Some(header), MB_SOUTH_ARROW_WARP, MB_NORMAL, None, &mut rng)
+            .is_none()
     );
     assert_eq!(rng.draws(), 0);
 }
@@ -277,7 +292,7 @@ fn a_map_without_a_land_table_costs_no_draws_on_foot() {
         .expect("Route 108 header");
     assert!(header.land.is_none(), "Route 108 has no land table");
     let mut rng = ScriptedRng::new([]);
-    assert!(standard_wild_encounter(Some(header), MB_CAVE, MB_CAVE, &mut rng).is_none());
+    assert!(standard_wild_encounter(Some(header), MB_CAVE, MB_CAVE, None, &mut rng).is_none());
     assert_eq!(rng.draws(), 0);
 }
 
@@ -292,7 +307,7 @@ fn the_first_four_steps_after_a_transition_never_draw() {
     for step in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
         assert_eq!(state.immunity_steps(), step);
         assert!(state
-            .check_standard_wild_encounter(MB_TALL_GRASS, Some(header), &mut rng)
+            .check_standard_wild_encounter(MB_TALL_GRASS, Some(header), None, &mut rng)
             .is_none());
     }
     assert_eq!(state.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
@@ -300,7 +315,12 @@ fn the_first_four_steps_after_a_transition_never_draw() {
 
     let mut first_eligible_step_rng = ScriptedRng::new([0, 0, 0]);
     let encounter = state
-        .check_standard_wild_encounter(MB_TALL_GRASS, Some(header), &mut first_eligible_step_rng)
+        .check_standard_wild_encounter(
+            MB_TALL_GRASS,
+            Some(header),
+            None,
+            &mut first_eligible_step_rng,
+        )
         .expect("a rate roll of 0 always passes");
     assert_eq!(
         first_eligible_step_rng.draws(),
@@ -316,9 +336,9 @@ fn suppressed_steps_still_record_the_metatile_behavior() {
     let mut state = WildEncounterState::new();
     let mut rng = ScriptedRng::new([]);
     assert_eq!(state.prev_metatile_behavior(), MB_NORMAL);
-    state.check_standard_wild_encounter(MB_TALL_GRASS, None, &mut rng);
+    state.check_standard_wild_encounter(MB_TALL_GRASS, None, None, &mut rng);
     assert_eq!(state.prev_metatile_behavior(), MB_TALL_GRASS);
-    state.check_standard_wild_encounter(MB_CAVE, None, &mut rng);
+    state.check_standard_wild_encounter(MB_CAVE, None, None, &mut rng);
     assert_eq!(state.prev_metatile_behavior(), MB_CAVE);
     assert_eq!(rng.draws(), 0);
 }
@@ -328,7 +348,7 @@ fn restarting_immunity_steps_leaves_the_remembered_behavior_alone() {
     let mut state = WildEncounterState::new();
     let mut rng = ScriptedRng::new([]);
     for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
-        state.check_standard_wild_encounter(MB_TALL_GRASS, None, &mut rng);
+        state.check_standard_wild_encounter(MB_TALL_GRASS, None, None, &mut rng);
     }
     assert_eq!(state.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
 
@@ -345,12 +365,12 @@ fn a_failed_roll_leaves_the_immunity_counter_at_its_ceiling() {
     let mut state = WildEncounterState::new();
     let mut silent = ScriptedRng::new([]);
     for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
-        state.check_standard_wild_encounter(MB_TALL_GRASS, Some(header), &mut silent);
+        state.check_standard_wild_encounter(MB_TALL_GRASS, Some(header), None, &mut silent);
     }
     let mut rng = ScriptedRng::new([320, 320]);
     for _ in 0..2 {
         assert!(state
-            .check_standard_wild_encounter(MB_TALL_GRASS, Some(header), &mut rng)
+            .check_standard_wild_encounter(MB_TALL_GRASS, Some(header), None, &mut rng)
             .is_none());
         assert_eq!(state.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
     }
@@ -367,10 +387,16 @@ fn the_real_generator_drives_the_roll_identically_to_its_script() {
     let script = [probe.next_u16(), probe.next_u16(), probe.next_u16()];
 
     let mut real = Rng::new(RATE_CHECK_FAILURE_SEED);
-    let from_real = standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut real);
+    let from_real =
+        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, None, &mut real);
     let mut scripted = ScriptedRng::new(script);
-    let from_script =
-        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut scripted);
+    let from_script = standard_wild_encounter(
+        Some(header),
+        MB_TALL_GRASS,
+        MB_TALL_GRASS,
+        None,
+        &mut scripted,
+    );
 
     assert_eq!(from_real, from_script);
     assert!(from_real.is_none());
@@ -379,4 +405,155 @@ fn the_real_generator_drives_the_roll_identically_to_its_script() {
     let mut expected_state_after_one_draw = Rng::new(RATE_CHECK_FAILURE_SEED);
     expected_state_after_one_draw.next_u16();
     assert_eq!(real.state(), expected_state_after_one_draw.state());
+}
+
+const LEVEL_BIAS_ABILITIES: [AbilityId; 3] = [
+    AbilityId::HUSTLE,
+    AbilityId::VITAL_SPIRIT,
+    AbilityId::PRESSURE,
+];
+
+fn band(min_level: u8, max_level: u8) -> WildPokemon {
+    WildPokemon {
+        min_level,
+        max_level,
+        species: SpeciesId(1),
+    }
+}
+
+fn level_and_draws(
+    mon: WildPokemon,
+    ability: Option<AbilityId>,
+    script: impl IntoIterator<Item = u16>,
+) -> (u8, usize) {
+    let mut rng = ScriptedRng::new(script);
+    let level = choose_wild_mon_level(&mon, ability, &mut rng);
+    (level, rng.draws())
+}
+
+#[test]
+fn each_level_bias_ability_draws_a_coin_after_the_level() {
+    let mon = band(10, 13);
+    for ability in LEVEL_BIAS_ABILITIES {
+        for (script, expected_level) in [
+            ([1, 0], 13),
+            ([2, 0], 13),
+            ([2, 1], 11),
+            ([0, 1], 10),
+            ([3, 1], 12),
+            ([65535, 3], 12),
+        ] {
+            assert_eq!(
+                level_and_draws(mon, Some(ability), script),
+                (expected_level, 2),
+                "{ability:?} {script:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn other_slot_zero_abilities_and_no_slot_zero_draw_only_the_level() {
+    let mon = band(10, 13);
+    for ability in [None, Some(AbilityId::OVERGROW), Some(AbilityId::NONE)] {
+        assert_eq!(level_and_draws(mon, ability, [2]), (12, 1), "{ability:?}");
+    }
+}
+
+#[test]
+fn a_reversed_band_is_ordered_before_the_bias() {
+    let mon = band(13, 10);
+    assert_eq!(
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [1, 0]),
+        (13, 2)
+    );
+    assert_eq!(
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [2, 1]),
+        (11, 2)
+    );
+    assert_eq!(
+        level_and_draws(mon, Some(AbilityId::PRESSURE), [0, 1]),
+        (10, 2)
+    );
+}
+
+#[test]
+fn a_one_level_band_still_spends_the_coin() {
+    let mon = band(7, 7);
+    for coin in [0, 1] {
+        assert_eq!(
+            level_and_draws(mon, Some(AbilityId::HUSTLE), [65535, coin]),
+            (7, 2)
+        );
+    }
+}
+
+fn biased_header() -> WildEncounterHeader {
+    WildEncounterHeader {
+        map: MapId("MAP_ROUTE101"),
+        label: "gBiased",
+        land: Some(LandEncounters {
+            encounter_rate: 20,
+            mons: [band(10, 13); assets::LAND_SLOTS],
+        }),
+        water: None,
+        rock_smash: None,
+        fishing: None,
+    }
+}
+
+#[test]
+fn a_biased_land_encounter_draws_the_coin_after_rate_slot_and_level() {
+    let header = biased_header();
+    let ability = Some(AbilityId::VITAL_SPIRIT);
+
+    let mut same_behavior = ScriptedRng::new([0, 20, 2, 1]);
+    let encounter = standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_TALL_GRASS,
+        ability,
+        &mut same_behavior,
+    )
+    .expect("a rate roll of 0 always passes");
+    assert_eq!((encounter.slot, encounter.level), (1, 11));
+    assert_eq!(same_behavior.draws(), 4);
+
+    let mut changed_behavior = ScriptedRng::new([0, 0, 20, 2, 1]);
+    let encounter = standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_NORMAL,
+        ability,
+        &mut changed_behavior,
+    )
+    .expect("permission and rate rolls of 0 pass");
+    assert_eq!((encounter.slot, encounter.level), (1, 11));
+    assert_eq!(changed_behavior.draws(), 5);
+}
+
+#[test]
+fn a_rejected_roll_never_draws_the_level_bias_coin() {
+    let header = biased_header();
+    let mut rate_failure = ScriptedRng::new([65535]);
+    assert!(standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_TALL_GRASS,
+        Some(AbilityId::HUSTLE),
+        &mut rate_failure,
+    )
+    .is_none());
+    assert_eq!(rate_failure.draws(), 1);
+
+    let mut permission_failure = ScriptedRng::new([60]);
+    assert!(standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_NORMAL,
+        Some(AbilityId::HUSTLE),
+        &mut permission_failure,
+    )
+    .is_none());
+    assert_eq!(permission_failure.draws(), 1);
 }
