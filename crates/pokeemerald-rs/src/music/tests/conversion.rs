@@ -5,7 +5,8 @@
 
 use assets::{
     AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, KeySplitVoice, NoiseVoice,
-    Sample, SampleId, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
+    ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId, Square1Voice, Square2Voice,
+    VoiceEntry, VoiceGroup, VoiceGroupId,
 };
 use audio::{Adsr, Instrument, Sequencer, ToneData, WaveData, DEFAULT_MASTER_VOLUME};
 
@@ -58,6 +59,7 @@ fn cgb_fixed_rate_tags_survive_loading() {
 
 #[test]
 fn cgb_sound_lengths_survive_loading() {
+    const WAVE_ID: &str = "audio/sample/lengthtest_wave";
     let vg_id = "audio/voicegroup/lengthtest";
     let voicegroup = VoiceGroup::new(vec![
         VoiceEntry::Square1(Square1Voice {
@@ -82,8 +84,15 @@ fn cgb_sound_lengths_survive_loading() {
             envelope: flat_cgb_envelope(),
             fixed_rate: false,
         }),
+        VoiceEntry::ProgrammableWave(ProgrammableWaveVoice {
+            base_key: 60,
+            length: 240,
+            wave: SampleId(WAVE_ID.to_owned()),
+            envelope: flat_cgb_envelope(),
+            fixed_rate: false,
+        }),
     ])
-    .expect("three slots is well under VOICE_SLOT_COUNT");
+    .expect("four slots is well under VOICE_SLOT_COUNT");
     let song = assets::Song::new(
         VoiceGroupId(vg_id.to_owned()),
         assets::MusicPlayerId(0),
@@ -97,17 +106,22 @@ fn cgb_sound_lengths_survive_loading() {
         &[
             ("audio/song/lengthtest", song.encode()),
             (vg_id, voicegroup.encode()),
+            (
+                WAVE_ID,
+                Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] }).encode(),
+            ),
         ],
     );
     let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
     let song = load_song_from_pack(&pack, "lengthtest").expect("the synthetic song loads");
 
-    let lengths = (0..3).map(|slot| match song.voice(slot) {
+    let lengths = (0..4).map(|slot| match song.voice(slot) {
         Some(Instrument::CgbSquare1(tone) | Instrument::CgbSquare2(tone)) => tone.length,
         Some(Instrument::CgbNoise(tone)) => tone.length,
+        Some(Instrument::CgbWave(tone)) => tone.length,
         other => panic!("slot {slot} must convert to a CGB tone, got {other:?}"),
     });
-    assert_eq!(lengths.collect::<Vec<_>>(), [33, 17, 5]);
+    assert_eq!(lengths.collect::<Vec<_>>(), [33, 17, 5, 240]);
 }
 
 #[test]

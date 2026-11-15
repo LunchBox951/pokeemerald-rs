@@ -295,11 +295,11 @@ fn an_open_start_menu_freezes_movement_and_exit_writes_nothing() {
         phase.start_menu().expect("still open").selected(),
         StartMenuItem::Save
     );
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves to the second item"
+        "UP from the first item wraps to EXIT"
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
     assert!(
@@ -326,7 +326,7 @@ fn item_window_pixels(phase: &OverworldPhase) -> Vec<u32> {
     const LEFT: usize = 22 * 8;
     const TOP: usize = 8;
     const WIDTH: usize = 7 * 8;
-    const HEIGHT: usize = (2 * 2 + 2) * 8;
+    const HEIGHT: usize = (3 * 2 + 2) * 8;
     let frame = phase.compose_frame();
     (TOP..TOP + HEIGHT)
         .flat_map(|y| (LEFT..LEFT + WIDTH).map(move |x| (y, x)))
@@ -346,11 +346,11 @@ fn a_on_exit_still_draws_the_menu_on_its_own_press_frame() {
     let mut phase = new_game_phase();
     settle(&mut phase);
     phase.open_synthetic_start_menu();
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves to EXIT before the A press this test drives"
+        "UP wraps to EXIT before the A press this test drives"
     );
     let open_pixels = item_window_pixels(&phase);
 
@@ -443,11 +443,11 @@ fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
     let mut phase = new_game_phase();
 
     phase.open_synthetic_start_menu();
-    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "DOWN moves the cursor onto EXIT before closing"
+        "UP wraps the cursor onto EXIT before closing"
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
     assert!(
@@ -481,11 +481,11 @@ fn reopening_after_start_or_b_keeps_the_cursor() {
         let mut phase = new_game_phase();
 
         phase.open_synthetic_start_menu();
-        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
         assert_eq!(
             phase.start_menu().unwrap().selected(),
             StartMenuItem::Exit,
-            "{close_key:?}: DOWN moves the cursor onto EXIT before closing"
+            "{close_key:?}: UP wraps the cursor onto EXIT before closing"
         );
         phase.advance_start_menu_frame(pressed(close_key), &mut save_slot);
         assert!(

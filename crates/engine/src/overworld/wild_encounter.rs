@@ -1,16 +1,17 @@
 //! Selects ordinary land encounters while preserving the shared RNG stream.
 //!
-//! A same-behavior encounter draws for rate, slot, then level. A metatile
+//! A same-behavior encounter draws for rate, slot, then level, plus one more
+//! coin when party slot 0 holds Hustle, Vital Spirit or Pressure. A metatile
 //! behavior change first draws whether an encounter check is allowed. Each
 //! failed eligibility check stops before later draws. The caller resolves the
-//! map header and builds a battle participant from the returned
-//! [`WildEncounter`].
+//! map header and slot 0's ability, and builds a battle participant from the
+//! returned [`WildEncounter`].
 //!
-//! This module does not apply bike, item, ability, or repel modifiers, and it
+//! This module does not apply bike, item, other ability, or repel modifiers, and it
 //! does not select water, fishing, rock-smash, roamer, outbreak, or special-mode
 //! encounters.
 
-use assets::{LandEncounters, SpeciesId, WildEncounterHeader, WildPokemon};
+use assets::{AbilityId, LandEncounters, SpeciesId, WildEncounterHeader, WildPokemon};
 
 use super::metatile_behavior::{is_land_wild_encounter, MB_NORMAL};
 use crate::rng::RandomSource;
@@ -101,8 +102,35 @@ pub fn level_for_roll(min_level: u8, max_level: u8, roll: u16) -> u8 {
 }
 
 /// Draws one level from a wild Pokémon slot's inclusive level band.
-pub fn choose_wild_mon_level(mon: &WildPokemon, rng: &mut impl RandomSource) -> u8 {
-    level_for_roll(mon.min_level, mon.max_level, rng.next_u16())
+///
+/// `slot_zero_ability` is the ability of party slot 0 when it is not an egg,
+/// whether or not it is fainted or leading the battle (`ChooseWildMonLevel`,
+/// `src/wild_encounter.c:268-303`). After the level draw, Hustle, Vital Spirit
+/// and Pressure draw a second coin, even for a one-level band: an even coin
+/// selects the band's maximum, an odd one lowers a level above the minimum by one.
+pub fn choose_wild_mon_level(
+    mon: &WildPokemon,
+    slot_zero_ability: Option<AbilityId>,
+    rng: &mut impl RandomSource,
+) -> u8 {
+    let level = level_for_roll(mon.min_level, mon.max_level, rng.next_u16());
+    if !matches!(
+        slot_zero_ability,
+        Some(AbilityId::HUSTLE | AbilityId::VITAL_SPIRIT | AbilityId::PRESSURE)
+    ) {
+        return level;
+    }
+    let (min, max) = (
+        mon.min_level.min(mon.max_level),
+        mon.min_level.max(mon.max_level),
+    );
+    if rng.next_u16().is_multiple_of(2) {
+        max
+    } else if level > min {
+        level - 1
+    } else {
+        level
+    }
 }
 
 /// Draws against [`MAX_ENCOUNTER_RATE`] and compares the result with `encounter_rate`.
@@ -121,14 +149,16 @@ pub fn allow_wild_check_on_new_metatile(rng: &mut impl RandomSource) -> bool {
     rng.next_u16() % NEW_METATILE_ROLL_RANGE < NEW_METATILE_CHECK_CHANCE
 }
 
-/// Draws a land encounter's slot and then its level.
+/// Draws a land encounter's slot and then its level for `slot_zero_ability`
+/// (see [`choose_wild_mon_level`]).
 pub fn try_generate_wild_mon_land(
     land: &LandEncounters,
+    slot_zero_ability: Option<AbilityId>,
     rng: &mut impl RandomSource,
 ) -> WildEncounter {
     let slot = choose_land_mon_index(rng);
     let mon = land.mons[slot];
-    let level = choose_wild_mon_level(&mon, rng);
+    let level = choose_wild_mon_level(&mon, slot_zero_ability, rng);
     WildEncounter {
         species: mon.species,
         level,
@@ -141,10 +171,12 @@ pub fn try_generate_wild_mon_land(
 /// `header` is the already-resolved entry for the current map. `None`, a
 /// non-land metatile, a missing land table, a rejected behavior change, or a
 /// failed rate draw returns `None` before consuming any later draw.
+/// `slot_zero_ability` is passed to [`choose_wild_mon_level`].
 pub fn standard_wild_encounter(
     header: Option<&WildEncounterHeader>,
     current_metatile_behavior: u8,
     previous_metatile_behavior: u8,
+    slot_zero_ability: Option<AbilityId>,
     rng: &mut impl RandomSource,
 ) -> Option<WildEncounter> {
     let header = header?;
@@ -160,7 +192,7 @@ pub fn standard_wild_encounter(
     if !wild_encounter_check(land.encounter_rate, rng) {
         return None;
     }
-    Some(try_generate_wild_mon_land(land, rng))
+    Some(try_generate_wild_mon_land(land, slot_zero_ability, rng))
 }
 
 /// Per-step encounter immunity and previous-metatile state.
@@ -207,10 +239,12 @@ impl WildEncounterState {
     ///
     /// Immune steps consume no RNG. A successful encounter restarts immunity;
     /// failed eligible rolls leave the counter at its ceiling.
+    /// `slot_zero_ability` is passed to [`choose_wild_mon_level`].
     pub fn check_standard_wild_encounter(
         &mut self,
         current_metatile_behavior: u8,
         header: Option<&WildEncounterHeader>,
+        slot_zero_ability: Option<AbilityId>,
         rng: &mut impl RandomSource,
     ) -> Option<WildEncounter> {
         let encounter = if self.immunity_steps < WILD_ENCOUNTER_IMMUNITY_STEPS {
@@ -221,6 +255,7 @@ impl WildEncounterState {
                 header,
                 current_metatile_behavior,
                 self.prev_metatile_behavior,
+                slot_zero_ability,
                 rng,
             )
         };

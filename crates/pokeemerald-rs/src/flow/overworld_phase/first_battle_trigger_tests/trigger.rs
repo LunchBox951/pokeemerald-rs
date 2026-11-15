@@ -511,7 +511,41 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
     phase.assert_lead_at_slot_for_test(0);
 }
 
-/// A loaded lead holding Oran Berry leaves the rescue armed, draws nothing and stays home
+/// A fainted lead is a refusal the screen reports before the trigger spends its state, so the
+/// rescue stays armed and neither the Zigzagoon's construction nor the held-item roll draws.
+#[test]
+fn a_fainted_lead_leaves_the_rescue_armed_without_drawing() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    let mut lead = new_game::provisional_starter();
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead is fainted");
+    phase.set_fresh_lead_for_test(lead.clone());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(!phase.is_first_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(4242).state(),
+        "a fainted lead must not draw at all"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue stays armed"
+    );
+    assert_eq!(phase.lead_for_test(), Some(&lead), "the lead stays home");
+    phase.assert_lead_at_slot_for_test(0);
+}
+
+/// A loaded lead holding Sitrus Berry leaves the rescue armed, draws nothing and stays home
 /// -- the item's refusal is as free as an inadmissible lead's.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing() {
@@ -522,7 +556,7 @@ fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing()
         Direction::East,
     ));
     phase.rng = Rng::new(4242);
-    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
 
     walk_one_tile_east(&mut phase);
@@ -537,6 +571,31 @@ fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing()
         "the lead keeps its item at home"
     );
     phase.assert_lead_at_slot_for_test(0);
+}
+
+/// The same lead, after the take, starts the rescue battle and the bag holds the item.
+#[test]
+fn taking_a_refused_item_lets_the_first_battle_start() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(loaded_holding(
+        &new_game::provisional_starter(),
+        ItemId::SITRUS_BERRY,
+    ));
+
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::SITRUS_BERRY))
+    );
+    walk_one_tile_east(&mut phase);
+
+    assert!(phase.is_first_battle_active(), "the rescue battle starts");
+    assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(2));
 }
 
 /// A successful first-battle start leaves the lead lent, so a second lend is refused.

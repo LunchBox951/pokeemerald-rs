@@ -580,3 +580,63 @@ fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
     assert_eq!((ball.open_sheet.width, ball.open_sheet.height), (16, 16));
     assert_eq!(ball.open_sheet.pixels.len(), 16 * 16);
 }
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_down_arrow_frames_bob_the_arrow_up_one_row_at_a_time() {
+    // `down_arrow.png` paints one arrow starting at sheet row 5, in palette
+    // indices 0, 2 and 4; the blit windows start at rows 0, 1, 2, 1.
+    const FIRST_ARROW_ROW: usize = 5;
+    const FRAME_START_ROWS: [usize; 4] = [0, 1, 2, 1];
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let arrow = pack.text_printer_down_arrow().expect("the down arrow");
+
+    for (index, start) in FRAME_START_ROWS.into_iter().enumerate() {
+        let frame = arrow.frame(u8::try_from(index).unwrap());
+        assert_eq!((frame.width, frame.height, frame.bit_depth), (8, 16, 4));
+        let first_painted_row = frame
+            .pixels
+            .chunks_exact(8)
+            .position(|row| row.iter().any(|&pixel| pixel != 0));
+        assert_eq!(first_painted_row, Some(FIRST_ARROW_ROW - start), "{index}");
+        assert!(frame.pixels.iter().all(|pixel| [0, 2, 4].contains(pixel)));
+    }
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_party_menu_has_every_record_in_its_upstream_shape() {
+    use crate::{PartyMenuButton, PartyMenuSlot};
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let menu = pack.party_menu().expect("the party menu");
+
+    // `bg.png`: 64 tiles cut to the first 62; 176 palette colours.
+    let bg = menu.background;
+    assert_eq!((bg.sheet.width, bg.sheet.height), (8, 496));
+    assert_eq!(bg.sheet.pixels.len(), 8 * 496);
+    assert_eq!(bg.palette.color_count, 176);
+    assert_eq!(bg.palette.color(0), Some(0x3A6F));
+    assert_eq!(bg.tilemap.len(), 2048);
+    // `pokeball.png` keeps all 32 tiles, `hold_icons.png` its 2.
+    assert_eq!(
+        (menu.poke_ball.image.width, menu.poke_ball.image.height),
+        (32, 64)
+    );
+    assert_eq!(menu.poke_ball.palette.color(0), Some(0x6605));
+    assert_eq!(
+        (menu.held_item.image.width, menu.held_item.image.height),
+        (8, 16)
+    );
+    assert_eq!(menu.held_item.palette.color(0), Some(0x3727));
+    // The slot grids are `u8` tile indices into the 62-tile background sheet.
+    let lengths = PartyMenuSlot::ALL.map(|slot| menu.slot(slot).len());
+    assert_eq!(lengths, [70, 70, 54, 54, 54]);
+    let maxima = PartyMenuSlot::ALL.map(|slot| menu.slot(slot).iter().copied().max().unwrap());
+    assert_eq!(maxima, [61, 48, 57, 57, 39]);
+    // The buttons are `u16` entries, not flattened to tile indices.
+    for button in PartyMenuButton::ALL {
+        assert_eq!(menu.button(button).len(), 28);
+    }
+}

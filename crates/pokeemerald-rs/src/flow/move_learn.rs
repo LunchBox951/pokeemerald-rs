@@ -4,10 +4,26 @@
 //! decline each prompt because that is the only decision that preserves the
 //! player's moveset.
 
-use battle::{Battle, BattleEvent, MoveLearnDecision};
+use battle::{Battle, BattleError, BattleEvent, MoveLearnDecision};
 use engine::rng::Rng;
 
 use super::wild_encounter::SharedRng;
+
+/// Declines the pending prompt and returns the events that decision released,
+/// including a following prompt or the deferred battle aftermath.
+///
+/// `rng` feeds the residual pass the last prompt's decision releases, as in
+/// [`settle_move_learn_prompts`].
+///
+/// # Errors
+///
+/// [`Battle::resolve_move_learn`]'s error, which leaves the prompt pending.
+pub(super) fn decline_pending_move_learn(
+    battle: &mut Battle,
+    rng: &mut Rng,
+) -> Result<Vec<BattleEvent>, BattleError> {
+    battle.resolve_move_learn(MoveLearnDecision::Decline, &mut SharedRng::new(rng))
+}
 
 /// Declines every pending prompt and returns all events released by those
 /// decisions, including deferred battle aftermath.
@@ -17,7 +33,7 @@ use super::wild_encounter::SharedRng;
 pub(super) fn settle_move_learn_prompts(battle: &mut Battle, rng: &mut Rng) -> Vec<BattleEvent> {
     let mut released_events = Vec::new();
     while battle.pending_move_learn().is_some() {
-        match battle.resolve_move_learn(MoveLearnDecision::Decline, &mut SharedRng::new(rng)) {
+        match decline_pending_move_learn(battle, rng) {
             Ok(events) => released_events.extend(events),
             Err(unexpected_error) => {
                 eprintln!(

@@ -233,3 +233,154 @@ fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack()
     assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
     assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }
+
+/// The umasks [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
+/// imports under.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+const OWNER_STRIPPING_UMASKS: &[&str] = &[
+    "0444",
+    "0277",
+    "0477",
+    "0022",
+    #[cfg(not(target_vendor = "apple"))]
+    "0177",
+    #[cfg(not(target_vendor = "apple"))]
+    "0777",
+];
+
+/// Set in the child [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
+/// re-runs itself as, holding the umask that child imports under.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+const NESTED_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_NESTED_UMASK_CHILD";
+
+/// An import to a destination whose every level is missing leaves each level
+/// it created with the owner's read, write and search, whatever the umask
+/// took, and the group and other bits the umask allows. `mkdirat(0777)`
+/// under `0444` leaves `0333`, under `0277` leaves `0500`, which the next
+/// level cannot be created in. The modes are asserted because a root runner
+/// is not stopped by either.
+///
+/// The umask is process-wide, so each case runs alone in a child that reads
+/// its mask from the environment.
+///
+/// Every mask here leaves the owner's search bit, which the traversal opens
+/// of Apple platforms need to pin a level; `0177` and `0777` take it too and
+/// are tried only where the pin is an `O_PATH` descriptor. Other Unix
+/// systems pin with a read-requiring open and are outside this test, as they
+/// are for the existing-destination test below.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = "import_rom::tests::publishing::\
+                an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask";
+    let Some(mask) = std::env::var_os(NESTED_UMASK_CHILD) else {
+        for mask in OWNER_STRIPPING_UMASKS {
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", "umask \"$1\" && shift && exec \"$0\" \"$@\""])
+                .arg(std::env::current_exe().unwrap())
+                .arg(mask)
+                .args(["--exact", name, "--test-threads=1"])
+                .env(NESTED_UMASK_CHILD, mask)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "umask {mask} child failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let mask = u32::from_str_radix(mask.to_str().unwrap(), 8).unwrap();
+
+    // The fixtures are made under an ordinary umask, so only the import's
+    // own directories answer to the hostile one.
+    let hostile = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+    let dir = TempDir::new("umask-nested");
+    let source = SourceRom::new("umask-nested-src");
+    rustix::process::umask(hostile);
+
+    let outer = dir.join("one");
+    let inner = outer.join("two");
+    let pack_path = inner.join("pokeemerald.pack");
+    import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import creates the nested destination");
+
+    // The owner's rwx is added to whatever `mkdirat(0777)` left, and nothing
+    // else changes.
+    let expected_dir = (0o777 & !mask) | 0o700;
+    for level in [&outer, &inner] {
+        let mode = fs::metadata(level).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, expected_dir, "{level:?} under umask {mask:04o}");
+    }
+    let mode = fs::metadata(&pack_path).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, (0o666 & !mask) | 0o600, "pack under umask {mask:04o}");
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+    assert_eq!(file_names(&inner), ["pokeemerald.pack"]);
+}
+
+// Same platform boundary as the traversal opens in `created_dirs`: every
+// other Unix falls back to a read-requiring open.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn an_import_into_an_existing_destination_that_is_writable_but_not_readable_publishes() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Creating, renaming and removing a basename needs write and search on
+    // the directory, never read: a `0o300` drop box takes the pack.
+    let dir = TempDir::new("unreadable-destination");
+    let drop_box = dir.join("drop-box");
+    fs::create_dir(&drop_box).expect("the destination is created");
+    let pack_path = drop_box.join("pokeemerald.pack");
+    let source = SourceRom::new("unreadable-destination-src");
+
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o300))
+        .expect("the destination closes");
+    // A privileged user ignores directory permissions, so the close-off does
+    // not block them and there is nothing to assert. Asked of the outcome
+    // rather than of the uid, so it needs no libc.
+    let unreadable = fs::read_dir(&drop_box).is_err();
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    });
+    fs::set_permissions(&drop_box, fs::Permissions::from_mode(0o755))
+        .expect("the destination reopens");
+
+    if unreadable {
+        outcome.expect("a writable, searchable destination takes the pack");
+        assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+        assert_eq!(file_names(&drop_box), ["pokeemerald.pack"]);
+    } else {
+        // A privileged user is not closed off by `0o300`, so the assertion
+        // cannot run; say so rather than pass vacuously.
+        eprintln!(
+            "an_import_into_an_existing_destination_that_is_writable_but_not_readable_publishes: \
+             skipped -- running privileged, 0o300 did not close the destination off"
+        );
+    }
+}

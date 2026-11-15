@@ -137,6 +137,12 @@ impl Mixer {
     /// Whether no voice (DirectSound or CGB) is active and no vacated noise
     /// slot still holds an unsettled output latch that idle frames render
     /// (`CgbVoice::render_idle_hardware`'s doc).
+    ///
+    /// This is the finite-tail query behind playback completion, so it
+    /// excludes a vacated wave slot's held sample: that level is permanent
+    /// hardware state no idle frame settles, and counting it would keep a
+    /// wave note's song from ever finishing. [`Self::has_held_wave_output`] and
+    /// [`Self::is_silent`] report it instead.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.direct_sound_slots.iter().all(Option::is_none)
@@ -146,6 +152,35 @@ impl Mixer {
                 .iter()
                 .flatten()
                 .any(CgbVoice::has_unsettled_noise_output)
+    }
+
+    /// Whether the vacated wave slot keeps mixing a nonzero held sample onto
+    /// a routed side, as `NR30 = 0` clears neither the sample nor `NR51`
+    /// (`mgba/src/gb/audio.c:246-253,768-774`; `pokeemerald/src/m4a.c:869-871`).
+    ///
+    /// The level never settles by idling. It reports `false` while a voice
+    /// occupies the slot (the voice, not the held level, is what renders), and
+    /// the stale hardware is dropped when that voice commits its initial
+    /// trigger (`Self::mix_frame`); a voice stopped before that trigger leaves
+    /// the old level held again. The mixer being discarded, as the player does
+    /// on a restart, ends it too.
+    #[must_use]
+    pub fn has_held_wave_output(&self) -> bool {
+        self.idle_cgb_hardware
+            .iter()
+            .zip(&self.cgb_slots)
+            .any(|(idle, slot)| {
+                slot.is_none() && idle.as_ref().is_some_and(CgbVoice::holds_wave_output)
+            })
+    }
+
+    /// The conservative output query: whether mixing another frame with no
+    /// voice added emits only zeros. False for any live voice (even one whose
+    /// route is silent), unsettled noise latch, held wave sample, or pending
+    /// reverb sample.
+    #[must_use]
+    pub fn is_silent(&self) -> bool {
+        self.is_idle() && !self.has_held_wave_output() && !self.has_pending_reverb()
     }
 
     /// Whether the master-mix reverb still holds delayed samples that can
@@ -266,7 +301,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.tick_gate();
             }
         }
@@ -293,7 +328,9 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
+                voice.track() == Some(track)
+                    && voice.is_end_tie_eligible()
+                    && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
 
@@ -328,8 +365,11 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track && !voice.is_stopping() {
-                voice.note_off();
+            if voice.track() == Some(track) {
+                if !voice.is_stopping() {
+                    voice.note_off();
+                }
+                voice.detach_track();
             }
         }
     }
@@ -347,7 +387,7 @@ impl Mixer {
         }
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
-                if voice.track() == track {
+                if voice.track() == Some(track) {
                     Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
                     *slot = None;
                 }
@@ -376,7 +416,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
@@ -390,7 +430,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_pitch(key_m, pit_m);
             }
         }
@@ -470,7 +510,11 @@ impl Mixer {
         for (index, idle) in self.idle_cgb_hardware.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
                 if let Some(hardware) = idle {
-                    hardware.render_idle_hardware(&mut self.mix_buffer, &self.clocks.sweep);
+                    hardware.render_idle_hardware(
+                        &mut self.mix_buffer,
+                        &self.clocks.sweep,
+                        &self.clocks.length,
+                    );
                 }
             }
         }

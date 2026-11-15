@@ -313,6 +313,7 @@ mod tests {
         extract_palette, extract_pokedex_graphics, extract_raw, extract_sheet, RawSource,
         SheetSource, DIRECTORY, PALETTES, RAW_FILES, SHEETS,
     };
+    use crate::extract::png::PngError;
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
@@ -614,14 +615,29 @@ mod tests {
         let dir = scratch_dir("embedded-count");
         let mut writer = PackWriter::new();
         let source = area_marker();
-        for colors in [15, 17] {
-            let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, colors, 0));
-            assert_eq!(
-                mismatch_path(extract_sheet(&dir, source, &mut writer).unwrap_err()),
-                path,
-                "{colors} colours"
-            );
-        }
+        // Too few entries fail this extractor's own count check.
+        let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, 15, 0));
+        assert_eq!(
+            mismatch_path(extract_sheet(&dir, source, &mut writer).unwrap_err()),
+            path,
+            "15 colours"
+        );
+        // Too many fail `png::decode`, which does not truncate: truncating
+        // 17 entries to 16 would let this check pass on a malformed PNG.
+        let path = write_sheet(&dir, source, &png_bytes(4, 16, 16, 17, 0));
+        assert!(
+            matches!(
+                extract_sheet(&dir, source, &mut writer).unwrap_err(),
+                ExtractError::Png(
+                    error_path,
+                    PngError::PaletteExceedsBitDepth {
+                        count: 17,
+                        bit_depth: 4
+                    }
+                ) if error_path == path
+            ),
+            "17 colours"
+        );
         assert_eq!(writer.len(), 0);
         std::fs::remove_dir_all(dir).unwrap();
     }

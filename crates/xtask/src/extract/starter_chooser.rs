@@ -406,7 +406,9 @@ mod tests {
             raw.push(0);
             raw.resize(raw.len() + row_bytes, 0);
         }
-        let plte = vec![7; sheet.colors * 3];
+        // A `PLTE` longer than `2^bit_depth` would fail the PNG decode
+        // before the bit-depth check this fixture exercises.
+        let plte = vec![7; sheet.colors.min(1 << bit_depth) * 3];
         indexed_png_from_raw_with_plte(bit_depth, sheet.width, sheet.height, &raw, &plte)
     }
 

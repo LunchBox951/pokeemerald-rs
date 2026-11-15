@@ -32,10 +32,13 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 /// `(tile_elevation, tile_elevation)` when the save cannot be trusted to hold
 /// one for this tile (`LoadObjectEvents`, `src/load_save.c:188-193`).
 ///
-/// The pair is trusted only when the decoded `active` is set (upstream's bit
-/// plus a marker only this port's writer sets, which rejects an image re-saved
-/// by an older writer) and the saved current elevation is one upstream could
-/// hold on the landing cell: the cell's own, or any on a multi-level cell
+/// The pair is trusted only when the decoded `active` is set (a record this
+/// port's writer marked, or a pristine upstream one whose coordinates agree
+/// with `pos`; `engine::save::block` documents the rule and the unmarked
+/// record an earlier port writer re-saved at an unchanged position, which it
+/// cannot tell apart and so adopts) and the saved
+/// current elevation is one upstream could hold on the landing cell: the
+/// cell's own, or any on a multi-level cell
 /// ([`ELEVATION_MULTI_LEVEL`]; `ObjectEventUpdateElevation`,
 /// `src/event_object_movement.c:7759-7771`).
 pub(super) fn saved_elevations(

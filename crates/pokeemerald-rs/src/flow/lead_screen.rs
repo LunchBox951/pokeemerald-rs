@@ -1,6 +1,7 @@
 //! The player-side screen every battle start shares.
 //!
-//! A battle refuses a lead its turn engine cannot play: one it does not admit
+//! A battle refuses a lead its turn engine cannot play: one that has fainted
+//! ([`BattleError::FaintedBattler`]), one it does not admit
 //! ([`battle::ensure_participant_admissible`]) or one holding an item whose
 //! effect it does not model ([`battle::ensure_held_item_playable`]). Every flow
 //! runs this before its first RNG draw, and the overworld runs it before it
@@ -17,9 +18,26 @@
 //! Only the lead is screened here for the first-battle, rival and
 //! sight-trainer flows, which bring no reserves. The wild flow screens each
 //! saved reserve through the same function and leaves out one it refuses,
-//! keeping its saved item. No item effect is implemented, and nothing yet gives
-//! or takes a held item, so an imported save whose lead holds an item with a
-//! battle effect cannot enter these battles until that exists.
+//! keeping its saved item. A fainted lead is refused the same way, before any
+//! draw and before any trigger state is spent: the Route 101 rescue stays
+//! armed and no encounter is rolled for a battle that cannot start.
+//!
+//! Only Oran Berry's end-turn heal is implemented
+//! ([`battle::ensure_held_item_playable`] admits it), so an imported save
+//! whose lead holds any other item with a battle effect cannot enter these
+//! battles until the player takes the item off it. An item with no battle
+//! effect, and Oran Berry, pass the screen.
+//!
+//! # Taking the item off
+//!
+//! The way out is `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273`):
+//! [`crate::party::take_held_item`] moves the item into the bag, and the
+//! start menu's TAKE entry reaches it through
+//! `OverworldPhase::show_take_item_outcome`, which stages the take, opens
+//! the outcome's message box, and then commits it and merges the lead into
+//! its saved slot. The screen above then admits the lead in every flow, as it
+//! admits one that never held the item. A full bag refuses the take and the
+//! lead keeps the item, so the refusal stays honest.
 
 use battle::{BattleError, BattlePokemon};
 
@@ -27,9 +45,14 @@ use battle::{BattleError, BattlePokemon};
 ///
 /// # Errors
 ///
-/// Returns the participant's admission error first, otherwise
-/// [`BattleError::UnsupportedHeldItem`] for an item with a battle effect.
+/// Returns [`BattleError::FaintedBattler`] for a fainted lead first, then the
+/// participant's admission error, otherwise
+/// [`BattleError::UnsupportedHeldItem`] for an item whose battle effect is
+/// not implemented.
 pub(super) fn ensure_lead_can_battle(lead: &BattlePokemon) -> Result<(), BattleError> {
+    if lead.is_fainted() {
+        return Err(BattleError::FaintedBattler(true));
+    }
     battle::ensure_participant_admissible(lead)?;
     battle::ensure_held_item_playable(lead.held_item())
 }
