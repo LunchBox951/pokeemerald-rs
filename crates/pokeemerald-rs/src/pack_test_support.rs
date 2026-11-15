@@ -48,7 +48,8 @@ pub(crate) fn palette_entry_with_colors(
 /// [`pack_bytes`], first adding a blank 2-bit glyph sheet for every
 /// [`assets::fonts::FontId`] that `entries` leaves out, so a fixture that
 /// customises one font still carries the five sheets every printer owner
-/// loads, and a blank keypad-icon sheet when `entries` has none.
+/// loads, and a blank keypad-icon sheet and down-arrow sheet when `entries`
+/// has none.
 pub(crate) fn pack_bytes_with_fonts(mut entries: Vec<PackEntry>) -> Vec<u8> {
     for font in assets::fonts::FontId::ALL {
         let id = format!("font/{}/glyphs", font.pack_name());
@@ -80,6 +81,21 @@ pub(crate) fn pack_bytes_with_fonts(mut entries: Vec<PackEntry>) -> Vec<u8> {
                 assets::keypad_icons::SHEET_HEIGHT,
                 4,
                 pixels,
+            )
+            .unwrap(),
+        );
+    }
+    if !entries
+        .iter()
+        .any(|entry| entry.id == "interface/image/down_arrow")
+    {
+        entries.push(
+            pack_format::image_entry(
+                "interface/image/down_arrow".into(),
+                8,
+                48,
+                4,
+                vec![0u8; 8 * 48],
             )
             .unwrap(),
         );
