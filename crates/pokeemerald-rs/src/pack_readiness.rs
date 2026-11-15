@@ -52,6 +52,7 @@ impl Requirements {
             .palettes
             .iter()
             .chain(roots.sprites.palettes)
+            .chain(roots.sprites.field_effect_palettes)
             .chain(roots.text_window.palettes)
             .chain(roots.interface.palettes)
             .chain(roots.bag.palettes)

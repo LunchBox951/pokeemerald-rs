@@ -119,6 +119,9 @@ fn missing_gameplay_assets_block_boot_before_a_save_is_opened() {
         "battle-interface/image/textbox",
         "battle-interface/palette/textbox",
         "battle-interface/raw/textbox_map",
+        // The tall-grass sheet is required, so the overworld scene also
+        // loads the field-effect palette it draws with.
+        "field-effect/palette/general_1",
     ] {
         let bytes = synthetic_pack(Some(id));
         let media = Media::new(&bytes);
