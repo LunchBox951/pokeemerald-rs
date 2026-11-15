@@ -4,9 +4,17 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.127.0] - 2026-11-14
+## [0.0.129.0] - 2026-11-15
 
 - The game now checks your installed asset pack before it starts and, if the pack is missing, damaged or out of date, tells you to import your ROM again instead of failing later.
+
+## [0.0.128.0] - 2026-11-14
+
+- General improvements in preparation for Pokémon cries that start partway through their sample, as the original game's cry data asks.
+
+## [0.0.127.0] - 2026-11-14
+
+- Importing from your ROM now brings in the tall-grass rustle graphics, so the grass animates around you on a ROM-imported pack too.
 
 ## [0.0.126.0] - 2026-11-13
 
@@ -573,8 +581,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.127.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/76d0f61938e1b5d3e33ceb9a8eb2aa3161d5bb57...dev
-[0.0.126.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c0cb698365891c5b54d49843e672e5f9b9a088eb...76d0f61938e1b5d3e33ceb9a8eb2aa3161d5bb57
+[0.0.129.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/90841a7c02a1e565fbe8115999ee37075913811e...dev
+[0.0.128.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/9e1f2ea174fb045d934c3c32fd60501b838ee75f...90841a7c02a1e565fbe8115999ee37075913811e
+[0.0.127.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/fa501fbcd7d90de6e1d970d041ff3b5278adac57...9e1f2ea174fb045d934c3c32fd60501b838ee75f
+[0.0.126.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c0cb698365891c5b54d49843e672e5f9b9a088eb...fa501fbcd7d90de6e1d970d041ff3b5278adac57
 [0.0.125.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/685d7358aa2372042630ee889f0e731c324296d4...c0cb698365891c5b54d49843e672e5f9b9a088eb
 [0.0.124.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cb63d96e6399c057df86b5e103ad985c772f1d55...685d7358aa2372042630ee889f0e731c324296d4
 [0.0.123.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/5bc427b52affc7926f5ef151a6c8f61aea0399a6...cb63d96e6399c057df86b5e103ad985c772f1d55
