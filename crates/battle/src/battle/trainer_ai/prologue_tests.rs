@@ -129,6 +129,10 @@ fn wonder_guard_cancels_everything_but_an_exactly_super_effective_hit() {
     let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
     assert_eq!(prologue(MoveId::WATER_GUN, &shedinja), (true, MINUS_10));
     assert_eq!(prologue(MoveId::WING_ATTACK, &shedinja), (false, FULL));
+    // Rollout shares Ice Ball's effect: Rock is super effective against
+    // Shedinja's Bug typing, Ice is not.
+    assert_eq!(prologue(MoveId::ROLLOUT, &shedinja), (false, FULL));
+    assert_eq!(prologue(MoveId::ICE_BALL, &shedinja), (true, MINUS_10));
 }
 
 #[test]
@@ -165,11 +169,16 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::DRAGON_RAGE,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::CONFUSION,
         MoveId::VITAL_THROW,
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
+        MoveId::ROLLOUT,
+        MoveId::ICE_BALL,
     ];
     for move_id in moves {
         let effect = Dex::new().move_data(move_id).unwrap().effect;
@@ -183,17 +192,20 @@ fn the_audited_row_set_is_exact() {
     let effects = [
         MoveEffect::ABSORB,
         MoveEffect::POISON_HIT,
+        MoveEffect::THAW_HIT,
         MoveEffect::ALWAYS_HIT,
         MoveEffect::MULTI_HIT,
         MoveEffect::DRAGON_RAGE,
         MoveEffect::HIGH_CRITICAL,
         MoveEffect::SPEED_DOWN_HIT,
+        MoveEffect::ACCURACY_DOWN_HIT,
         MoveEffect::EVASION_DOWN_HIT,
         MoveEffect::CONFUSE_HIT,
         MoveEffect::VITAL_THROW,
         MoveEffect::SPLASH,
         MoveEffect::QUICK_ATTACK,
         MoveEffect::CHARGE,
+        MoveEffect::ROLLOUT,
     ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected: Vec<u8> = UNCHANGED_AFTER_PROLOGUE_EFFECTS
@@ -223,6 +235,7 @@ fn admission_is_flag_aware() {
         MoveId::SWIFT,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::VITAL_THROW,
         MoveId::QUICK_ATTACK,
         MoveId::SPLASH,
@@ -245,6 +258,16 @@ fn admission_is_flag_aware() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         );
     }
+    // `AI_CheckViability` has no `EFFECT_ACCURACY_DOWN_HIT` branch
+    // (`data/battle_ai_scripts.s:655-743`), unlike Speed Down Hit's at `:706`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::MUD_SLAP,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
     assert_eq!(
         ensure_scoreable(
             &dex,
@@ -253,7 +276,12 @@ fn admission_is_flag_aware() {
         ),
         Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
     );
-    for move_id in [MoveId::SPLASH, MoveId::POISON_STING] {
+    for move_id in [
+        MoveId::SPLASH,
+        MoveId::POISON_STING,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
+    ] {
         assert_eq!(
             ensure_scoreable(
                 &dex,

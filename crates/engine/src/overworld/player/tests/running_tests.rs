@@ -257,3 +257,50 @@ fn the_permission_is_read_from_saved_bytes_at_each_step() {
         WALK_FRAMES_PER_TILE
     );
 }
+
+/// `PLAYER_AVATAR_FLAG_DASH` is set by the run's dispatch and cleared by the first keypad poll
+/// after its held action has finished (`field_player_avatar.c:384-391,658-663`).
+#[test]
+fn the_dash_flag_spans_a_run_and_ends_at_the_next_poll() {
+    let runtime = open();
+    let data = shoes();
+    let mut player = PlayerState::new((4, 4), 3, Direction::South);
+    assert!(!player.dashing());
+
+    step(&mut player, Some(Direction::South), true, &runtime, &data);
+    for _ in 0..RUN_FRAMES_PER_TILE {
+        assert!(player.dashing());
+        player.tick();
+    }
+    assert!(!player.in_transit());
+    assert!(
+        player.dashing(),
+        "the finished run's pose lasts to the next poll"
+    );
+
+    step(&mut player, None, false, &runtime, &data);
+    assert!(!player.dashing());
+}
+
+#[test]
+fn a_walk_or_a_run_the_gates_refuse_never_sets_the_dash_flag() {
+    let runtime = open();
+    let data = shoes();
+    let mut player = PlayerState::new((4, 4), 3, Direction::South);
+    step(&mut player, Some(Direction::South), false, &runtime, &data);
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        assert!(!player.dashing());
+        player.tick();
+    }
+    assert!(!player.dashing());
+
+    let mut no_shoes = PlayerState::new((4, 4), 3, Direction::South);
+    step(
+        &mut no_shoes,
+        Some(Direction::South),
+        true,
+        &runtime,
+        &EventData::new(),
+    );
+    assert!(!no_shoes.dashing());
+}

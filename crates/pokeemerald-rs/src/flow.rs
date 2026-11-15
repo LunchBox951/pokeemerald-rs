@@ -78,6 +78,9 @@ pub(crate) use title_init::TitleInit;
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+/// The live battle sequencer (S-6): a battle's turns and results
+/// wait on the narration gates of the text before them.
+mod battle_sequence;
 #[cfg(test)]
 mod boot_setup_frames_tests;
 /// I-3 (issue #1329) front-end palette fade-wait states and the four
@@ -187,6 +190,13 @@ mod save_continue_window_frame_tests;
 /// [`tests`]: one module, one concept `(oop-boundaries)`.
 #[cfg(test)]
 mod start_menu_tests;
+
+/// The start menu's TAKE entry on a saved-slot lead (S-6): the
+/// item moves to the bag, the lead and its slot follow, a refusal changes
+/// nothing. Split from [`start_menu_tests`]: one module, one concept
+/// `(oop-boundaries)`.
+#[cfg(test)]
+mod take_lead_held_item_tests;
 
 /// The main menu's B path back to the title (I-2): priority against A and
 /// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own

@@ -5,9 +5,8 @@
 //! `STATUS1_FREEZE` (`pokeemerald/include/constants/battle.h:119`).
 //!
 //! The thaw-hit exception (`EFFECT_THAW_HIT`, `CANCELER_THAW`,
-//! `battle_util.c:2066`-`:2072`, `:2250`-`:2262`) is pinned at the canceller
-//! itself in `status1.rs`'s unit tests: Flame Wheel and Sacred Fire carry an
-//! unported burn secondary, so no constructor admits them yet.
+//! `battle_util.c:2066`-`:2072`, `:2250`-`:2262`) runs end to end in
+//! `thaw_hit.rs`, where Flame Wheel and Sacred Fire are admitted.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};

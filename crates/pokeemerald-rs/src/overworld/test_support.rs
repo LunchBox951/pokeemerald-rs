@@ -22,6 +22,42 @@ pub(super) struct Entry {
 const SYNTHETIC_ROOM_MAP: assets::MapId = assets::MapId("MAP_ROUTE122");
 
 impl super::OverworldScene {
+    /// The OAM entries [`Self::compose_live`] would draw for `graphics_id`'s
+    /// frame block, read from `objects`' *live* tiles and facings (the
+    /// template-seeded [`Self::sprite_entries`] cannot see a walked object).
+    #[must_use]
+    pub(crate) fn live_entries_for_test(
+        &self,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        player: &engine::overworld::PlayerState,
+        event_data: &engine::event_data::EventData,
+        graphics_id: &str,
+    ) -> Vec<super::obj_vram::SheetSprite> {
+        let binding = self.sprites.bindings()[graphics_id];
+        let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
+        self.sprites
+            .live_entries(objects, player, event_data, &self.grass)
+            .into_iter()
+            .filter(|entry| frame_block.contains(&entry.tile_index()))
+            .collect()
+    }
+
+    /// The palette bank `graphics_id` is bound to.
+    #[must_use]
+    pub(crate) fn npc_palette_bank_for_test(&self, graphics_id: &str) -> u8 {
+        self.sprites.bindings()[graphics_id].palette_bank()
+    }
+
+    /// Where the player's own OBJ sits on screen: an object `n` tiles from
+    /// the player draws `n * 16` pixels from this origin.
+    #[must_use]
+    pub(crate) fn player_obj_origin_for_test() -> (i16, u8) {
+        (
+            i16::try_from(super::avatar::PLAYER_OBJ_X).expect("the column fits a screen"),
+            super::avatar::PLAYER_OBJ_Y,
+        )
+    }
+
     /// [`Self::runtime`] answering from `events` in place of the visit's own,
     /// for the one test that injects a trigger stack.
     #[must_use]
@@ -480,6 +516,37 @@ pub(crate) fn synthetic_scene_with_events(
     .expect("synthetic pack with object-event sprites should decode cleanly")
 }
 
+/// [`synthetic_scene_with_events`], but each sheet's third (side-facing) 16x32 frame keeps only
+/// its left half opaque, so a south-to-west turn changes the painted pixels.
+pub(crate) fn synthetic_scene_with_events_and_distinct_side_frame(
+    width: u16,
+    height: u16,
+    events: &'static assets::MapEvents,
+    sprite_paths: &[&str],
+) -> super::OverworldScene {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+    let payload: Vec<u8> = (0..32usize)
+        .flat_map(|_| (0..144usize).map(|x| if x / 16 == 2 && x % 16 >= 8 { 0 } else { 3 }))
+        .collect();
+    for path in sprite_paths {
+        entries.push(Entry {
+            id: format!("sprite/{path}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: payload.clone(),
+        });
+    }
+    synthetic_scene_result_with_connections_and_events(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+        &[],
+        events,
+    )
+    .expect("synthetic pack with object-event sprites should decode cleanly")
+}
+
 /// [`synthetic_scene`], but the cell at `special_pos` is a second, distinct
 /// metatile with `special_behavior` instead of ordinary ground
 /// (`MB_NORMAL`); otherwise identical: fully walkable, uniform elevation
@@ -529,30 +596,42 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     pos: (u16, u16),
     elevation: u8,
 ) -> super::OverworldScene {
+    synthetic_scene_with_cell_elevations(width, height, &[(pos, elevation)])
+}
+
+/// [`synthetic_scene`], but each listed cell carries its own elevation instead
+/// of the fixture's uniform ground elevation.
+pub(crate) fn synthetic_scene_with_cell_elevations(
+    width: u16,
+    height: u16,
+    cells: &[((u16, u16), u8)],
+) -> super::OverworldScene {
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
-    assert!(
-        pos.0 < width && pos.1 < height,
-        "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
-    );
-    let cell = assets::MetatileCell {
-        metatile_id: 0,
-        collision: 0,
-        elevation,
-    }
-    .pack();
     let grid = entries
         .iter_mut()
         .find(|e| e.id == "layout/map_test/map")
         .expect("the general fixture always fabricates its own layout entry");
-    let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
-    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    for &(pos, elevation) in cells {
+        assert!(
+            pos.0 < width && pos.1 < height,
+            "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
+        );
+        let cell = assets::MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
     synthetic_scene_result(
         write_synthetic_pack(entries),
         "gTileset_General",
         width,
         height,
     )
-    .expect("synthetic pack with an elevated cell should decode cleanly")
+    .expect("synthetic pack with elevated cells should decode cleanly")
 }
 
 pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
@@ -632,6 +711,37 @@ fn tall_grass_entries() -> [Entry; 2] {
         payload: palette,
     };
     [image, palette]
+}
+
+/// [`synthetic_scene_with_tall_grass_sprites`], loaded with `events` and an
+/// opaque people sheet for each of `sprite_paths`.
+pub(crate) fn synthetic_scene_with_tall_grass_sprites_and_events(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+    events: &'static assets::MapEvents,
+    sprite_paths: &[&str],
+) -> super::OverworldScene {
+    let mut entries = special_tile_entries_at_elevations(width, height, specials);
+    entries.extend(tall_grass_entries());
+    for path in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(path);
+        entries.push(Entry {
+            id: format!("sprite/{path}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
+        });
+    }
+    synthetic_scene_result_with_connections_and_events(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+        &[],
+        events,
+    )
+    .expect("synthetic pack should decode cleanly")
 }
 
 /// [`synthetic_scene_with_special_tiles_at_elevations`] over a pack that also
