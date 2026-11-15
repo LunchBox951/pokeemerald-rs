@@ -16,6 +16,10 @@
 //! sharing the art in address order and recorded as
 //! [`Resolution::ArbitraryAmongIdentical`] with a note; the importer's pack
 //! entry is the same whichever copy it reads.
+//!
+//! Art a table row points at is not arbitrary: [`locate_image_copies`] keeps
+//! every copy so the locator can resolve its table against all of them and
+//! take the copy the selected row holds ([`ImageCopies::plan_at`]).
 
 use std::collections::BTreeMap;
 
@@ -112,6 +116,9 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     }
     if id.starts_with("sprite/") {
         return vec!["gObjectEventPic_".to_owned()];
+    }
+    if id.starts_with("field-effect/image/") {
+        return vec!["gFieldEffectObjectPic_".to_owned()];
     }
     if let Some(species) = id.strip_prefix("pokemon/") {
         if let Some((name, direction)) = species.split_once('/') {
@@ -267,6 +274,106 @@ fn locate_images_with(
     report: &mut Vec<ReportLine>,
     duplicates: Duplicates,
 ) -> Result<Vec<ImagePlan>, GenRomProfileError> {
+    // `assign` gives each id sharing art its own copy, so every copy up to
+    // one per query must survive the search; the ordinary cap would reject
+    // more identical-art ids than it. No more ids than queries can share.
+    let (found, _) = search(ctx, queries, queries.len().max(MATCH_LIMIT))?;
+    if duplicates == Duplicates::Refuse {
+        require_one_address_each(queries, &found)?;
+    }
+    assign(ctx, queries, &found, report)
+}
+
+/// Every address each of `queries` matches at, with its packing there.
+///
+/// For art whose copies a deciding structure (a table row) tells apart: the
+/// caller resolves the structure against [`ImageCopies::addrs`], then builds
+/// the plan and report line for the copy it names with [`ImageCopies::plan_at`].
+/// Copies are never paired in address order here.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::NotFound`] if an image's art is nowhere in the ROM
+/// under any packing, or [`GenRomProfileError::Ambiguous`] if it repeats more
+/// often than the search records, since a partial set could omit the copy the
+/// structure names.
+pub fn locate_image_copies(
+    ctx: &Context<'_>,
+    queries: &[ImageQuery],
+) -> Result<Vec<ImageCopies>, GenRomProfileError> {
+    // One hit past the most copies this path accepts, so a capped search
+    // shows itself instead of passing for the whole set.
+    let (found, capped) = search(ctx, queries, queries.len().max(MATCH_LIMIT) + 1)?;
+    let mut out = Vec::with_capacity(queries.len());
+    for ((query, copies), capped) in queries.iter().cloned().zip(found).zip(capped) {
+        if copies.is_empty() {
+            return Err(GenRomProfileError::NotFound { id: query.id });
+        }
+        if capped {
+            return Err(GenRomProfileError::Ambiguous {
+                id: query.id,
+                addrs: copies.keys().copied().collect(),
+            });
+        }
+        out.push(ImageCopies { query, copies });
+    }
+    Ok(out)
+}
+
+/// Every copy of one image's art in the ROM, found by [`locate_image_copies`].
+#[derive(Debug, Clone)]
+pub struct ImageCopies {
+    query: ImageQuery,
+    copies: Candidates,
+}
+
+impl ImageCopies {
+    /// Each address the art turns up at, in ascending order.
+    #[must_use]
+    pub fn addrs(&self) -> Vec<u32> {
+        self.copies.keys().copied().collect()
+    }
+
+    /// The plan and report line for the copy at `addr`, the one a deciding
+    /// structure names. A line is [`Resolution::StructDerived`] when the art
+    /// repeats, since the structure then picked among identical copies.
+    ///
+    /// # Errors
+    ///
+    /// [`GenRomProfileError::NotFound`] if the art has no copy at `addr`.
+    pub fn plan_at(
+        &self,
+        ctx: &Context<'_>,
+        addr: u32,
+        report: &mut Vec<ReportLine>,
+    ) -> Result<ImagePlan, GenRomProfileError> {
+        if !self.copies.contains_key(&addr) {
+            return Err(GenRomProfileError::NotFound {
+                id: self.query.id.clone(),
+            });
+        }
+        let note = (self.copies.len() > 1).then(|| {
+            (
+                Resolution::StructDerived,
+                format!(
+                    "art repeats at {} addresses holding identical bytes; the table row names \
+                     this one",
+                    self.copies.len()
+                ),
+            )
+        });
+        plan_one(ctx, &self.query, addr, self.copies[&addr], note, report)
+    }
+}
+
+/// Searches the ROM for every packing of every query, keeping at most
+/// `hit_limit` lowest hits per packing; also reports per query whether any
+/// packing reached that limit, so its candidates may be a partial set.
+fn search(
+    ctx: &Context<'_>,
+    queries: &[ImageQuery],
+    hit_limit: usize,
+) -> Result<(Vec<Candidates>, Vec<bool>), GenRomProfileError> {
     let mut raw_needles: Vec<Vec<u8>> = Vec::new();
     let mut raw_variants: Vec<Variant> = Vec::new();
     let mut lz_needles: Vec<Vec<u8>> = Vec::new();
@@ -319,17 +426,15 @@ fn locate_images_with(
         }
     }
 
-    // `assign` gives each id sharing art its own copy, so every copy up to
-    // one per query must survive the search; the ordinary cap would reject
-    // more identical-art ids than it. No more ids than queries can share.
-    let hit_limit = queries.len().max(MATCH_LIMIT);
     let raw_hits = ctx.raw.find_all_up_to(&raw_needles, hit_limit);
     let lz_hits = ctx.lz77.find_all_up_to(&lz_needles, hit_limit);
 
     // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
+    let mut capped = vec![false; queries.len()];
     for (variants, hits) in [(&raw_variants, &raw_hits), (&lz_variants, &lz_hits)] {
         for (variant, offsets) in variants.iter().zip(hits.iter()) {
+            capped[variant.query_index] |= offsets.len() >= hit_limit;
             for &offset in offsets {
                 let slot = found[variant.query_index]
                     .entry(to_addr(offset))
@@ -343,10 +448,7 @@ fn locate_images_with(
         }
     }
 
-    if duplicates == Duplicates::Refuse {
-        require_one_address_each(queries, &found)?;
-    }
-    assign(ctx, queries, &found, report)
+    Ok((found, capped))
 }
 
 /// Fails unless every query matched at exactly one address.
@@ -423,40 +525,63 @@ fn assign(
         let addr = chosen[index].ok_or_else(|| GenRomProfileError::NotFound {
             id: query.id.clone(),
         })?;
-        let (rom_bit_depth, metatile, tile_count) = found[index][&addr];
-        let asset = ctx.pack.get(&query.id)?;
-        let (width, height, pack_bit_depth) = asset.image_shape(&query.id)?;
-        let mut line = ReportLine::unique(
-            &query.id,
+        let note = notes[index]
+            .clone()
+            .map(|note| (Resolution::ArbitraryAmongIdentical, note));
+        plans.push(plan_one(
+            ctx,
+            query,
             addr,
-            tile_count * if rom_bit_depth == 4 { 32 } else { 64 },
-        );
-        if let Some(note) = notes[index].clone() {
-            line = line.with(Resolution::ArbitraryAmongIdentical).note(note);
-        }
-        if let Some(name) = local_image_symbol(&query.id) {
-            line = line.local_symbol(name);
-        } else {
-            let fragments = symbol_fragments(&query.id);
-            if !fragments.is_empty() {
-                line = line.symbol_contains(fragments);
-            }
-        }
-        report.push(line);
-        plans.push(ImagePlan {
-            id: query.id.clone(),
-            addr,
-            encoding: query.encoding,
-            rom_bit_depth,
-            pack_bit_depth,
-            width,
-            height,
-            metatile_width: metatile.0,
-            metatile_height: metatile.1,
-            tile_count,
-        });
+            found[index][&addr],
+            note,
+            report,
+        )?);
     }
     Ok(plans)
+}
+
+/// The plan and report line for `query`'s art at `addr` with `packing`;
+/// `note` is the resolution and explanation for art that repeats.
+fn plan_one(
+    ctx: &Context<'_>,
+    query: &ImageQuery,
+    addr: u32,
+    packing: Packing,
+    note: Option<(Resolution, String)>,
+    report: &mut Vec<ReportLine>,
+) -> Result<ImagePlan, GenRomProfileError> {
+    let (rom_bit_depth, metatile, tile_count) = packing;
+    let asset = ctx.pack.get(&query.id)?;
+    let (width, height, pack_bit_depth) = asset.image_shape(&query.id)?;
+    let mut line = ReportLine::unique(
+        &query.id,
+        addr,
+        tile_count * if rom_bit_depth == 4 { 32 } else { 64 },
+    );
+    if let Some((resolution, note)) = note {
+        line = line.with(resolution).note(note);
+    }
+    if let Some(name) = local_image_symbol(&query.id) {
+        line = line.local_symbol(name);
+    } else {
+        let fragments = symbol_fragments(&query.id);
+        if !fragments.is_empty() {
+            line = line.symbol_contains(fragments);
+        }
+    }
+    report.push(line);
+    Ok(ImagePlan {
+        id: query.id.clone(),
+        addr,
+        encoding: query.encoding,
+        rom_bit_depth,
+        pack_bit_depth,
+        width,
+        height,
+        metatile_width: metatile.0,
+        metatile_height: metatile.1,
+        tile_count,
+    })
 }
 
 #[cfg(test)]
@@ -491,6 +616,10 @@ mod tests {
         assert_eq!(
             symbol_fragments("sprite/brendan/walking"),
             ["gObjectEventPic_"]
+        );
+        assert_eq!(
+            symbol_fragments("field-effect/image/tall_grass"),
+            ["gFieldEffectObjectPic_"]
         );
         assert_eq!(
             symbol_fragments("text-window/image/12"),

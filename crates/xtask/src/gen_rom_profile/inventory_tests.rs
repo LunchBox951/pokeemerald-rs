@@ -15,9 +15,9 @@ use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
     party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS,
-    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
-    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID,
+    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TALL_GRASS_IMAGE_ID,
+    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -41,6 +41,10 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(sprite_sheet_ids())
         // Sprite palettes stay, so deleting a sheet removes only that sheet.
         .chain(sprite_palette_ids())
+        .chain([
+            TALL_GRASS_IMAGE_ID.to_owned(),
+            GENERAL_1_PALETTE_ID.to_owned(),
+        ])
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
@@ -729,10 +733,39 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
         .collect();
     // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
+    // The profile's sheets are the object-event sheets and the tall-grass sheet.
     let mut actual = sprite_sheet_ids();
+    actual.push(TALL_GRASS_IMAGE_ID.to_owned());
     actual.sort();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 146);
+    assert_eq!(actual.len(), 147);
+}
+
+#[test]
+fn the_field_effect_palette_inventory_matches_the_committed_profile() {
+    let committed: Vec<&str> = rom_import::EMERALD_US_REV0
+        .roots
+        .sprites
+        .field_effect_palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect();
+    assert_eq!(committed, [GENERAL_1_PALETTE_ID]);
+}
+
+#[test]
+fn a_pack_missing_a_tall_grass_entry_is_refused() {
+    for id in [TALL_GRASS_IMAGE_ID, GENERAL_1_PALETTE_ID] {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "sprites");
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_field_effect_family_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.starts_with("field-effect/"));
+    assert_refused("no-field-effect", entries, TALL_GRASS_IMAGE_ID, "sprites");
 }
 
 #[test]
