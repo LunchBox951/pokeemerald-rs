@@ -1199,6 +1199,8 @@ impl Battle {
     /// The first tick draws nothing. The expiring tick clears the drowsiness
     /// and, only if sleep can land, draws one `(Random() & 3) + 2` duration
     /// ([`try_inflict_sleep`]); a refused expiry is silent and draws nothing.
+    /// Landed sleep releases the sleeper's multi-turn lock (`:1761`); a
+    /// refused expiry leaves it.
     fn apply_yawn_residual(
         &mut self,
         is_player: bool,
@@ -1213,12 +1215,14 @@ impl Battle {
         if battler.is_fainted() || !battler.volatiles_mut().tick_yawn() {
             return;
         }
-        if let Some(asleep) = try_inflict_sleep(battler.status1(), battler.ability(), rng) {
-            battler.set_status1(asleep);
-            events.push(BattleEvent::FellAsleepFromYawn {
-                by_player: is_player,
-            });
-        }
+        let Some(asleep) = try_inflict_sleep(battler.status1(), battler.ability(), rng) else {
+            return;
+        };
+        battler.set_status1(asleep);
+        self.cancel_multi_turn_moves(is_player);
+        events.push(BattleEvent::FellAsleepFromYawn {
+            by_player: is_player,
+        });
     }
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
