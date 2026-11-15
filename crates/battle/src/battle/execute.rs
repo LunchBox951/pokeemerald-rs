@@ -725,15 +725,9 @@ impl Battle {
         });
     }
 
-    /// `MOVE_EFFECT_FLINCH` as a secondary effect: the target's flinch flag is
-    /// set silently, with no draw and no event; the observable message comes
-    /// only when the target reaches its cancelled action
-    /// ([`BattleEvent::Flinched`]). `SetMoveEffect` leads with an `hp == 0`
-    /// guard (`battle_script_commands.c:2261`-`:2264`) and the flag is set only
-    /// when the target's turn-order slot is still ahead
-    /// (`:2561`-`:2565`), modelled by [`Battle::acted_this_turn`]. Shield Dust
-    /// and Inner Focus never reach this point
-    /// ([`crate::secondary::spend_effect_chance_draw`]).
+    /// `MOVE_EFFECT_FLINCH` sets the flag silently; [`BattleEvent::Flinched`] reports
+    /// it at the cancelled action (`battle_script_commands.c:2261`-`:2264`,
+    /// `:2561`-`:2565`).
     fn apply_secondary_flinch(&mut self, attacker_is_player: bool) {
         let target_acted = self.acted_this_turn[usize::from(attacker_is_player)];
         let defender = if attacker_is_player {
