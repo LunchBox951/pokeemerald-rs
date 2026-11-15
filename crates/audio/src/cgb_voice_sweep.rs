@@ -513,7 +513,7 @@ fn a_length_expiry_after_a_sweep_overflow_leaves_the_held_level_untouched() {
     voice.begin_frame(false);
 
     let mut sequencer = FrameSequencer::default();
-    let mut clocks = FrameClocks::with_capacity(4, 8);
+    let mut clocks = FrameClocks::with_capacity(4, 8, 2);
     sequencer.advance_clocks_into(FRAME_SAMPLES, &mut clocks);
     let overflow = clocks.sweep[0];
     assert!(
@@ -526,7 +526,7 @@ fn a_length_expiry_after_a_sweep_overflow_leaves_the_held_level_untouched() {
         "sanity: the counter loads 3 and must run out after the overflow"
     );
     let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
-    voice.render_clocked(&mut acc, &clocks.sweep, &clocks.length);
+    voice.render_clocked(&mut acc, &clocks.sweep, &clocks.length, &clocks.envelope);
 
     let held = acc[overflow - 1];
     assert!(
