@@ -579,12 +579,12 @@ mod tests {
     fn a_berry_holding_lead_is_refused_before_any_ot_id_draw() {
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let lead = treecko_lead().with_held_item(ItemId::ORAN_BERRY);
+        let lead = treecko_lead().with_held_item(ItemId::SITRUS_BERRY);
         let result = start_npc_trainer_battle(lead, NUGGET_THEN_EMPTY_PARTY, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)
             ))
         );
         assert_eq!(
@@ -610,16 +610,34 @@ mod tests {
     }
 
     #[test]
-    fn a_berry_party_is_refused_before_any_ot_id_draw() {
+    fn a_party_with_an_unported_move_is_refused_before_any_ot_id_draw() {
+        // `TRAINER_THOMAS`: his level-45 Zangoose knows Pursuit.
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let result = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng);
+        let result = start_npc_trainer_battle(treecko_lead(), TrainerId(256), &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedMoveEffect(MoveId::PURSUIT)
             ))
         );
-        assert_eq!(rng.state(), before, "the item screen precedes every draw");
+        assert_eq!(rng.state(), before, "the party screen precedes every draw");
+    }
+
+    #[test]
+    fn the_oran_berry_party_constructs_now_that_headbutt_flinches() {
+        // Neither the Berries nor the party's Headbutt stops it now.
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let bench = battle.trainer().expect("a trainer battle").bench();
+        assert_eq!(battle.enemy().held_item(), ItemId::ORAN_BERRY);
+        assert!(
+            std::iter::once(battle.enemy())
+                .chain(bench)
+                .flat_map(BattlePokemon::moves)
+                .any(|slot| slot.move_id == MoveId::HEADBUTT),
+            "the move that used to refuse the party is on it"
+        );
     }
 }

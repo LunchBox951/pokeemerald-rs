@@ -15,7 +15,7 @@
 //!
 //! Both return ROM offsets, not bus addresses, and cap each needle at
 //! [`MATCH_LIMIT`] hits unless the caller asks for a larger bound through
-//! `find_all_up_to`.
+//! `find_all_up_to`, or for every hit through `find_all_uncapped`.
 
 use std::collections::HashMap;
 
@@ -31,7 +31,10 @@ const ANCHOR: usize = 8;
 /// to name the duplicates in an error, takes this cap. It bounds memory for
 /// a short blob that repeats hundreds of times. A locator that must give each
 /// of several ids its own copy needs at least that many hits and asks for the
-/// bound through `find_all_up_to`.
+/// bound through `find_all_up_to`. A locator that picks one copy by a table
+/// that names it needs every copy: the cap keeps the lowest offsets, so
+/// enough stray copies below the named one would discard it before the table
+/// is read. It asks through `find_all_uncapped`.
 pub const MATCH_LIMIT: usize = 16;
 
 /// The fewest distinct byte values an eight-byte window needs to serve as an
@@ -89,9 +92,37 @@ impl<'a> RawSearch<'a> {
         self.find_all_up_to(needles, MATCH_LIMIT)
     }
 
+    /// [`Self::find_all`] with no cap: every occurrence of each needle.
+    ///
+    /// For a locator that picks one copy by a table naming it, which must see
+    /// every candidate. Memory stays bounded because a needle cannot occur
+    /// more often than the ROM has offsets.
+    pub fn find_all_uncapped(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, self.rom.len())
+    }
+
     /// [`Self::find_all`] with each needle capped at `limit` hits instead of
     /// [`MATCH_LIMIT`]; the lowest `limit` offsets are kept.
     pub fn find_all_up_to(&self, needles: &[Vec<u8>], limit: usize) -> Vec<Vec<u32>> {
+        self.find_all_up_to_where(needles, limit, |_| true)
+    }
+
+    /// [`Self::find_all_up_to`] counting only the offsets `accept` allows.
+    ///
+    /// A locator that discards raw hits afterwards (a string must begin
+    /// after an `EOS`, say) must filter here instead: the cap keeps the
+    /// lowest `limit` offsets, so rejected hits recorded first would crowd
+    /// accepted ones out of the list and hide a duplicate or the only
+    /// genuine match. `accept` sees a match start at most once per needle,
+    /// in ascending order within that needle; in a batch the same start can
+    /// reach it for several needles, and starts are not ascending across
+    /// needles.
+    pub fn find_all_up_to_where(
+        &self,
+        needles: &[Vec<u8>],
+        limit: usize,
+        accept: impl Fn(u32) -> bool,
+    ) -> Vec<Vec<u32>> {
         let mut anchors = Vec::with_capacity(needles.len());
         // Bitmap over the anchor's first two bytes: a one-index filter that
         // spares most ROM offsets the hash lookup below.
@@ -137,9 +168,10 @@ impl<'a> RawSearch<'a> {
                     continue;
                 }
                 if self.rom.get(start..start + needle.len()) == Some(needle.as_slice()) {
-                    let truncated =
-                        u32::try_from(start).expect("a ROM offset fits in u32 at 16 MiB");
-                    hits[index].push(truncated);
+                    let found = u32::try_from(start).expect("a ROM offset fits in u32 at 16 MiB");
+                    if accept(found) {
+                        hits[index].push(found);
+                    }
                 }
             }
         }
@@ -208,6 +240,16 @@ impl<'a> Lz77Search<'a> {
     /// capped at [`MATCH_LIMIT`] and sorted ascending.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
         self.find_all_up_to(needles, MATCH_LIMIT)
+    }
+
+    /// [`Self::find_all`] with no cap: every stream that decompresses to each
+    /// needle.
+    ///
+    /// For a locator that picks one copy by a table naming it, which must see
+    /// every candidate. Memory stays bounded because a needle cannot match
+    /// more streams than the ROM has offsets.
+    pub fn find_all_uncapped(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, self.rom.len())
     }
 
     /// [`Self::find_all`] with each needle capped at `limit` hits instead of
@@ -384,6 +426,29 @@ mod tests {
         assert_eq!(raised[0].len(), copies);
         assert!(raised[0].windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+        assert_eq!(search.find_all_uncapped(&[needle.to_vec()]), raised);
+    }
+
+    #[test]
+    fn a_rejected_hit_does_not_count_against_the_cap() {
+        let needle = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut rom = vec![0u8; 4096];
+        // MATCH_LIMIT rejected copies at low offsets, then two accepted ones.
+        for slot in 0..MATCH_LIMIT {
+            let at = 64 + slot * 64;
+            rom[at..at + ANCHOR].copy_from_slice(&needle);
+        }
+        let accepted = [2048usize, 3072];
+        for &at in &accepted {
+            rom[at..at + ANCHOR].copy_from_slice(&needle);
+        }
+        let search = RawSearch::new(&rom);
+        let hits = search.find_all_up_to_where(&[needle.to_vec()], MATCH_LIMIT, |at| at >= 2048);
+        assert_eq!(hits[0], vec![2048, 3072]);
+        // The unfiltered search is full before it reaches either.
+        assert!(search.find_all(&[needle.to_vec()])[0]
+            .iter()
+            .all(|&at| at < 2048));
     }
 
     #[test]
@@ -402,5 +467,9 @@ mod tests {
         let raised = search.find_all_up_to(std::slice::from_ref(&payload), copies);
         assert_eq!(raised[0].len(), copies);
         assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+        assert_eq!(
+            search.find_all_uncapped(std::slice::from_ref(&payload)),
+            raised
+        );
     }
 }

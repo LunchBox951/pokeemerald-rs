@@ -519,8 +519,8 @@ fn decode_sheet(
 
 /// Reads one PNG sheet and checks it is a whole-tile 4-bit image.
 fn read_sheet(path: &Path) -> Result<IndexedImage, ExtractError> {
-    let image =
-        png::decode(&read_file(path)?).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
+    let image = png::decode_truncating_palette(&read_file(path)?)
+        .map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
     if image.bit_depth != BIT_DEPTH {
         return Err(mismatch(
             path,

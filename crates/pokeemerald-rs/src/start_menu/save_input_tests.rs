@@ -63,9 +63,17 @@ fn drive_reporting_outcome(
 }
 
 #[test]
-fn the_item_list_is_save_then_exit() {
-    assert_eq!(ITEMS, [StartMenuItem::Save, StartMenuItem::Exit]);
+fn the_item_list_is_save_then_take_then_exit() {
+    assert_eq!(
+        ITEMS,
+        [
+            StartMenuItem::Save,
+            StartMenuItem::TakeItem,
+            StartMenuItem::Exit
+        ]
+    );
     assert_eq!(StartMenuItem::Save.label(), "SAVE");
+    assert_eq!(StartMenuItem::TakeItem.label(), "TAKE");
     assert_eq!(StartMenuItem::Exit.label(), "EXIT");
     assert_eq!(synthetic_start_menu().selected(), StartMenuItem::Save);
 }
@@ -74,7 +82,7 @@ fn the_item_list_is_save_then_exit() {
 /// (`pokeemerald/src/menu.c:493`).
 #[test]
 fn item_window_geometry_matches_upstream() {
-    assert_eq!(menu_height(2), 6, "this shell's own two-item menu");
+    assert_eq!(menu_height(3), 8, "this shell's own three-item menu");
     assert_eq!(menu_height(7), 16, "a larger menu");
     assert_eq!(
         (MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH),
@@ -92,6 +100,8 @@ fn the_item_cursor_wraps_in_both_directions() {
     menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Save);
     menu.tick(pressed(Buttons::DOWN), &mut target);
+    assert_eq!(menu.selected(), StartMenuItem::TakeItem);
+    menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
 }
 
@@ -99,13 +109,14 @@ fn the_item_cursor_wraps_in_both_directions() {
 fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
-    // DOWN+A off a fresh menu: EXIT is selected but not yet closed.
+    // UP+A off a fresh menu (wrapping to EXIT): EXIT is selected but not yet
+    // closed.
     let mut menu = synthetic_start_menu();
     assert_eq!(menu.selected(), StartMenuItem::Save);
     assert_eq!(
-        menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
+        menu.tick(pressed(Buttons::UP | Buttons::A), &mut target),
         StartMenuOutcome::Open,
-        "the A must act on the row DOWN just moved it to, not on SAVE, \
+        "the A must act on the row UP just moved it to, not on SAVE, \
          and EXIT must not have closed the menu yet"
     );
     assert_eq!(menu.selected(), StartMenuItem::Exit);
@@ -116,13 +127,13 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
         "EXIT closes on the next tick, reading no input"
     );
 
-    // UP+A from EXIT: the cursor wraps back to SAVE and the same frame's A
+    // DOWN+A from EXIT: the cursor wraps back to SAVE and the same frame's A
     // starts the save flow.
     let mut menu = synthetic_start_menu();
-    menu.tick(pressed(Buttons::DOWN), &mut target);
+    menu.tick(pressed(Buttons::UP), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
     assert_eq!(
-        menu.tick(pressed(Buttons::UP | Buttons::A), &mut target),
+        menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
         StartMenuOutcome::Open
     );
     assert_eq!(menu.selected(), StartMenuItem::Save);
@@ -142,12 +153,29 @@ fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
     );
 }
 
+/// TAKE reports its own outcome and leaves the SAVE flow untouched: the
+/// menu cannot reach the party or bag, so the caller owns the take.
+#[test]
+fn a_on_take_reports_the_take_without_opening_the_save_flow() {
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    let mut menu = synthetic_start_menu();
+    menu.tick(pressed(Buttons::DOWN), &mut target);
+    assert_eq!(menu.selected(), StartMenuItem::TakeItem);
+
+    assert_eq!(
+        menu.tick(pressed(Buttons::A), &mut target),
+        StartMenuOutcome::TakeItem
+    );
+    assert!(!menu.saving());
+    assert!(target.writes.is_empty(), "taking an item writes nothing");
+}
+
 #[test]
 fn exit_closes_next_tick_while_start_and_b_close_immediately_without_writing() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
     let mut menu = synthetic_start_menu();
-    menu.tick(pressed(Buttons::DOWN), &mut target);
+    menu.tick(pressed(Buttons::UP), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
     assert_eq!(
         menu.tick(pressed(Buttons::A), &mut target),

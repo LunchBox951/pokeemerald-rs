@@ -262,6 +262,7 @@ fn convert_programmable_wave(
         table: w.table,
         adsr: convert_cgb_envelope(v.envelope),
         fixed_rate: v.fixed_rate,
+        length: v.length,
     }))
 }
 

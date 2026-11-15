@@ -56,8 +56,8 @@ impl OverworldPhase {
         }
     }
 
-    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead, or one
-    /// holding an item with a battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
+    /// Gates the encounter roll, since `Battle::new` refuses a fainted or inadmissible lead, or one
+    /// holding an item with an unimplemented battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
         let refusal = self
             .lead_battler()
@@ -242,6 +242,16 @@ impl OverworldPhase {
         (owners, unplayable_member_remains)
     }
 
+    /// The ability party slot 0 brings to wild level selection: the saved slot even when it
+    /// is fainted behind another battle lead, or the live lead of an unsaved party.
+    pub(super) fn slot_zero_wild_level_ability(&self) -> Option<assets::AbilityId> {
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        if stored == 0 {
+            return self.lead_battler().map(battle::BattlePokemon::ability);
+        }
+        crate::party::slot_zero_wild_level_ability(&Dex::new(), &self.save1.player_party[..stored])
+    }
+
     /// Starts a wild battle from a fired encounter, taking the party lead into
     /// it. Nothing starts, and the lead stays in place, when the encounter is
     /// `None`, when no lead exists (a bare [`OverworldPhase::new`] phase), or
@@ -251,9 +261,9 @@ impl OverworldPhase {
     /// rejected start may have drawn while building the opponent.
     ///
     /// A lead that is fainted because the whole saved party is unusable is
-    /// not screened here; [`battle::Battle::new`] refuses it with
-    /// `FaintedBattler`, which this method logs and drops like any other
-    /// rejection. A party with a usable member never reaches this state,
+    /// refused by the shared lead screen ([`ensure_lead_can_battle`]) with
+    /// `FaintedBattler` before the opponent is built, so the refusal draws
+    /// nothing. A party with a usable member never reaches this state,
     /// because [`crate::party::select_active_battler`] picks that member as
     /// lead (`SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
     pub(super) fn begin_wild_battle(
@@ -310,6 +320,7 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Wild(WildBattle {
                     battle,
                     reserves,

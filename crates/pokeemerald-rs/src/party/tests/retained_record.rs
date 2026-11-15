@@ -142,6 +142,9 @@ fn a_merge_files_the_battlers_primary_status_over_the_backing_records_word() {
         (battle::Status1::Burned, STATUS1_BURN),
         (battle::Status1::Frozen, STATUS1_FREEZE),
         (battle::Status1::Paralysed, STATUS1_PARALYSIS),
+        (battle::Status1::BadPoisoned { counter: 0 }, 0x80),
+        (battle::Status1::BadPoisoned { counter: 5 }, 0x580),
+        (battle::Status1::BadPoisoned { counter: 15 }, 0xF80),
         (battle::Status1::Asleep { turns: 3 }, 3),
         (battle::Status1::Asleep { turns: 0 }, STATUS1_NONE),
         (battle::Status1::Healthy, STATUS1_NONE),
@@ -279,6 +282,105 @@ fn a_frozen_record_re_saves_byte_for_byte_and_a_thaw_writes_only_a_zero_word() {
         expected.to_bytes(),
         "a thaw changes the status word and no other byte"
     );
+}
+
+/// An untouched badly poisoned lead re-saves as the same 100 bytes for every
+/// counter; a cure changes the status word and nothing else.
+#[test]
+fn a_bad_poison_record_re_saves_byte_for_byte_and_a_cure_writes_only_a_zero_word() {
+    let dex = Dex::new();
+    for counter in 0u32..=15 {
+        let mut stored = stored_record_with_retained_fields();
+        stored.status = 0x80 | counter << 8;
+        let mut loaded = LoadedLead::load(&dex, std::slice::from_ref(&stored))
+            .expect("a badly poisoned record decodes");
+
+        let first = loaded.merge_and_save(&dex);
+        assert_eq!(first.to_bytes(), stored.to_bytes(), "counter {counter}");
+        assert_eq!(loaded.merge_and_save(&dex).to_bytes(), first.to_bytes());
+
+        loaded.battler_mut().set_status1(battle::Status1::Healthy);
+        let cured = loaded.merge_and_save(&dex);
+        let mut expected = stored;
+        expected.status = 0;
+        assert_eq!(
+            cured.to_bytes(),
+            expected.to_bytes(),
+            "a cure must not resurrect the retained toxic word"
+        );
+    }
+}
+
+/// Zeroes for construction's seed, the turn's start and selection draws and
+/// the lead's one hit (accuracy, crit, roll, secondary). A draw past the
+/// script panics rather than looping on a constant.
+struct Script(std::vec::IntoIter<u16>);
+
+impl battle::BattleRng for Script {
+    fn next_u16(&mut self) -> u16 {
+        self.0.next().expect("the script covers every draw")
+    }
+}
+
+/// The toxic residual advances the battle's own counter and writes nothing
+/// back (`pokeemerald/src/battle_util.c:1536-1549`), so a lead that lived
+/// through badly poisoned turns saves the party's stored word: `0x580` stays
+/// `0x580`, not `0x680`, and the HP the residual took still reaches the save.
+#[test]
+fn a_bad_poison_lead_that_took_residual_ticks_saves_its_stored_word() {
+    use battle::{Battle, PlayerAction};
+
+    let dex = Dex::new();
+    for (word, first_tick_counter) in [(0x80u32, 1u32), (0x580, 6)] {
+        let mut stored = to_save_pokemon(&dex, &treecko_fixture());
+        stored.status = word;
+        let mut loaded = LoadedLead::load(&dex, std::slice::from_ref(&stored))
+            .expect("a badly poisoned record decodes");
+        let hp_before = loaded.battler().current_hp();
+        let max_hp = loaded.battler().stats().max_hp;
+
+        let enemy = battle::BattlePokemon::new(
+            &dex,
+            assets::SpeciesId::ZIGZAGOON,
+            50,
+            Ivs {
+                hp: 0,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            0,
+            vec![assets::MoveId::SPLASH],
+        )
+        .unwrap();
+        let mut rng = Script(vec![0; 12].into_iter());
+        let mut battle =
+            Battle::new(Dex::new(), loaded.take_battler(), enemy, false, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        let lost = events
+            .iter()
+            .find_map(|event| match event {
+                battle::BattleEvent::HurtByPoison {
+                    by_player: true,
+                    damage,
+                } => Some(*damage),
+                _ => None,
+            })
+            .expect("the toxic tick fired");
+        assert_eq!(lost, (max_hp / 16).max(1) * first_tick_counter);
+        let mut after = battle.player().clone();
+        after.clear_battle_scratch();
+        loaded.restore_battler(after);
+
+        let saved = loaded.merge_and_save(&dex);
+
+        assert_eq!(saved.status, word, "the residual never reaches the word");
+        assert_eq!(u32::from(saved.hp), hp_before - lost);
+    }
 }
 
 #[test]

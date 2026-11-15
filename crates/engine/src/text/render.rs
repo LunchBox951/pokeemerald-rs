@@ -8,29 +8,44 @@
 //!
 //! # Deliberately out of scope
 //!
-//! Colour, audio, and the other formatting controls are consumed without
-//! applying effects. Placeholders and dynamic tokens are skipped because this
+//! Audio and the remaining formatting controls are consumed without applying
+//! effects. Placeholders and dynamic tokens are skipped because this
 //! renderer has no expansion context. A keypad icon is not skipped: it advances
 //! the cursor by the icon's width and is reported through
 //! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
-//! no icon bitmaps. `FONT`, `CLEAR`, `CLEAR_TO`, and `FILL_WINDOW` are the
-//! exceptions among the controls that would otherwise be no-ops:
+//! no icon bitmaps. `FONT`, `MIN_LETTER_SPACING`, `CLEAR`, `CLEAR_TO`, and
+//! `FILL_WINDOW` are the exceptions among the controls that would otherwise be no-ops:
 //!
 //! - `FONT` changes the glyph source the following glyphs render from, mid
 //!   string, as reported by [`Printer::active_font`]. A font with no modelled
 //!   source (Braille, Bold, or an unknown id) skips glyphs until a later
 //!   `FONT` selects a modelled one. The template line and scroll metrics stay
 //!   on the font the printer was built with.
+//! - `MIN_LETTER_SPACING` pads each following glyph's advance to the given
+//!   minimum, reporting the gap as a [`ClearedSpan`] alongside the glyph; zero
+//!   restores the ordinary advance. Template letter spacing and the Japanese
+//!   branch stay unmodelled.
 //! - `CLEAR`/`CLEAR_TO` move the cursor, and their geometry is reported as a
 //!   [`ClearedSpan`] for the caller to erase.
 //! - `FILL_WINDOW` resets the cursor and reports its whole-window equivalent
 //!   through [`Printer::cleared_window`], also for the caller to erase.
 //!
-//! Which colour an erase uses stays out of scope with the rest of formatting.
+//! # Colour state
+//!
+//! `COLOR`, `HIGHLIGHT`, `SHADOW`, and `COLOR_HIGHLIGHT_SHADOW` update the
+//! printer's [`TextColors`] (`pokeemerald/src/text.c:980-1003`). Every
+//! [`RevealedGlyph`] and [`ClearedSpan`] carries the colours in force when it
+//! was produced, and [`Printer::cleared_window_colors`] carries those a
+//! whole-window clear erases with, so the caller composes each operation with
+//! its own palette indices.
 
 use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
 use super::Token;
+
+mod colors;
+use colors::BackgroundPaint;
+pub use colors::TextColors;
 
 mod ext_ctrl {
     pub const ESCAPE: u8 = super::super::EXT_CTRL_CODE_ESCAPE;
@@ -38,17 +53,24 @@ mod ext_ctrl {
     pub const SHIFT_DOWN: u8 = super::super::EXT_CTRL_CODE_SHIFT_DOWN;
     pub const SKIP: u8 = super::super::EXT_CTRL_CODE_SKIP;
     pub const FONT: u8 = super::super::EXT_CTRL_CODE_FONT;
+    pub const MIN_LETTER_SPACING: u8 = super::super::EXT_CTRL_CODE_MIN_LETTER_SPACING;
     pub const CLEAR: u8 = super::super::EXT_CTRL_CODE_CLEAR;
     pub const CLEAR_TO: u8 = super::super::EXT_CTRL_CODE_CLEAR_TO;
     pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
     pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
+    pub const COLOR: u8 = super::super::EXT_CTRL_CODE_COLOR;
+    pub const HIGHLIGHT: u8 = super::super::EXT_CTRL_CODE_HIGHLIGHT;
+    pub const SHADOW: u8 = super::super::EXT_CTRL_CODE_SHADOW;
+    pub const COLOR_HIGHLIGHT_SHADOW: u8 = super::super::EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW;
 }
 
 mod keypad_icon;
 
 #[cfg(test)]
 mod font_control_tests;
+#[cfg(test)]
+mod min_letter_spacing_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 
@@ -100,7 +122,8 @@ const fn font_for_upstream_id(raw: u8) -> Option<FontId> {
     }
 }
 
-/// The pixels one `CLEAR` or `CLEAR_TO` control erased.
+/// The pixels one `CLEAR` or `CLEAR_TO` control, or one glyph's
+/// minimum-spacing gap, erased.
 ///
 /// Upstream's `ClearTextSpan` paints this rectangle into the window's tile
 /// buffer (`pokeemerald/src/text.c:649-674`). [`Printer`] owns no such buffer,
@@ -118,6 +141,9 @@ pub struct ClearedSpan {
     pub width: i32,
     /// Height in pixels: the font's Latin glyph height.
     pub height: i32,
+    /// The colours in force for the erase; `colors.background` fills it
+    /// (`pokeemerald/src/text.c:649-674`).
+    pub colors: TextColors,
 }
 
 /// Text reveal cadence.
@@ -232,6 +258,16 @@ pub struct RevealedGlyph {
     pub y: i32,
     /// The glyph's bitmap and advance width.
     pub glyph: Glyph,
+    /// The colours in force when the glyph was revealed.
+    pub colors: TextColors,
+    /// Rows of background upstream paints under the glyph: the font's Latin
+    /// glyph height ([`ClearedSpan::height`]).
+    pub raster_height: i32,
+    /// Whether the glyph's background pixels paint `colors.background`. False
+    /// while the printer still uses the unmodified message-box background,
+    /// which the window already shows; true once a `HIGHLIGHT` (or a
+    /// non-default configured background) selects one.
+    pub paint_background: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +296,9 @@ pub enum TickEvent {
     /// call. [`Printer::cleared_window`] distinguishes an idle `FILL_WINDOW`
     /// tick from an ordinary delay.
     Idle,
-    /// A glyph became visible.
+    /// A glyph became visible. While `MIN_LETTER_SPACING` is nonzero and the
+    /// glyph is narrower than it, [`Printer::cleared_span`] holds the gap the
+    /// caller erases after drawing the glyph (`text.c:1149-1156`).
     Glyph(Box<RevealedGlyph>),
     /// A scroll prompt is waiting for a new A or B press.
     AwaitingScroll,
@@ -347,12 +385,18 @@ pub struct Printer<S> {
     cursor: PixelPos,
     line_height: i32,
     clear_height: i32,
+    /// `MIN_LETTER_SPACING`'s argument; zero keeps the ordinary Latin advance.
+    min_letter_spacing: u8,
     cleared_span: Option<ClearedSpan>,
     cleared_window: bool,
     keypad_icon: Option<KeypadIconPlacement>,
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
+    initial_colors: TextColors,
+    colors: TextColors,
+    background: BackgroundPaint,
+    cleared_window_colors: Option<TextColors>,
 }
 
 impl<S: GlyphSource> Printer<S> {
@@ -367,6 +411,7 @@ impl<S: GlyphSource> Printer<S> {
             next_token_index: 0,
             line_height: max_letter_height(glyphs.font()),
             clear_height: clear_span_height(glyphs.font()),
+            min_letter_spacing: 0,
             cleared_span: None,
             cleared_window: false,
             keypad_icon: None,
@@ -380,6 +425,10 @@ impl<S: GlyphSource> Printer<S> {
             state: PrinterState::HandleChar,
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
+            initial_colors: TextColors::MESSAGE_BOX,
+            colors: TextColors::MESSAGE_BOX,
+            background: BackgroundPaint::Window,
+            cleared_window_colors: None,
         }
     }
 
@@ -453,6 +502,23 @@ impl<S: GlyphSource> Printer<S> {
         self
     }
 
+    /// Starts the printer with `colors` instead of the message-box defaults
+    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`). A background
+    /// other than the default is painted under glyphs from the first one.
+    #[must_use]
+    pub fn with_text_colors(mut self, colors: TextColors) -> Self {
+        self.initial_colors = colors;
+        self.colors = colors;
+        self.background = BackgroundPaint::for_initial(colors);
+        self
+    }
+
+    /// The colours currently in force: what the next glyph or erase uses.
+    #[must_use]
+    pub const fn colors(&self) -> TextColors {
+        self.colors
+    }
+
     /// The cursor's current window-local pixel position.
     #[must_use]
     pub const fn cursor(&self) -> PixelPos {
@@ -460,7 +526,11 @@ impl<S: GlyphSource> Printer<S> {
     }
 
     /// The span the most recent [`Self::tick`] erased, if that tick handled a
-    /// forward `CLEAR` or `CLEAR_TO`.
+    /// forward `CLEAR` or `CLEAR_TO`, or drew a glyph narrower than the
+    /// `MIN_LETTER_SPACING` minimum. The latter accompanies
+    /// [`TickEvent::Glyph`] and covers only the gap beyond the glyph; the
+    /// caller draws the glyph first, as upstream's `CopyGlyphToWindow`
+    /// precedes `ClearTextSpan` (`pokeemerald/src/text.c:1146-1156`).
     ///
     /// Upstream erases the pixels itself; this printer emits events instead of
     /// owning a window buffer, so a caller that retains revealed glyphs uses
@@ -500,6 +570,16 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_window
     }
 
+    /// The colours the most recent [`Self::tick`]'s whole-window clear erased
+    /// with, when [`Self::cleared_window`] is set.
+    ///
+    /// Captured when the clear happened: a `HIGHLIGHT` later in the same tick
+    /// changes [`Self::colors`] but not this.
+    #[must_use]
+    pub const fn cleared_window_colors(&self) -> Option<TextColors> {
+        self.cleared_window_colors
+    }
+
     /// Returns whether the token stream has ended.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
@@ -514,11 +594,15 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
+        self.colors = self.initial_colors;
+        self.background = BackgroundPaint::for_initial(self.initial_colors);
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
         self.active_font = Some(self.glyphs.font());
         self.clear_height = clear_span_height(self.glyphs.font());
+        self.min_letter_spacing = 0;
     }
 
     /// Advance the printer by exactly one frame.
@@ -529,6 +613,7 @@ impl<S: GlyphSource> Printer<S> {
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
         self.keypad_icon = None;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
@@ -560,6 +645,7 @@ impl<S: GlyphSource> Printer<S> {
                 if input.confirm_pressed() {
                     self.cursor = self.origin;
                     self.cleared_window = true;
+                    self.cleared_window_colors = Some(self.colors);
                     self.state = PrinterState::HandleChar;
                     TickEvent::Cleared
                 } else {
@@ -645,6 +731,7 @@ impl<S: GlyphSource> Printer<S> {
                     // returns, so token handling keeps going here.
                     ControlOutcome::ClearedWindow => {
                         self.cleared_window = true;
+                        self.cleared_window_colors = Some(self.colors);
                         None
                     }
                 },
@@ -681,8 +768,18 @@ impl<S: GlyphSource> Printer<S> {
                 x: self.cursor.0,
                 y: self.cursor.1,
                 glyph,
+                colors: self.colors,
+                raster_height: self.clear_height,
+                paint_background: self.background == BackgroundPaint::Painted,
             };
+            // `text.c:1149-1156`: with a minimum set, the glyph's own advance
+            // is followed by erasing the shortfall and advancing across it in
+            // the same tick, after the glyph is drawn.
             self.cursor.0 = self.cursor.0.saturating_add(i32::from(glyph.advance_width));
+            if self.min_letter_spacing != 0 {
+                let gap = i32::from(self.min_letter_spacing) - i32::from(glyph.advance_width);
+                self.erase_forward(gap);
+            }
             return TickEvent::Glyph(Box::new(placement));
         }
     }
@@ -729,6 +826,13 @@ impl<S: GlyphSource> Printer<S> {
                     self.active_font = font_for_upstream_id(raw);
                 }
             }
+            // `text.c:1091-1092`: records the minimum advance the following
+            // glyphs are padded to; zero restores the ordinary advance.
+            ext_ctrl::MIN_LETTER_SPACING => {
+                if let Some(&minimum) = arguments.first() {
+                    self.min_letter_spacing = minimum;
+                }
+            }
             // `text.c:1063-1072`: the argument is the width to erase from the
             // cursor, which then advances by it.
             ext_ctrl::CLEAR => {
@@ -752,9 +856,41 @@ impl<S: GlyphSource> Printer<S> {
                 self.cursor = self.origin;
                 return ControlOutcome::ClearedWindow;
             }
+            // `text.c:980-1003`: each updates its own palette index and
+            // repeats. A hand-built token short of its arguments changes
+            // nothing rather than partially assigning.
+            ext_ctrl::COLOR => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.foreground = index;
+                }
+            }
+            ext_ctrl::HIGHLIGHT => {
+                if let Some(&index) = arguments.first() {
+                    self.set_background(index);
+                }
+            }
+            ext_ctrl::SHADOW => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.shadow = index;
+                }
+            }
+            ext_ctrl::COLOR_HIGHLIGHT_SHADOW => {
+                if let [foreground, background, shadow, ..] = *arguments {
+                    self.colors.foreground = foreground;
+                    self.colors.shadow = shadow;
+                    self.set_background(background);
+                }
+            }
             _ => {}
         }
         ControlOutcome::Repeat
+    }
+
+    /// An accepted `HIGHLIGHT` selects the background upstream paints under
+    /// every later glyph, including an explicit return to the default one.
+    fn set_background(&mut self, index: u8) {
+        self.colors.background = index;
+        self.background = BackgroundPaint::Painted;
     }
 
     /// Records `width` pixels erased at the cursor and advances past them.
@@ -770,17 +906,26 @@ impl<S: GlyphSource> Printer<S> {
         if width <= 0 {
             return ControlOutcome::Repeat;
         }
+        self.erase_forward(width);
+        ControlOutcome::ClearedSpan
+    }
+
+    /// Records a positive `width` erased at the cursor and advances past it.
+    ///
+    /// Shared by the explicit clear controls and the post-glyph minimum-spacing
+    /// gap (`text.c:1152-1156`); a non-positive `width` records nothing.
+    fn erase_forward(&mut self, width: i32) {
         let representable = width.min(i32::MAX.saturating_sub(self.cursor.0));
-        if representable > 0 {
+        if width > 0 && representable > 0 {
             self.cleared_span = Some(ClearedSpan {
                 x: self.cursor.0,
                 y: self.cursor.1,
                 width: representable,
                 height: self.clear_height,
+                colors: self.colors,
             });
             self.cursor.0 = self.cursor.0.saturating_add(representable);
         }
-        ControlOutcome::ClearedSpan
     }
 }
 
@@ -1322,6 +1467,7 @@ mod tests {
                 y: 1,
                 width: 4,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (cursor_before_clear.0 + 4, 1));
@@ -1494,6 +1640,7 @@ mod tests {
                 y: 1,
                 width: 14,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (23, 1));
@@ -2162,3 +2309,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "render/color_tests.rs"]
+mod color_tests;

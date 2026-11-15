@@ -88,9 +88,18 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
 
     // The all-spent enemy's forced Struggle pick bypasses the move-selection
     // draw, so the script has no selection entry between the escape roll and
-    // Struggle's own three draws.
+    // Struggle's own `GetMoveTarget` draw (`battle_util.c:100`-`:105`) and
+    // three damage draws.
     let escape_roll_that_fails: u16 = 65_000;
-    let mut rng = SequenceRng::new([0, 0, escape_roll_that_fails, 0, 1, 0]);
+    let mut rng = SequenceRng::new([
+        0,
+        0,
+        escape_roll_that_fails,
+        crate::common::STRUGGLE_TARGET_PLAYER,
+        0,
+        1,
+        0,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -127,7 +136,8 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
         0,
         "the forced pick spends no PP"
     );
-    assert_eq!(rng.draws(), 6);
+    assert_eq!(rng.draws(), 7);
+    rng.assert_exhausted();
 }
 
 #[test]

@@ -8,6 +8,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
+use battle::battle::BattlerSide;
 use battle::{Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, Status1};
 
 const HEADBUTT: MoveId = MoveId::HEADBUTT;
@@ -420,4 +421,53 @@ fn an_earlier_canceller_wins_and_the_unconsumed_flag_clears_at_end_of_turn() {
     rng.assert_exhausted();
     assert!(!flinched(&second, true), "{second:?}");
     assert!(used_move(&second, true), "{second:?}");
+}
+
+/// `CANCELER_FLINCH` calls `CancelMultiTurnMoves` before its script
+/// (`pokeemerald/src/battle_util.c:2115`), so a flinched Rollout user loses
+/// the series along with the action.
+#[test]
+fn a_flinch_releases_the_flinched_battlers_rollout_lock() {
+    const ROLLOUT: MoveId = MoveId::ROLLOUT;
+    /// A landed Rollout: accuracy, non-critical, damage roll, discarded
+    /// secondary-effect draw.
+    const ROLLOUT_LANDS: [u16; 4] = [0, 1, 0, 0];
+    // Level 9 survives both Headbutts and is still slower than the player.
+    let enemy = max_iv_mon(&Dex::new(), MAKUHITA, 9, vec![ROLLOUT]);
+    let enemy_pp = enemy.moves()[0].pp;
+    let (mut battle, mut rng) = start(
+        player_with(HEADBUTT),
+        enemy,
+        script(&[
+            &PREFIX,
+            &hit_with_chance(NO_FLINCH),
+            &ROLLOUT_LANDS,
+            // Turn two: the locked enemy selects nothing, so only the
+            // turn-start draw precedes the flinching Headbutt.
+            &[0],
+            &hit_with_chance(FLINCHES),
+        ]),
+    );
+    let lock = |battle: &Battle| battle.battler_state(BattlerSide::Enemy).locked_move();
+
+    let events = turn(&mut battle, &mut rng);
+    assert!(used_move(&events, false), "{events:?}");
+    assert_eq!(lock(&battle), Some(ROLLOUT));
+
+    let events = turn(&mut battle, &mut rng);
+    rng.assert_exhausted();
+    assert!(
+        events.contains(&BattleEvent::Flinched {
+            by_player: false,
+            move_id: ROLLOUT,
+        }),
+        "{events:?}"
+    );
+    assert!(!used_move(&events, false), "{events:?}");
+    assert_eq!(lock(&battle), None, "the flinch ended the series");
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        enemy_pp - 1,
+        "only the first attempt cost PP"
+    );
 }
