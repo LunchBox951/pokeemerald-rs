@@ -50,6 +50,7 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FastAsleep { by_player, move_id },
         BattleEvent::WokeUp { by_player },
         BattleEvent::LoafingAround { by_player, move_id },
+        BattleEvent::Flinched { by_player, move_id },
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
@@ -256,7 +257,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 92;
+const VARIANTS: usize = 93;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -355,6 +356,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::YawnAbilityProtected { .. } => 89,
         BattleEvent::FellAsleepFromYawn { .. } => 90,
         BattleEvent::TracedAbility { .. } => 91,
+        BattleEvent::Flinched { .. } => 92,
     }
 }
 

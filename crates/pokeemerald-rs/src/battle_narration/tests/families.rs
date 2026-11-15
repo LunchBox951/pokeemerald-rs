@@ -196,6 +196,26 @@ fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
 }
 
 #[test]
+fn a_flinched_user_prints_flinched_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Flinched {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::Flinched {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        ["Foe RATTATA flinched!", "TORCHIC flinched!"]
+    );
+}
+
+#[test]
 fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
     let mut narrator = narrator(BattleKind::Trainer);
     let events = [
