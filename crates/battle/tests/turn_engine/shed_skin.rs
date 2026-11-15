@@ -439,3 +439,31 @@ fn slower_player_run_after_a_shed_skin_cure_still_refuses_serene_grace() {
     );
     assert!(err.events().is_empty());
 }
+
+/// The Serene Grace re-screen fixture's construction and first turn, pinned to
+/// an exact script: battle start, turn number, the enemy's pick, the faster
+/// player's 4-draw Tackle, Poison Sting's 4 draws against the statused player,
+/// then the Shed Skin cure draw.
+#[test]
+fn serene_grace_shed_skin_fixture_first_turn_draws_an_exact_script() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, DRATINI, 10, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
+
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 48, CURE_HIT_DRAW]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1, "construction draws only the turn number");
+    let first = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    rng.assert_exhausted();
+    assert!(
+        first.contains(&BattleEvent::ShedSkinCured {
+            by_player: true,
+            status: Status1::Poisoned
+        }),
+        "{first:?}"
+    );
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+}

@@ -1,17 +1,17 @@
 //! Object-event visibility, spatial queries, initial facing, and live state.
 //!
-//! The visibility/spatial queries read the runtime's bound live collection
+//! The visibility/spatial queries read the admitted entries of the runtime's bound live collection
 //! ([`MapRuntime::with_object_events`]) by live position and elevation, and
 //! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision, and
-//! interaction read the collection's live state; sight still consults the static templates this
-//! module also exposes.
+//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision,
+//! interaction, and trainer sight read the collection's live state; an unbound runtime still
+//! consults the static templates this module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
-use super::collision::ELEVATION_TRANSITION;
+use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::player::{PlayerState, TilePos};
@@ -19,7 +19,14 @@ use crate::event_data::EventData;
 
 #[path = "live_object_events.rs"]
 mod live_object_events;
-pub use live_object_events::{LiveObjectEvent, ObjectEventCollection};
+pub use live_object_events::{
+    collision_in_direction, FrameContext, LiveObjectEvent, MovementRange, NpcCollision,
+    ObjectEventCollection, Occupant,
+};
+
+#[path = "object_event_motion.rs"]
+mod motion;
+pub use motion::{StepAction, StepKind, NORMAL_STEP_FRAMES};
 
 /// Returns whether an object's hide flag permits it to spawn.
 ///
@@ -70,6 +77,11 @@ pub fn tile_is_in_view(tile: (i32, i32), player_position: (i32, i32)) -> bool {
 }
 
 /// Returns the first visible object at a tile and elevation, in declaration order.
+///
+/// With a bound live collection every result is already an admitted object, so `event_data` is
+/// not consulted: the scheduler applied the hide flag at admission, and a flag set later leaves
+/// the object where it is. An unbound runtime scans authored templates and filters them by
+/// their current hide flag.
 #[must_use]
 pub fn visible_object_event_at<'a>(
     runtime: &MapRuntime<'a>,
@@ -78,9 +90,31 @@ pub fn visible_object_event_at<'a>(
     elevation: u8,
     event_data: &EventData,
 ) -> Option<&'a ObjectEvent> {
+    let admitted = runtime.has_live_object_events();
     runtime
         .object_events_at(x, y, elevation)
-        .find(|event| object_event_is_visible(event, event_data))
+        .find(|event| admitted || object_event_is_visible(event, event_data))
+}
+
+/// Returns the first object that blocks a step onto a tile and elevation, in declaration
+/// order: one standing on the tile, or one still leaving it (`DoesObjectCollideWithObjectAt`,
+/// `event_object_movement.c:4724-4741`).
+///
+/// [`visible_object_event_at`] identifies the object *on* a tile instead, for interaction.
+/// The hide flag is read as there: only for an unbound runtime, since a bound collection's
+/// scheduler applied it at admission.
+#[must_use]
+pub fn blocking_object_event_at<'a>(
+    runtime: &MapRuntime<'a>,
+    x: i32,
+    y: i32,
+    elevation: u8,
+    event_data: &EventData,
+) -> Option<&'a ObjectEvent> {
+    let admitted = runtime.has_live_object_events();
+    runtime
+        .collision_objects_at(x, y, elevation)
+        .find(|event| admitted || object_event_is_visible(event, event_data))
 }
 
 /// The tile an interaction targets, with the elevation every lookup at it uses.
@@ -237,17 +271,23 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// Template overrides remain inside this value. A map runtime observes them only through an
 /// [`ObjectEventCollection`] bound to it, which then answers collision and interaction queries
 /// from each object's live position and elevation and feeds overworld rendering; an unbound
-/// runtime still reads the authored template coordinates. Walking commits the destination
-/// immediately, while the owning script or collection entry tracks animation time.
+/// runtime still reads the authored template coordinates. Trainer sight reads a collection
+/// handed to it directly. Walking commits the destination immediately, while the owning script
+/// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,
     previous_position: TilePos,
+    /// `currentElevation`: the elevation collision and lookups compare against.
     elevation: u8,
+    /// `previousElevation`: the elevation of the last ordinary cell, which draws the sprite.
+    previous_elevation: u8,
+    template_elevation: u8,
     facing: Direction,
     movement_type: MovementType,
     template_position: TilePos,
     template_movement_type: MovementType,
+    step: Option<StepAction>,
 }
 
 impl ObjectEventState {
@@ -259,10 +299,13 @@ impl ObjectEventState {
             position,
             previous_position: position,
             elevation: event.elevation,
+            previous_elevation: event.elevation,
+            template_elevation: event.elevation,
             facing: initial_facing_direction(event.movement_type),
             movement_type: event.movement_type,
             template_position: position,
             template_movement_type: event.movement_type,
+            step: None,
         }
     }
 
@@ -278,10 +321,32 @@ impl ObjectEventState {
         self.previous_position
     }
 
-    /// Returns the template elevation.
+    /// Returns the current elevation (`currentElevation`): the template's until
+    /// [`Self::update_elevation`] settles it on a cell.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
         self.elevation
+    }
+
+    /// Returns the retained elevation (`previousElevation`) that sets the sprite's OAM priority
+    /// (`sElevationToPriority[objEvent->previousElevation]`, `event_object_movement.c:7744-7745`).
+    #[must_use]
+    pub const fn previous_elevation(&self) -> u8 {
+        self.previous_elevation
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`), given the map elevation
+    /// at the current and the previous tile. Nothing changes while either is multi-level; else the
+    /// current elevation takes the current cell's, and the retained one does too unless that cell
+    /// is a transition, which keeps the last ordinary cell's.
+    pub const fn update_elevation(&mut self, current_cell: u8, previous_cell: u8) {
+        if current_cell == ELEVATION_MULTI_LEVEL || previous_cell == ELEVATION_MULTI_LEVEL {
+            return;
+        }
+        self.elevation = current_cell;
+        if current_cell != ELEVATION_TRANSITION {
+            self.previous_elevation = current_cell;
+        }
     }
 
     /// Returns the current facing direction.
@@ -319,12 +384,94 @@ impl ObjectEventState {
         self.facing = direction;
     }
 
-    /// Commits a one-tile walk immediately without collision checks or elevation changes.
+    /// Commits a one-tile walk immediately without collision checks or elevation changes. The
+    /// tile it leaves stays held for collision until [`Self::settle_previous_position`].
     pub const fn walk(&mut self, direction: Direction) {
         self.facing = direction;
         self.previous_position = self.position;
         let (dx, dy) = direction.delta();
         self.position = (self.position.0 + dx, self.position.1 + dy);
+    }
+
+    /// Settles the previous tile onto the current one without changing facing, as the
+    /// fixed-facing face action does when it re-faces the current direction
+    /// (`FaceDirection`, `event_object_movement.c:5048-5056`).
+    pub const fn face_in_place(&mut self) {
+        self.settle_previous_position();
+    }
+
+    /// `ShiftStillObjectEventCoords` (`event_object_movement.c:2162-2164`): the tile the object
+    /// left stops being occupied, so a walk's finish-step elevation update reads the
+    /// destination for both of its cells.
+    pub const fn settle_previous_position(&mut self) {
+        self.previous_position = self.position;
+    }
+
+    /// Starts a normal-speed walk: commits the destination as [`Self::walk`] does and runs the
+    /// action's first frame. [`Self::advance_step`] runs the rest.
+    pub const fn begin_normal_walk(&mut self, direction: Direction) {
+        self.walk(direction);
+        self.step = Some(StepAction::begin(StepKind::Walk, direction));
+    }
+
+    /// Starts a normal-speed walk in place, facing `direction` and staying on the tile.
+    pub const fn begin_normal_walk_in_place(&mut self, direction: Direction) {
+        self.face(direction);
+        self.step = Some(StepAction::begin(StepKind::WalkInPlace, direction));
+    }
+
+    /// Returns the running normal-speed action, if any.
+    #[must_use]
+    pub const fn step(&self) -> Option<StepAction> {
+        self.step
+    }
+
+    /// Runs one more frame of the running action; `true` once none is left to run, which for a
+    /// walk is the frame that also settles the previous tile.
+    pub const fn advance_step(&mut self) -> bool {
+        let Some(step) = &mut self.step else {
+            return true;
+        };
+        if !step.advance() {
+            return false;
+        }
+        self.step = None;
+        self.settle_previous_position();
+        true
+    }
+
+    /// Restores the position, movement type, and initial facing a respawn gives an object from
+    /// this value's template snapshots, so a coordinate or movement override survives
+    /// (`InitObjectEventStateFromTemplate` reads the saved template,
+    /// `event_object_movement.c:1287-1330`). Both elevations return to the authored one, as
+    /// `:1313-1314` sets them; the snapshots themselves are kept.
+    pub const fn reinit_from_template_snapshots(&mut self) {
+        self.position = self.template_position;
+        self.previous_position = self.template_position;
+        self.elevation = self.template_elevation;
+        self.previous_elevation = self.template_elevation;
+        self.movement_type = self.template_movement_type;
+        self.facing = initial_facing_direction(self.template_movement_type);
+        self.step = None;
+    }
+
+    /// Shifts the current, previous, and template-snapshot tiles by `shift`, as
+    /// `UpdateObjectEventCoordsForCameraUpdate` moves a live object into the coordinates a
+    /// camera update puts its map in (`event_object_movement.c:2167-2189`). Elevation, facing,
+    /// and movement are kept.
+    pub const fn translate(&mut self, (dx, dy): (i32, i32)) {
+        self.position = (
+            self.position.0.saturating_add(dx),
+            self.position.1.saturating_add(dy),
+        );
+        self.previous_position = (
+            self.previous_position.0.saturating_add(dx),
+            self.previous_position.1.saturating_add(dy),
+        );
+        self.template_position = (
+            self.template_position.0.saturating_add(dx),
+            self.template_position.1.saturating_add(dy),
+        );
     }
 
     /// Changes the current movement type.
@@ -341,11 +488,22 @@ impl ObjectEventState {
     pub const fn override_template_movement_type(&mut self, movement_type: MovementType) {
         self.template_movement_type = movement_type;
     }
+
+    /// Replaces the template-position, template-movement, and template-elevation snapshots with
+    /// `event`'s, as a map load rewrites the templates a later spawn reads
+    /// (`LoadObjEventTemplatesFromHeader`, `overworld.c:796`); the live tile, elevation, facing,
+    /// and movement type are kept.
+    pub fn reload_template_snapshots(&mut self, event: &ObjectEvent) {
+        self.template_position = (i32::from(event.x), i32::from(event.y));
+        self.template_movement_type = event.movement_type;
+        self.template_elevation = event.elevation;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overworld::object_event_harness::{admit, admitted, template, Rig};
     use assets::{
         BattleScene, CoordEvent, MapConnection, MapEvents, MapHeader, MapId, MapLayout, MapType,
         MetatileAttributeTable, MetatileCell, MusicId, RegionMapSectionId, TrainerType, Weather,
@@ -363,7 +521,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "SomeScript",
+            script: Some(assets::ScriptRef::new("SomeScript")),
             flag,
         }
     }
@@ -473,6 +631,7 @@ mod tests {
             allow_run: false,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &[MapConnection],
         };
         let layout = MapLayout {
@@ -612,7 +771,7 @@ mod tests {
         templates: &'static [ObjectEvent],
         moves: &[(u8, Direction)],
     ) -> &'static ObjectEventCollection {
-        let mut collection = ObjectEventCollection::from_templates(templates);
+        let mut collection = admitted(templates, (2, 2));
         for &(id, direction) in moves {
             collection.get_mut(id).unwrap().state_mut().walk(direction);
         }
@@ -660,40 +819,41 @@ mod tests {
     }
 
     #[test]
-    fn live_stacks_keep_declaration_order_and_hide_flags_filter_inside_the_search() {
+    fn live_stacks_keep_declaration_order_and_a_hidden_entry_is_never_admitted_into_one() {
+        const RIVAL: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM";
         let grid_bytes = flat_grid_bytes(5, 5);
         let templates: &'static [ObjectEvent] = Box::leak(Box::new([
-            object(
-                9,
-                1,
-                2,
-                3,
-                "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
-            ),
+            object(9, 1, 2, 3, RIVAL),
             object(2, 4, 2, 3, "0"),
         ]));
         let events = events_with(templates);
-        let live = live_collection(
-            templates,
-            &[
+        let stacked = |hidden: bool| -> &'static ObjectEventCollection {
+            let mut data = EventData::new();
+            if hidden {
+                data.flag_set(assets::object_event_flags::resolve(RIVAL).unwrap())
+                    .unwrap();
+            }
+            let mut collection = ObjectEventCollection::from_templates(templates);
+            admit(&mut collection, (2, 2), &data);
+            for (id, direction) in [
                 (9, Direction::East),
                 (9, Direction::East),
                 (2, Direction::West),
-            ],
-        );
-        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
-        let hide = assets::object_event_flags::resolve(
-            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
-        )
-        .unwrap();
-        let mut data = EventData::new();
-        let visible =
-            |data: &EventData| visible_object_event_at(&runtime, 3, 2, 3, data).map(|o| o.local_id);
+            ] {
+                collection.get_mut(id).unwrap().state_mut().walk(direction);
+            }
+            Box::leak(Box::new(collection))
+        };
+        let ids = |live: &'static ObjectEventCollection| {
+            let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+            (
+                ids_at(&runtime, 3, 2, 3),
+                visible_object_event_at(&runtime, 3, 2, 3, &EventData::new()).map(|o| o.local_id),
+            )
+        };
 
-        assert_eq!(ids_at(&runtime, 3, 2, 3), vec![9, 2]);
-        assert_eq!(visible(&data), Some(9));
-        data.flag_set(hide).unwrap();
-        assert_eq!(visible(&data), Some(2));
+        assert_eq!(ids(stacked(false)), (vec![9, 2], Some(9)));
+        assert_eq!(ids(stacked(true)), (vec![2], Some(2)));
     }
 
     #[test]
@@ -701,7 +861,7 @@ mod tests {
         let grid_bytes = flat_grid_bytes(5, 5);
         let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 2, 3, "0")]));
         let events = events_with(templates);
-        let mut collection = ObjectEventCollection::from_templates(templates);
+        let mut collection = admitted(templates, (2, 2));
         let state = collection.get_mut(9).unwrap().state_mut();
         state.walk(Direction::East);
         state.elevation = 5;
@@ -711,6 +871,60 @@ mod tests {
         assert_eq!(ids_at(&runtime, 3, 2, 3), Vec::<u8>::new());
         assert_eq!(ids_at(&runtime, 3, 2, 5), vec![9]);
         assert_eq!(ids_at(&runtime, 3, 2, 0), vec![9]);
+    }
+
+    const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM";
+
+    fn hide_flag() -> u16 {
+        assets::object_event_flags::resolve(HIDE).unwrap()
+    }
+
+    /// The `Rig`'s lone entry (local id 1 at (2, 2)) as the runtime's bound collection, queried
+    /// through [`visible_object_event_at`].
+    fn visible_in_rig(rig: &Rig) -> Option<u8> {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] =
+            std::slice::from_ref(rig.collection.get(1).unwrap().template());
+        let events = events_with(templates);
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(&rig.collection);
+        visible_object_event_at(&runtime, 2, 2, 3, &rig.event_data).map(|o| o.local_id)
+    }
+
+    #[test]
+    fn an_unadmitted_object_is_not_query_visible_after_its_hide_flag_clears() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(1);
+        rig.event_data.flag_clear(hide_flag()).unwrap();
+        rig.tick(10);
+        assert!(
+            !rig.collection.get(1).unwrap().is_active(),
+            "the camera never moved, so the scheduler never admitted it"
+        );
+        assert_eq!(visible_in_rig(&rig), None);
+
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(
+            visible_in_rig(&rig),
+            Some(1),
+            "the next camera update admits it"
+        );
+    }
+
+    #[test]
+    fn an_admitted_object_stays_query_visible_after_its_hide_flag_is_set() {
+        let mut rig = Rig::new(vec![template(1, 2, 2, MovementType::FaceUp, HIDE)], (2, 2));
+        rig.tick(1);
+        assert_eq!(visible_in_rig(&rig), Some(1));
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(10);
+        assert!(rig.collection.get(1).unwrap().is_active());
+        assert_eq!(
+            visible_in_rig(&rig),
+            Some(1),
+            "only a script's removal retires it, not the flag"
+        );
     }
 
     #[test]
@@ -905,11 +1119,14 @@ mod tests {
             .filter(|o| (o.x, o.y) == (6, 8))
             .collect();
         assert_eq!(
-            balls.iter().map(|o| o.script).collect::<Vec<_>>(),
+            balls
+                .iter()
+                .map(|o| o.script.map(assets::ScriptRef::id))
+                .collect::<Vec<_>>(),
             vec![
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Totodile",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita",
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita"),
             ],
             "fixture precondition: three starter balls stacked on (6, 8), in \
              this declaration order"
@@ -926,13 +1143,17 @@ mod tests {
 
         let mut data = EventData::new();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil")
         );
 
         data.flag_set(cyndaquil).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
             "a hidden first template must be scanned past, not returned and \
              then rejected"
@@ -940,7 +1161,9 @@ mod tests {
 
         data.flag_set(totodile).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita")
         );
 
@@ -951,7 +1174,9 @@ mod tests {
         data.flag_set(cyndaquil).unwrap();
         let player = PlayerState::new((6, 9), 3, Direction::North);
         assert_eq!(
-            facing_object_event(&player, &runtime, &data).map(|o| o.script),
+            facing_object_event(&player, &runtime, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile")
         );
     }
@@ -1163,5 +1388,43 @@ mod tests {
             3,
             "elevation is not modelled for a walking object event (`walk`'s own docs)"
         );
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`).
+    #[test]
+    fn update_elevation_follows_upstreams_multi_level_and_transition_rules() {
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        assert_eq!((state.elevation(), state.previous_elevation()), (3, 3));
+
+        state.update_elevation(4, 4);
+        assert_eq!((state.elevation(), state.previous_elevation()), (4, 4));
+
+        state.update_elevation(ELEVATION_TRANSITION, 4);
+        assert_eq!(
+            (state.elevation(), state.previous_elevation()),
+            (ELEVATION_TRANSITION, 4),
+            "a transition cell keeps the retained elevation"
+        );
+
+        state.update_elevation(ELEVATION_MULTI_LEVEL, 6);
+        state.update_elevation(6, ELEVATION_MULTI_LEVEL);
+        assert_eq!(
+            (state.elevation(), state.previous_elevation()),
+            (ELEVATION_TRANSITION, 4),
+            "either multi-level cell skips the update"
+        );
+
+        state.update_elevation(6, ELEVATION_TRANSITION);
+        assert_eq!((state.elevation(), state.previous_elevation()), (6, 6));
+    }
+
+    /// `InitObjectEventStateFromTemplate` sets both elevations from the template
+    /// (`event_object_movement.c:1313-1314`).
+    #[test]
+    fn a_respawn_restores_both_elevations_to_the_authored_one() {
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        state.update_elevation(6, 6);
+        state.reinit_from_template_snapshots();
+        assert_eq!((state.elevation(), state.previous_elevation()), (3, 3));
     }
 }

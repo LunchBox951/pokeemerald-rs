@@ -14,10 +14,12 @@ fn an_attacker_that_fainted_to_its_own_recoil_draws_no_roll() {
         attacker.deduct_pp(0).unwrap();
     }
 
-    // The all-spent enemy's forced Struggle pick skips the selection draw.
+    // The all-spent enemy's forced Struggle pick skips the selection draw but
+    // draws its `GetMoveTarget` once (`battle_util.c:100`-`:105`).
     let mut rng = SequenceRng::new([
         CONSTRUCTION_TURN_NUMBER,
         TURN_START,
+        crate::common::STRUGGLE_TARGET_PLAYER,
         ACCURACY_HITS,
         NO_CRIT,
         DAMAGE_ROLL,

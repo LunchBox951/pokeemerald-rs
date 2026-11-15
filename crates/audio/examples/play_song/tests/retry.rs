@@ -293,3 +293,37 @@ fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_er
     );
     assert_eq!(output.stream_errors(), 0, "the null backend never errors");
 }
+
+#[test]
+fn an_error_from_before_playback_does_not_fail_a_push_but_a_new_one_does() {
+    let output = AudioOutput::null(64);
+    let producer = output.producer();
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(1),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    // A stream failed and the transport rebuilt it before playback began.
+    output.record_stream_error_for_test();
+    let errors = ErrorBaseline::of(&output);
+
+    let push = |output: &AudioOutput| {
+        push_frame(
+            &[0.0_f32; 4],
+            &policy,
+            |chunk| producer.push(chunk),
+            || errors.since(output),
+            std::time::Instant::now,
+            |_| panic!("plenty of room; must not need to retry"),
+        )
+    };
+    assert!(push(&output).is_ok(), "a recovered transport plays");
+
+    output.record_stream_error_for_test();
+    assert!(
+        matches!(
+            push(&output),
+            Err(PushError::StreamStopped { errors: 1, .. })
+        ),
+        "an error during playback still stops it"
+    );
+}

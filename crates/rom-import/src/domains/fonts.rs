@@ -11,13 +11,17 @@
 //! the same way to find the sheet, so the two directions are checked
 //! against each other by the equivalence harness.
 //!
+//! The keypad-icon sheet, `font/keypad_icons`, is the exception: upstream
+//! includes `keypad_icons.4bpp` as plain row-major tiles, so it goes
+//! through [`super::image`] like any other tile sheet.
+//!
 //! The layout is fixed: 256x512 pixels, 2bpp, 32 KiB. A [`FontRoot`] that
 //! claims any other shape is a profile the decoder cannot honour, and is
 //! refused as [`ImportError::FontShape`] before a byte is read.
 
 use pack_format::{image_entry, PackEntry, PackWriter};
 
-use super::len_usize;
+use super::{image, len_usize};
 use crate::error::ImportError;
 use crate::reader::RomReader;
 use crate::rom::Rom;
@@ -42,16 +46,20 @@ const TILE_ROW_BYTES: usize = 2;
 /// Bytes per stored sheet: 512 glyphs of 64 bytes.
 const SHEET_BYTES: usize = ROWS * COLUMNS * 4 * 8 * TILE_ROW_BYTES;
 
-/// Write every Latin glyph sheet.
+/// Write every Latin glyph sheet and every plain tile-sheet font image.
 ///
 /// # Errors
 ///
 /// [`ImportError::FontShape`] if a root is not the one shape `.latfont`
-/// has; [`ImportError::Truncated`] if its bytes are not inside the ROM.
+/// has; [`ImportError::Truncated`] if its bytes are not inside the ROM;
+/// [`ImportError::EntryShape`] if a font image's tiles do not fit its raster.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
     let reader = rom.reader();
     for root in roots.fonts {
         writer.push(font(&reader, root)?);
+    }
+    for root in roots.font_images {
+        writer.push(image(&reader, root)?);
     }
     Ok(())
 }

@@ -24,9 +24,31 @@ pub(super) fn object(
         movement_range_y: 0,
         trainer_type: TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script: "0x0",
+        script: None,
         flag: "0",
     }
+}
+
+/// `templates` seeded and admitted as map load admits them for a player standing on the first
+/// template's tile with no flag set, so every test object near the first one is a spawned,
+/// drawable object.
+pub(super) fn admitted(
+    templates: &'static [ObjectEvent],
+) -> engine::overworld::object_event::ObjectEventCollection {
+    admitted_with(templates, &engine::event_data::EventData::new())
+}
+
+/// [`admitted`] under `event_data`, whose set hide flags leave their objects unspawned.
+pub(super) fn admitted_with(
+    templates: &'static [ObjectEvent],
+    event_data: &engine::event_data::EventData,
+) -> engine::overworld::object_event::ObjectEventCollection {
+    let mut objects =
+        engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
+    if let Some(first) = templates.first() {
+        let _ = objects.admit_on_map_load((i32::from(first.x), i32::from(first.y)), event_data);
+    }
+    objects
 }
 
 /// The sorted, de-duplicated graphics ids of every object event on every map
@@ -75,6 +97,7 @@ pub(super) fn open_runtime(width: u16, height: u16) -> engine::overworld::MapRun
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [assets::MapConnection],
     }));
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {

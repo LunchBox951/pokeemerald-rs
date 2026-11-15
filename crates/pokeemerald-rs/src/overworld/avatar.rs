@@ -8,10 +8,14 @@ use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES};
 use engine::save::PlayerGender;
 use rendering::{BitDepth, OamEntry, ObjShape};
 
+mod mat;
+#[cfg(test)]
+mod mat_tests;
 mod run;
 #[cfg(test)]
 mod run_tests;
 
+use super::obj_vram::SheetSprite;
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
 pub(super) const FRAME_W: usize = 16;
@@ -23,6 +27,7 @@ pub(super) const NUM_WALK_FRAMES: usize = 9;
 )]
 pub(super) const FRAME_TILES: u16 =
     (FRAME_W / BitDepth::TILE_DIM * FRAME_H / BitDepth::TILE_DIM) as u16;
+#[cfg(test)]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the nine-frame block fits in u16"
@@ -182,11 +187,20 @@ pub(super) const fn stand_frame_for(facing: Direction) -> (u16, bool) {
 
 fn frame_for(player: &PlayerState) -> (u16, bool) {
     let (stand, h_flip) = stand_frame_for(player.facing());
-    let step = match player.facing() {
+    let step_base = match player.facing() {
         Direction::South => FRAME_SOUTH_STEP,
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
-    } + u16::from(player.second_foot_leads());
+    };
+    let step = step_base + u16::from(player.second_foot_leads());
+    if let Some(cell) = mat::go_cell_for(player) {
+        let frame = match cell {
+            mat::GoCell::Stand => stand,
+            mat::GoCell::LeadingFoot => step,
+            mat::GoCell::OtherFoot => step_base + u16::from(!player.second_foot_leads()),
+        };
+        return (frame, h_flip);
+    }
     let walking_foot_forward = player.slide_pose_held()
         || run::running_foot_forward(player)
         || (player.in_transit()
@@ -206,25 +220,29 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
 /// `run_base_tile` is where the player's running sheet starts in the
 /// combined tileset; it is drawn from instead of the walking sheet at tile 0
 /// while [`run::draws_running_sheet`].
-pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> OamEntry {
+pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSprite {
     let (frame, h_flip) = frame_for(player);
     let sheet_base = if run::draws_running_sheet(player) {
         run_base_tile
     } else {
         0
     };
-    OamEntry::new(
-        PLAYER_OBJ_X,
-        PLAYER_OBJ_Y,
-        sheet_base + frame * FRAME_TILES,
-        PLAYER_PALETTE_BANK,
-        BitDepth::Bpp4,
-        h_flip,
-        false,
-        PLAYER_OBJ_SHAPE,
-        PLAYER_OBJ_SIZE,
-        priority_for_elevation(player.previous_elevation()),
-        true,
+    let sheet_tile = sheet_base + frame * FRAME_TILES;
+    SheetSprite::new(
+        OamEntry::new(
+            PLAYER_OBJ_X,
+            PLAYER_OBJ_Y.saturating_sub(mat::lift(player)),
+            sheet_tile,
+            PLAYER_PALETTE_BANK,
+            BitDepth::Bpp4,
+            h_flip,
+            false,
+            PLAYER_OBJ_SHAPE,
+            PLAYER_OBJ_SIZE,
+            priority_for_elevation(player.previous_elevation()),
+            true,
+        ),
+        sheet_tile,
     )
 }
 
@@ -438,7 +456,7 @@ mod tests {
     /// A 5x5 map whose `(2, 2)` tile carries `behavior`, otherwise plain
     /// ground, for proving [`frame_for`] reads the active crossing's own
     /// pace rather than assuming [`WALK_FRAMES_PER_TILE`].
-    fn behavior_runtime(behavior: u8) -> engine::overworld::MapRuntime<'static> {
+    pub(super) fn behavior_runtime(behavior: u8) -> engine::overworld::MapRuntime<'static> {
         let mut bytes = Vec::new();
         for y in 0..5u16 {
             for x in 0..5u16 {
@@ -669,6 +687,7 @@ mod tests {
             allow_run: true,
             show_name: false,
             battle_scene: assets::BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &'static [assets::MapConnection],
         };
         let events = assets::MapEvents {

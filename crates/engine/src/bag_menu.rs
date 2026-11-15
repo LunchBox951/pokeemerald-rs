@@ -3,12 +3,17 @@
 //! [`BagMenu`] owns the five pockets' browse order, the per-pocket cursor and
 //! scroll positions, and the choice between a terminal selection, a typed
 //! context-action request, and a cancel. It reads a [`Bag`] once when opened and
-//! never writes it; item use, party targeting, toss, register, and every
-//! renderer concern stay with the caller.
+//! never writes it; item use, party targeting, register, and every renderer
+//! concern stay with the caller. The quantity stepping the TOSS prompt uses
+//! is [`adjust_quantity`].
 
 use assets::items::{ItemDisplayTable, ItemId, ItemTable, Pocket};
 
 use crate::save::bag::{Bag, ItemSlot};
+
+mod quantity;
+
+pub use quantity::adjust_quantity;
 
 /// Number of bag pockets (`POCKETS_COUNT`).
 pub const POCKET_COUNT: usize = 5;
@@ -170,7 +175,8 @@ pub struct BagSelection {
 pub enum BagAction {
     /// Use the item in the field.
     Use,
-    /// Toss the item.
+    /// Toss the item. The bag screen answers this action with its own
+    /// quantity prompt rather than passing it on.
     Toss,
     /// Register the key item.
     Register,

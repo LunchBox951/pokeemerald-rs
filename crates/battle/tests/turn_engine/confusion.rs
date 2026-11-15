@@ -38,7 +38,7 @@ fn a_duration_one_confusion_snaps_out_before_the_mover_s_own_hit() {
     );
     assert!(
         matches!(
-            events[1],
+            events[2],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -76,6 +76,10 @@ fn confusion_snaps_out_ahead_of_the_same_action_s_full_paralysis_draw() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::NoEffect {
                 by_player: false,
                 move_id: TACKLE,
@@ -84,7 +88,7 @@ fn confusion_snaps_out_ahead_of_the_same_action_s_full_paralysis_draw() {
             BattleEvent::FullyParalyzed {
                 by_player: true,
                 move_id: TACKLE,
-            },
+            }
         ],
         "the confusion decrement gates the same action ahead of the \
          full-paralysis draw: {events:?}"
@@ -113,7 +117,7 @@ fn each_battler_s_confusion_decrements_only_on_its_own_action() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -123,13 +127,13 @@ fn each_battler_s_confusion_decrements_only_on_its_own_action() {
         "the faster, unconfused player acts first: {events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::SnappedOutOfConfusion { by_player: false },
         "only the enemy's own action ticks its own confusion: {events:?}"
     );
     assert!(
         matches!(
-            events[2],
+            events[4],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -164,7 +168,7 @@ fn a_multi_turn_confusion_persists_without_an_expiry_event() {
     );
     assert!(
         matches!(
-            events[1],
+            events[2],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -229,7 +233,7 @@ fn an_even_coin_cancels_the_chosen_move_for_a_self_hit_that_ignores_its_own_type
          Ghost user despite Tackle's Normal type being an immunity: {events:?}"
     );
     assert_eq!(
-        events[2],
+        events[3],
         BattleEvent::NoEffect {
             by_player: false,
             move_id: TACKLE,
@@ -283,7 +287,7 @@ fn a_self_hit_ignores_its_own_paralysis_and_draws_no_paralysis_bit() {
     );
     assert!(
         matches!(
-            events[2],
+            events[3],
             BattleEvent::ConfusionSelfHit {
                 by_player: true,
                 ..
@@ -389,7 +393,7 @@ fn confuse_ray_inflicts_a_fresh_confusion_that_the_target_immediately_ticks_thro
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::ConfusionInflicted {
             by_player: true,
             move_id: CONFUSE_RAY,
@@ -397,14 +401,14 @@ fn confuse_ray_inflicts_a_fresh_confusion_that_the_target_immediately_ticks_thro
         "{events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::Confused { by_player: false },
         "the enemy's own action immediately ticks the confusion the \
          player's move just wrote, before its own coin draw: {events:?}"
     );
     assert!(
         matches!(
-            events[2],
+            events[4],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -447,7 +451,7 @@ fn an_own_tempo_target_blocks_confuse_ray_before_any_draw() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::OwnTempoProtected {
             by_player: true,
             move_id: CONFUSE_RAY,
@@ -456,7 +460,7 @@ fn an_own_tempo_target_blocks_confuse_ray_before_any_draw() {
     );
     assert!(
         matches!(
-            events[1],
+            events[3],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -484,7 +488,7 @@ fn an_already_confused_target_refuses_confuse_ray_without_drawing() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::AlreadyConfused {
             by_player: true,
             move_id: CONFUSE_RAY,
@@ -492,7 +496,7 @@ fn an_already_confused_target_refuses_confuse_ray_without_drawing() {
         "{events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::SnappedOutOfConfusion { by_player: false },
         "{events:?}"
     );
@@ -514,7 +518,7 @@ fn a_missed_sweet_kiss_reports_missed_and_confuses_nothing() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Missed {
             by_player: true,
             move_id: SWEET_KISS,
@@ -546,7 +550,7 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: PSYBEAM,
@@ -556,7 +560,7 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
         "{events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::ConfusionInflicted {
             by_player: true,
             move_id: PSYBEAM,
@@ -564,13 +568,13 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
         "{events:?}"
     );
     assert_eq!(
-        events[2],
+        events[3],
         BattleEvent::Confused { by_player: false },
         "{events:?}"
     );
     assert!(
         matches!(
-            events[3],
+            events[5],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -645,7 +649,7 @@ fn an_own_tempo_target_is_hit_by_psybeam_but_never_confused() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: PSYBEAM,
@@ -656,7 +660,7 @@ fn an_own_tempo_target_is_hit_by_psybeam_but_never_confused() {
     );
     assert!(
         matches!(
-            events[1],
+            events[3],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -666,7 +670,7 @@ fn an_own_tempo_target_is_hit_by_psybeam_but_never_confused() {
         "Own Tempo lands no confusion, so the enemy's own action never ticks \
          or draws a coin: {events:?}"
     );
-    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events.len(), 4, "{events:?}");
     assert!(!battle.enemy().volatiles().confused());
 }
 

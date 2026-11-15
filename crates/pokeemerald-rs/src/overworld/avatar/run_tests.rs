@@ -198,7 +198,7 @@ fn real_pack_scenes_draw_the_running_cells_for_both_genders() {
             &data,
         );
         player.tick();
-        let entries = scene.sprites.entries(&player, &data);
+        let entries = scene.sprite_entries(&player, &data);
         let drawn = entries
             .iter()
             .find(|entry| {

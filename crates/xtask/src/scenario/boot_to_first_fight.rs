@@ -43,8 +43,16 @@ const CROSS_ROUTE_EDGE_TO_RESCUE_TRIGGER_TILES: usize = 1;
 /// spends one frame per landing event, holding the direction across it, and
 /// the walk that follows starts on the next frame.
 const STEP_LANDING_FRAMES: usize = 1;
-const FIRST_BATTLE_DRIVER_BUTTONS: AppButtons = AppButtons::RIGHT;
-const REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING: usize = 2;
+/// The first battle plays its text, and each page prompt
+/// waits for a fresh A press: one press opens every period, and the held-A
+/// speed-up lasts only that frame.
+const FIRST_BATTLE_TEXT_PERIOD_FRAMES: usize = 16;
+/// The frames after the trigger landing that the fight takes with that input:
+/// the opening, the turns and their holds, and the experience award, up to the
+/// frame before the battle slot empties. The fight's rolls follow the field
+/// `Random()` stream, which the walk's random-facing NPCs advance, so this count
+/// is measured against that stream and moves with it.
+const FIRST_BATTLE_TEXT_FRAMES: usize = 964;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
 const FINAL_RELEASE_FRAMES: usize = 1;
 
@@ -52,6 +60,7 @@ const FINAL_RELEASE_FRAMES: usize = 1;
 enum ScenarioBlock {
     Segment(Segment),
     IntroTraversal,
+    FirstBattleText,
 }
 
 const fn segment(buttons: AppButtons, count: usize, expected: AppState) -> Segment {
@@ -150,13 +159,9 @@ const SEGMENTS: &[ScenarioBlock] = &[
     // the crossing above keeps its full sixteen animation frames and the
     // battle starts on the landing frame after them.
     held(AppButtons::UP, STEP_LANDING_FRAMES, AppState::FirstBattle),
+    ScenarioBlock::FirstBattleText,
     held(
-        FIRST_BATTLE_DRIVER_BUTTONS,
-        REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING,
-        AppState::FirstBattle,
-    ),
-    held(
-        FIRST_BATTLE_DRIVER_BUTTONS,
+        AppButtons::NONE,
         FIRST_BATTLE_CONCLUDING_FRAMES,
         AppState::Overworld,
     ),
@@ -206,12 +211,30 @@ fn append_intro_traversal(segments: &mut Vec<Segment>) {
     ));
 }
 
+fn append_first_battle_text(segments: &mut Vec<Segment>) {
+    let mut remaining = FIRST_BATTLE_TEXT_FRAMES;
+    while remaining > 0 {
+        segments.push(segment(
+            AppButtons::A,
+            BUTTON_EDGE_FRAMES,
+            AppState::FirstBattle,
+        ));
+        remaining -= BUTTON_EDGE_FRAMES;
+        let idle = remaining.min(FIRST_BATTLE_TEXT_PERIOD_FRAMES - BUTTON_EDGE_FRAMES);
+        if idle > 0 {
+            segments.push(segment(AppButtons::NONE, idle, AppState::FirstBattle));
+        }
+        remaining -= idle;
+    }
+}
+
 fn scenario_segments() -> Vec<Segment> {
     let mut segments = Vec::new();
     for block in SEGMENTS {
         match block {
             ScenarioBlock::Segment(segment) => segments.push(*segment),
             ScenarioBlock::IntroTraversal => append_intro_traversal(&mut segments),
+            ScenarioBlock::FirstBattleText => append_first_battle_text(&mut segments),
         }
     }
     segments
@@ -242,11 +265,12 @@ mod tests {
     /// (`super::STEP_LANDING_FRAMES`): the bedroom stair warp, the front
     /// door's arrow warp, and the Route 101 rescue trigger.
     const EXPECTED_STEP_LANDING_FRAMES: usize = 3;
-    const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 2;
+    const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 964;
     const EXPECTED_BATTLE_CONCLUSION_FRAMES: usize = 1;
     const EXPECTED_FINAL_RELEASE_FRAMES: usize = 1;
     const EXPECTED_B_CONFIRM_COUNT: usize = 2;
-    const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 3;
+    /// The trigger landing frame, then the fight's text frames.
+    const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 1 + 964;
 
     #[test]
     fn script_has_the_expected_route_and_state_shape() {

@@ -18,7 +18,7 @@
 //! No ROM bytes leave this tool: the table carries offsets, lengths,
 //! dimensions, counts, and names, plus the whole-file SHA-1 `rom_import`
 //! already ships, and no other hash of ROM data. A pack missing the whole
-//! fixed asset domain (fonts, tilesets, layouts, interface palettes) is
+//! fixed asset domain (fonts, tilesets, layouts, interface images and palettes) is
 //! refused.
 
 mod audio;
@@ -33,14 +33,17 @@ mod evolution_scene;
 mod field_messages;
 mod fonts;
 mod images;
+mod interface;
 mod inventory;
 mod layouts;
 mod locate;
 mod lz77_blobs;
 mod map_file;
+mod naming_screen;
 mod opening_scene;
 mod pack_source;
 mod palettes;
+mod party_menu;
 mod plan;
 mod poke_ball;
 mod search;
@@ -171,8 +174,9 @@ fn locate_profile(
         sprites: sprites::locate(ctx, lines)?,
         layouts: layouts::locate(ctx, lines)?,
         fonts: fonts::locate(ctx, lines)?,
+        font_images: fonts::locate_keypad_icons(ctx, lines)?,
         text_window: text_window::locate(ctx, lines)?,
-        interface: locate_interface_palettes(ctx, lines)?,
+        interface: interface::locate(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
         field_messages: field_messages::locate(ctx, lines)?,
@@ -182,6 +186,8 @@ fn locate_profile(
         opening_scene: opening_scene::locate(ctx, lines)?,
         evolution_scene: evolution_scene::locate(ctx, lines)?,
         battle_interface: battle_interface::locate(ctx, lines)?,
+        naming_screen: naming_screen::locate(ctx, lines)?,
+        party_menu: party_menu::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
         trainer_front,

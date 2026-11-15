@@ -58,7 +58,7 @@ impl KeyboardPage {
             .nth(usize::from(column))
     }
 
-    const fn rows(self) -> [&'static str; KEY_ROWS as usize] {
+    pub(super) const fn rows(self) -> [&'static str; KEY_ROWS as usize] {
         match self {
             Self::Lower => ["abcdef .", "ghijkl ,", "mnopqrs ", "tuvwxyz "],
             Self::Upper => ["ABCDEF .", "GHIJKL ,", "MNOPQRS ", "TUVWXYZ "],

@@ -9,14 +9,17 @@
 //! host's palette stage, and a closed screen keeps drawing, as the source of
 //! the fade out, until the host drops it. A confirmed action, a selected item,
 //! and a close all return to the caller as [`BagScreenTick`] data: using,
-//! tossing, registering, consuming, suspending a battle, or routing back to the
+//! registering, consuming, suspending a battle, or routing back to the
 //! field is the host's, as are the entries that open this screen.
 //!
 //! The screen never writes the caller's [`Bag`]: it reads it at [`open`], so
 //! the rows show the quantities of that moment, and keeps its own copy. SELECT
 //! picks an item up and the cursor puts it down elsewhere in its pocket, which
 //! reorders that copy and returns the new bag as [`BagScreenTick::Reordered`]
-//! for the host to keep. [`BagScreen::positions`] returns
+//! for the host to keep. TOSS runs upstream's prompt on the screen itself
+//! (`toss.rs`): the quantity window, the yes/no and the "Threw away" message,
+//! after which the count leaves that copy and the new bag comes back as
+//! [`BagScreenTick::Tossed`]. [`BagScreen::positions`] returns
 //! the per-pocket cursor and scroll for the host to pass into the next
 //! [`BagScreenRequest`], which is how a reopen keeps its place.
 //!
@@ -24,8 +27,11 @@
 //! `item_menu.c:1352-1404`) over the ticks that follow it: the list is wiped
 //! away, the bag bobs and the ball turns, and the engine changes pocket only
 //! when the list returns. The list's scroll arrows show while the pocket has
-//! rows past the window and bob as upstream's do. Only the Items, Poké Balls
-//! and Key Items pockets swap (`CanSwapItems`, `item_menu.c:1416-1427`).
+//! rows past the window and bob as upstream's do, and the pocket-switch arrows
+//! sit at the pocket name except during a switch, a context menu, or a swap,
+//! and the bag picture shakes when the list cursor moves (`ShakeBagSprite`,
+//! `item_menu_icons.c:477-494`). Only the Items, Poké Balls and Key Items
+//! pockets swap (`CanSwapItems`, `item_menu.c:1416-1427`).
 
 #![cfg_attr(
     not(test),
@@ -48,13 +54,17 @@ mod chrome;
 mod draw;
 mod labels;
 mod scroll;
+mod shake;
 mod sprite;
 mod swap;
+mod toss;
 
 use crate::key_repeat::{self, KeyRepeat};
 use chrome::BagChrome;
 use scroll::ArrowClock;
+use shake::BagShake;
 use swap::ItemSwap;
+use toss::ItemToss;
 
 /// Which caller opened the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,8 +172,9 @@ pub(crate) enum BagScreenResult {
 pub(crate) enum BagScreenTick {
     /// The screen still owns input.
     Open,
-    /// A field choice was confirmed. The screen stays open; the host applies
-    /// the action's effect and, for effects that change the bag, reopens.
+    /// A field choice other than TOSS, which the screen runs itself, was
+    /// confirmed. The screen stays open; the host applies the action's effect
+    /// and, for effects that change the bag, reopens.
     Action {
         action: BagAction,
         selection: BagSelection,
@@ -172,6 +183,11 @@ pub(crate) enum BagScreenTick {
     /// and shows the new order; the host keeps `bag`, the bag as the screen
     /// now holds it, in place of the one it opened with.
     Reordered { bag: Box<Bag> },
+    /// A count was tossed from a stack, after the player acknowledged the
+    /// "Threw away" message. The screen stays open and shows the list without
+    /// it; the host keeps `bag`, the bag as the screen now holds it, in place
+    /// of the one it opened with.
+    Tossed { bag: Box<Bag> },
     /// The screen is done; the host drops it and acts on the result.
     Closed(BagScreenResult),
 }
@@ -227,6 +243,10 @@ pub(crate) struct BagScreen {
     link_active: bool,
     switch: Option<PocketSwitch>,
     arrows: ArrowClock,
+    /// The pocket-switch arrows' own clock: a swap takes only that pair down.
+    switch_arrows: ArrowClock,
+    /// The bag picture's shake, which the list cursor sets off.
+    shake: BagShake,
     /// The bag as the screen has reordered it, which the engine menu lists.
     bag: Bag,
     /// What the engine menu was opened with. Its positions are the ones to
@@ -234,9 +254,12 @@ pub(crate) struct BagScreen {
     /// host passed it in until then.
     menu_request: BagMenuRequest,
     swap: Option<ItemSwap>,
+    /// The TOSS prompt, once TOSS is chosen.
+    toss: Option<ItemToss>,
     /// `ReadKeys`' per-frame repeat counter, which the item list's held Up
-    /// and Down read, in the list and while swapping. It opens at the boot
-    /// delay of 40: upstream's session-global `gKeyRepeatStartDelay` is not
+    /// and Down read, in the list and while swapping, and the TOSS count
+    /// reads for all four directions. It opens at the boot delay of 40:
+    /// upstream's session-global `gKeyRepeatStartDelay` is not
     /// modelled, so a naming screen's 16 does not carry over.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
@@ -255,16 +278,18 @@ impl BagScreen {
     /// switch pockets only in the L/R button mode. While the item list has
     /// the input, a held Up or Down repeats as `JOY_REPEAT` does: the first
     /// repeat 40 frames after the press, then every 5 frames
-    /// (`ReadKeys`, `main.c:251-275`). Every other input, and the choice
+    /// (`ReadKeys`, `main.c:251-275`). The TOSS count repeats all four
+    /// directions on the same clock. Every other input, and the choice
     /// windows' directions, read only fresh presses.
     ///
     /// A pocket switch runs for the next 17 ticks. Only a fresh switch
     /// press is heard meanwhile and restarts it, unless the request has a
     /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
-        let arrows_were_shown = self.arrows_exist();
+        let pairs_before = self.arrow_pairs();
         let outcome = self.handle_buttons(buttons);
-        self.age_arrows(arrows_were_shown, self.arrows_exist());
+        self.age_arrows(pairs_before, self.arrow_pairs());
+        self.shake.update();
         outcome
     }
 
@@ -279,6 +304,9 @@ impl BagScreen {
         }
         if let Some(swap) = self.swap {
             return self.advance_swap(swap, buttons, repeated);
+        }
+        if let Some(toss) = self.toss {
+            return self.advance_toss(toss, buttons, repeated);
         }
         if self.can_switch_pocket() {
             if let Some(direction) = switch_direction(buttons, self.lr_buttons) {
@@ -303,6 +331,13 @@ impl BagScreen {
         let in_context = self.menu.context_grid().is_some();
         match self.apply(input) {
             None => BagScreenTick::Open,
+            Some(BagMenuOutcome::Action {
+                action: BagAction::Toss,
+                selection,
+            }) => {
+                self.start_toss(selection);
+                BagScreenTick::Open
+            }
             Some(BagMenuOutcome::Action { action, selection }) => {
                 BagScreenTick::Action { action, selection }
             }
@@ -484,9 +519,12 @@ fn open_from_pack(
         link_active: request.link.is_some(),
         switch: None,
         arrows: ArrowClock::default(),
+        switch_arrows: ArrowClock::default(),
+        shake: BagShake::default(),
         bag: bag.clone(),
         menu_request: engine_request,
         swap: None,
+        toss: None,
         repeat: KeyRepeat::new(key_repeat::START_DELAY),
         done: None,
         closed_from_context: false,

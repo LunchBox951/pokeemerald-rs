@@ -23,8 +23,8 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, is_speed_down_hit_effect,
-    spend_effect_chance_draw, SecondaryApplication,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect,
+    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
 };
 
 const ORDINARY_HIT_EFFECTS: [MoveEffect; 21] = [
@@ -78,8 +78,8 @@ pub enum HitOutcome {
     },
     /// The target's Flash Fire took a Fire move (`battle_util.c:2703-2726`).
     ///
-    /// Upstream also lets a frozen holder be hit. `Status1` cannot represent
-    /// freeze yet, so that exemption has nothing to test.
+    /// Upstream also lets a frozen holder be hit, so a frozen Flash Fire
+    /// holder never produces this outcome.
     FlashFireBlocked {
         /// Whether this activation latches the boost for the first time.
         first_activation: bool,
@@ -122,13 +122,16 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT` and `EFFECT_SPEED_DOWN_HIT`
-    // resolve through this same damage script while keeping their own
-    // trampoline dispatch in `spend_effect_chance_draw`.
+    // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT`, `EFFECT_SPEED_DOWN_HIT`,
+    // `EFFECT_ACCURACY_DOWN_HIT` and `EFFECT_THAW_HIT` resolve through this
+    // same damage script while keeping their own trampoline dispatch in
+    // `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && !is_confuse_hit_effect(move_data.effect)
         && !is_speed_down_hit_effect(move_data.effect)
+        && !is_accuracy_down_hit_effect(move_data.effect)
+        && !is_thaw_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
@@ -281,7 +284,7 @@ fn roll_critical_hit(
 }
 
 fn damage_input(
-    move_power: u8,
+    move_power: u32,
     move_type: Type,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
@@ -306,7 +309,7 @@ fn damage_input(
 
     DamageInput {
         attacker_level: attacker.level(),
-        power: u32::from(move_power),
+        power: move_power,
         move_type,
         attack_stat: ability_adjusted_attack,
         attack_stage,
@@ -346,6 +349,34 @@ pub fn damage_before_roll(
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
 ) -> Result<RawDamage, BattleError> {
+    let power = u32::from(dex.move_data(move_id)?.power);
+    damage_before_roll_with_power(
+        dex,
+        move_id,
+        power,
+        attacker,
+        defender,
+        critical_hits_suppressed,
+        rng,
+    )
+}
+
+/// [`damage_before_roll`] with the base power given by the caller, upstream's
+/// `gDynamicBasePower` override (`battle_script_commands.c:1290`-`:1299`).
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnknownMove`] or
+/// [`BattleError::UnsupportedMoveType`] before drawing.
+pub(crate) fn damage_before_roll_with_power(
+    dex: &Dex,
+    move_id: MoveId,
+    power: u32,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    critical_hits_suppressed: bool,
+    rng: &mut impl BattleRng,
+) -> Result<RawDamage, BattleError> {
     let move_data = dex.move_data(move_id)?;
     let move_type = move_data
         .move_type
@@ -359,7 +390,7 @@ pub fn damage_before_roll(
         critical_hits_suppressed,
         rng,
     );
-    let input = damage_input(move_data.power, move_type, attacker, defender, is_critical);
+    let input = damage_input(power, move_type, attacker, defender, is_critical);
 
     let base_damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
     let damage_after_critical = if is_critical {
@@ -415,10 +446,14 @@ fn absorbing_outcome(
         AbilityId::VOLT_ABSORB => move_type == Type::Electric,
         AbilityId::WATER_ABSORB => move_type == Type::Water,
         AbilityId::FLASH_FIRE => {
+            // `!(status1 & STATUS1_FREEZE)` (`battle_util.c:2704`): a frozen
+            // holder takes the Fire move like any other target.
             return Ok(
-                (move_type == Type::Fire).then_some(HitOutcome::FlashFireBlocked {
-                    first_activation: !defender.volatiles().flash_fire,
-                }),
+                (move_type == Type::Fire && !defender.status1().is_frozen()).then_some(
+                    HitOutcome::FlashFireBlocked {
+                        first_activation: !defender.volatiles().flash_fire,
+                    },
+                ),
             );
         }
         _ => return Ok(None),
@@ -454,12 +489,41 @@ pub fn damage_core(
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
 ) -> Result<HitOutcome, BattleError> {
+    let power = u32::from(dex.move_data(move_id)?.power);
+    damage_core_with_power(
+        dex,
+        move_id,
+        power,
+        attacker,
+        defender,
+        critical_hits_suppressed,
+        rng,
+    )
+}
+
+/// [`damage_core`] with the base power given by the caller; see
+/// [`damage_before_roll_with_power`].
+///
+/// # Errors
+///
+/// Returns the errors from [`damage_before_roll_with_power`] before the
+/// damage-variance draw.
+pub(crate) fn damage_core_with_power(
+    dex: &Dex,
+    move_id: MoveId,
+    power: u32,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    critical_hits_suppressed: bool,
+    rng: &mut impl BattleRng,
+) -> Result<HitOutcome, BattleError> {
     if let Some(absorbed) = absorbing_outcome(dex, move_id, defender)? {
         return Ok(absorbed);
     }
-    let raw_damage = damage_before_roll(
+    let raw_damage = damage_before_roll_with_power(
         dex,
         move_id,
+        power,
         attacker,
         defender,
         critical_hits_suppressed,

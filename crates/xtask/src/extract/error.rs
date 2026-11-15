@@ -141,6 +141,17 @@ pub enum ExtractError {
         /// Decoded bit depth.
         bit_depth: u8,
     },
+    /// The keypad-icon sheet violates its 128x32 four-bit contract.
+    KeypadIconSheetWrongShape {
+        /// Source path.
+        path: PathBuf,
+        /// Decoded width in pixels.
+        width: u32,
+        /// Decoded height in pixels.
+        height: u32,
+        /// Decoded bit depth.
+        bit_depth: u8,
+    },
     /// A text-window image does not match its required dimensions.
     TextWindowImageWrongDimensions {
         /// Source path.
@@ -222,6 +233,13 @@ pub enum ExtractError {
     },
     /// A naming-screen source differs from its upstream graphic's shape.
     NamingScreenAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A party-menu source differs from its upstream graphic's shape.
+    PartyMenuAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -447,6 +465,17 @@ impl fmt::Display for ExtractError {
                  256x512 at 2bpp",
                 path.display()
             ),
+            Self::KeypadIconSheetWrongShape {
+                path,
+                width,
+                height,
+                bit_depth,
+            } => write!(
+                f,
+                "keypad-icon sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
+                 128x32 at 4bpp",
+                path.display()
+            ),
             Self::TextWindowImageWrongDimensions {
                 path,
                 width,
@@ -491,6 +520,9 @@ impl fmt::Display for ExtractError {
             }
             Self::NamingScreenAssetMismatch { path, detail } => {
                 write!(f, "naming-screen asset `{}` {detail}", path.display())
+            }
+            Self::PartyMenuAssetMismatch { path, detail } => {
+                write!(f, "party-menu asset `{}` {detail}", path.display())
             }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())

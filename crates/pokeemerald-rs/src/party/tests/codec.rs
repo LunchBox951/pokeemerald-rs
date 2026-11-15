@@ -218,7 +218,7 @@ fn a_move_learned_by_levelling_up_survives_the_round_trip() {
 }
 
 #[test]
-fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
+fn an_experience_total_past_the_next_threshold_is_adopted_without_levelling_the_decoded_mon() {
     let dex = Dex::new();
     let mon = treecko_fixture();
     let mut saved = to_save_pokemon(&dex, &mon);
@@ -229,13 +229,24 @@ fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
     substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_13.to_le_bytes());
     saved.box_data.set_substructures(&substructures);
 
-    let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
-    assert_eq!(restored.level(), 13, "the level follows the experience");
+    let mut restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
+    assert_eq!(
+        restored.level(),
+        12,
+        "`LoadPlayerParty` copies the level byte (`load_save.c:160-178`); \
+         `GetLevelFromMonExp` only runs inside `CalculateMonStats`"
+    );
     assert_eq!(restored.experience(), level_13);
+    assert_eq!(restored.cached_stats(), mon.cached_stats());
+
+    restored
+        .apply_experience(&dex, 1)
+        .expect("no move-learn prompt is pending");
+    assert_eq!(restored.level(), 13, "the next award reconciles the level");
 }
 
 #[test]
-fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
+fn decoding_an_inconsistent_save_keeps_the_saved_level_and_moves() {
     let dex = Dex::new();
     let mon = torchic_before_learning_peck();
     let mut saved = to_save_pokemon(&dex, &mon);
@@ -247,11 +258,7 @@ fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
     saved.box_data.set_substructures(&substructures);
 
     let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
-    assert_eq!(
-        restored.level(),
-        16,
-        "the level still follows the experience"
-    );
+    assert_eq!(restored.level(), 15, "the level byte is adopted as saved");
     assert_eq!(
         restored
             .moves()
@@ -259,7 +266,7 @@ fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
         vec![SCRATCH, GROWL],
-        "but the moveset stays exactly the saved attacks substructure -- \
+        "and the moveset stays exactly the saved attacks substructure -- \
          no Peck: load is not a level-up"
     );
 }
@@ -533,8 +540,8 @@ fn a_disagreeing_ability_slot_survives_the_save_round_trip() {
 }
 
 /// `STATUS1_*` (`pokeemerald/include/constants/battle.h:114-125`): the three
-/// sleep bits count turns left, poison is `0x08`, burn is `0x10`, paralysis
-/// is `0x40`.
+/// sleep bits count turns left, poison is `0x08`, burn is `0x10`, freeze is
+/// `0x20`, paralysis is `0x40`.
 #[test]
 fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     let dex = Dex::new();
@@ -549,6 +556,7 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
         (7, battle::Status1::Asleep { turns: 7 }),
         (8, battle::Status1::Poisoned),
         (16, battle::Status1::Burned),
+        (32, battle::Status1::Frozen),
         (64, battle::Status1::Paralysed),
     ] {
         let mut record = to_save_pokemon(&dex, &treecko_fixture());
@@ -564,25 +572,74 @@ fn every_modelled_status_word_decodes_and_encodes_back_to_itself() {
     }
 }
 
-/// Freeze `0x20`, bad poison `0x80` and its counter bits
-/// (`0x0F00`), several conditions at once, a sleep count beside poison, and
-/// bits above `STATUS1_ANY` are not modelled
+/// `STATUS1_TOXIC_POISON | STATUS1_TOXIC_TURN(counter)` is `0x80 | counter <<
+/// 8`, every one of the sixteen counters
+/// (`pokeemerald/include/constants/battle.h:117,123-125`): each decodes to its
+/// counter, merges back byte for byte, and encodes from a fresh battler.
+#[test]
+fn every_bad_poison_word_decodes_and_encodes_back_to_itself() {
+    let dex = Dex::new();
+    for counter in 0u8..=15 {
+        let word = 0x80 | u32::from(counter) << 8;
+        let expected = battle::Status1::BadPoisoned { counter };
+        let mut record = to_save_pokemon(&dex, &treecko_fixture());
+        record.status = word;
+
+        assert_eq!(
+            from_save_pokemon(&dex, &record).unwrap().status1(),
+            expected,
+            "word {word:#x}"
+        );
+        let mut loaded = LoadedLead::load(&dex, &[record]).expect("a toxic word decodes");
+        assert_eq!(loaded.battler().status1(), expected, "word {word:#x}");
+        assert_eq!(loaded.merge_and_save(&dex).status, word, "word {word:#x}");
+        let mut fresh = treecko_fixture();
+        fresh.set_status1(expected);
+        assert_eq!(to_save_pokemon(&dex, &fresh).status, word, "word {word:#x}");
+    }
+    assert_eq!(0x80 | 5u32 << 8, 0x580, "the issue's worked example");
+}
+
+#[test]
+fn a_toxic_counter_beyond_the_status_words_four_bits_is_refused_rather_than_truncated() {
+    let mut lead = treecko_fixture();
+    lead.set_status1(battle::Status1::BadPoisoned { counter: 15 });
+    assert_eq!(to_save_pokemon(&Dex::new(), &lead).status, 0xF80);
+
+    // The battle crate refuses an out-of-range counter at the setter; the
+    // encoder carries its own guard against a bypass.
+    let outcome = std::panic::catch_unwind(|| {
+        let mut lead = treecko_fixture();
+        lead.set_status1(battle::Status1::BadPoisoned { counter: 16 });
+        to_save_pokemon(&Dex::new(), &lead)
+    });
+    assert!(outcome.is_err(), "counter 16 would otherwise set bit 12");
+}
+
+/// A counter without the toxic flag, several conditions at once (toxic
+/// beside poison, burn or sleep included), a sleep count beside poison, and
+/// bits above the counter are not modelled
 /// (`pokeemerald/include/constants/battle.h:117-125`): decoding fails closed
 /// and names the original word, never masking it to a neighbour.
 #[test]
 fn an_unmodelled_status_word_fails_closed_with_the_original_word() {
     let dex = Dex::new();
     for word in [
-        0x20,
-        0x80,
-        0x180,
-        0xF80,
         0x100,
+        0xF00,
+        0x188,
+        0x81,
+        0x90,
+        0xA0,
+        0xC0,
+        0x1080,
+        0x1F80,
         0x9,
         0x48,
         0x88,
         0x18,
         0x50,
+        0x30,
         0x11,
         0x8000_0000,
         0x1_0000,
@@ -614,5 +671,254 @@ fn an_internal_sleep_count_beyond_the_status_word_is_refused_rather_than_truncat
     assert!(
         outcome.is_err(),
         "turns 8 would otherwise encode as STATUS1_POISON"
+    );
+}
+
+/// Re-writes `slot`'s saved PP byte, re-checksumming the record.
+fn with_saved_pp(dex: &Dex, mon: &BattlePokemon, slot: usize, pp: u8) -> Pokemon {
+    let mut saved = to_save_pokemon(dex, mon);
+    let mut subs = saved.box_data.substructures().unwrap();
+    subs.attacks[EXPECTED_ATTACK_PP_OFFSET + slot] = pp;
+    saved.box_data.set_substructures(&subs);
+    saved
+}
+
+fn saved_pp(record: &Pokemon, slot: usize) -> u8 {
+    record.box_data.substructures().unwrap().attacks[EXPECTED_ATTACK_PP_OFFSET + slot]
+}
+
+#[test]
+fn saved_pp_above_the_maximum_survives_decode_and_merge() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 1);
+
+    let decoded = from_save_pokemon(&dex, &saved).expect("checksummed record decodes");
+    assert_eq!(
+        decoded.moves()[0].pp,
+        max + 1,
+        "`GetMonData(MON_DATA_PP1)` returns the stored byte unclamped (`pokemon.c:3851-3855`)"
+    );
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(
+        saved_pp(&merged, 0),
+        max + 1,
+        "a merge with no battle or heal must write the saved PP byte back unchanged"
+    );
+}
+
+#[test]
+fn every_saved_pp_byte_survives_decode_and_merge_in_every_slot() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    for slot in 0..mon.moves().len() {
+        for byte in [0, 1, mon.max_pp(&dex, slot).unwrap(), u8::MAX] {
+            let saved = with_saved_pp(&dex, &mon, slot, byte);
+            let decoded = from_save_pokemon(&dex, &saved).expect("checksummed record decodes");
+            let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+            assert_eq!(
+                merged.box_data.substructures().unwrap().attacks,
+                saved.box_data.substructures().unwrap().attacks,
+                "slot {slot} PP {byte}"
+            );
+        }
+    }
+}
+
+#[test]
+fn saved_pp_at_exactly_the_maximum_round_trips() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max);
+
+    let decoded = from_save_pokemon(&dex, &saved).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max);
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(saved_pp(&merged, 0), max);
+}
+
+#[test]
+fn a_move_spent_from_above_the_maximum_counts_down_from_the_saved_value() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 5);
+
+    let mut decoded = from_save_pokemon(&dex, &saved).unwrap();
+    decoded.deduct_pp(0).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max + 4);
+
+    let merged = super::super::merge_into_save_pokemon(&dex, &decoded, &saved);
+    assert_eq!(saved_pp(&merged, 0), max + 4);
+}
+
+#[test]
+fn healing_a_record_saved_above_the_maximum_restores_the_maximum() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let max = mon.max_pp(&dex, 0).unwrap();
+    let saved = with_saved_pp(&dex, &mon, 0, max + 1);
+
+    let mut decoded = from_save_pokemon(&dex, &saved).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max + 1, "the heal starts from above");
+    decoded.heal(&dex).unwrap();
+    assert_eq!(decoded.moves()[0].pp, max);
+}
+
+/// One primary-status word and what the codec must do with it.
+enum StatusWord {
+    /// A word `battle::Status1` models: it loads to the status and every save
+    /// path writes the identical word back.
+    Exact(u32, battle::Status1),
+    /// A word the battler cannot hold: both the decode and the load refuse it
+    /// with the original word, and the record's bytes stay as they were.
+    Malformed(u32),
+}
+
+/// `REQUEST_STATUS_BATTLE` copies and sets the whole status word
+/// (`pokeemerald/src/battle_controller_player.c:1636-1640`, `:1983-1987`):
+/// supported words round-trip exactly, and malformed words are refused.
+#[test]
+fn the_primary_status_word_converts_exactly_or_fails_closed_in_both_directions() {
+    let dex = Dex::new();
+    for row in status_word_table() {
+        match row {
+            StatusWord::Exact(word, expected) => {
+                assert_status_word_round_trips(&dex, word, expected);
+            }
+            StatusWord::Malformed(word) => assert_status_word_fails_closed(&dex, word),
+        }
+    }
+}
+
+fn status_word_table() -> Vec<StatusWord> {
+    let mut table = vec![
+        StatusWord::Exact(0, battle::Status1::Healthy),
+        StatusWord::Exact(8, battle::Status1::Poisoned),
+        StatusWord::Exact(16, battle::Status1::Burned),
+        StatusWord::Exact(32, battle::Status1::Frozen),
+        StatusWord::Exact(64, battle::Status1::Paralysed),
+    ];
+    table.extend(
+        (1u8..=7)
+            .map(|turns| StatusWord::Exact(u32::from(turns), battle::Status1::Asleep { turns })),
+    );
+    table.extend((0u8..=15).map(|counter| {
+        StatusWord::Exact(
+            0x80 | u32::from(counter) << 8,
+            battle::Status1::BadPoisoned { counter },
+        )
+    }));
+    let malformed: &[u32] = &[
+        // Two conditions at once: poison with burn, freeze or paralysis,
+        // every ordinary condition together, and sleep beside another.
+        0x18,
+        0x30,
+        0x48,
+        0x50,
+        0x60,
+        0x78,
+        0x09,
+        0x11,
+        0x21,
+        0x41,
+        0x0F,
+        // Toxic poison beside another condition or sleep.
+        0x88,
+        0x90,
+        0xA0,
+        0xC0,
+        0x81,
+        0xFF,
+        0x588,
+        0xFC0,
+        // A toxic counter without toxic poison.
+        0x100,
+        0x500,
+        0xF00,
+        0x108,
+        0x501,
+        // Bits above the counter, alone and beside supported words.
+        0x1000,
+        0x1080,
+        0x1F80,
+        0x8000,
+        0x1_0000,
+        0x8000_0000,
+        0xFFFF_FFFF,
+        0x1008,
+        0x1001,
+        0x2000,
+        0x4080,
+    ];
+    table.extend(malformed.iter().copied().map(StatusWord::Malformed));
+    table
+}
+
+fn assert_status_word_round_trips(dex: &Dex, word: u32, expected: battle::Status1) {
+    let mut record = to_save_pokemon(dex, &treecko_fixture());
+    record.status = word;
+
+    assert_eq!(
+        from_save_pokemon(dex, &record).unwrap().status1(),
+        expected,
+        "load: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load_slot(dex, 0, &record)
+            .unwrap()
+            .battler()
+            .status1(),
+        expected,
+        "load_slot: word {word:#x}"
+    );
+    let mut loaded = LoadedLead::load(dex, &[record]).expect("a supported status decodes");
+    assert_eq!(
+        loaded.battler().status1(),
+        expected,
+        "party load: word {word:#x}"
+    );
+
+    assert_eq!(
+        loaded.merge_and_save(dex).status,
+        word,
+        "re-save over the loaded record: word {word:#x}"
+    );
+    assert_eq!(loaded.record().status, word, "kept record: word {word:#x}");
+    let mut fresh = treecko_fixture();
+    fresh.set_status1(expected);
+    assert_eq!(
+        to_save_pokemon(dex, &fresh).status,
+        word,
+        "fresh save: word {word:#x}"
+    );
+}
+
+fn assert_status_word_fails_closed(dex: &Dex, word: u32) {
+    let mut record = to_save_pokemon(dex, &treecko_fixture());
+    record.status = word;
+    let before = record;
+
+    let refusal = PartyError::UnsupportedStatus(word);
+    assert_eq!(
+        from_save_pokemon(dex, &record).unwrap_err(),
+        refusal,
+        "load: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load_slot(dex, 0, &record).unwrap_err(),
+        refusal,
+        "load_slot: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load(dex, &[record]).unwrap_err(),
+        refusal,
+        "a lone undecodable slot has nothing to fall back to: word {word:#x}"
+    );
+    assert_eq!(
+        record, before,
+        "no battler exists to re-save over it, so the record is untouched: word {word:#x}"
     );
 }

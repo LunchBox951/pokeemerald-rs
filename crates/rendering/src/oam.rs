@@ -162,6 +162,13 @@ impl OamEntry {
         }
     }
 
+    /// Replaces the tile index, masking it to ten bits.
+    #[must_use]
+    pub const fn with_tile_index(mut self, tile_index: u16) -> Self {
+        self.tile_index = tile_index & TILE_INDEX_MASK;
+        self
+    }
+
     /// Replaces the transform mode, masking its matrix index to five bits.
     #[must_use]
     pub const fn with_affine(mut self, mode: AffineMode) -> Self {

@@ -171,8 +171,8 @@ const OLDALE_SPRITES: [&str; 3] = ["girl_3", "mart_employee", "maniac"];
 const ROUTE_101_SPRITES: [&str; 5] = [
     "youngster",
     "prof_birch",
-    "birchs_bag",
-    "zigzagoon_1",
+    "misc/birchs_bag",
+    "pokemon/enemy_zigzagoon",
     "boy_2",
 ];
 
@@ -623,7 +623,8 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         PlayerState::new((10, 4), 3, Direction::North),
         None,
         source,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(IMMUNITY_SEED);
     phase
         .save1

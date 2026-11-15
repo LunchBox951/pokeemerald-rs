@@ -6,9 +6,9 @@
 //! metatile stage upstream (Surf and Waterfall) is not selected here, and neither is a
 //! script an object's saved RAM override replaces.
 
-use assets::{ObjectEvent, SecretBaseId};
+use assets::{MapId, ObjectEvent, SecretBaseId};
 
-use super::background_event::{resolve_background_event, BackgroundEventTarget, NO_SCRIPT};
+use super::background_event::{resolve_background_event, BackgroundEventTarget};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::is_counter;
@@ -22,6 +22,11 @@ use crate::event_data::EventData;
 pub struct ObjectInteraction {
     /// The selected object's id within its map (`gSpecialVar_LastTalked`).
     pub local_id: u8,
+    /// The map the object was carried out of by a connection crossing, or `None` for an object
+    /// of the runtime's own map ([`MapRuntime::carried_from`]). With `local_id` it names the live
+    /// entry, which a bare local id cannot once an entry of another map shares it
+    /// ([`super::object_event::ObjectEventCollection::find`]).
+    pub carried_from: Option<MapId>,
     /// The script authored on the object.
     pub script: &'static str,
     /// The player's facing when the button was pressed (`gSpecialVar_Facing`).
@@ -62,10 +67,11 @@ pub fn select_interaction_target(
 
     let front_is_counter = front_behavior.is_some_and(is_counter);
     let object = interacted_object(front, facing, front_is_counter, runtime, event_data);
-    if let Some(object) = object.filter(|object| object.script != NO_SCRIPT) {
+    if let Some((object, script)) = object.and_then(|object| Some((object, object.script?))) {
         return Some(InteractionTarget::Object(ObjectInteraction {
             local_id: object.local_id,
-            script: object.script,
+            carried_from: runtime.carried_from(object),
+            script: script.id(),
             player_facing: facing,
         }));
     }

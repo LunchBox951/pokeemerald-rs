@@ -57,10 +57,30 @@ pub(crate) enum MidiError {
     CfgMalformedFlag(String),
     /// A `midi.cfg` entry has no voicegroup flag.
     CfgMissingVoiceGroup,
+    /// A `midi.cfg` filename has more than one entry, so the compile flags are ambiguous.
+    CfgEntryDuplicate(String),
     /// `song_table.inc` has no row for the song symbol.
     SongTableEntryMissing(String),
+    /// `song_table.inc` has more than one row for the song symbol.
+    SongTableEntryDuplicate(String),
+    /// A `song_table.inc` row does not have the three `label, ms, me` operands of the `song`
+    /// macro (`asm/macros/m4a.inc:1-5`), or its `me` operand is not a `u16` literal.
+    SongTableRowMalformed(String),
     /// A `song_table.inc` row's player is neither a defined `.equiv` name nor a `u16` literal.
     SongTablePlayerMalformed(String),
+    /// The manifest expects a different music player than the song table's row assigns.
+    SongTablePlayerMismatch {
+        symbol: String,
+        expected: u16,
+        actual: u16,
+    },
+    /// A manifest symbol is not a lowercase `mus_` or `se_` song-table label.
+    ManifestSymbolMalformed(String),
+    /// Two manifest entries name the same song, and so the same pack id.
+    ManifestDuplicateSong(String),
+    /// A song without a `-G` flag compiled to playable tracks, so upstream's default
+    /// `dummy` voicegroup would silently stand in for a missing instrument set.
+    DefaultVoiceGroupOnPlayableSong,
 }
 
 impl fmt::Display for MidiError {
@@ -127,12 +147,41 @@ impl fmt::Display for MidiError {
             Self::CfgMissingVoiceGroup => {
                 write!(f, "midi.cfg entry has no `-G` (voice group) flag")
             }
+            Self::CfgEntryDuplicate(name) => {
+                write!(f, "midi.cfg has more than one entry for `{name}`")
+            }
             Self::SongTableEntryMissing(symbol) => {
                 write!(f, "song_table.inc has no row for `{symbol}`")
             }
+            Self::SongTableEntryDuplicate(symbol) => {
+                write!(f, "song_table.inc has more than one row for `{symbol}`")
+            }
+            Self::SongTableRowMalformed(symbol) => write!(
+                f,
+                "song_table.inc row for `{symbol}` is not `song <label>, <ms>, <me>` with a numeric `me`"
+            ),
             Self::SongTablePlayerMalformed(player) => {
                 write!(f, "song_table.inc player `{player}` is not a defined index")
             }
+            Self::SongTablePlayerMismatch {
+                symbol,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "song_table.inc assigns `{symbol}` to music player {actual}, but the manifest expects {expected}"
+            ),
+            Self::ManifestSymbolMalformed(symbol) => write!(
+                f,
+                "manifest symbol `{symbol}` is not a lowercase `mus_` or `se_` song label"
+            ),
+            Self::ManifestDuplicateSong(symbol) => {
+                write!(f, "manifest lists `{symbol}` more than once")
+            }
+            Self::DefaultVoiceGroupOnPlayableSong => write!(
+                f,
+                "midi.cfg entry has no `-G` flag, which is only supported for a song with no playable tracks"
+            ),
         }
     }
 }
