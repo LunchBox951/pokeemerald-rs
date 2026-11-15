@@ -28,7 +28,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: POISON_STING,
@@ -38,7 +38,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
         "{events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::Poisoned {
             by_player: true,
             move_id: POISON_STING,
@@ -46,7 +46,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
         "{events:?}"
     );
     assert_eq!(
-        events[2],
+        events[3],
         BattleEvent::PoisonedBySynchronize {
             by_player: true,
             move_id: POISON_STING,
@@ -57,7 +57,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
     );
     assert!(
         matches!(
-            events[3],
+            events[5],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -69,7 +69,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
     );
     assert_eq!(
         events.len(),
-        6,
+        8,
         "both battlers are now poisoned, so each takes its own end-of-turn \
          residual tick after the exchange: {events:?}"
     );

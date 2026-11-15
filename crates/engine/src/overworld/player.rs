@@ -4,17 +4,18 @@ use assets::{MapId, MetatileCell};
 
 use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
-use super::map_runtime::{ConnectedMapData, MapRuntime};
+use super::map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime};
 use super::metatile_behavior::{
     is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_LONG_GRASS,
     MB_MUDDY_SLOPE, MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH,
     MB_SLIDE_WEST, MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST,
     MB_WALK_NORTH, MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
 };
-use super::object_event::visible_object_event_at;
+use super::object_event::blocking_object_event_at;
 #[cfg(test)]
 use super::{collision, metatile_behavior, object_event};
 use crate::event_data::EventData;
+pub use mat::{ForcedMat, MAT_JUMP_FRAMES};
 
 /// Frames required for a normal on-foot step to cross one tile: also the
 /// pace `ForcedMovement_WalkSouth/North/West/East`'s `PlayerWalkNormal`
@@ -28,6 +29,12 @@ pub const WALK_FRAMES_PER_TILE: u8 = 16;
 /// (`field_player_avatar.c:526-552, 979-982`; `sStepTimes[MOVE_SPEED_FAST_1]
 /// == ARRAY_COUNT(sStep2Funcs) == 8`, `event_object_movement.c:8233-8298`).
 pub const SLIDE_FRAMES_PER_TILE: u8 = 8;
+
+/// Frames the spin mat's exit step takes to cross one tile: upstream's
+/// `UpdateWalkSlowAnim` moves one pixel on each even `sTimer` and reports
+/// done once the sixteenth is taken, at `sTimer == 30`: 31 updates
+/// (`event_object_movement.c:8328-8342`).
+pub const WALK_SLOW_FRAMES_PER_TILE: u8 = 31;
 
 /// Frames a held-B run crosses one tile in: upstream's `PlayerRun` mover
 /// initialises `MOVE_SPEED_FAST_1`, so `sStepTimes` gives 8 two-pixel updates
@@ -67,6 +74,8 @@ pub const TURN_IN_PLACE_FRAMES: u8 = 8;
 /// (`MovementAction_WalkInPlaceSlow*_Step0` starts its counter at 32,
 /// `event_object_movement.c:5724-5735`).
 pub const BUMP_IN_PLACE_FRAMES: u8 = 32;
+
+mod mat;
 
 /// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
@@ -124,6 +133,16 @@ impl TransitCadence {
         forward_foot_frames: 4,
     };
 
+    /// The spin mat's exit step: `MovementAction_WalkSlow*` at
+    /// [`WALK_SLOW_FRAMES_PER_TILE`], the walk animation running four
+    /// eight-frame cells (`object_event_anims.h:202-208`).
+    const WALK_SLOW: Self = Self {
+        duration: WALK_SLOW_FRAMES_PER_TILE,
+        animation_disabled: false,
+        running: false,
+        forward_foot_frames: 8,
+    };
+
     /// A held-B run's pace: fast, with the walk animation left running.
     const RUN: Self = Self {
         duration: RUN_FRAMES_PER_TILE,
@@ -179,6 +198,8 @@ pub struct PlayerState {
     landing_elevation: u8,
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
+    /// The running Secret Base mat sequence, if any.
+    forced_mat: Option<ForcedMat>,
     rest_pose: RestPose,
     /// The current walk-cycle phase (`sAnim_Go*` alternate cells,
     /// `object_event_anims.h:202-272`).
@@ -218,12 +239,21 @@ pub enum StepOutcome {
     },
 }
 
+/// The live objects a landing's occupancy test reads.
+#[derive(Debug, Clone, Copy)]
+enum LandingObjects {
+    /// The current map's, read through its runtime when the collision is decided.
+    CurrentMap,
+    /// The objects a connection crossing carries, already asked about the landing tile.
+    Carried { occupied: bool },
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Landing {
     position: TilePos,
     cell: MetatileCell,
     destination_behavior: u8,
-    object_events_accessible: bool,
+    objects: LandingObjects,
     /// The connected map entered, or `None` for a same-map landing.
     to_map: Option<MapId>,
 }
@@ -234,25 +264,25 @@ impl Landing {
             position,
             cell,
             destination_behavior,
-            object_events_accessible: true,
+            objects: LandingObjects::CurrentMap,
             to_map: None,
         }
     }
 
     fn across_connection(
-        to_map: MapId,
-        position: TilePos,
+        crossing: ConnectionCrossing,
         cell: MetatileCell,
         destination_behavior: u8,
+        carried_object_occupies: bool,
     ) -> Self {
-        // `ConnectedMapData` exposes the neighbour's cells and behaviors, but
-        // not its object events.
         Self {
-            position,
+            position: crossing.position,
             cell,
             destination_behavior,
-            object_events_accessible: false,
-            to_map: Some(to_map),
+            objects: LandingObjects::Carried {
+                occupied: carried_object_occupies,
+            },
+            to_map: Some(crossing.target),
         }
     }
 }
@@ -281,6 +311,7 @@ impl PlayerState {
             landing_elevation: elevation,
             forced_movement_armed: false,
             forced_input_tile_center: false,
+            forced_mat: None,
             rest_pose: RestPose::Standing,
             leading_foot: LeadingFoot::Fresh,
         }
@@ -310,6 +341,24 @@ impl PlayerState {
     #[must_use]
     pub const fn position(&self) -> TilePos {
         self.position
+    }
+
+    /// Returns the tile the player's object event occupied before its active
+    /// crossing began: `previousCoords`, which equals the current tile once
+    /// the crossing finishes and at rest (`ShiftStillObjectEventCoords`,
+    /// `event_object_movement.c:2162-2165`).
+    ///
+    /// Taken from the committed crossing direction, not
+    /// [`facing`](Self::facing), which may change mid-step.
+    #[must_use]
+    pub const fn previous_position(&self) -> TilePos {
+        match self.transit_direction {
+            Some(direction) => {
+                let (dx, dy) = direction.delta();
+                (self.position.0 - dx, self.position.1 - dy)
+            }
+            None => self.position,
+        }
     }
 
     /// Returns the elevation used for collision checks.
@@ -380,9 +429,10 @@ impl PlayerState {
     /// dispatch set, `sForcedMovementTestFuncs`
     /// (`field_player_avatar.c:412-427`). `supported_forced_mover`
     /// dispatches `MB_WALK_*`, `MB_SLIDE_*`, ice, the Trick House floor and
-    /// the four currents as real movement; every other armed tile (waterfall,
-    /// muddy slope, Secret Base mats) still refuses manual steps. Armed only by a manual
-    /// step attempt (including a blocked one), never by placement.
+    /// the four currents as real movement, and the two Secret Base mats as
+    /// [`forced_mat`](Self::forced_mat) sequences; every other armed tile
+    /// (waterfall, muddy slope) still refuses manual steps. Armed only by a
+    /// manual step attempt (including a blocked one), never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
@@ -394,6 +444,14 @@ impl PlayerState {
     #[must_use]
     pub const fn field_input_suppressed(&self) -> bool {
         self.forced_input_tile_center
+    }
+
+    /// Ends the keypad's moving streak after a step upstream drives as held
+    /// movement, which leaves `runningState` at `NOT_MOVING`
+    /// (`field_player_avatar.c:353-379`), so a held direction that differs from
+    /// the facing turns first (`CheckMovementInputNotOnBike`, `:587-595`).
+    pub const fn end_movement_streak(&mut self) {
+        self.movement_streak_active = false;
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -435,6 +493,15 @@ impl PlayerState {
         self.transit_cadence.forward_foot_frames
     }
 
+    /// Returns whether the active tile crossing is the spin mat's slow exit
+    /// step, whose walk animation plays the second foot's cell for its third
+    /// eight frames. Only meaningful while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale at rest.
+    #[must_use]
+    pub const fn transit_walk_slow(&self) -> bool {
+        self.transit_cadence.duration == WALK_SLOW_FRAMES_PER_TILE
+    }
+
     /// Returns whether a finished slide still holds its paused forward-foot
     /// pose until the next keypad poll or field lock (`event_object_movement.c:7302-7306`).
     #[must_use]
@@ -455,6 +522,16 @@ impl PlayerState {
     #[must_use]
     pub const fn run_pose_held(&self) -> bool {
         matches!(self.rest_pose, RestPose::RunPaused)
+    }
+
+    /// Returns whether the avatar carries `PLAYER_AVATAR_FLAG_DASH`: a held-B run was dispatched
+    /// and no later keypad poll has cleared it (`PlayerStep`'s `npc_clear_strange_bits`,
+    /// `field_player_avatar.c:384-391`, runs once the run's held action has finished, and
+    /// `MovePlayerAvatarUsingKeypadInput` sets it again for a continuing run, `:658-663`).
+    /// That is the run's crossing in flight, plus the finished run's held pose until the next poll.
+    #[must_use]
+    pub const fn dashing(&self) -> bool {
+        (self.in_transit() && self.transit_running()) || self.run_pose_held()
     }
 
     /// Drops a finished run's held neutral pose, as a field lock does
@@ -547,6 +624,7 @@ impl PlayerState {
     ///
     /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
     pub fn tick(&mut self) {
+        self.tick_forced_mat();
         let crossing = self.transit_frames.is_some();
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
@@ -560,6 +638,12 @@ impl PlayerState {
                 // (`DoGroundEffects_OnFinishStep`, `:8085-8104`), so a
                 // multi-level origin's deferred adoption lands here.
                 self.adopt_elevation(self.landing_elevation, self.landing_elevation);
+                if self.transit_cadence.duration == WALK_SLOW_FRAMES_PER_TILE {
+                    // The slow animation plays both feet and finishes on
+                    // the opposite standing command (`:4582-4598`), so the
+                    // stored cycle phase flips once more on completion.
+                    self.advance_step_parity(false);
+                }
                 if self.transit_cadence.animation_disabled {
                     self.rest_pose = RestPose::SlidePaused;
                 } else if self.transit_cadence.running {
@@ -656,6 +740,11 @@ impl PlayerState {
         maps: &impl ConnectedMapData,
         event_data: &EventData,
     ) -> StepOutcome {
+        // `preventStep` consumes every poll while a mat sequence runs
+        // (`field_player_avatar.c:1555, 1587`).
+        if let Some(outcome) = self.step_forced_mat(runtime, maps) {
+            return outcome;
+        }
         if self.in_transit() || self.turn_frames_remaining > 0 {
             return StepOutcome::Idle;
         }
@@ -678,6 +767,10 @@ impl PlayerState {
         // Dispatched ahead of the keypad, even on a `None` poll; see
         // `step`'s "Forced movement" section for the contract.
         if self.forced_movement_armed {
+            if self.dispatch_mat(standing_behavior, keep_foot) {
+                self.movement_streak_active = true;
+                return StepOutcome::Idle;
+            }
             if let Some(mover) = supported_mover {
                 if let Some(outcome) = self.dispatch_forced_mover(
                     mover,
@@ -752,7 +845,8 @@ impl PlayerState {
         // Upstream enters MOVING before collision resolves, so a blocked attempt
         // still arms the standing tile (`field_player_avatar.c:401-405`, `:583-595`).
         self.forced_movement_armed |=
-            supported_forced_mover(standing_behavior, self.movement_direction).is_some();
+            supported_forced_mover(standing_behavior, self.movement_direction).is_some()
+                || mat::is_mat(standing_behavior);
 
         self.attempt_manual_step(
             direction,
@@ -914,11 +1008,15 @@ impl PlayerState {
         let destination_behavior = maps
             .metatile_behavior(crossing.target, crossing.position.0, crossing.position.1)
             .ok_or(Collision::Impassable)?;
+        // The destination's own templates have not spawned, so only the carried live set can
+        // occupy the landing tile.
+        let carried_object_occupies =
+            maps.carried_object_event_blocks(crossing, self.collision_elevation);
         Ok(Landing::across_connection(
-            crossing.target,
-            crossing.position,
+            crossing,
             cell,
             destination_behavior,
+            carried_object_occupies,
         ))
     }
 
@@ -941,19 +1039,18 @@ impl PlayerState {
         if elevation_mismatch(self.collision_elevation, landing.cell.elevation) {
             return Some(Collision::ElevationMismatch);
         }
-        if landing.object_events_accessible
-            && visible_object_event_at(
+        let object_event_occupies = match landing.objects {
+            LandingObjects::CurrentMap => blocking_object_event_at(
                 runtime,
                 landing.position.0,
                 landing.position.1,
                 self.collision_elevation,
                 event_data,
             )
-            .is_some()
-        {
-            return Some(Collision::ObjectEvent);
-        }
-        None
+            .is_some(),
+            LandingObjects::Carried { occupied } => occupied,
+        };
+        object_event_occupies.then_some(Collision::ObjectEvent)
     }
 
     /// `cadence` is the crossing's own pace -- the caller's, not the
@@ -974,7 +1071,19 @@ impl PlayerState {
         {
             return Err(collision);
         }
+        self.commit_resolved_step(direction, runtime, landing, cadence);
+        Ok(())
+    }
 
+    /// Moves onto `landing` without a collision check, as a held movement
+    /// action does.
+    fn commit_resolved_step(
+        &mut self,
+        direction: Direction,
+        runtime: &MapRuntime<'_>,
+        landing: Landing,
+        cadence: TransitCadence,
+    ) {
         let origin_elevation = runtime
             .metatile_cell(self.position.0, self.position.1)
             .map_or(self.collision_elevation, |origin_cell| {
@@ -992,7 +1101,6 @@ impl PlayerState {
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
         self.forced_input_tile_center = is_forced_movement_input_tile(landing.destination_behavior);
-        Ok(())
     }
 
     /// Dispatches a supported standing forced tile's mover before the keypad
@@ -1078,7 +1186,7 @@ struct ForcedMover {
 /// Returns the walk, slide, slip, or current mover a standing behavior
 /// dispatches (`field_player_avatar.c:473-552, 975-988`), or `None` for every
 /// other behavior [`is_forced_movement`] arms -- the waterfall, the muddy
-/// slope, and the Secret Base mats, which stay deferred. `movement_direction`
+/// slope, and the Secret Base mats, which `dispatch_mat` runs. `movement_direction`
 /// is the slip tiles' direction (`:473-484`).
 #[must_use]
 fn supported_forced_mover(
@@ -1115,7 +1223,8 @@ fn supported_forced_mover(
 
 /// Returns the direction a standing *deferred* behavior's `ForcedMovement_*`
 /// handler collision-tests (`field_player_avatar.c:486-580`), or `None` for
-/// the Secret Base mats, which never collision-check (`:555-565`). Walk,
+/// the Secret Base mats, which `dispatch_mat` runs ahead of this path
+/// (`:555-565`). Walk,
 /// slide, slip and current tiles are dispatched by
 /// [`supported_forced_mover`] before `step` ever reaches this deferred path.
 fn forced_movement_direction(standing_behavior: u8) -> Option<Direction> {
@@ -1158,6 +1267,10 @@ mod tests {
     mod step_parity_tests;
 
     mod bump_tests;
+    /// The Secret Base jump and spin mats' forced sequences.
+    mod mat_tests;
+    /// The previous tile of an active crossing.
+    mod previous_position_tests;
     /// Held-B running: its gates, cadence, and preserved interactions.
     mod running_tests;
 

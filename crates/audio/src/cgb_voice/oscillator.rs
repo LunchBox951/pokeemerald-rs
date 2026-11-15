@@ -51,6 +51,42 @@ impl Oscillator {
         }
     }
 
+    /// A square's contribution at its current duty position, without stepping
+    /// it: the level the sample about to be emitted would carry. `None` for
+    /// Wave and Noise, whose latch at a length expiry needs no refresh.
+    pub(super) fn square_held_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(square) => {
+                let level = square.held_level();
+                self.relatched_square_contribution(level, frame_gain)
+            }
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
+    /// A square's contribution at a `level` its register write latched,
+    /// without stepping it; `None` for Wave and Noise.
+    pub(super) fn relatched_square_contribution(&self, level: i8, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(_) => {
+                Some((frame_gain * i32::from(level) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS)
+            }
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
+    /// The first pass's `NRx1` store, as the byte the length counter loads
+    /// from. A square sums its duty into the byte and re-selects the duty from
+    /// the result ([`SquareChannel::write_nrx1`]); noise stores the raw length
+    /// byte; wave stores the whole byte as the 8-bit `NR31` length, with no
+    /// duty bits to re-select.
+    pub(super) fn write_nrx1(&mut self, length_register: u8) -> u8 {
+        match self {
+            Self::Square(square) => square.write_nrx1(length_register),
+            Self::Noise(_) | Self::Wave { .. } => length_register,
+        }
+    }
+
     /// A stopped wave channel's held output at full envelope gain, with no
     /// clock (`mgba/src/gb/audio.c:246-253,768-774`); `None` for the other
     /// channels, whose idle outputs are accounted separately.
@@ -82,16 +118,29 @@ impl Oscillator {
         }
     }
 
-    pub(super) fn retune(&mut self, note_key: u8, fine_pitch: u8, correction: DacCorrection) {
+    /// Retunes the channel; a square returns the level its `NR14` write's
+    /// catch-up latched before the high-byte store
+    /// ([`SquareChannel::set_frequency_latching`]).
+    pub(super) fn retune(
+        &mut self,
+        note_key: u8,
+        fine_pitch: u8,
+        correction: DacCorrection,
+    ) -> Option<i8> {
         match self {
-            Self::Square(square) => square
-                .set_frequency(correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch))),
+            Self::Square(square) => Some(square.set_frequency_latching(
+                correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch)),
+            )),
             Self::Wave { channel: wave, .. } => {
                 wave.set_frequency(
                     correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch)),
                 );
+                None
             }
-            Self::Noise(noise) => noise.retune(midi_key_to_noise_control(note_key)),
+            Self::Noise(noise) => {
+                noise.retune(midi_key_to_noise_control(note_key));
+                None
+            }
         }
     }
 
@@ -237,7 +286,8 @@ mod nr32_attenuation_tests {
     #[test]
     fn full_volume_keeps_the_centered_nibble() {
         assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
-        assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
+        // Levels past the table read `gClockTable`, which mutes (`cgb_voice.rs`).
+        assert_eq!(render(0, 31), 0);
     }
 }
 

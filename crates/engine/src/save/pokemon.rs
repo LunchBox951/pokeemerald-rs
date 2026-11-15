@@ -221,6 +221,16 @@ impl BoxPokemon {
         read_u32(&self.bytes, OT_ID_OFFSET)
     }
 
+    /// Returns the unencrypted header's nickname field (`BoxPokemon::nickname`,
+    /// `pokeemerald/include/pokemon.h:200`), terminator included when the
+    /// name is shorter than the field.
+    #[must_use]
+    pub fn nickname(&self) -> [u8; BOX_NICKNAME_LEN] {
+        let mut nickname = [0u8; BOX_NICKNAME_LEN];
+        nickname.copy_from_slice(&self.bytes[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN]);
+        nickname
+    }
+
     /// Overwrites the unencrypted header's nickname field.
     ///
     /// Header fields are independent of [`Self::set_substructures`], which

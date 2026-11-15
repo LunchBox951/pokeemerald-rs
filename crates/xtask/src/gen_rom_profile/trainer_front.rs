@@ -8,22 +8,22 @@
 //!
 //! The walk:
 //!
-//! 1. Images are found by their decompressed tiles ([`super::images`]).
-//!    Palettes are found by their decompressed colours, which can match more
-//!    than one stream.
+//! 1. Images are found by their decompressed tiles ([`super::images`]) and
+//!    palettes by their decompressed colours; either can match more than one
+//!    stream.
 //! 2. Each table is found through the pointers to the art: biased back by
 //!    each trainer's own row, they name candidate table bases, and exactly one
 //!    base must hold, at both rows, a pointer to that trainer's art and the
 //!    size and tag upstream's `TRAINER_SPRITE` and `TRAINER_PAL` macros write.
-//! 3. A palette's address is the pointer its table row holds, which settles
-//!    a palette the ROM stores more than once.
+//! 3. A picture's or palette's address is the pointer its table row holds,
+//!    which settles art the ROM stores more than once.
 
 use std::collections::BTreeSet;
 
 use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
-use super::images::{locate_images, ImageQuery};
+use super::images::{locate_image_copies, ImageQuery};
 use super::inventory;
 use super::locate::{camel_case, only_one_matching, to_addr, u16_at_addr, u32_at_addr};
 use super::plan::{
@@ -91,15 +91,13 @@ pub fn locate(
         .iter()
         .map(|pic| ImageQuery::lz77(pic.image_id))
         .collect();
-    let first_line = report.len();
-    let images = locate_images(ctx, &queries, report)?;
-    name_image_symbols(&mut report[first_line..]);
+    let image_copies = locate_image_copies(ctx, &queries)?;
     let palette_candidates = palette_candidates(ctx)?;
 
     let picture_rows: Vec<(u16, Vec<u32>)> = TRAINER_FRONT_PICS
         .iter()
-        .zip(&images)
-        .map(|(pic, image)| (u16::from(pic.trainer_pic.index()), vec![image.addr]))
+        .zip(&image_copies)
+        .map(|(pic, copies)| (u16::from(pic.trainer_pic.index()), copies.addrs()))
         .collect();
     let palette_rows: Vec<(u16, Vec<u32>)> = TRAINER_FRONT_PICS
         .iter()
@@ -122,6 +120,20 @@ pub fn locate(
         TABLE_ROWS,
         report,
     )?;
+
+    // Each picture is the copy its table row points at.
+    let first_line = report.len();
+    let mut images = Vec::with_capacity(TRAINER_FRONT_PICS.len());
+    for (pic, copies) in TRAINER_FRONT_PICS.iter().zip(&image_copies) {
+        let trainer_pic = u16::from(pic.trainer_pic.index());
+        let addr = row_pointer(ctx, front_table, trainer_pic).ok_or_else(|| {
+            GenRomProfileError::NotFound {
+                id: pic.image_id.to_owned(),
+            }
+        })?;
+        images.push(copies.plan_at(ctx, addr, report)?);
+    }
+    name_image_symbols(&mut report[first_line..]);
 
     let mut trainers = Vec::with_capacity(TRAINER_FRONT_PICS.len());
     for (index, pic) in TRAINER_FRONT_PICS.iter().enumerate() {
@@ -151,7 +163,7 @@ pub fn locate(
 /// Require a linker map to name each front picture `gTrainerFrontPic_<Name>`.
 ///
 /// The shared image classifier knows no trainer naming convention, so the
-/// expectation is set here on the lines [`locate_images`] just reported.
+/// expectation is set here on the lines [`super::images::ImageCopies::plan_at`] just reported.
 fn name_image_symbols(lines: &mut [ReportLine]) {
     for pic in &TRAINER_FRONT_PICS {
         if let Some(line) = lines.iter_mut().find(|line| line.id == pic.image_id) {
@@ -173,7 +185,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
                 .to_vec(),
         );
     }
-    let hits = ctx.lz77.find_all(&needles);
+    let hits = ctx.lz77.find_all_uncapped(&needles);
     TRAINER_FRONT_PICS
         .iter()
         .zip(&hits)
@@ -189,7 +201,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
 }
 
 /// The pointer in `trainer_pic`'s row of the table at `table`.
-fn row_pointer(ctx: &Context<'_>, table: u32, trainer_pic: u16) -> Option<u32> {
+pub(super) fn row_pointer(ctx: &Context<'_>, table: u32, trainer_pic: u16) -> Option<u32> {
     u32_at_addr(ctx.rom, table + u32::from(trainer_pic) * RECORD_BYTES)
 }
 

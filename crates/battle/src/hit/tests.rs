@@ -1493,6 +1493,24 @@ fn flash_fire_absorbs_a_fire_move_without_drawing_and_latches_once() {
 }
 
 #[test]
+fn a_frozen_flash_fire_holder_takes_a_fire_move_like_any_other_target() {
+    // `ABILITY_FLASH_FIRE` requires `!(status1 & STATUS1_FREEZE)`
+    // (`battle_util.c:2703-2704`), so the move is not absorbed, latches
+    // nothing, and spends the ordinary crit and damage draws.
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![EMBER]);
+    let mut vulpix = mon(&dex, VULPIX, 20, vec![TACKLE]);
+    vulpix.set_status1(crate::Status1::Frozen);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome = damage_core(&dex, EMBER, &attacker, &vulpix, false, &mut rng).unwrap();
+
+    assert!(matches!(outcome, HitOutcome::Hit { .. }), "{outcome:?}");
+    assert_eq!(rng.draws(), 2);
+    assert!(!vulpix.volatiles().flash_fire, "nothing latched");
+}
+
+#[test]
 fn a_latched_flash_fire_boosts_ember_before_the_final_plus_two() {
     let dex = Dex::new();
     let control = mon(&dex, VULPIX, 20, vec![EMBER]);

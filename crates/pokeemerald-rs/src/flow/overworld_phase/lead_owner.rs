@@ -1,15 +1,15 @@
 //! The lead owner: `OverworldPhase`'s one [`party::LoadedLead`], behind the
 //! interface every flow adopter uses.
 //!
-//! The battle-facing lead, the saved slot it was decoded from, the backing
-//! record, and the HP the load clamp hid from it are one fact, and upstream
-//! never synchronises them as unrelated values
-//! (`pokeemerald/src/pokemon.c:2823-2895`). [`party::LoadedLead`] owns all of
-//! them, so none can move without the others. The phase files the owned record
-//! into the save only at [`party::LoadedLead::slot`]; the interface returns
-//! the battler, never the slot or the offset.
+//! The battle-facing lead, the saved slot it was decoded from, and the backing
+//! record are one fact, and upstream never synchronises them as unrelated
+//! values (`pokeemerald/src/pokemon.c:2823-2895`). [`party::LoadedLead`] owns
+//! all of them, so none can move without the others. The phase files the owned
+//! record into the save only at [`party::LoadedLead::slot`]; the interface
+//! returns the battler, never the slot.
 
 use battle::{BattleError, BattlePokemon, Dex};
+use engine::save::Pokemon;
 
 use super::OverworldPhase;
 use crate::party::{self, LoadedLead};
@@ -30,8 +30,8 @@ impl OverworldPhase {
         self.resident_lead().map(LoadedLead::battler)
     }
 
-    /// Battler mutation. Exposes the battler only, so the slot, record, and
-    /// hidden-HP offset cannot be edited independently of it.
+    /// Battler mutation. Exposes the battler only, so the slot and record
+    /// cannot be edited independently of it.
     pub(super) fn lead_battler_mut(&mut self) -> Option<&mut BattlePokemon> {
         self.resident_lead_mut().map(LoadedLead::battler_mut)
     }
@@ -42,19 +42,27 @@ impl OverworldPhase {
     /// the lead only if its personality and OT id match the battler's, so a
     /// lead installed without a saved record is left as is.
     fn classified_for_battle(&self, lead: BattlePokemon) -> BattlePokemon {
+        self.classified_against_record(self.lead.as_ref().map(LoadedLead::record), lead)
+    }
+
+    /// `battler` classified against the save owner through `record`, the saved
+    /// record backing it: [`Self::classified_for_battle`]'s rule for any party
+    /// member, so a battle reserve earns the same traded-recipient award as
+    /// the lead.
+    pub(super) fn classified_against_record(
+        &self,
+        record: Option<&Pokemon>,
+        battler: BattlePokemon,
+    ) -> BattlePokemon {
         let owner_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        let traded = self
-            .lead
-            .as_ref()
-            .map(LoadedLead::record)
-            .is_some_and(|record| {
-                record.box_data.personality() == lead.personality()
-                    && record.box_data.ot_id() == lead.original_trainer_id()
-                    && !party::has_unstamped_owner_name(record, owner_id)
-                    && party::is_traded_record(record, owner_id, &self.save2.player_name)
-            });
-        let traded = traded || lead.is_traded_recipient();
-        lead.with_traded_recipient(traded)
+        let traded = record.is_some_and(|record| {
+            record.box_data.personality() == battler.personality()
+                && record.box_data.ot_id() == battler.original_trainer_id()
+                && !party::has_unstamped_owner_name(record, owner_id)
+                && party::is_traded_record(record, owner_id, &self.save2.player_name)
+        });
+        let traded = traded || battler.is_traded_recipient();
+        battler.with_traded_recipient(traded)
     }
 
     /// A copy of the resident lead for a battle start, classified against the
@@ -76,8 +84,8 @@ impl OverworldPhase {
         Some(self.classified_for_battle(lead))
     }
 
-    /// Lend: moves the battler out for a battle. The lead keeps its slot,
-    /// record, and hidden-HP offset, so [`Self::restore_lead_battler`] merges
+    /// Lend: moves the battler out for a battle. The lead keeps its slot
+    /// and record, so [`Self::restore_lead_battler`] merges
     /// back into the same record. `None` when no lead is loaded.
     ///
     /// # Panics
@@ -104,14 +112,14 @@ impl OverworldPhase {
         lead.restore_battler(battler);
     }
 
-    /// Installs a lead with no saved backing: slot 0, no hidden HP, and no
+    /// Installs a lead with no saved backing: slot 0 and no
     /// retained-undecodable diagnostic. Its backing record is the fresh
     /// `to_save_pokemon` encoding of the battler, held by the lead and filed
     /// only by [`Self::flush_lead_to_save`]; the save is untouched here.
     pub(super) fn install_fresh_lead(&mut self, battler: BattlePokemon) {
         let dex = Dex::new();
         let record = party::to_save_pokemon(&dex, &battler);
-        self.lead = Some(LoadedLead::created(&dex, battler, record));
+        self.lead = Some(LoadedLead::created(battler, record));
         self.undecodable_lead_retained = false;
     }
 
@@ -130,8 +138,7 @@ impl OverworldPhase {
 
     /// Load and selection (the party half of `CopyPartyAndObjectsFromSave`,
     /// `LoadPlayerParty`, `src/load_save.c:160-205`): rebuilds the lead from
-    /// the saved party through [`party::LoadedLead::load`], measuring what the
-    /// load hid. Reads the saved party and count; writes no saved bytes.
+    /// the saved party through [`party::LoadedLead::load`]. Reads the saved party and count; writes no saved bytes.
     ///
     /// The lead is empty when the stored party count is zero (the port's
     /// deliberate difference from `SetBattlePartyIds`'s count-blind scan in

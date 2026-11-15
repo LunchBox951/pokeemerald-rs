@@ -19,7 +19,7 @@
 use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::SAMPLES_PER_FRAME;
-use crate::psg::FrameSequencer128Hz;
+use crate::psg::{FrameClocks, FrameSequencer};
 use crate::reverb::Reverb;
 use crate::voice::{StereoAcc, Voice};
 
@@ -41,6 +41,8 @@ pub const DEFAULT_MAX_VOICES: usize = 5;
 
 const MAX_SWEEP_TICKS_PER_FRAME: usize =
     (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
+const MAX_LENGTH_TICKS_PER_FRAME: usize =
+    (SAMPLES_PER_FRAME * 256).div_ceil(crate::pitch::MIXER_RATE as usize);
 
 #[derive(Clone, Copy, Debug)]
 enum VoiceSlot {
@@ -65,8 +67,8 @@ pub struct Mixer {
     next_note_on_ordinal: u64,
     mix_buffer: Vec<StereoAcc>,
     reverb: Reverb,
-    sweep_clock: FrameSequencer128Hz,
-    sweep_ticks: Vec<usize>,
+    sequencer: FrameSequencer,
+    clocks: FrameClocks,
     cgb_envelope_cadence: CgbEnvelopeCadence,
 }
 
@@ -100,8 +102,11 @@ impl Mixer {
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
             reverb: Reverb::new(0),
-            sweep_clock: FrameSequencer128Hz::default(),
-            sweep_ticks: Vec::with_capacity(MAX_SWEEP_TICKS_PER_FRAME),
+            sequencer: FrameSequencer::default(),
+            clocks: FrameClocks::with_capacity(
+                MAX_SWEEP_TICKS_PER_FRAME,
+                MAX_LENGTH_TICKS_PER_FRAME,
+            ),
             cgb_envelope_cadence: CgbEnvelopeCadence::default(),
         }
     }
@@ -129,6 +134,12 @@ impl Mixer {
     /// Whether no voice (DirectSound or CGB) is active and no vacated noise
     /// slot still holds an unsettled output latch that idle frames render
     /// (`CgbVoice::render_idle_hardware`'s doc).
+    ///
+    /// This is the finite-tail query behind playback completion, so it
+    /// excludes a vacated wave slot's held sample: that level is permanent
+    /// hardware state no idle frame settles, and counting it would keep a
+    /// wave note's song from ever finishing. [`Self::has_held_wave_output`] and
+    /// [`Self::is_silent`] report it instead.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.direct_sound_slots.iter().all(Option::is_none)
@@ -138,6 +149,35 @@ impl Mixer {
                 .iter()
                 .flatten()
                 .any(CgbVoice::has_unsettled_noise_output)
+    }
+
+    /// Whether the vacated wave slot keeps mixing a nonzero held sample onto
+    /// a routed side, as `NR30 = 0` clears neither the sample nor `NR51`
+    /// (`mgba/src/gb/audio.c:246-253,768-774`; `pokeemerald/src/m4a.c:869-871`).
+    ///
+    /// The level never settles by idling. It reports `false` while a voice
+    /// occupies the slot (the voice, not the held level, is what renders), and
+    /// the stale hardware is dropped when that voice commits its initial
+    /// trigger (`Self::mix_frame`); a voice stopped before that trigger leaves
+    /// the old level held again. The mixer being discarded, as the player does
+    /// on a restart, ends it too.
+    #[must_use]
+    pub fn has_held_wave_output(&self) -> bool {
+        self.idle_cgb_hardware
+            .iter()
+            .zip(&self.cgb_slots)
+            .any(|(idle, slot)| {
+                slot.is_none() && idle.as_ref().is_some_and(CgbVoice::holds_wave_output)
+            })
+    }
+
+    /// The conservative output query: whether mixing another frame with no
+    /// voice added emits only zeros. False for any live voice (even one whose
+    /// route is silent), unsettled noise latch, held wave sample, or pending
+    /// reverb sample.
+    #[must_use]
+    pub fn is_silent(&self) -> bool {
+        self.is_idle() && !self.has_held_wave_output() && !self.has_pending_reverb()
     }
 
     /// Whether the master-mix reverb still holds delayed samples that can
@@ -421,15 +461,17 @@ impl Mixer {
         }
         self.reverb.commit_frame(&self.mix_buffer);
 
-        self.sweep_clock
-            .advance_into(self.mix_buffer.len(), &mut self.sweep_ticks);
+        self.sequencer
+            .advance_clocks_into(self.mix_buffer.len(), &mut self.clocks);
         debug_assert!(
-            self.sweep_ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
-            "a frame's tick buffer must never have to grow",
+            self.clocks.sweep.len() <= MAX_SWEEP_TICKS_PER_FRAME
+                && self.clocks.length.len() <= MAX_LENGTH_TICKS_PER_FRAME,
+            "a frame's tick buffers must never have to grow",
         );
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
+                voice.set_sequencer_step(self.clocks.start_step);
                 voice.begin_frame(extra_envelope_iteration);
                 if voice.initial_trigger_committed() {
                     self.idle_cgb_hardware[index] = None;
@@ -439,7 +481,11 @@ impl Mixer {
                 // hardware-muted voice's unconditional catch-up in `render`
                 // must not also advance it (`CgbVoice::render`'s doc).
                 if voice.is_active() {
-                    voice.render(&mut self.mix_buffer, &self.sweep_ticks);
+                    voice.render_clocked(
+                        &mut self.mix_buffer,
+                        &self.clocks.sweep,
+                        &self.clocks.length,
+                    );
                 }
                 if !voice.is_active() {
                     Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
@@ -454,7 +500,11 @@ impl Mixer {
         for (index, idle) in self.idle_cgb_hardware.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
                 if let Some(hardware) = idle {
-                    hardware.render_idle_hardware(&mut self.mix_buffer, &self.sweep_ticks);
+                    hardware.render_idle_hardware(
+                        &mut self.mix_buffer,
+                        &self.clocks.sweep,
+                        &self.clocks.length,
+                    );
                 }
             }
         }
@@ -536,3 +586,7 @@ mod wave_rotation_tests;
 #[cfg(test)]
 #[path = "mixer_psg_balance.rs"]
 mod psg_balance_tests;
+
+#[cfg(test)]
+#[path = "mixer_length.rs"]
+mod length_tests;

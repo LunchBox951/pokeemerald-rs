@@ -207,8 +207,9 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
 
     // `AreAllMovesUnusable` forces Struggle before the first-battle AI's
     // setup draws run, so neither the four simulatedRNG draws nor a
-    // tie-break draw happen.
-    let mut rng = SequenceRng::new([0, 0, 0, 0]);
+    // tie-break draw happen. Struggle's own `GetMoveTarget` draw still runs
+    // (`battle_util.c:100`-`:105`), then its accuracy and variance draws.
+    let mut rng = SequenceRng::new([0, 0, crate::common::STRUGGLE_TARGET_PLAYER, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -217,6 +218,10 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: battle::STRUGGLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: battle::STRUGGLE,
@@ -229,16 +234,17 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
                 damage: player_max_hp / 4,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "the faster, all-spent enemy is the first mover, and its forced \
          Struggle one-shots this fixture's level-5 Rattata: {events:?}"
     );
     assert_eq!(
         rng.draws(),
-        4,
-        "no simulatedRNG or tie-break draw for the forced Struggle, and no \
-         crit draw: first_battle suppresses it entirely"
+        5,
+        "no simulatedRNG or tie-break draw for the forced Struggle, one \
+         `GetMoveTarget` draw, and no crit draw: first_battle suppresses it \
+         entirely"
     );
 }
 
@@ -305,6 +311,10 @@ fn wild_flees_after_the_players_move_already_resolved() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: GROWL
+            },
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: GROWL,
@@ -313,7 +323,7 @@ fn wild_flees_after_the_players_move_already_resolved() {
                 magnitude: 1,
             },
             BattleEvent::WildFled,
-            BattleEvent::Ended(BattleOutcome::WildFled),
+            BattleEvent::Ended(BattleOutcome::WildFled)
         ],
         "the first mover's events must survive; the enemy flees only after"
     );

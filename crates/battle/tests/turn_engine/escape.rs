@@ -88,9 +88,18 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
 
     // The all-spent enemy's forced Struggle pick bypasses the move-selection
     // draw, so the script has no selection entry between the escape roll and
-    // Struggle's own three draws.
+    // Struggle's own `GetMoveTarget` draw (`battle_util.c:100`-`:105`) and
+    // three damage draws.
     let escape_roll_that_fails: u16 = 65_000;
-    let mut rng = SequenceRng::new([0, 0, escape_roll_that_fails, 0, 1, 0]);
+    let mut rng = SequenceRng::new([
+        0,
+        0,
+        escape_roll_that_fails,
+        crate::common::STRUGGLE_TARGET_PLAYER,
+        0,
+        1,
+        0,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -100,6 +109,10 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
             BattleEvent::RunAttempt {
                 by_player: true,
                 success: false,
+            },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: STRUGGLE
             },
             BattleEvent::Hit {
                 by_player: false,
@@ -113,7 +126,7 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
                 damage: player_max_hp / 4,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "the failed run and the forced Struggle that follows it must both commit"
     );
@@ -123,7 +136,8 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
         0,
         "the forced pick spends no PP"
     );
-    assert_eq!(rng.draws(), 6);
+    assert_eq!(rng.draws(), 7);
+    rng.assert_exhausted();
 }
 
 #[test]
@@ -199,18 +213,26 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: bulbasaur_tackle_damage,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: rattata_tackle_damage,
                 is_critical: false,
-            },
+            }
         ],
         "the +6-stage mon moves first only if turn order reads \
          effective speed"

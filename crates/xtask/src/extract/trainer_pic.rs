@@ -178,7 +178,7 @@ mod tests {
             raw.push(0);
             raw.resize(raw.len() + row_bytes, pixel);
         }
-        let plte = vec![7; 16 * 3];
+        let plte = vec![7; 16.min(1usize << bit_depth) * 3];
         indexed_png_from_raw_with_plte(bit_depth, side, side, &raw, &plte)
     }
 

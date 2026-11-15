@@ -8,9 +8,12 @@
 
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, PackWriter};
 
+use assets::SpeciesId;
+
 use super::{write, RECORD_BYTES, SHINY_TAG, TABLE_ROWS};
-use crate::error::ImportError;
+use crate::error::{ImportError, Lz77Fault};
 use crate::fixture::RomFixture;
+use crate::profiles::bpee_rev0::EMERALD_US_REV0_ROOTS;
 use crate::reader::{GbaPtr, ROM_BASE};
 use crate::rom::Rom;
 use crate::roots::{BattlerRoot, BattlerRoots, Encoding, ImageRoot, PaletteRoot, Roots};
@@ -369,4 +372,217 @@ fn the_roots_expose_every_battler_image_and_palette() {
 fn a_record_is_eight_bytes() {
     assert_eq!(picture_row(at(0), 0, 0).len(), RECORD_BYTES);
     assert_eq!(palette_row(at(0), 0).len(), RECORD_BYTES);
+}
+
+/// Poochyena's table index, the one species whose still front is a sheet.
+const POOCHYENA: u16 = 286;
+/// Where the sheet fixture's four streams sit, `0x4000` apart: the all-literal
+/// 64x256 front alone takes `0x2404` bytes.
+const SHEET_ART: u32 = 0x6_0000;
+/// `MON_PIC_SIZE` rows of the sheet hold the picture; the rest is filler.
+const PICTURE_BYTES: usize = 0x800;
+const SHEET_BYTES: usize = 0x2000;
+
+const fn sheet_stream(slot: u32) -> GbaPtr {
+    at(SHEET_ART + slot * 0x4000)
+}
+
+/// Poochyena's four rows and streams: a 64x256 front whose first 0x800 bytes
+/// are the picture (nibble 3) and whose remainder is nibble 15.
+fn sheet_rom(front_size_field: u16) -> Rom {
+    let row = u32::from(POOCHYENA) * RECORD_BYTES_U32;
+    let mut front = vec![0x33; PICTURE_BYTES];
+    front.resize(SHEET_BYTES, 0xFF);
+    let fixture = RomFixture::new()
+        .emerald_header()
+        .write(
+            idx(FRONT_TABLE + row),
+            &picture_row(sheet_stream(0), front_size_field, POOCHYENA),
+        )
+        .write(
+            idx(BACK_TABLE + row),
+            &picture_row(sheet_stream(1), 0x800, POOCHYENA),
+        )
+        .write(
+            idx(PALETTE_TABLE + row),
+            &palette_row(sheet_stream(2), POOCHYENA),
+        )
+        .write(
+            idx(SHINY_TABLE + row),
+            &palette_row(sheet_stream(3), POOCHYENA + SHINY_TAG),
+        )
+        .write(idx(SHEET_ART), &lz77_literals(&front))
+        .write(idx(SHEET_ART + 0x4000), &lz77_literals(&vec![0x11; 0x800]))
+        .write(idx(SHEET_ART + 0x8000), &lz77_literals(&colors(1)))
+        .write(idx(SHEET_ART + 0xC000), &lz77_literals(&colors(2)));
+    Rom::from_bytes(fixture.finish()).expect("the fixture header is valid")
+}
+
+const fn sheet_image(id: &'static str, slot: u32, height: u32) -> ImageRoot {
+    ImageRoot {
+        id,
+        addr: sheet_stream(slot),
+        encoding: Encoding::Lz77,
+        rom_bit_depth: 4,
+        pack_bit_depth: 4,
+        width: 64,
+        height,
+        metatile_width: 8,
+        metatile_height: height / 8,
+        tile_count: height,
+    }
+}
+
+static SHEET: [BattlerRoot; 1] = [BattlerRoot {
+    species: POOCHYENA,
+    front: sheet_image("pokemon/poochyena/front", 0, 256),
+    back: sheet_image("pokemon/poochyena/back", 1, 64),
+    normal: PaletteRoot {
+        id: "pokemon/poochyena/palette/normal",
+        addr: sheet_stream(2),
+        encoding: Encoding::Lz77,
+        color_count: 16,
+    },
+    shiny: PaletteRoot {
+        id: "pokemon/poochyena/palette/shiny",
+        addr: sheet_stream(3),
+        encoding: Encoding::Lz77,
+        color_count: 16,
+    },
+}];
+
+#[test]
+fn a_front_sheet_longer_than_its_picture_is_kept_whole() {
+    let (pack, entries) = run_on(&sheet_rom(0x800), &roots(&SHEET)).expect("a faithful sheet");
+    assert_eq!(entries.len(), 4);
+    let front = entries
+        .iter()
+        .find(|e| e.id == "pokemon/poochyena/front")
+        .unwrap();
+    assert!(matches!(
+        front.kind,
+        EntryKind::Image {
+            width: 64,
+            height: 256,
+            bit_depth: 4,
+            ..
+        }
+    ));
+    let pixels = &pack[front.offset..front.offset + front.length];
+    assert_eq!(pixels.len(), 64 * 256);
+    assert!(pixels[..64 * 64].iter().all(|&p| p == 3));
+    assert!(pixels[64 * 64..].iter().all(|&p| p == 15));
+}
+
+#[test]
+fn a_sheet_read_as_a_bare_picture_is_a_length_fault() {
+    static CROPPED: [BattlerRoot; 1] = [BattlerRoot {
+        front: sheet_image("pokemon/poochyena/front", 0, 64),
+        ..SHEET[0]
+    }];
+    let err = run_on(&sheet_rom(0x800), &roots(&CROPPED)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::Lz77 {
+                fault: Lz77Fault::SizeMismatch {
+                    expected: 0x800,
+                    actual: 0x2000
+                },
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_sheet_row_sized_for_the_whole_sheet_is_still_refused() {
+    let err = run_on(&sheet_rom(0x2000), &roots(&SHEET)).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            ImportError::StructMismatch {
+                root: "pokemon/poochyena/front",
+                field: "CompressedSpriteSheet.size"
+            }
+        ),
+        "{err}"
+    );
+}
+
+/// Every species the shipped profile carries battler art for, with the
+/// directory its pack ids use.
+const PROFILE_SPECIES: [(SpeciesId, &str); 14] = [
+    (SpeciesId::TREECKO, "treecko"),
+    (SpeciesId::TORCHIC, "torchic"),
+    (SpeciesId::MUDKIP, "mudkip"),
+    (SpeciesId::POOCHYENA, "poochyena"),
+    (SpeciesId::MIGHTYENA, "mightyena"),
+    (SpeciesId::WURMPLE, "wurmple"),
+    (SpeciesId::SILCOON, "silcoon"),
+    (SpeciesId::BEAUTIFLY, "beautifly"),
+    (SpeciesId::CASCOON, "cascoon"),
+    (SpeciesId::DUSTOX, "dustox"),
+    (SpeciesId::ZIGZAGOON, "zigzagoon"),
+    (SpeciesId::LINOONE, "linoone"),
+    (SpeciesId::WINGULL, "wingull"),
+    (SpeciesId::PELIPPER, "pelipper"),
+];
+
+#[test]
+fn the_shipped_profile_roots_exactly_the_listed_species_and_variants() {
+    let roots = EMERALD_US_REV0_ROOTS;
+    let rooted: Vec<(u16, [String; 4])> = roots
+        .battlers
+        .species
+        .iter()
+        .map(|b| {
+            let ids = [b.front.id, b.back.id, b.normal.id, b.shiny.id];
+            (b.species, ids.map(String::from))
+        })
+        .collect();
+    let expected: Vec<(u16, [String; 4])> = PROFILE_SPECIES
+        .iter()
+        .map(|&(species, name)| {
+            (
+                species.index(),
+                [
+                    format!("pokemon/{name}/front"),
+                    format!("pokemon/{name}/back"),
+                    format!("pokemon/{name}/palette/normal"),
+                    format!("pokemon/{name}/palette/shiny"),
+                ],
+            )
+        })
+        .collect();
+    assert_eq!(rooted, expected);
+
+    // Poochyena's still front is the one 64x256 sheet; every other image is a picture.
+    for battler in roots.battlers.species {
+        let sheet = battler.species == SpeciesId::POOCHYENA.index();
+        let (front_height, front_tiles) = if sheet { (256, 256) } else { (64, 64) };
+        assert_eq!(battler.front.height, front_height, "{}", battler.front.id);
+        assert_eq!(
+            battler.front.tile_count, front_tiles,
+            "{}",
+            battler.front.id
+        );
+        assert_eq!((battler.back.height, battler.back.tile_count), (64, 64));
+    }
+}
+
+#[test]
+fn both_aggregate_iterators_reach_every_shipped_battler_root() {
+    let roots = EMERALD_US_REV0_ROOTS;
+    for (_, name) in PROFILE_SPECIES {
+        for stem in ["front", "back"] {
+            let id = format!("pokemon/{name}/{stem}");
+            assert_eq!(roots.images().filter(|r| r.id == id).count(), 1, "{id}");
+        }
+        for stem in ["normal", "shiny"] {
+            let id = format!("pokemon/{name}/palette/{stem}");
+            assert_eq!(roots.palettes().filter(|r| r.id == id).count(), 1, "{id}");
+        }
+    }
 }
