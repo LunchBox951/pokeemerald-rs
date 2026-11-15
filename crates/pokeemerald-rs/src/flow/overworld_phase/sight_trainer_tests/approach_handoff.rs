@@ -46,10 +46,10 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
     // actually ran means starting from something other than zero.
     phase
         .wild
-        .check_standard_wild_encounter(0, None, &mut phase.rng);
+        .check_standard_wild_encounter(0, None, None, &mut phase.rng);
     phase
         .wild
-        .check_standard_wild_encounter(0, None, &mut phase.rng);
+        .check_standard_wild_encounter(0, None, None, &mut phase.rng);
     assert_eq!(
         phase.wild.immunity_steps(),
         2,

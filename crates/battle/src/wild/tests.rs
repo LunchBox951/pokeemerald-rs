@@ -322,6 +322,44 @@ fn the_any_slot_ability_screen_admits_both_truant_species() {
 }
 
 #[test]
+fn the_ability_screens_admit_every_trace_species() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::PORYGON,
+        SpeciesId::PORYGON2,
+        SpeciesId::RALTS,
+        SpeciesId::KIRLIA,
+        SpeciesId::GARDEVOIR,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
+fn the_any_slot_ability_screen_admits_every_speed_boost_species() {
+    let dex = Dex::new();
+    for species in [SpeciesId::NINJASK, SpeciesId::YANMA] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::NINJASK, 1), Ok(()));
+}
+
+#[test]
+fn ensure_wild_startable_admits_route_102_ralts() {
+    let dex = Dex::new();
+    assert_eq!(initial_moveset(SpeciesId::RALTS, 4), vec![GROWL]);
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::RALTS, 4), Ok(()));
+}
+
+#[test]
 fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
     let dex = Dex::new();
     for (species, ability) in [
@@ -329,14 +367,7 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
         (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
         (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::NINJASK, assets::AbilityId::SPEED_BOOST),
-        (SpeciesId::YANMA, assets::AbilityId::SPEED_BOOST),
         (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
-        (SpeciesId::PORYGON, assets::AbilityId::TRACE),
-        (SpeciesId::PORYGON2, assets::AbilityId::TRACE),
-        (SpeciesId::RALTS, assets::AbilityId::TRACE),
-        (SpeciesId::KIRLIA, assets::AbilityId::TRACE),
-        (SpeciesId::GARDEVOIR, assets::AbilityId::TRACE),
         (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),
@@ -457,3 +488,29 @@ fn build_wild_pokemon_with_a_losing_synchronize_flip_draws_six_times() {
 }
 
 mod cute_charm;
+
+#[test]
+fn the_flinch_learners_are_startable_with_their_real_level_up_movesets() {
+    let dex = Dex::new();
+    for (species, level, flinch_move) in [
+        // Route 102's level-3 and level-4 Lotad (`wild_encounters.json:108-141`).
+        (SpeciesId::LOTAD, 3, MoveId::ASTONISH),
+        (SpeciesId::LOTAD, 4, MoveId::ASTONISH),
+        // Haley's level-6 Lotad (`trainer_parties.h:8007-8017`).
+        (SpeciesId::LOTAD, 6, MoveId::ASTONISH),
+        (ZIGZAGOON, 9, HEADBUTT),
+        (POOCHYENA, 13, MoveId::BITE),
+    ] {
+        assert!(
+            initial_moveset(species, level).contains(&flinch_move),
+            "species {} at level {level} must know {flinch_move:?}",
+            species.0
+        );
+        assert_eq!(
+            ensure_wild_startable(&dex, species, level),
+            Ok(()),
+            "species {} at level {level} must be startable",
+            species.0
+        );
+    }
+}

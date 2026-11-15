@@ -1,13 +1,13 @@
-//! Per-battler move history, Perish Song, Truant and multi-turn lock state.
+//! Per-battler move history, Perish Song, Truant, Trace and multi-turn lock state.
 //!
 //! Upstream keeps these in arrays indexed by battler (`gLastLandedMoves`,
 //! `gLastHitBy`, `gStatuses3[].perishSongTimer`, `gLockedMoves`,
-//! `gDisableStructs[].rolloutTimer`, `gDisableStructs[].truantCounter`) that
-//! `SwitchInClearSetData` and `FaintClearSetData` reset, so they belong to the
-//! battler's occupancy of the field and not to a party member. None of it
-//! reaches a save.
+//! `gDisableStructs[].rolloutTimer`, `gDisableStructs[].truantCounter`,
+//! `gStatuses3[].STATUS3_TRACE`) that `SwitchInClearSetData` and
+//! `FaintClearSetData` reset, so they belong to the battler's occupancy of the
+//! field and not to a party member. None of it reaches a save.
 
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 
 /// One of the two battlers in a single battle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +55,11 @@ pub enum LastLandedMove {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerishSongTurns(pub u8);
 
+/// `gDisableStructs[battler].isFirstTurn` when a battler has just entered the
+/// field: `BattleStartClearSetData`, `SwitchInClearSetData` and
+/// `FaintClearSetData` all write 2 (`battle_main.c:3051`, `:3220`, `:3312`).
+const FRESH_FIRST_TURN: u8 = 2;
+
 /// A multi-turn lock on a battler's selection: `gLockedMoves[battler]` with
 /// `STATUS2_MULTIPLETURNS` set, and the `rolloutTimer` that counts it down
 /// (`Cmd_rolloutdamagecalculation`, `src/battle_script_commands.c:8547`-
@@ -68,16 +73,71 @@ pub(super) struct MoveLock {
 }
 
 /// Everything the battle remembers about one battler's time on the field.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BattlerState {
     last_landed_move: LastLandedMove,
     last_hitter: Option<BattlerSide>,
     perish_song: Option<PerishSongTurns>,
     move_lock: Option<MoveLock>,
     truant_loafing: bool,
+    trace_pending: bool,
+    /// `isFirstTurn`: 2 until the first end-of-turn cleanup after the battler
+    /// entered, then 1, then 0. Speed Boost is suppressed only while it is 2.
+    first_turn: u8,
+}
+
+impl Default for BattlerState {
+    /// A battler that has just entered the field (a send-out or a faint
+    /// clear), whose Speed Boost stays quiet until the turn after the next
+    /// end-turn cleanup.
+    fn default() -> Self {
+        Self {
+            last_landed_move: LastLandedMove::None,
+            last_hitter: None,
+            perish_song: None,
+            move_lock: None,
+            truant_loafing: false,
+            trace_pending: false,
+            first_turn: FRESH_FIRST_TURN,
+        }
+    }
 }
 
 impl BattlerState {
+    /// An initial lead: `BattleStartClearSetData` sets `isFirstTurn` to 2 and
+    /// `TryDoEventsBeforeFirstTurn`'s `TurnValuesCleanUp(FALSE)` takes it to 1
+    /// before turn one (`battle_main.c:3051`, `:3901`, `:4875`-`:4876`), so a
+    /// lead's Speed Boost already acts at the end of turn one.
+    pub(super) const fn initial_lead() -> Self {
+        Self {
+            last_landed_move: LastLandedMove::None,
+            last_hitter: None,
+            perish_song: None,
+            move_lock: None,
+            truant_loafing: false,
+            trace_pending: false,
+            first_turn: FRESH_FIRST_TURN - 1,
+        }
+    }
+
+    /// Whether `isFirstTurn` is 2, the only value Speed Boost refuses
+    /// (`battle_util.c:2643`).
+    pub(super) const fn suppresses_speed_boost(self) -> bool {
+        self.first_turn == FRESH_FIRST_TURN
+    }
+
+    /// The raw `isFirstTurn` value, for tests that pin the cleanup itself.
+    #[cfg(test)]
+    pub(super) const fn first_turn(self) -> u8 {
+        self.first_turn
+    }
+
+    /// `TurnValuesCleanUp(FALSE)`'s `isFirstTurn--` when nonzero
+    /// (`battle_main.c:4875`-`:4876`).
+    pub(super) fn tick_first_turn(&mut self) {
+        self.first_turn = self.first_turn.saturating_sub(1);
+    }
+
     /// Returns the last move that landed on this battler (`gLastLandedMoves`).
     #[must_use]
     pub const fn last_landed_move(&self) -> LastLandedMove {
@@ -140,11 +200,40 @@ impl BattlerState {
         self.truant_loafing
     }
 
-    /// `Cmd_switchineffects` sets the counter for an incoming Truant holder
-    /// after `SwitchInClearSetData` zeroed it (`battle_script_commands.c:5258`-
-    /// `:5263`); a battler of any other ability keeps it clear.
-    pub(super) fn enter_field(&mut self, has_truant: bool) {
-        self.truant_loafing = has_truant;
+    /// Whether this occupant's Trace activation is queued
+    /// (`STATUS3_TRACE`), waiting for a living opponent with an ability.
+    #[must_use]
+    pub const fn trace_pending(&self) -> bool {
+        self.trace_pending
+    }
+
+    /// The state of a battler present when the battle starts: no Truant
+    /// counter, and a native Trace holder queued by its switch-in ability
+    /// check (`battle_util.c:2575`-`:2580`).
+    pub(super) fn at_battle_start(native_ability: AbilityId) -> Self {
+        Self {
+            trace_pending: native_ability == AbilityId::TRACE,
+            ..Self::initial_lead()
+        }
+    }
+
+    /// A fresh occupant's state after `SwitchInClearSetData`: `Cmd_switchineffects`
+    /// sets an incoming Truant holder's counter
+    /// (`battle_script_commands.c:5258`-`:5263`), and the switch-in ability
+    /// check queues a Trace holder (`battle_util.c:2575`-`:2580`). Both read
+    /// the native ability; a copy happens only when the queue drains.
+    pub(super) fn after_switch_in(native_ability: AbilityId) -> Self {
+        Self {
+            truant_loafing: native_ability == AbilityId::TRUANT,
+            trace_pending: native_ability == AbilityId::TRACE,
+            ..Self::default()
+        }
+    }
+
+    /// A Trace activation succeeded: `BattleScript_TraceActivates` clears
+    /// `STATUS3_TRACE` (`battle_util.c:3065`).
+    pub(super) fn settle_trace(&mut self) {
+        self.trace_pending = false;
     }
 
     /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_TRUANT` case toggles the counter

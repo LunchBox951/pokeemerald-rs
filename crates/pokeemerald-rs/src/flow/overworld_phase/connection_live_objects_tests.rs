@@ -564,3 +564,21 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
         "the animation continues rather than restarts"
     );
 }
+
+/// `DoesObjectCollideWithObjectAt` scans active objects whatever map they came from
+/// (`event_object_movement.c:4724-4741`): an in-view NPC standing where the player would
+/// land after the shift holds that tile, so the crossing is refused and nothing is rebound.
+#[test]
+fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
+    // One tile past Route 101's north edge, which the shift carries onto the landing tile.
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, -1)]);
+    phase.step(held(Buttons::UP));
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(
+        phase.map_id, ROUTE_101,
+        "the crossing never rebound the scene"
+    );
+    assert_eq!(phase.player.position(), (LANDING_X, 0));
+    assert!(entry_of(&phase, &templates[0]).is_active());
+    assert_eq!(entry_of(&phase, &templates[0]).carried_from(), None);
+}

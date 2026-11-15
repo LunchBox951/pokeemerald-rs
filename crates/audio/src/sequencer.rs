@@ -2,8 +2,9 @@
 //! per-track state, and drives the [`Mixer`] one V-blank frame at a time
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
-//! `PORT` and every `XCMD` besides `xWAIT`, the pseudo-echo pair
-//! (`xIECV`/`xIECL`), and the terminal reserved kinds 0 and 3 decode but
+//! `PORT` and every `XCMD` besides the ADSR overrides (`xATTA`..`xRELE`),
+//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), the sample-progress
+//! command (kind `0x0D`) and the terminal reserved kinds 0 and 3 decode but
 //! never execute.
 
 use crate::cgb_envelope::CgbAdsr;
@@ -15,6 +16,10 @@ use crate::song::{Instrument, Song, SquareTone};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 
+mod adsr_override;
+
+use adsr_override::{AdsrOverride, XCMD_ATTA, XCMD_RELE};
+
 /// `XCMD` sub-command number for `xIECV` (pseudo-echo volume,
 /// `m4a_tables.c:252`).
 const XCMD_IECV: u8 = 0x08;
@@ -23,6 +28,9 @@ const XCMD_IECV: u8 = 0x08;
 const XCMD_IECL: u8 = 0x09;
 /// `XCMD` sub-command number for `xWAIT` (`m4a_tables.c:305`).
 const XCMD_WAIT: u8 = 0x0C;
+/// `XCMD` sub-command number for `ply_xcmd_0D`, the DirectSound sample start
+/// (`m4a_tables.c:306`; `m4a.c:1639`..`:1653`).
+const XCMD_SAMPLE_PROGRESS: u8 = 0x0D;
 
 /// Ticks fire each time the accumulator crosses this threshold
 /// (`subs r0, 150`, `m4a_1.s:1169`).
@@ -165,6 +173,9 @@ struct TrackState {
     /// (`Clear64byte` then `tone.type = 1`, `m4a_1.s:1218`..`:1230`), which
     /// never reads the voicegroup.
     voice: Option<usize>,
+    /// The `xATTA`..`xRELE` bytes written to this track's local tone copy
+    /// since the last `VOICE` (`m4a.c:1567`..`:1589`).
+    adsr_override: AdsrOverride,
     vol: u8,
     /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`).
     vol_x: u8,
@@ -194,6 +205,10 @@ struct TrackState {
     /// Combined into each new note's priority by
     /// [`Sequencer::note_priority`].
     priority: u8,
+    /// `MusicPlayerTrack::unk_3C`, set by XCMD 0x0D (`m4a.c:1651`). Snapshotted
+    /// into each new DirectSound voice as its start position; CGB notes never
+    /// read it (`m4a_1.s:1791`..`:1797`). Zero until the command runs.
+    sample_progress: u32,
     /// Set when a volume input changed since the last
     /// [`Sequencer::propagate_dirty_tracks`] pass (`MPT_FLG_VOLCHG`,
     /// `m4a_internal.h:266`).
@@ -211,6 +226,7 @@ impl TrackState {
             xwait_timer: 0,
             ended: false,
             voice: None,
+            adsr_override: AdsrOverride::default(),
             vol: DEFAULT_TRACK_VOLUME,
             vol_x: TRACK_VOLUME_SCALE,
             pan: 0,
@@ -232,6 +248,7 @@ impl TrackState {
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
             priority: 0,
+            sample_progress: 0,
             vol_dirty: false,
             pitch_dirty: false,
         }
@@ -311,9 +328,10 @@ pub struct Sequencer {
     suspended_tick: Option<usize>,
     /// A fade step handed to a frame whose tick was suspended. `FadeOutBody`
     /// runs only when the next `MPlayMain` begins (`m4a_1.s:1152`-`:1169`),
-    /// so the step waits for the yielded frame's ticks and propagation to
-    /// complete and `advance_frame` applies it then, through either render
-    /// path; a later step replaces it.
+    /// after `SoundMain` has mixed the completed tick (`m4a_1.s:51`-`:62`),
+    /// so the step waits for the yielded frame's ticks, propagation and mix
+    /// to complete and `render_completed_frame` applies it then, through
+    /// either render path; a later step replaces it.
     pending_fade: Option<u8>,
 }
 
@@ -432,7 +450,18 @@ impl Sequencer {
     /// Panics if `out.len() != Self::FRAME_SAMPLES`.
     pub fn render_frame(&mut self, out: &mut [f32]) {
         self.advance_frame();
+        self.render_completed_frame(out);
+    }
+
+    /// Mixes the frame, then applies the fade step that waited on a tick this
+    /// frame completed: `FadeOutBody` belongs to the next `MPlayMain`, after
+    /// the mix of the tick it waited on, so a terminal step cannot silence
+    /// that tick's first mix. A tick still suspended keeps the step waiting.
+    fn render_completed_frame(&mut self, out: &mut [f32]) {
         self.mix_committed_frame(out);
+        if self.suspended_tick.is_none() {
+            self.apply_pending_fade();
+        }
     }
 
     /// Mixes the frame unless a tick is suspended. `SoundMain` mixes only
@@ -484,17 +513,18 @@ impl Sequencer {
     /// A suspended tick is still the previous `MPlayMain`, whose tick upstream
     /// finishes before the next `FadeOutBody` runs, so a frame that resumes
     /// one applies no step before it: the step waits (the latest one wins)
-    /// and [`Self::advance_frame`] stages it, or pauses, after the yielded
-    /// frame's remaining ticks and propagation pass, whichever render path
-    /// completes it. The frame's notes therefore all share one `volX`, and
-    /// the terminal step never leaves a tick half-run.
+    /// and stages it, or pauses, after the yielded frame's remaining ticks,
+    /// propagation pass and mix, whichever render path completes it. The
+    /// frame's notes therefore all share one `volX`, the completed tick is
+    /// heard before a terminal step stops it, and the step never leaves a
+    /// tick half-run.
     pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
         if self.suspended_tick.is_some() && !self.paused {
             if fade_vol_x.is_some() {
                 self.pending_fade = fade_vol_x;
             }
             self.advance_frame();
-            self.mix_committed_frame(out);
+            self.render_completed_frame(out);
             return;
         }
         match fade_vol_x {
@@ -505,7 +535,7 @@ impl Sequencer {
             }
             None => self.advance_frame(),
         }
-        self.mix_committed_frame(out);
+        self.render_completed_frame(out);
     }
 
     /// Stops every not-yet-ended track's voices outright and latches
@@ -568,18 +598,16 @@ impl Sequencer {
             return;
         }
         debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
-        let resumed = if let Some(track_id) = self.suspended_tick {
+        if let Some(track_id) = self.suspended_tick {
             // This frame continues the frame whose tick yielded: its tempo
             // was already added, so only that frame's remaining ticks run.
             if !self.finish_tick(track_id, false) {
                 return;
             }
-            true
         } else {
             debug_assert!(self.tempo_c < TEMPO_UNIT);
             self.tempo_c += self.tempo_i;
-            false
-        };
+        }
         while self.tempo_c >= TEMPO_UNIT {
             self.tempo_c -= TEMPO_UNIT;
             if !self.do_tick() {
@@ -591,16 +619,11 @@ impl Sequencer {
         // A suspended tick returns above, so a half-run burst's volume or
         // pitch never reaches a voice.
         self.propagate_dirty_tracks();
-        if resumed {
-            // The fade step that waited on the yielded frame is the next
-            // `MPlayMain`'s `FadeOutBody`, so it follows that frame's whole
-            // tempo loop and propagation pass, whichever render path drove it.
-            self.apply_pending_fade();
-        }
     }
 
     /// Stages the fade step that waited on a suspended tick, or pauses on its
-    /// terminal step.
+    /// terminal step. Runs after the completed frame's mix
+    /// (`Self::render_completed_frame`).
     fn apply_pending_fade(&mut self) {
         match self.pending_fade.take() {
             Some(0) => self.pause(),
@@ -772,7 +795,12 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Goto(index) => track.cursor = index,
-            Event::Voice(v) => track.voice = Some(usize::from(v)),
+            // `ply_voice` overwrites the whole local tone copy, discarding the
+            // ADSR overrides (`m4a_1.s:945`..`:965`).
+            Event::Voice(v) => {
+                track.voice = Some(usize::from(v));
+                track.adsr_override = AdsrOverride::default();
+            }
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -878,6 +906,12 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Xcmd {
+                kind: kind @ XCMD_ATTA..=XCMD_RELE,
+                value,
+            } => track
+                .adsr_override
+                .set(kind, u8::try_from(value).unwrap_or(0)),
+            Event::Xcmd {
                 kind: XCMD_WAIT,
                 value,
             } => track.xwait(u16::try_from(value & 0xFFFF).unwrap_or(0)),
@@ -889,6 +923,12 @@ impl Sequencer {
                 kind: XCMD_IECL,
                 value,
             } => track.pseudo_echo_length = u8::try_from(value).unwrap_or(0),
+            // Applies only to DirectSound notes started afterwards; a sounding
+            // voice keeps its position (`ply_xcmd_0D`, `m4a.c:1639`..`:1653`).
+            Event::Xcmd {
+                kind: XCMD_SAMPLE_PROGRESS,
+                value,
+            } => track.sample_progress = value,
             Event::Repeat { count, target } => track.repeat(count, target),
             Event::MemAcc {
                 op,
@@ -1093,6 +1133,14 @@ impl Sequencer {
             startup = startup_tone();
             &startup
         };
+        // Only a direct tone snapshots the track's local copy; a key-split or
+        // rhythm child is read from the bank, so it never sees an override
+        // (`m4a_1.s:1580`..`:1609`, `:1750`..`:1758`).
+        let overrides = if matches!(instrument, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
+            AdsrOverride::default()
+        } else {
+            track.adsr_override
+        };
         let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
             return false;
         };
@@ -1117,7 +1165,7 @@ impl Sequencer {
                 let freq = pitch::midi_key_to_freq(tone.wave.freq(), note_key, pit_m);
                 let voice = Voice::new(
                     tone.wave.clone(),
-                    tone.adsr,
+                    overrides.direct(tone.adsr),
                     freq,
                     right,
                     left,
@@ -1132,6 +1180,11 @@ impl Sequencer {
                 .with_rhythm_pan(rhythm_pan)
                 .fixed_rate(tone.is_fixed_rate())
                 .with_priority(priority);
+                // An out-of-range sample start fails closed before allocation,
+                // so the note neither sounds nor steals a channel.
+                let Some(voice) = voice.with_sample_progress(track.sample_progress) else {
+                    return false;
+                };
                 // A refused note simply never sounds -- upstream's `ply_note`
                 // returns without touching any channel (`m4a_1.s:1806`).
                 mixer.add_voice(voice)
@@ -1141,7 +1194,7 @@ impl Sequencer {
                     CgbChannelNumber::Square1,
                     sq.duty,
                     Some(admitted_sweep_byte(sq.sweep)),
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1164,7 +1217,7 @@ impl Sequencer {
                     CgbChannelNumber::Square2,
                     sq.duty,
                     None,
-                    sq.adsr,
+                    overrides.cgb(sq.adsr),
                     sq.fixed_rate,
                     note_key,
                     pit_m,
@@ -1188,7 +1241,7 @@ impl Sequencer {
                     CgbVoice::wave(
                         w.wave_id.clone(),
                         samples,
-                        w.adsr,
+                        overrides.cgb(w.adsr),
                         w.fixed_rate,
                         note_key,
                         pit_m,
@@ -1209,7 +1262,7 @@ impl Sequencer {
             }
             Instrument::CgbNoise(n) => mixer.add_cgb_voice(
                 CgbVoice::noise(
-                    n.adsr,
+                    overrides.cgb(n.adsr),
                     note_key,
                     n.lfsr_width_selector,
                     vol_mr,
@@ -1360,6 +1413,8 @@ fn scale_lfo(depth: u8, triangle: i32) -> i8 {
 }
 
 #[cfg(test)]
+mod adsr_override_tests;
+#[cfg(test)]
 mod cgb_psg_tests;
 #[cfg(test)]
 mod core_tests;
@@ -1377,6 +1432,8 @@ mod memacc_tests;
 mod pattern_tests;
 #[cfg(test)]
 mod pseudo_echo_tests;
+#[cfg(test)]
+mod sample_progress_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
