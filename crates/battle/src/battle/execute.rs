@@ -873,7 +873,7 @@ impl Battle {
         } else {
             &mut self.enemy
         };
-        fainted_battler.clear_battle_scratch();
+        fainted_battler.clear_fainted_scratch();
         fainted_battler.set_status1(Status1::Healthy);
         self.clear_infatuation_from(BattlerSide::from_is_player(fainted_is_player));
         // `FaintClearSetData` resets the battler's history, Perish Song

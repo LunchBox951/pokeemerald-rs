@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.130.0] - 2026-11-15
+## [0.0.131.0] - 2026-11-15
 
 - Game Boy sound-channel volume envelopes now fade at the hardware's own 64 Hz ticks, so the opening-area music's square and noise instruments decay as on the original hardware.
+
+## [0.0.130.0] - 2026-11-15
+
+- Pokémon with the Trace ability, such as Ralts, can now take part in battles: they copy the opposing Pokémon's ability as they enter, as in the original game.
 
 ## [0.0.129.0] - 2026-11-15
 
@@ -585,7 +589,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.130.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6c733d974ef75a1c3d382566984ff3280d90ed4b...dev
+[0.0.131.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/a642ed4922f3fa4dfa33a3d66cab3a1da0ba9504...dev
+[0.0.130.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6c733d974ef75a1c3d382566984ff3280d90ed4b...a642ed4922f3fa4dfa33a3d66cab3a1da0ba9504
 [0.0.129.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cc9707c09537b764fd10c3a41aaf0edfb534d65c...6c733d974ef75a1c3d382566984ff3280d90ed4b
 [0.0.128.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/9e1f2ea174fb045d934c3c32fd60501b838ee75f...cc9707c09537b764fd10c3a41aaf0edfb534d65c
 [0.0.127.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/fa501fbcd7d90de6e1d970d041ff3b5278adac57...9e1f2ea174fb045d934c3c32fd60501b838ee75f
