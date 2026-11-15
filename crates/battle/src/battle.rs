@@ -14,6 +14,7 @@
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget};
 
+use crate::badge_boosts::BadgeBoosts;
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -238,6 +239,22 @@ fn initialize_turn_rng_state(
     random_turn_number
 }
 
+/// The lead's badges are the player side's: shared with the reserves, never
+/// held by an enemy (`pokeemerald/src/pokemon.c:3407`-`:3420`).
+fn assign_stat_badges<'a>(
+    player: &mut BattlePokemon,
+    player_reserves: &mut [BattlePokemon],
+    enemies: impl Iterator<Item = &'a mut BattlePokemon>,
+) {
+    let badges = player.stat_badges();
+    for reserve in player_reserves {
+        reserve.set_stat_badges(badges);
+    }
+    for enemy in enemies {
+        enemy.set_stat_badges(BadgeBoosts::NONE);
+    }
+}
+
 /// Re-reads Deoxys's Speed Forme stats from the EVs the player's side carries
 /// in. [`BattlePokemon::gain_evs`] leaves the earning battle's stats alone, as
 /// `MonGainEVs` writes only the party copy (`pokemon.c:5988`); upstream's
@@ -325,7 +342,7 @@ impl Battle {
         dex: Dex,
         mut player: BattlePokemon,
         mut player_reserves: Vec<BattlePokemon>,
-        enemy: BattlePokemon,
+        mut enemy: BattlePokemon,
         first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
@@ -377,6 +394,11 @@ impl Battle {
             ),
         )?;
         trace::ensure_copies_admissible(&dex, &[&enemy], &player, &player_reserves)?;
+        assign_stat_badges(
+            &mut player,
+            &mut player_reserves,
+            std::iter::once(&mut enemy),
+        );
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         let battler_states = trace::battle_start_states(&player, &enemy);
         let mut battle = Self {
@@ -534,6 +556,7 @@ impl Battle {
         let usable_party: Vec<&BattlePokemon> =
             party.iter().filter(|mon| !mon.is_fainted()).collect();
         trace::ensure_copies_admissible(&dex, &usable_party, &player, &player_reserves)?;
+        assign_stat_badges(&mut player, &mut player_reserves, party.iter_mut());
         let enemy = party.remove(0);
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         let battler_states = trace::battle_start_states(&player, &enemy);
@@ -565,12 +588,29 @@ impl Battle {
     /// Supplies the player's identity and badge limit so the pre-PP
     /// obedience gate runs for Pokémon of another original trainer
     /// (`IsMonDisobedient`, `src/battle_util.c:3923`-`:4038`).
+    ///
+    /// A context holding stat badges applies them via
+    /// [`Battle::with_stat_badges`]; one holding none keeps the lead's own.
     #[must_use]
-    pub const fn with_player_obedience(
-        mut self,
-        obedience: crate::obedience::PlayerObedience,
-    ) -> Self {
+    pub fn with_player_obedience(mut self, obedience: crate::obedience::PlayerObedience) -> Self {
+        let badges = obedience.stat_badges();
         self.player_obedience = Some(obedience);
+        if badges.is_none() {
+            self
+        } else {
+            self.with_stat_badges(badges)
+        }
+    }
+
+    /// Gives the player's side its [`BadgeBoosts`] from here on. The opening
+    /// Speed comparison, and its tie draw, already ran in the constructor: set
+    /// [`BattlePokemon::with_stat_badges`] on the lead beforehand to include it.
+    #[must_use]
+    pub fn with_stat_badges(mut self, badges: BadgeBoosts) -> Self {
+        self.player.set_stat_badges(badges);
+        for reserve in &mut self.player_reserves {
+            reserve.set_stat_badges(badges);
+        }
         self
     }
 

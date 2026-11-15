@@ -10,6 +10,7 @@ use super::shared::{
     sample_mon, BULBASAUR, FIRST_UNREPRESENTABLE_IV, HARDY_PERSONALITY, MAX_IVS, TACKLE,
 };
 use crate::ability::LIQUID_OOZE;
+use crate::badge_boosts::BadgeBoosts;
 use crate::damage::MoveCategory;
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -491,6 +492,67 @@ fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
     );
 
     assert_ne!(mon.speed_for_turn_order(), WRONG_QUARTER_FIRST_ORDER);
+}
+
+/// Stage, then badge, then paralysis quarter (`battle_main.c:4639`-`:4651`).
+#[test]
+fn the_speed_badge_sits_between_the_stage_and_the_paralysis_quarter() {
+    let dex = Dex::new();
+    let planted = Stats {
+        max_hp: 100,
+        attack: 11,
+        defense: 11,
+        speed: 11,
+        sp_attack: 11,
+        sp_defense: 11,
+    };
+    let mut mon = sample_mon(&dex)
+        .with_cached_stats(planted, 100)
+        .with_stat_badges(BadgeBoosts::from_badges([false, true, false, false]));
+    assert_eq!(mon.speed_for_turn_order(), 12, "11 * 110 / 100");
+    assert_eq!(mon.effective_speed(), 11, "the badge is not a stat stage");
+
+    mon.stages_mut().speed = StatStage::new(1).unwrap();
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        17,
+        "11 -> 16 at +1, then 16 * 110 / 100; boosting first would give 18"
+    );
+
+    mon.stages_mut().speed = StatStage::new(0).unwrap();
+    mon.set_status1(Status1::Paralysed);
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        3,
+        "12 / 4; quartering first would give 2"
+    );
+    assert_eq!(mon.stats().speed, 11, "the stored Speed is untouched");
+    assert_eq!(mon.cached_stats().speed, 11);
+}
+
+#[test]
+fn the_damage_stat_reads_apply_the_badge_and_the_plain_accessors_do_not() {
+    let dex = Dex::new();
+    let planted = Stats {
+        max_hp: 100,
+        attack: 11,
+        defense: 11,
+        speed: 11,
+        sp_attack: 11,
+        sp_defense: 11,
+    };
+    let mon = sample_mon(&dex)
+        .with_cached_stats(planted, 100)
+        .with_stat_badges(BadgeBoosts::from_badges([true; 4]));
+    for category in [MoveCategory::Physical, MoveCategory::Special] {
+        assert_eq!(mon.damage_attacking_stat(category).0, 12, "{category:?}");
+        assert_eq!(mon.damage_defending_stat(category).0, 12, "{category:?}");
+        assert_eq!(mon.attacking_stat(category).0, 11, "{category:?}");
+        assert_eq!(mon.defending_stat(category).0, 11, "{category:?}");
+    }
+    let unbadged = mon.with_stat_badges(BadgeBoosts::NONE);
+    assert_eq!(unbadged.damage_attacking_stat(MoveCategory::Physical).0, 11);
+    assert_eq!(unbadged.damage_defending_stat(MoveCategory::Special).0, 11);
 }
 
 #[test]
