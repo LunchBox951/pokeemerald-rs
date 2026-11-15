@@ -238,6 +238,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
+    (74, "{B_ATK_NAME_WITH_PREFIX} flinched!"),
     (230, "It hurt itself in its\nconfusion!"),
     (35, "{B_EFF_NAME_WITH_PREFIX}\nfell asleep!"),
     (276, "{B_ATK_NAME_WITH_PREFIX} ignored\norders!"),

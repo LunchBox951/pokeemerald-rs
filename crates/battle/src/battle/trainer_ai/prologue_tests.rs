@@ -175,6 +175,9 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::BITE,
+        MoveId::HEADBUTT,
+        MoveId::ASTONISH,
         MoveId::FLAME_WHEEL,
         MoveId::SACRED_FIRE,
         MoveId::ROLLOUT,
@@ -205,6 +208,8 @@ fn the_audited_row_set_is_exact() {
         MoveEffect::SPLASH,
         MoveEffect::QUICK_ATTACK,
         MoveEffect::CHARGE,
+        MoveEffect::FLINCH_HIT,
+        MoveEffect::FLINCH_MINIMIZE_HIT,
         MoveEffect::ROLLOUT,
     ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();

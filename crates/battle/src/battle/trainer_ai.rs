@@ -101,7 +101,7 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant. Any
 /// other effect is never an implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
     MoveEffect::ABSORB,
     MoveEffect::POISON_HIT,
     MoveEffect::THAW_HIT,
@@ -117,6 +117,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
     MoveEffect::SPLASH,
     MoveEffect::QUICK_ATTACK,
     MoveEffect::CHARGE,
+    MoveEffect::FLINCH_HIT,
+    MoveEffect::FLINCH_MINIMIZE_HIT,
     MoveEffect::ROLLOUT,
 ];
 
@@ -1438,6 +1440,45 @@ mod tests {
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
         rng.assert_exhausted();
+    }
+
+    /// Haley's real party uses `AI_SCRIPT_CHECK_BAD_MOVE` only, and
+    /// `AI_CheckBadMove` has no flinch branch (`battle_ai_scripts.s:105-214`),
+    /// so Astonish, Bite and Headbutt add no effect-specific draw: the four
+    /// score-initialisation draws plus one tied-move selection, and nothing
+    /// else.
+    #[test]
+    fn flinch_moves_add_no_effect_specific_draw_to_a_check_bad_move_only_turn() {
+        let dex = Dex::new();
+        let flags = AiFlags::CHECK_BAD_MOVE;
+        let target = pokemon(TREECKO, vec![POUND]);
+        let enemy = pokemon(
+            MUDKIP,
+            vec![MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT],
+        );
+        for move_id in [MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT] {
+            assert_eq!(
+                ensure_scoreable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                crate::battle::trainer::ensure_move_playable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+        }
+        for (selection, expected) in [
+            (SELECT_FIRST_TIED_MOVE, EnemyAction::Move(0)),
+            (SELECT_SECOND_TIED_MOVE, EnemyAction::Move(1)),
+        ] {
+            let mut rng = rng_with_maximum_simulated_damage([selection]);
+            let action =
+                choose_trainer_action(&dex, &enemy, &target, flags, FIRST_TURN, &mut rng).unwrap();
+            assert_eq!(action, expected);
+            assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+            rng.assert_exhausted();
+        }
     }
 
     #[test]
