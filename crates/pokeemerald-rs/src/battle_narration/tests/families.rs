@@ -987,3 +987,42 @@ fn a_boosted_award_reads_gained_a_boosted() {
         ]
     );
 }
+
+#[test]
+fn a_trace_copy_names_the_holder_the_source_and_the_copied_ability() {
+    for (kind, player_line, opponent_line) in [
+        (
+            BattleKind::Wild,
+            "TORCHIC TRACED\nWild RATTATA's LIMBER!",
+            "Wild RATTATA TRACED\nTORCHIC's LIMBER!",
+        ),
+        (
+            BattleKind::Trainer,
+            "TORCHIC TRACED\nFoe RATTATA's LIMBER!",
+            "Foe RATTATA TRACED\nTORCHIC's LIMBER!",
+        ),
+    ] {
+        for (by_player, expected) in [(true, player_line), (false, opponent_line)] {
+            let mut narrator = narrator(kind);
+            let event = BattleEvent::TracedAbility {
+                by_player,
+                ability: AbilityId::LIMBER,
+            };
+            assert_eq!(
+                lines(&narrate(&mut narrator, &[event])),
+                [expected],
+                "{kind:?}, by_player {by_player}"
+            );
+            let holder = if by_player {
+                &narrator.scene().player
+            } else {
+                &narrator.scene().opponent
+            };
+            assert_eq!(
+                holder.ability,
+                Some(AbilityId::LIMBER),
+                "later messages read the copied ability"
+            );
+        }
+    }
+}

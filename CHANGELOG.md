@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.130.0] - 2026-11-15
+
+- Pokémon with the Trace ability, such as Ralts, can now take part in battles: they copy the opposing Pokémon's ability as they enter, as in the original game.
+
 ## [0.0.129.0] - 2026-11-15
 
 - Yawn can now be used in battle: the target grows drowsy and falls asleep at the end of the following turn unless something prevents it, so Petalburg Woods' Slakoth fights with its real moves as in the original game.
@@ -581,7 +585,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.129.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cc9707c09537b764fd10c3a41aaf0edfb534d65c...dev
+[0.0.130.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6c733d974ef75a1c3d382566984ff3280d90ed4b...dev
+[0.0.129.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cc9707c09537b764fd10c3a41aaf0edfb534d65c...6c733d974ef75a1c3d382566984ff3280d90ed4b
 [0.0.128.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/9e1f2ea174fb045d934c3c32fd60501b838ee75f...cc9707c09537b764fd10c3a41aaf0edfb534d65c
 [0.0.127.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/fa501fbcd7d90de6e1d970d041ff3b5278adac57...9e1f2ea174fb045d934c3c32fd60501b838ee75f
 [0.0.126.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/c0cb698365891c5b54d49843e672e5f9b9a088eb...fa501fbcd7d90de6e1d970d041ff3b5278adac57

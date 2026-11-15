@@ -84,6 +84,8 @@ mod static_contact;
 mod status_ability_matrix;
 #[path = "turn_engine/thaw_hit.rs"]
 mod thaw_hit;
+#[path = "turn_engine/trace.rs"]
+mod trace;
 #[path = "turn_engine/traded_recipient_exp.rs"]
 mod traded_recipient_exp;
 #[path = "turn_engine/trainer_battle.rs"]
