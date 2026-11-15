@@ -3,7 +3,8 @@
 //! # RNG stream
 //!
 //! [`SharedRng`] lends the overworld-owned generator to battle code, keeping
-//! encounter selection, opponent construction, battle initialization, and turns on one
+//! encounter selection (including the level coin party slot 0's Hustle, Vital Spirit or
+//! Pressure draws), opponent construction, battle initialization, and turns on one
 //! stream. [`start_wild_battle`] consumes those construction draws in order, including the
 //! held-item draw whose result is not modelled.
 //! Only the frame-free draw order matches upstream: `VBlankCB_Battle`
@@ -80,11 +81,12 @@ pub(super) fn roll_for_step(
     map: assets::MapId,
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
+    slot_zero_ability: Option<assets::AbilityId>,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter(metatile_behavior, encounter_header, rng)
+    state.check_standard_wild_encounter(metatile_behavior, encounter_header, slot_zero_ability, rng)
 }
 
 /// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
@@ -263,6 +265,8 @@ mod encounter_roll_tests;
 mod first_battle_recovery_tests;
 #[cfg(test)]
 mod full_party_tests;
+#[cfg(test)]
+mod slot_zero_level_bias_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
