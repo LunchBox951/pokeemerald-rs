@@ -218,9 +218,11 @@ fn a_blocked_wanderer_turns_without_walking_and_draws_a_fresh_delay() {
     assert_eq!((phase(&rig, 1), delay(&rig, 1)), (3, 95));
 }
 
+type Blocker = fn(&mut Rig);
+
 #[test]
 fn a_wanderer_is_refused_by_every_kind_of_blocker() {
-    let blockers: [(&str, fn(&mut Rig)); 4] = [
+    let blockers: [(&str, Blocker); 4] = [
         ("wall", |rig| rig.terrain.set_wall((20, 19))),
         ("elevation", |rig| rig.terrain.set_elevation((20, 19), 5)),
         ("player", |rig| {
@@ -531,8 +533,8 @@ fn real_template(map: &'static str, local_id: u8) -> ObjectEvent {
         .object_events
         .iter()
         .find(|event| event.local_id == local_id)
+        .copied()
         .expect("the checkpoint object is on the map")
-        .clone()
 }
 
 #[test]
