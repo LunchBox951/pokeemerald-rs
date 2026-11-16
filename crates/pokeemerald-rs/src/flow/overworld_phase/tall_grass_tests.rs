@@ -8,6 +8,7 @@ use super::OverworldPhase;
 use crate::overworld::test_support::{
     synthetic_scene_with_tall_grass_sprites, TALL_GRASS_CELL_COLORS,
 };
+use crate::pack_test_support::ScratchClaim;
 use assets::MapId;
 use engine::overworld::metatile_behavior::{MB_LONG_GRASS, MB_NORMAL, MB_TALL_GRASS};
 use engine::overworld::{Direction, PlayerState};
@@ -510,19 +511,31 @@ const CROSSING_SPRITES: [&str; 8] = [
 /// sheet.
 pub(super) fn route_101_phase_crossing_into_oldale(
     landing_behavior: u8,
-) -> (OverworldPhase, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-tall-grass-crossing-{landing_behavior}-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    crate::overworld::test_support::write_route101_oldale_layout_pack_with(
-        &path,
-        &[((13, 19), landing_behavior)],
-        &CROSSING_SPRITES,
-        true,
+) -> (OverworldPhase, ScratchClaim) {
+    route_101_phase_crossing_into_oldale_at(
+        std::env::temp_dir().join(format!(
+            "pokeemerald-rs-tall-grass-crossing-{landing_behavior}-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        )),
+        landing_behavior,
+    )
+}
+
+/// [`route_101_phase_crossing_into_oldale`] with its pack written at `path`.
+fn route_101_phase_crossing_into_oldale_at(
+    path: std::path::PathBuf,
+    landing_behavior: u8,
+) -> (OverworldPhase, ScratchClaim) {
+    let claim = ScratchClaim::claim_with(
+        path,
+        crate::overworld::test_support::route101_oldale_layout_pack_bytes_with(
+            &[((13, 19), landing_behavior)],
+            &CROSSING_SPRITES,
+            true,
+        ),
     );
-    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let leaked: &'static std::path::Path = Box::leak(claim.path().into());
     let mut phase = OverworldPhase::for_test(
         synthetic_scene_with_tall_grass_sprites(20, 20, &[]),
         ROUTE_101,
@@ -530,12 +543,12 @@ pub(super) fn route_101_phase_crossing_into_oldale(
         None,
     );
     phase.pack_source = crate::pack_source::PackSource::Test(leaked);
-    (phase, path)
+    (phase, claim)
 }
 
 #[test]
 fn a_map_edge_crossing_onto_tall_grass_starts_the_effect_in_the_entered_scene() {
-    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_TALL_GRASS);
+    let (mut phase, _claim) = route_101_phase_crossing_into_oldale(MB_TALL_GRASS);
     phase.step(held(Buttons::UP));
     assert_eq!(phase.map_id, OLDALE_TOWN, "the crossing rebound the scene");
     assert_eq!(shown_image(&phase), 1, "a step's rustle, not a placement");
@@ -545,28 +558,26 @@ fn a_map_edge_crossing_onto_tall_grass_starts_the_effect_in_the_entered_scene() 
     // The entered scene's first frame must not seed a second, settled effect.
     idle(&mut phase, 60);
     assert_eq!(phase.scene.tall_grass_effect_count(), 1);
-    std::fs::remove_file(path).expect("scratch pack");
 }
 
 #[test]
 fn a_map_edge_crossing_onto_ordinary_ground_leaves_the_entered_scene_without_effects() {
-    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+    let (mut phase, _claim) = route_101_phase_crossing_into_oldale(MB_NORMAL);
     phase.step(held(Buttons::UP));
     assert_eq!(phase.map_id, OLDALE_TOWN);
     idle(&mut phase, 40);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
-    std::fs::remove_file(path).expect("scratch pack");
 }
 
 /// Route 101 with tall grass on its top-edge tile `(13, 0)`, the player at rest
 /// one tile south of it facing north.
-fn route_101_phase_with_grass_on_the_edge_tile() -> (OverworldPhase, std::path::PathBuf) {
-    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+fn route_101_phase_with_grass_on_the_edge_tile() -> (OverworldPhase, ScratchClaim) {
+    let (mut phase, claim) = route_101_phase_crossing_into_oldale(MB_NORMAL);
     phase.scene =
         synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 0), MB_TALL_GRASS, GROUND)])
             .in_room_for_test(ROUTE_101);
     phase.player = PlayerState::new((LANDING_X, 1), GROUND, Direction::North);
-    (phase, path)
+    (phase, claim)
 }
 
 /// `UpdateTallGrassFieldEffect` (`field_effect_helpers.c:324-337`) translates a
@@ -574,7 +585,7 @@ fn route_101_phase_with_grass_on_the_edge_tile() -> (OverworldPhase, std::path::
 /// while the player has not yet left the departed tile's coordinates.
 #[test]
 fn a_map_edge_crossing_keeps_the_departed_tiles_live_effect() {
-    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    let (mut phase, _claim) = route_101_phase_with_grass_on_the_edge_tile();
     phase.step(held(Buttons::UP));
     assert_eq!(phase.player.position(), (LANDING_X, 0));
     idle(&mut phase, 15);
@@ -585,7 +596,6 @@ fn a_map_edge_crossing_keeps_the_departed_tiles_live_effect() {
     assert_eq!(phase.map_id, OLDALE_TOWN, "the crossing rebound the scene");
     let count = phase.scene.tall_grass_effect_count();
     let after = shown_image(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(
         count, 1,
         "the departed tile's live effect survives the crossing"
@@ -600,7 +610,7 @@ fn a_map_edge_crossing_keeps_the_departed_tiles_live_effect() {
 /// once the player has left the departed tile and its animation has finished.
 #[test]
 fn a_carried_effect_still_ends_when_its_animation_finishes_after_the_owner_leaves() {
-    let (mut phase, path) = route_101_phase_with_grass_on_the_edge_tile();
+    let (mut phase, _claim) = route_101_phase_with_grass_on_the_edge_tile();
     phase.step(held(Buttons::UP));
     idle(&mut phase, 15);
     phase.step(held(Buttons::UP));
@@ -612,7 +622,6 @@ fn a_carried_effect_still_ends_when_its_animation_finishes_after_the_owner_leave
     }
     idle(&mut phase, 60);
     let count = phase.scene.tall_grass_effect_count();
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(count, 0, "the carried effect ended after the owner left");
 }
 
@@ -620,7 +629,7 @@ fn a_carried_effect_still_ends_when_its_animation_finishes_after_the_owner_leave
 /// metatiles beyond its south edge): a tile farther out is dropped.
 #[test]
 fn a_carried_effect_outside_the_entered_maps_retained_strip_is_dropped() {
-    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+    let (mut phase, _claim) = route_101_phase_crossing_into_oldale(MB_NORMAL);
     phase.scene =
         synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 7), MB_TALL_GRASS, GROUND)])
             .in_room_for_test(ROUTE_101);
@@ -638,6 +647,36 @@ fn a_carried_effect_outside_the_entered_maps_retained_strip_is_dropped() {
     phase.scene.player_step_began((13, 7), GROUND);
     assert!(phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), (0, 20)));
     let dropped = phase.scene.tall_grass_effect_count();
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!((retained, dropped), (1, 0));
+}
+
+/// The fixture's cleanup removes only the file it claimed, never an unrelated
+/// one that took over the pack's name, and never a neighbour.
+#[test]
+fn a_replaced_scratch_pack_survives_the_fixtures_cleanup() {
+    // A directory this test made, so every path below is exclusively its own.
+    let dir = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-tall-grass-replaced-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir(&dir).expect("a fresh scratch directory");
+    let bystander = dir.join("bystander");
+    std::fs::write(&bystander, b"bystander").unwrap();
+
+    let claim = route_101_phase_crossing_into_oldale_at(dir.join("claimed.pack"), MB_NORMAL).1;
+    let path = claim.path().to_path_buf();
+    std::fs::rename(&path, dir.join("moved.pack")).unwrap();
+    std::fs::write(&path, b"unrelated replacement").unwrap();
+    drop(claim);
+
+    let replacement = std::fs::read(&path).ok();
+    let neighbour = std::fs::read(&bystander).ok();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        replacement.as_deref(),
+        Some(&b"unrelated replacement"[..]),
+        "cleanup removed an entry the fixture did not create"
+    );
+    assert_eq!(neighbour.as_deref(), Some(&b"bystander"[..]));
 }
