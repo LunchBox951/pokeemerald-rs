@@ -158,11 +158,18 @@ enum ApproachStage {
 /// is unaffected either way).
 #[derive(Debug, Clone)]
 pub(super) struct SightApproach {
-    /// The local ID of the active map's live collection entry that was
-    /// selected: every walk, turn and write-back of this approach lands on
-    /// that entry ([`crate::flow::overworld_phase::OverworldPhase::object_events`]), so the stopped trainer
-    /// outlives the approach.
+    /// The local ID of the live collection entry that was selected: every
+    /// walk, turn and write-back of this approach lands on that entry
+    /// ([`crate::flow::overworld_phase::OverworldPhase::object_events`]), so the stopped trainer
+    /// outlives the approach. A local id names an object only within its own
+    /// map, so it resolves together with [`Self::carried_from`].
     local_id: u8,
+    /// The map a connection crossing carried the selected entry out of, if it
+    /// did ([`engine::overworld::object_event::LiveObjectEvent::carried_from`]).
+    /// With `local_id` it is the entry's identity
+    /// (`GetObjectEventIdByLocalIdAndMap`, `event_object_movement.c:1263-1285`),
+    /// so a namesake of the entered map is never the one that walks.
+    carried_from: Option<assets::MapId>,
     /// `InitTrainerApproachTask`'s `range` argument, `approachDistance - 1`
     /// -- how many tiles the trainer walks in total.
     walk_tiles: u8,
@@ -185,6 +192,7 @@ impl SightApproach {
     /// while a step is in flight) and the walk-up begins when it comes down.
     pub(super) const fn new(
         local_id: u8,
+        carried_from: Option<assets::MapId>,
         walk_tiles: u8,
         intro: &'static str,
         battle: battle::Battle,
@@ -192,6 +200,7 @@ impl SightApproach {
     ) -> Self {
         Self {
             local_id,
+            carried_from,
             walk_tiles,
             intro,
             battle,
@@ -206,6 +215,13 @@ impl SightApproach {
     #[cfg(test)]
     pub(super) const fn local_id(&self) -> u8 {
         self.local_id
+    }
+
+    /// The map the live collection entry this approach is for was carried
+    /// out of, if a connection crossing carried it.
+    #[cfg(test)]
+    pub(super) const fn carried_from(&self) -> Option<assets::MapId> {
+        self.carried_from
     }
 
     /// The already-constructed fight, for tests that pin its party.
