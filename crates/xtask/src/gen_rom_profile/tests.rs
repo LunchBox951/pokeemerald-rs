@@ -1,11 +1,6 @@
-//! Shared fixtures for the ROM-profile regression tests, which live in the
-//! concern modules below: `locator` (image, palette, map, committed-profile
-//! and missing-domain checks, plus the `#[ignore]`d real-ROM drift check),
-//! `publication` (destination and cleanup), `audio` (audio fixture,
-//! pack-entry and song checks) and `audio_bytecode` (voicegroup and song
-//! bytecode). Every synthetic test builds its own ROM-shaped image with
-//! `rom_import::fixture::RomFixture` and its own pack, so the suite needs
-//! no copyrighted ROM and no real upstream checkout.
+//! Shared fixtures for the synthetic ROM-profile regression tests, which need
+//! no real ROM and no upstream checkout. The `#[ignore]`d drift test in
+//! `locator` is the exception: it needs both, and an extracted pack.
 
 use std::path::PathBuf;
 
@@ -17,7 +12,8 @@ use super::plan::{ReportLine, SymbolExpectation};
 use super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::Context;
 
-/// A scratch directory unique to one test.
+/// A scratch directory named for the process and `name`; callers keep `name`
+/// unique per test and remove the directory themselves.
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "pokeemerald-rs-gen-rom-profile-{name}-{}",
@@ -27,10 +23,9 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// Run `lines` through [`super::cross_check`] against a map shaped like
-/// GNU ld `-Map` output, which lists linker-global symbols only: the global
-/// `gGlobalTable` sits 0x10 bytes past `table`, and nothing is listed at
-/// `table` itself because the table is a translation-unit-local `static`.
+/// Requires a translation-unit-local root to pass a map that lists linker
+/// globals only, so nothing is listed at `table` itself. The nearby global
+/// `gGlobalTable` keeps the map non-empty without naming the root.
 pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [ReportLine]) {
     let dir = scratch(name);
     let map_path = dir.join("pokeemerald.map");
@@ -46,16 +41,15 @@ pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [Report
     let result = super::cross_check(Some(&map_path), lines);
     let _ = std::fs::remove_file(&map_path);
     let _ = std::fs::remove_dir(&dir);
-    result.expect("a correctly located static table must survive a real GNU ld map");
+    result.expect("a local root must not require linker-global evidence");
 }
 
-/// Run a whole domain's report `lines` through [`super::cross_check`]
-/// against a map shaped like GNU ld `-Map` output: a global symbol at every
-/// root a linker map can list, nothing at a root marked
-/// [`SymbolExpectation::Local`], and nothing at a root named in `unlisted`.
+/// Cross-checks a whole domain against a global-only GNU ld map: roots marked
+/// [`SymbolExpectation::Local`] or [`SymbolExpectation::Interior`], and ids
+/// named in `unlisted`, get no symbol.
 ///
-/// Returns the cross-check's result so a caller can assert either that a
-/// correct ROM/map pair passes or that a missing global symbol is refused.
+/// Returns the result so a caller can assert either that a correct ROM/map
+/// pair passes or that a missing global symbol is refused.
 pub(super) fn cross_check_ld_map(
     name: &str,
     lines: &mut [ReportLine],
@@ -94,7 +88,7 @@ pub(super) fn cross_check_ld_map(
     result
 }
 
-/// Tile bytes that are distinctive enough to anchor a search.
+/// Non-repeating 4bpp tile data, so only the planted layout reproduces it.
 pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
     (0..tile_count * 32)
         .map(|index| {
@@ -104,7 +98,8 @@ pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
         .collect()
 }
 
-/// The bag expectation synthetic contexts carry: one root of every family.
+/// Synthetic bag ids, independent of the upstream inventory: one root of
+/// every bag family.
 pub(super) fn synthetic_bag_ids() -> Vec<String> {
     [
         "bag/image/menu",
@@ -117,7 +112,9 @@ pub(super) fn synthetic_bag_ids() -> Vec<String> {
     .to_vec()
 }
 
-/// Run a body against a fixture ROM and a pack built from `entries`.
+/// Runs `body` against a locator context over `rom` and a pack of `entries`,
+/// with synthetic bag ids and an upstream path that holds no checkout.
+/// The scratch files are removed after `body` returns, not if it panics.
 pub(super) fn with_context<T>(
     name: &str,
     rom: &[u8],
@@ -147,8 +144,8 @@ pub(super) fn with_context<T>(
     out
 }
 
-/// Compress `data` as a literals-only LZ77 stream, which is what the
-/// decompressor reads back.
+/// Encodes `data` (under 16 MiB) as GBA LZ77 using literals only, no
+/// back-references.
 pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
     let len = u32::try_from(data.len()).expect("small");
     let size = len.to_le_bytes();
@@ -160,7 +157,8 @@ pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The same bytes as an 8-bit image entry, the kind the importers never emit.
+/// Wraps `payload` in image metadata, to prove a raw-payload id is refused
+/// when the pack stores it as an image.
 pub(super) fn image_twin(id: &str, payload: &[u8]) -> pack_format::PackEntry {
     let width = u32::try_from(payload.len()).expect("payload fits in u32");
     image_entry(id.to_owned(), width, 1, 8, payload.to_vec()).expect("valid image entry")
