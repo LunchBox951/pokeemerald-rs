@@ -3,7 +3,8 @@
 //! # RNG stream
 //!
 //! [`SharedRng`] lends the overworld-owned generator to battle code, keeping
-//! encounter selection, opponent construction, battle initialization, and turns on one
+//! encounter selection (including the level coin party slot 0's Hustle, Vital Spirit or
+//! Pressure draws), opponent construction, battle initialization, and turns on one
 //! stream. [`start_wild_battle`] consumes those construction draws in order, including the
 //! held-item draw whose result is not modelled.
 //! Only the frame-free draw order matches upstream: `VBlankCB_Battle`
@@ -40,7 +41,9 @@
 use battle::{Battle, BattleError, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
-use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
+use engine::overworld::wild_encounter::{
+    EncounterRateModifiers, WildEncounter, WildEncounterState,
+};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
@@ -80,11 +83,19 @@ pub(super) fn roll_for_step(
     map: assets::MapId,
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
+    slot_zero_ability: Option<assets::AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter(metatile_behavior, encounter_header, rng)
+    state.check_standard_wild_encounter_with_rate_modifiers(
+        metatile_behavior,
+        encounter_header,
+        slot_zero_ability,
+        rate_modifiers,
+        rng,
+    )
 }
 
 /// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
@@ -135,6 +146,28 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 
     let dex = Dex::new();
     for wild_slot in &land_encounters.mons {
+        // The driver's standing Run selection is refused by a trapping
+        // opponent (`battle::escape::ensure_admissible`), which would silently
+        // drop an ongoing encounter, so a table that can roll one is not
+        // fightable yet either.
+        if let Some(trapper) = dex.species(wild_slot.species).ok().and_then(|species| {
+            species.abilities.into_iter().find(|ability| {
+                matches!(
+                    *ability,
+                    assets::AbilityId::SHADOW_TAG
+                        | assets::AbilityId::ARENA_TRAP
+                        | assets::AbilityId::MAGNET_PULL
+                )
+            })
+        }) {
+            eprintln!(
+                "wild encounter: {}'s land table can roll species {:?} with {trapper:?}, \
+                 whose trap refuses the driver's Run -- no encounters will roll on this map",
+                map.name(),
+                wild_slot.species,
+            );
+            return false;
+        }
         for level in wild_slot.min_level..=wild_slot.max_level {
             if let Err(error) = battle::ensure_wild_startable(&dex, wild_slot.species, level) {
                 eprintln!(
@@ -258,11 +291,15 @@ mod completed_turn_tests;
 #[cfg(test)]
 mod cute_charm_gender_tests;
 #[cfg(test)]
+mod encounter_rate_modifier_tests;
+#[cfg(test)]
 mod encounter_roll_tests;
 #[cfg(test)]
 mod first_battle_recovery_tests;
 #[cfg(test)]
 mod full_party_tests;
+#[cfg(test)]
+mod slot_zero_level_bias_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

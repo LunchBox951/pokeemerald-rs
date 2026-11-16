@@ -44,11 +44,16 @@
 //!    `FLAG_HIDE_ROUTE_101_ZIGZAGOON`, is what upstream's earlier
 //!    `removeobject LOCALID_ROUTE101_ZIGZAGOON` (`:224`) persists as
 //!    (`RemoveObjectEventByLocalIdAndMap` -> `FlagSet`,
-//!    `src/event_object_movement.c:1389-1397`); it is written first.
-//!    [`assets::MapEventsTable`] templates carry these flag names, and
-//!    `engine::overworld::object_event` drops a template whose flag is set
-//!    from rendering and collision. [`crate::new_game`] starts a save with
-//!    the lab-Birch flag set, so clearing it places Birch in the lab.
+//!    `src/event_object_movement.c:1389-1397`); it is written first. The same
+//!    call also retires the admitted Zigzagoon entry
+//!    (`ObjectEventCollection::remove_by_local_id`, `RemoveObjectEvent`'s
+//!    `active = FALSE`), so it is not queryable or drawn while its flag is
+//!    set.
+//!    [`assets::MapEventsTable`] templates carry these flag names, and the
+//!    scheduler consults a template's flag when it admits the object, so a
+//!    set flag keeps a later admission from spawning it. [`crate::new_game`]
+//!    starts a save with the lab-Birch flag set, so clearing it places Birch
+//!    in the lab.
 //! 3. `VAR_STARTER_MON` is set to the encoding of
 //!    [`new_game::PROVISIONAL_STARTER_SPECIES`] through
 //!    [`PlayerStarter::var_value`]. Upstream writes it before the fight in
@@ -75,8 +80,8 @@
 //!
 //! The flag and var writes (steps 2 to 5) and the warp are therefore one unit.
 //! [`OverworldPhase::warp_to_position`] reports whether it landed; when it did
-//! not, the event data is restored to what it was before step 2 and
-//! `VAR_ROUTE101_STATE` is set to [`ROUTE101_STATE_TRIGGER_READY`], not the
+//! not, the event data and the live objects (the retired Zigzagoon) are
+//! restored to what they were before step 2 and `VAR_ROUTE101_STATE` is set to [`ROUTE101_STATE_TRIGGER_READY`], not the
 //! consumed value the trigger left. The player stays where they stood and the
 //! coord event fires again on the next completed landing on its tile, which
 //! replays the fight (battle progress and RNG already spent stay spent) and
@@ -132,6 +137,10 @@ const ROUTE101_STATE_TRIGGER_READY: u16 = 1;
 /// Route 101 events).
 const FLAG_HIDE_ROUTE_101_ZIGZAGOON: u16 = 0x2EE;
 
+/// `LOCALID_ROUTE101_ZIGZAGOON`, the rescue Zigzagoon's local id in the
+/// generated Route 101 events.
+const ROUTE_101_ZIGZAGOON_LOCAL_ID: u8 = 4;
+
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`), the hide flag of the rescue-battle
 /// Birch template (local id 2).
@@ -163,12 +172,17 @@ impl OverworldPhase {
 
         // The writes below and the lab warp are one unit; see the module docs.
         let event_data_before_conclusion = self.save1.event_data.clone();
+        let object_events_before_conclusion = self.object_events.clone();
 
         Self::write_flag(
             &mut self.save1.event_data,
             FLAG_HIDE_ROUTE_101_ZIGZAGOON,
             true,
         );
+        // `removeobject` also deactivates the object; the scheduler does not retire an admitted
+        // entry for its flag (`event_object_movement.c:1383-1397`).
+        self.object_events
+            .remove_by_local_id(ROUTE_101_ZIGZAGOON_LOCAL_ID);
         Self::write_flag(
             &mut self.save1.event_data,
             FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,
@@ -213,6 +227,7 @@ impl OverworldPhase {
         let (x, y) = BIRCHS_LAB_ARRIVAL;
         if !self.warp_to_position(BIRCHS_LAB, x, y) {
             self.save1.event_data = event_data_before_conclusion;
+            self.object_events = object_events_before_conclusion;
             Self::write_var(
                 &mut self.save1.event_data,
                 VAR_ROUTE101_STATE,

@@ -128,6 +128,88 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
     (bound, scratch_frames)
 }
 
+/// A source-frame change [`Cursor::advance_frame`] reports, in order.
+#[derive(Clone, Copy)]
+enum Transition {
+    /// A source-frame boundary was crossed. `next_was_pending` tells the
+    /// caller whether `prev` takes a fresh source frame or the old `next`.
+    Crossing { next_was_pending: bool },
+    /// `next` is needed at a fractional position and was not loaded yet.
+    Lookahead,
+}
+
+/// The floating-point interpolation cursor and its pending-lookahead state.
+///
+/// [`Resampler::fill_chunk`] must drain exactly the source frames it then
+/// consumes, so its prediction pass and its render pass both step through
+/// [`Self::advance_frame`]: one implementation cannot drift from itself in
+/// `f64` rounding or decision order.
+#[derive(Clone, Copy)]
+struct Cursor {
+    /// Fractional position between `prev` and `next`, in `[0.0, 1.0)` except
+    /// when [`Self::is_stalled`].
+    frac: f64,
+    /// `false` only before the very first output frame, which sits on the
+    /// primed `prev`. Advancing *before* each frame rather than after is what
+    /// defers the trailing lookahead pull to the next callback (see the
+    /// module docs).
+    need_advance: bool,
+    /// Whether `next` is not loaded yet (see the module docs).
+    next_pending: bool,
+}
+
+impl Cursor {
+    const fn new() -> Self {
+        Self {
+            frac: 0.0,
+            need_advance: false,
+            next_pending: true,
+        }
+    }
+
+    /// The crossing budget ran out with `frac` still at or past `1.0`.
+    fn is_stalled(&self) -> bool {
+        self.frac >= 1.0
+    }
+
+    /// Move to the next output frame's position, reporting each source-frame
+    /// change to `on_transition`; returns the boundaries crossed.
+    ///
+    /// `crossing_budget` guards the caller's drained scratch. If it runs out
+    /// with `frac` still at or past `1.0`, the cursor stalls and requests no
+    /// lookahead, so nothing reads a frame the caller did not budget. A
+    /// validly constructed `Resampler` never stalls.
+    fn advance_frame(
+        &mut self,
+        step: f64,
+        crossing_budget: usize,
+        mut on_transition: impl FnMut(Transition),
+    ) -> usize {
+        let mut crossed = 0;
+        if self.need_advance {
+            self.frac += step;
+            while self.frac >= 1.0 {
+                if crossed >= crossing_budget {
+                    break;
+                }
+                self.frac -= 1.0;
+                on_transition(Transition::Crossing {
+                    next_was_pending: self.next_pending,
+                });
+                self.next_pending = true;
+                crossed += 1;
+            }
+        }
+        self.need_advance = true;
+
+        if self.frac > 0.0 && self.frac < 1.0 && self.next_pending {
+            on_transition(Transition::Lookahead);
+            self.next_pending = false;
+        }
+        crossed
+    }
+}
+
 /// Linear-interpolation resampler bridging a [`Consumer`]'s nominal sample
 /// rate (what the `audio` crate renders at) and an audio device's actual
 /// negotiated rate.
@@ -141,8 +223,7 @@ pub struct Resampler {
     channels: usize,
     /// Source frames advanced per output frame (`source_rate / device_rate`).
     step: f64,
-    /// Fractional position between `prev` and `next`, in `[0.0, 1.0)`.
-    frac: f64,
+    cursor: Cursor,
     prev: Vec<f32>,
     next: Vec<f32>,
     /// Preallocated interleaved source-frame scratch, bulk-drained in one
@@ -155,17 +236,6 @@ pub struct Resampler {
     /// `scratch` was sized against.
     chunk_frames: usize,
     primed: bool,
-    /// Whether the next output frame should first advance the interpolation
-    /// cursor. `false` only for the very first frame ever produced (which sits
-    /// exactly on the primed `prev`); `true` forever after. Advancing *before*
-    /// each frame — rather than after — is what defers the trailing lookahead
-    /// pull to the next callback (see the module docs).
-    need_advance: bool,
-    /// Whether `next` is not loaded yet. Set when the cursor sits exactly on
-    /// a source frame (`frac == 0.0`): that output uses only `prev`, so the
-    /// following frame is left in the ring until an output actually blends it
-    /// (see the module docs).
-    next_pending: bool,
 }
 
 impl Resampler {
@@ -232,14 +302,12 @@ impl Resampler {
             consumer,
             channels,
             step,
-            frac: 0.0,
+            cursor: Cursor::new(),
             prev: vec![0.0; channels],
             next: vec![0.0; channels],
             scratch: vec![0.0; scratch_frames * channels],
             chunk_frames: bound,
             primed: false,
-            need_advance: false,
-            next_pending: true,
         })
     }
 
@@ -307,53 +375,27 @@ impl Resampler {
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
 
-        // Source frames this call consumes: 1 to prime `prev` on the very
-        // first call (`next` stays pending), plus one per boundary crossing
-        // that lands on a still-pending `next` (a crossing onto an already
-        // loaded `next` swaps and pulls nothing), plus one for each lookahead
-        // `next` loaded at a nonzero `frac`. The advance runs *before* each
-        // frame (skipped only for the very first frame ever), so the trailing
-        // lookahead pull is deferred to the next callback — see the module
-        // docs. Count the crossings with a dry run that mirrors the loop below
-        // exactly: same `need_advance` gate, same `frac`/`step` f64 arithmetic
-        // in the same order. That parity is what makes the bulk drain match
-        // consumption precisely — never relying on `floor` agreeing with
-        // incremental accumulation at an exact boundary (a mismatch would drop
-        // a source frame or index past the scratch).
-        // Capped at `MAX_SCRATCH_SOURCE_FRAMES` (matching `scratch_layout`) as
-        // a defense-in-depth bound, not a path a validly constructed
-        // `Resampler` can reach: `Resampler::new` refuses any `step` its
-        // scratch cannot carry (see its `MAX_SCRATCH_SOURCE_FRAMES` check), so
-        // `bound * step` (this chunk's worst-case crossings, `bound == steps`
-        // here) is always within the cap and this `break` never fires. Were
-        // it ever to fire regardless, the leftover `frac_probe >= 1.0` would
-        // carry over unresolved rather than spin or index unboundedly — the
-        // same shape `Self::fill_chunk`'s own advance loop below mirrors.
-        // `pending` mirrors `self.next_pending` through the loop below.
-        let prime = usize::from(!self.primed);
-        let mut frac_probe = self.frac;
-        let mut advance_probe = self.need_advance;
-        let mut pending = self.next_pending;
+        // A closed-form `floor(frac + steps * step)` can disagree with
+        // incremental `f64` accumulation at an exact boundary, and the bulk
+        // drain must match consumption exactly.
+        //
+        // The budget comes from `scratch`, not `MAX_SCRATCH_SOURCE_FRAMES`: a
+        // cursor just under `1.0` with `bound * step` on the cap needs one
+        // crossing more than the cap.
+        let crossing_budget = (self.scratch.len() / self.channels).saturating_sub(2);
+        let mut probe = self.cursor;
         let mut crossings = 0usize;
-        let mut loads = prime;
-        'dry_run: for _ in 0..steps {
-            if advance_probe {
-                frac_probe += self.step;
-                while frac_probe >= 1.0 {
-                    if crossings >= MAX_SCRATCH_SOURCE_FRAMES {
-                        break 'dry_run;
+        let mut loads = usize::from(!self.primed);
+        for _ in 0..steps {
+            crossings +=
+                probe.advance_frame(self.step, crossing_budget - crossings, |transition| {
+                    match transition {
+                        Transition::Crossing { next_was_pending } => {
+                            loads += usize::from(next_was_pending);
+                        }
+                        Transition::Lookahead => loads += 1,
                     }
-                    frac_probe -= 1.0;
-                    crossings += 1;
-                    loads += usize::from(pending);
-                    pending = true;
-                }
-            }
-            advance_probe = true;
-            if frac_probe > 0.0 && pending {
-                loads += 1;
-                pending = false;
-            }
+                });
         }
         let needed = loads * self.channels;
 
@@ -378,50 +420,47 @@ impl Resampler {
 
         let mut crossed = 0usize;
         for frame in out.chunks_mut(self.channels) {
-            // Advance to this frame's position first. Skipped only for the
-            // first frame ever, which sits exactly on the primed `prev` at
-            // `frac == 0`. Mirrors the dry run's own `crossings` cap, so this
-            // never reads past what was actually drained into `scratch`.
-            if self.need_advance {
-                self.frac += self.step;
-                while self.frac >= 1.0 {
-                    if crossed >= crossings {
-                        break;
-                    }
-                    self.frac -= 1.0;
-                    if self.next_pending {
-                        let base = src * self.channels;
-                        self.prev
-                            .copy_from_slice(&self.scratch[base..base + self.channels]);
-                        src += 1;
-                    } else {
-                        std::mem::swap(&mut self.prev, &mut self.next);
-                    }
-                    self.next_pending = true;
-                    crossed += 1;
-                }
-            }
-            self.need_advance = true;
+            // The dry run's crossing count is the budget, so this never
+            // reads past what was drained into `scratch`.
+            let channels = self.channels;
+            let prev = &mut self.prev;
+            let next = &mut self.next;
+            let scratch = &self.scratch;
+            crossed += self
+                .cursor
+                .advance_frame(
+                    self.step,
+                    crossings - crossed,
+                    |transition| match transition {
+                        Transition::Crossing {
+                            next_was_pending: true,
+                        } => {
+                            let base = src * channels;
+                            prev.copy_from_slice(&scratch[base..base + channels]);
+                            src += 1;
+                        }
+                        Transition::Crossing {
+                            next_was_pending: false,
+                        } => std::mem::swap(prev, next),
+                        Transition::Lookahead => {
+                            let base = src * channels;
+                            next.copy_from_slice(&scratch[base..base + channels]);
+                            src += 1;
+                        }
+                    },
+                );
 
-            if self.frac > 0.0 && self.next_pending {
-                let base = src * self.channels;
-                self.next
-                    .copy_from_slice(&self.scratch[base..base + self.channels]);
-                src += 1;
-                self.next_pending = false;
-            }
-
-            if self.frac == 0.0 {
+            if self.cursor.frac == 0.0 || self.cursor.is_stalled() {
                 frame.copy_from_slice(&self.prev[..frame.len()]);
                 continue;
             }
 
-            // `self.frac` is a loop invariant always in `[0.0, 1.0)` (see
-            // the `while` above), so narrowing to `f32` here never
+            // `self.cursor.frac` is in `[0.0, 1.0)` here (a stalled cursor
+            // was handled above), so narrowing to `f32` here never
             // truncates meaningfully — audio-rate linear interpolation
             // doesn't need `f64`'s extra precision either way.
             #[allow(clippy::cast_possible_truncation)]
-            let frac = self.frac as f32;
+            let frac = self.cursor.frac as f32;
             for ((sample, &prev), &next) in frame.iter_mut().zip(&self.prev).zip(&self.next) {
                 *sample = prev.mul_add(1.0 - frac, next * frac);
             }
@@ -438,6 +477,108 @@ impl Resampler {
 mod tests {
     use super::*;
     use crate::ring::{ring_buffer, Producer};
+
+    /// Fill the ring with a ramp of real (finite) samples and poison the
+    /// resampler's scratch with NaN: any output sample read from scratch
+    /// beyond what the chunk's bulk drain wrote is then visibly NaN.
+    fn poisoned_resampler_over_a_ramp(
+        source_rate: f64,
+        device_rate: u32,
+        max_output_frames: usize,
+        ramp_frames: usize,
+    ) -> Resampler {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "ramp indices stay far below 2^24, exactly representable in f32"
+        )]
+        let ramp: Vec<f32> = (0..ramp_frames).map(|i| 1.0 + i as f32).collect();
+        let (producer, consumer) = ring_buffer(ramp_frames);
+        assert_eq!(producer.push(&ramp), ramp_frames);
+        let mut resampler =
+            Resampler::new(consumer, 1, source_rate, device_rate, max_output_frames).unwrap();
+        resampler.scratch.fill(f32::NAN);
+        resampler
+    }
+
+    #[test]
+    fn an_injected_cursor_one_crossing_past_the_scratch_cap_never_reads_undrained_scratch() {
+        // Defence in depth: probed `fill` histories at this step rest the
+        // cursor no higher than about 0.96, so the start just under 1.0 is
+        // injected (with `next` loaded, as at any fractional rest). 200 *
+        // 163.84 == 32768.0 in f64 keeps the full 200-frame bound, and that
+        // start adds a 32769th crossing.
+        let mut resampler = poisoned_resampler_over_a_ramp(163.84, 1, 200, 40_000);
+        resampler.primed = true;
+        resampler.cursor.need_advance = true;
+        resampler.cursor.next_pending = false;
+        resampler.cursor.frac = f64::from_bits(1.0_f64.to_bits() - 1);
+        assert!(resampler.cursor.frac < 1.0);
+
+        let mut out = [0.0_f32; 200];
+        resampler.fill(&mut out);
+
+        assert!(
+            out.iter().all(|sample| sample.is_finite()),
+            "an output frame was interpolated from scratch the chunk's bulk \
+             drain never wrote"
+        );
+        assert!(resampler.cursor.frac < 1.0, "the cursor must end in [0, 1)");
+        assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn every_output_frame_is_interpolated_from_drained_scratch_across_ratios_and_callbacks() {
+        // Drift between prediction and rendering shows as NaN (a render past
+        // the drain) or an underrun (a drain past the render). 163.84/1 at
+        // bound 200 sits exactly on the scratch cap.
+        let cases: [(f64, u32, usize); 6] = [
+            (1.0, 3, 64),
+            (3.0, 2, 64),
+            (44_100.0, 48_000, 64),
+            (48_000.0, 44_100, 64),
+            (163.84, 1, 200),
+            (7.999_999_999_999_998, 1, 4096),
+        ];
+        let callbacks = [1_usize, 2, 3, 7, 64];
+        for (source_rate, device_rate, bound) in cases {
+            let mut resampler =
+                poisoned_resampler_over_a_ramp(source_rate, device_rate, bound, 200_000);
+            for round in 0..40 {
+                let frames = callbacks[round % callbacks.len()].min(bound);
+                let mut out = vec![0.0_f32; frames];
+                // A slot an earlier chunk drained would hide a stale read.
+                resampler.scratch.fill(f32::NAN);
+                resampler.fill(&mut out);
+                assert!(
+                    out.iter().all(|sample| sample.is_finite()),
+                    "ratio {source_rate}/{device_rate} callback {round}: read undrained scratch"
+                );
+                assert!(resampler.cursor.frac < 1.0);
+            }
+            assert_eq!(
+                resampler.underruns(),
+                0,
+                "ratio {source_rate}/{device_rate}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chunk_that_outruns_its_scratch_stalls_instead_of_reading_past_the_drain() {
+        // Defence in depth: a validly constructed `Resampler` never asks for
+        // more crossings than its scratch holds, so the scratch is shrunk to
+        // force it (eight outputs at step 3.0 want 21 crossings; it carries 4).
+        let mut resampler = poisoned_resampler_over_a_ramp(3.0, 1, 8, 64);
+        resampler.scratch.truncate(6);
+        let mut out = [0.0_f32; 8];
+        resampler.fill(&mut out);
+
+        assert!(out.iter().all(|sample| sample.is_finite()), "{out:?}");
+        assert!(resampler.cursor.is_stalled());
+        assert_eq!(resampler.underruns(), 0);
+        // Priming frame + 4 budgeted crossings, nothing more.
+        assert_eq!(resampler.consumer.available(), 64 - 5);
+    }
 
     #[test]
     fn zero_device_rate_is_rejected() {
@@ -979,9 +1120,9 @@ mod tests {
         assert_eq!(producer_a.available_space(), producer_b.available_space());
         assert_eq!(baseline.underruns(), with_empty.underruns());
         assert_eq!(baseline.primed, with_empty.primed);
-        assert_eq!(baseline.need_advance, with_empty.need_advance);
-        assert_eq!(baseline.next_pending, with_empty.next_pending);
-        assert_eq!(baseline.frac, with_empty.frac);
+        assert_eq!(baseline.cursor.need_advance, with_empty.cursor.need_advance);
+        assert_eq!(baseline.cursor.next_pending, with_empty.cursor.next_pending);
+        assert_eq!(baseline.cursor.frac, with_empty.cursor.frac);
         assert_eq!(baseline.prev, with_empty.prev);
         assert_eq!(baseline.next, with_empty.next);
 

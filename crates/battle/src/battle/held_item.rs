@@ -4,10 +4,15 @@
 //! effect upstream hangs off it lives in `ItemBattleEffects` and the damage,
 //! turn-order and experience consumers (`src/battle_util.c:3260-3340`). This
 //! engine ports only Oran Berry's end-turn heal ([`Battle::apply_held_item_residual`]),
-//! so a battle admits an item that has no effect to ignore, and Oran Berry.
+//! so a battle admits an item that has no effect to ignore, and Oran Berry. The
+//! Cleanse Tag is the one named exception to the hold-effect screen: its
+//! `HOLD_EFFECT_REPEL` is read only by the field's encounter-rate roll
+//! (`ApplyCleanseTagEncounterRateMod`, `src/wild_encounter.c:961-967`), and no
+//! battle code consumes it, so its holder fights and keeps the item.
 //!
 //! The screen keys on the extracted [`HoldEffect`], not on the item's bag
-//! behaviour. Anything with a nonzero effect except Oran Berry is refused,
+//! behaviour. Anything with a nonzero effect except Oran Berry and the Cleanse
+//! Tag is refused,
 //! which includes the other berries, the herbs and the type-boosting items
 //! trainers hold, and also the few effects that happen never to reach a
 //! battle: a refusal of those costs a trainer fight, a silent admission of an
@@ -31,9 +36,9 @@ use super::{Battle, BattleEvent};
 ///
 /// Returns [`BattleError::UnsupportedHeldItem`] for an item outside the item
 /// table, Enigma Berry, or any item with a nonzero hold effect other than
-/// Oran Berry.
+/// Oran Berry and the Cleanse Tag, which has no battle effect upstream.
 pub fn ensure_held_item_playable(item: ItemId) -> Result<(), BattleError> {
-    if item == ItemId::NONE || item == ItemId::ORAN_BERRY {
+    if item == ItemId::NONE || item == ItemId::ORAN_BERRY || item == ItemId::CLEANSE_TAG {
         return Ok(());
     }
     let effect_free = item != ItemId::ENIGMA_BERRY
@@ -147,8 +152,33 @@ mod tests {
     }
 
     #[test]
-    fn oran_berry_is_the_only_hold_effect_item_admitted() {
+    fn oran_berry_and_the_cleanse_tag_are_the_only_hold_effect_items_admitted() {
         assert_eq!(ensure_held_item_playable(ItemId::ORAN_BERRY), Ok(()));
+        let tag_effect = ItemTable::new()
+            .get(ItemId::CLEANSE_TAG)
+            .unwrap()
+            .hold_effect;
+        assert_ne!(
+            tag_effect,
+            HoldEffect::NONE,
+            "fixture sanity: a named exception"
+        );
+        assert_eq!(ensure_held_item_playable(ItemId::CLEANSE_TAG), Ok(()));
+    }
+
+    #[test]
+    fn a_cleanse_tag_holder_starts_a_battle_and_keeps_the_item() {
+        let mut rng = SequenceRng::new([0, 0]);
+        let battle = Battle::new(
+            Dex::new(),
+            mon(SpeciesId::MUDKIP, ItemId::CLEANSE_TAG),
+            mon(SpeciesId::TREECKO, ItemId::CLEANSE_TAG),
+            false,
+            &mut rng,
+        )
+        .expect("a Cleanse Tag has no battle effect to drop");
+        assert_eq!(battle.player().held_item(), ItemId::CLEANSE_TAG);
+        assert_eq!(battle.enemy().held_item(), ItemId::CLEANSE_TAG);
     }
 
     #[test]

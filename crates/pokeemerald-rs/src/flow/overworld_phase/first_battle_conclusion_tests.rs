@@ -754,3 +754,109 @@ fn a_failed_lab_load_leaves_the_rescue_unconcluded() {
         "Route 101 Birch hidden although the player never left Route 101"
     );
 }
+
+/// `LOCALID_ROUTE101_ZIGZAGOON`, the rescue Zigzagoon's local id in the generated Route 101
+/// events.
+const ZIGZAGOON_LOCAL_ID: u8 = 4;
+
+const ZIGZAGOON_HIDE_FLAG_NAME: &str = "FLAG_HIDE_ROUTE_101_ZIGZAGOON";
+
+const ZIGZAGOON_TILE: (i32, i32) = (6, 5);
+
+/// A Route 101 phase reading `source`, whose only object is the rescue Zigzagoon, admitted beside
+/// the player.
+fn phase_with_admitted_zigzagoon(source: crate::pack_source::PackSource) -> OverworldPhase {
+    let player = PlayerState::new((5, 5), 3, Direction::East);
+    let mut phase = route_101_trigger_phase_from_source(player, source);
+    let templates: &'static [assets::ObjectEvent] = Box::leak(Box::new([assets::ObjectEvent {
+        local_id: ZIGZAGOON_LOCAL_ID,
+        graphics_id: "OBJ_EVENT_GFX_ZIGZAGOON_1",
+        x: 6,
+        y: 5,
+        elevation: 3,
+        movement_type: assets::MovementType::FaceDown,
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: assets::TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: None,
+        flag: ZIGZAGOON_HIDE_FLAG_NAME,
+    }]));
+    phase.object_events = admitted_objects(templates, &phase.player, &phase.save1.event_data);
+    assert!(
+        phase
+            .object_events
+            .get(ZIGZAGOON_LOCAL_ID)
+            .unwrap()
+            .is_active(),
+        "setup: the Zigzagoon is admitted"
+    );
+    phase
+}
+
+/// The rollback re-arms the rescue, so the Zigzagoon it replays against must be back with its
+/// cleared hide flag: an admitted object and its hide flag never disagree after a conclusion.
+#[test]
+fn a_failed_lab_warp_leaves_the_zigzagoon_admitted_exactly_while_its_hide_flag_is_clear() {
+    let mut phase = phase_with_admitted_zigzagoon(unloadable_pack_source());
+
+    phase.conclude_first_battle();
+    assert_eq!(phase.map_id, ROUTE_101, "setup: the lab warp fails");
+    let hidden = phase
+        .save1
+        .event_data
+        .flag_get(FLAG_HIDE_ROUTE_101_ZIGZAGOON)
+        .unwrap();
+    assert!(!hidden, "the rollback restores the cleared hide flag");
+
+    let runtime = phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events);
+    let (x, y) = ZIGZAGOON_TILE;
+    let queried = engine::overworld::object_event::visible_object_event_at(
+        &runtime,
+        x,
+        y,
+        3,
+        &phase.save1.event_data,
+    )
+    .map(|o| o.local_id);
+    assert_eq!(
+        queried.is_some(),
+        !hidden,
+        "the Zigzagoon is query-visible exactly while its hide flag is clear"
+    );
+    assert_eq!(queried, Some(ZIGZAGOON_LOCAL_ID));
+    assert_eq!(
+        phase
+            .object_events
+            .get(ZIGZAGOON_LOCAL_ID)
+            .unwrap()
+            .is_active(),
+        !hidden,
+        "the Zigzagoon is active (drawn) exactly while its hide flag is clear"
+    );
+}
+
+/// The one path that leaves the hide flag set: no Route 101 Zigzagoon stays admitted behind it.
+#[test]
+fn a_landed_lab_warp_leaves_no_admitted_zigzagoon_behind_its_set_hide_flag() {
+    let lab = crate::overworld::test_support::BirchsLabPack::new();
+    let mut phase = phase_with_admitted_zigzagoon(lab.source());
+
+    phase.conclude_first_battle();
+    assert_eq!(phase.map_id, BIRCHS_LAB, "setup: the lab warp lands");
+    assert!(phase
+        .save1
+        .event_data
+        .flag_get(FLAG_HIDE_ROUTE_101_ZIGZAGOON)
+        .unwrap());
+    assert!(
+        !phase
+            .object_events
+            .entries()
+            .any(|entry| entry.is_active() && entry.template().flag == ZIGZAGOON_HIDE_FLAG_NAME),
+        "the removed Zigzagoon must not stay active (drawn or queryable)"
+    );
+}

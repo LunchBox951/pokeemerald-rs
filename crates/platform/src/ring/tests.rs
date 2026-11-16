@@ -578,3 +578,62 @@ fn a_stop_between_the_discard_snapshot_and_claim_drops_all_history_before_its_ma
     assert_eq!(consumer.available(), 0);
     assert_eq!(consumer.underruns(), 0, "the discard is not an underrun");
 }
+
+thread_local! {
+    /// Run inside the next [`Producer::push`], between the two steps that
+    /// publish its samples (`occupied`) and count them (`pushed`), as a
+    /// `stop` and a callback read racing the push would.
+    static BETWEEN_PUSH_PUBLISH_STEPS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn between_push_publish_steps() {
+    if let Some(hook) = BETWEEN_PUSH_PUBLISH_STEPS.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[test]
+fn a_stop_inside_a_push_discards_exactly_the_samples_its_mark_covers() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    let (producer, consumer) = ring_buffer(8);
+    let consumer = Rc::new(RefCell::new(consumer));
+    // Everything pushed, in push order: stale history, the push the stop
+    // races, and the stopped stream's prefill.
+    let history = [0.25_f32; 2];
+    let racing = [0.5_f32; 2];
+    let prefill = [0.75_f32; 2];
+    assert_eq!(producer.push(&history), 2);
+    consumer.borrow_mut().discard_queued_at_first_read();
+
+    let played = Rc::new(RefCell::new(Vec::new()));
+    let mark = Rc::new(Cell::new(None));
+    let (racer, reader) = (producer.clone(), Rc::clone(&consumer));
+    let (played_in_hook, mark_in_hook) = (Rc::clone(&played), Rc::clone(&mark));
+    BETWEEN_PUSH_PUBLISH_STEPS.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            // The stop lands inside the push, then the callback reads.
+            mark_in_hook.set(Some(racer.pushed()));
+            racer.keep_pushed_from_at_first_read(racer.pushed());
+            let mut consumer = reader.borrow_mut();
+            while let Some(sample) = consumer.try_pop() {
+                played_in_hook.borrow_mut().push(sample);
+            }
+        }));
+    });
+    assert_eq!(producer.push(&racing), 2);
+    assert_eq!(producer.push(&prefill), 2);
+    while let Some(sample) = consumer.borrow_mut().try_pop() {
+        played.borrow_mut().push(sample);
+    }
+
+    let mark = usize::try_from(mark.get().expect("the hook ran")).unwrap();
+    let pushed: Vec<f32> = [history, racing, prefill].concat();
+    assert_eq!(
+        *played.borrow(),
+        pushed[mark..],
+        "every sample before the stop mark is dropped, every one after it plays"
+    );
+}
