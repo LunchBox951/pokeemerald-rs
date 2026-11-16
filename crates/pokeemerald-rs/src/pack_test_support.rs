@@ -487,5 +487,8 @@ fn scratch_claim_drop_still_removes_its_own_file() {
         std::thread::current().id()
     ));
     drop(ScratchClaim::claim_with(path.clone(), b"claimed"));
-    assert!(std::fs::symlink_metadata(&path).is_err(), "drop left its own file behind");
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "drop left its own file behind"
+    );
 }
