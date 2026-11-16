@@ -44,8 +44,12 @@ const FLAG_SYS_USE_STRENGTH: u16 = SYSTEM_FLAGS + 0x29;
 const FLAG_SYS_CYCLING_ROAD: u16 = SYSTEM_FLAGS + 0x2B;
 const FLAG_SYS_SAFARI_MODE: u16 = SYSTEM_FLAGS + 0x2C;
 const FLAG_SYS_CRUISE_MODE: u16 = SYSTEM_FLAGS + 0x2D;
-const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
-const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
+/// Set by the White Flute (`ItemUseOutOfBattle_BlackWhiteFlute`, `src/item_use.c:877-890`) while
+/// its wild encounter rate increase is active.
+pub const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
+/// Set by the Black Flute (`src/item_use.c:877-890`) while its wild encounter rate decrease is
+/// active.
+pub const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
 const FLAG_SYS_CTRL_OBJ_DELETE: u16 = SYSTEM_FLAGS + 0x61;
 
 /// First ordinary variable id.

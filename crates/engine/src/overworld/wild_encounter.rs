@@ -7,7 +7,9 @@
 //! map header and slot 0's ability, and builds a battle participant from the
 //! returned [`WildEncounter`].
 //!
-//! This module does not apply bike, item, other ability, or repel modifiers, and it
+//! The rate roll applies the two flute flags and a Cleanse Tag held by slot 0
+//! ([`EncounterRateModifiers`]) before its clamp; none of them draws. This module
+//! does not apply bike, other item, other ability, or repel modifiers, and it
 //! does not select water, fishing, rock-smash, roamer, outbreak, or special-mode
 //! encounters.
 
@@ -138,10 +140,55 @@ pub fn encounter_odds_check(encounter_rate: u32, rng: &mut impl RandomSource) ->
     u32::from(rng.next_u16()) % MAX_ENCOUNTER_RATE < encounter_rate
 }
 
-/// Scales and clamps a table encounter rate, then draws once against it.
+/// The field inputs that scale an encounter rate between its table scaling and
+/// its clamp (`WildEncounterCheck`, `src/wild_encounter.c:502-528`). None of
+/// them draws from the RNG.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncounterRateModifiers {
+    /// `FLAG_SYS_ENC_UP_ITEM`: adds half the current rate.
+    pub encounter_up_flute: bool,
+    /// `FLAG_SYS_ENC_DOWN_ITEM`: halves the current rate unless the up flag is set.
+    pub encounter_down_flute: bool,
+    /// Whether party slot 0 holds a Cleanse Tag, with no HP or egg condition.
+    pub slot_zero_holds_cleanse_tag: bool,
+}
+
+impl EncounterRateModifiers {
+    /// Applies the flute flags, then the Cleanse Tag, to a rate already scaled
+    /// by 16. The up flag wins over the down flag (`ApplyFluteEncounterRateMod`,
+    /// `:946-952`); a Tag multiplies by 2 and divides by 3 with integer
+    /// truncation (`ApplyCleanseTagEncounterRateMod`, `:961-967`). The result is
+    /// not clamped.
+    #[must_use]
+    pub fn apply(self, scaled_rate: u32) -> u32 {
+        let mut rate = scaled_rate;
+        if self.encounter_up_flute {
+            rate += rate / 2;
+        } else if self.encounter_down_flute {
+            rate /= 2;
+        }
+        if self.slot_zero_holds_cleanse_tag {
+            rate = rate * 2 / 3;
+        }
+        rate
+    }
+}
+
+/// [`wild_encounter_check_with_rate_modifiers`] with no flute flag and no Cleanse Tag.
 pub fn wild_encounter_check(encounter_rate: u8, rng: &mut impl RandomSource) -> bool {
-    let scaled_rate = (u32::from(encounter_rate) * ENCOUNTER_RATE_SCALE).min(MAX_ENCOUNTER_RATE);
-    encounter_odds_check(scaled_rate, rng)
+    wild_encounter_check_with_rate_modifiers(encounter_rate, EncounterRateModifiers::default(), rng)
+}
+
+/// Scales a table encounter rate by 16, applies `modifiers`, clamps to
+/// [`MAX_ENCOUNTER_RATE`], then draws once against it (`WildEncounterCheck`,
+/// `src/wild_encounter.c:502-528`). The clamp follows the modifiers.
+pub fn wild_encounter_check_with_rate_modifiers(
+    encounter_rate: u8,
+    modifiers: EncounterRateModifiers,
+    rng: &mut impl RandomSource,
+) -> bool {
+    let scaled_rate = u32::from(encounter_rate) * ENCOUNTER_RATE_SCALE;
+    encounter_odds_check(modifiers.apply(scaled_rate).min(MAX_ENCOUNTER_RATE), rng)
 }
 
 /// Draws whether a check may continue after metatile behavior changes.
@@ -166,17 +213,37 @@ pub fn try_generate_wild_mon_land(
     }
 }
 
-/// Rolls an ordinary land encounter for one completed step.
-///
-/// `header` is the already-resolved entry for the current map. `None`, a
-/// non-land metatile, a missing land table, a rejected behavior change, or a
-/// failed rate draw returns `None` before consuming any later draw.
-/// `slot_zero_ability` is passed to [`choose_wild_mon_level`].
+/// [`standard_wild_encounter_with_rate_modifiers`] with no flute flag and no Cleanse Tag.
 pub fn standard_wild_encounter(
     header: Option<&WildEncounterHeader>,
     current_metatile_behavior: u8,
     previous_metatile_behavior: u8,
     slot_zero_ability: Option<AbilityId>,
+    rng: &mut impl RandomSource,
+) -> Option<WildEncounter> {
+    standard_wild_encounter_with_rate_modifiers(
+        header,
+        current_metatile_behavior,
+        previous_metatile_behavior,
+        slot_zero_ability,
+        EncounterRateModifiers::default(),
+        rng,
+    )
+}
+
+/// Rolls an ordinary land encounter for one completed step.
+///
+/// `header` is the already-resolved entry for the current map. `None`, a
+/// non-land metatile, a missing land table, a rejected behavior change, or a
+/// failed rate draw returns `None` before consuming any later draw.
+/// `slot_zero_ability` is passed to [`choose_wild_mon_level`] and `rate_modifiers`
+/// scale the rate draw ([`wild_encounter_check_with_rate_modifiers`]).
+pub fn standard_wild_encounter_with_rate_modifiers(
+    header: Option<&WildEncounterHeader>,
+    current_metatile_behavior: u8,
+    previous_metatile_behavior: u8,
+    slot_zero_ability: Option<AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
     rng: &mut impl RandomSource,
 ) -> Option<WildEncounter> {
     let header = header?;
@@ -189,7 +256,7 @@ pub fn standard_wild_encounter(
     {
         return None;
     }
-    if !wild_encounter_check(land.encounter_rate, rng) {
+    if !wild_encounter_check_with_rate_modifiers(land.encounter_rate, rate_modifiers, rng) {
         return None;
     }
     Some(try_generate_wild_mon_land(land, slot_zero_ability, rng))
@@ -235,11 +302,8 @@ impl WildEncounterState {
         self.prev_metatile_behavior
     }
 
-    /// Rolls for an encounter and records the completed step's behavior.
-    ///
-    /// Immune steps consume no RNG. A successful encounter restarts immunity;
-    /// failed eligible rolls leave the counter at its ceiling.
-    /// `slot_zero_ability` is passed to [`choose_wild_mon_level`].
+    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with no flute flag and
+    /// no Cleanse Tag.
     pub fn check_standard_wild_encounter(
         &mut self,
         current_metatile_behavior: u8,
@@ -247,15 +311,39 @@ impl WildEncounterState {
         slot_zero_ability: Option<AbilityId>,
         rng: &mut impl RandomSource,
     ) -> Option<WildEncounter> {
+        self.check_standard_wild_encounter_with_rate_modifiers(
+            current_metatile_behavior,
+            header,
+            slot_zero_ability,
+            EncounterRateModifiers::default(),
+            rng,
+        )
+    }
+
+    /// Rolls for an encounter and records the completed step's behavior.
+    ///
+    /// Immune steps consume no RNG. A successful encounter restarts immunity;
+    /// failed eligible rolls leave the counter at its ceiling.
+    /// `slot_zero_ability` is passed to [`choose_wild_mon_level`] and `rate_modifiers`
+    /// to [`wild_encounter_check_with_rate_modifiers`].
+    pub fn check_standard_wild_encounter_with_rate_modifiers(
+        &mut self,
+        current_metatile_behavior: u8,
+        header: Option<&WildEncounterHeader>,
+        slot_zero_ability: Option<AbilityId>,
+        rate_modifiers: EncounterRateModifiers,
+        rng: &mut impl RandomSource,
+    ) -> Option<WildEncounter> {
         let encounter = if self.immunity_steps < WILD_ENCOUNTER_IMMUNITY_STEPS {
             self.immunity_steps += 1;
             None
         } else {
-            standard_wild_encounter(
+            standard_wild_encounter_with_rate_modifiers(
                 header,
                 current_metatile_behavior,
                 self.prev_metatile_behavior,
                 slot_zero_ability,
+                rate_modifiers,
                 rng,
             )
         };

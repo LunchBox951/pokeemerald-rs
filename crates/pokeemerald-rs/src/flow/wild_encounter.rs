@@ -41,7 +41,9 @@
 use battle::{Battle, BattleError, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
-use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
+use engine::overworld::wild_encounter::{
+    EncounterRateModifiers, WildEncounter, WildEncounterState,
+};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
@@ -82,11 +84,18 @@ pub(super) fn roll_for_step(
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
     slot_zero_ability: Option<assets::AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter(metatile_behavior, encounter_header, slot_zero_ability, rng)
+    state.check_standard_wild_encounter_with_rate_modifiers(
+        metatile_behavior,
+        encounter_header,
+        slot_zero_ability,
+        rate_modifiers,
+        rng,
+    )
 }
 
 /// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
@@ -281,6 +290,8 @@ mod battle_write_back_tests;
 mod completed_turn_tests;
 #[cfg(test)]
 mod cute_charm_gender_tests;
+#[cfg(test)]
+mod encounter_rate_modifier_tests;
 #[cfg(test)]
 mod encounter_roll_tests;
 #[cfg(test)]
