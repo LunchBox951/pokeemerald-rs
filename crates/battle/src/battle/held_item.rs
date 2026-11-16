@@ -11,7 +11,8 @@
 //! battle code consumes it, so its holder fights and keeps the item.
 //!
 //! The screen keys on the extracted [`HoldEffect`], not on the item's bag
-//! behaviour. Anything with a nonzero effect except Oran Berry is refused,
+//! behaviour. Anything with a nonzero effect except Oran Berry and the Cleanse
+//! Tag is refused,
 //! which includes the other berries, the herbs and the type-boosting items
 //! trainers hold, and also the few effects that happen never to reach a
 //! battle: a refusal of those costs a trainer fight, a silent admission of an
