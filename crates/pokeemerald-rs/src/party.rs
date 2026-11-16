@@ -60,7 +60,11 @@
 //! `battle` does carry a copy: [`from_save_pokemon`] reads it into
 //! [`battle::BattlePokemon::original_trainer_name`] only for the obedience
 //! gate's `IsOtherTrainer` comparison. It is never re-encoded from the
-//! battler (an all-zero name reads back as unrecorded). [`to_save_pokemon`], which has no record to retain
+//! battler (an all-zero name reads back as unrecorded). The ribbon word's top
+//! bit, `modernFatefulEncounter`, is also read into the battler
+//! ([`battle::BattlePokemon::is_modern_fateful_encounter`]) for the obedience
+//! gate's Mew and Deoxys check; [`merge_into_save_pokemon`] keeps it with the
+//! rest of the word, and [`to_save_pokemon`] writes it from the battler. [`to_save_pokemon`], which has no record to retain
 //! them from, writes upstream's own `CreateMon` default for whichever of
 //! those it can derive from its own two arguments: nickname
 //! (the species' display name), language (`GAME_LANGUAGE`), met level
@@ -130,6 +134,10 @@ const MISC_IV_WORD: Range<usize> = 4..8;
 const IV_FIELD_WIDTH: usize = 5;
 const IV_FIELD_MASK: u32 = 0x1F;
 const IS_EGG_BIT: u32 = 1 << 30;
+/// `PokemonSubstruct3`'s ribbon word (`pokeemerald/include/pokemon.h:150-175`),
+/// whose top bit is `modernFatefulEncounter`.
+const MISC_RIBBON_WORD: Range<usize> = 8..12;
+const MODERN_FATEFUL_ENCOUNTER_BIT: u32 = 1 << 31;
 
 /// `PokemonSubstruct3`'s origins word (`pokeemerald/include/pokemon.h:131-149`):
 /// met level in bits 0-6, met game in bits 7-10, poké ball in bits 11-14, OT
@@ -388,6 +396,11 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut misc = [0u8; SUBSTRUCTURE_LEN];
     let iv_word = pack_ivs(mon.ivs()) | (u32::from(mon.ability_slot()) << ABILITY_SLOT_SHIFT);
     misc[MISC_IV_WORD].copy_from_slice(&iv_word.to_le_bytes());
+    // The ribbons stay clear; the bit that shares their word is the battler's
+    // own (`from_save_pokemon` reads it back).
+    if mon.is_modern_fateful_encounter() {
+        misc[MISC_RIBBON_WORD].copy_from_slice(&MODERN_FATEFUL_ENCOUNTER_BIT.to_le_bytes());
+    }
     // Met level is the level the record was first built at, not the live
     // level: `CreateBoxMon` stamps it once and later saves copy it unchanged
     // (`pokeemerald/src/pokemon.c:2259`). Met location and OT gender stay
@@ -661,6 +674,9 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     )?
     .with_original_trainer_id(saved.box_data.ot_id())
     .with_ability_slot(ability_slot)
+    .with_modern_fateful_encounter(
+        read_u32(&substructures.misc, MISC_RIBBON_WORD) & MODERN_FATEFUL_ENCOUNTER_BIT != 0,
+    )
     .with_pp_bonuses(dex, pp_bonuses)?
     .with_cached_stats(saved_stats, u32::from(saved.hp))
     .with_evs(evs)
