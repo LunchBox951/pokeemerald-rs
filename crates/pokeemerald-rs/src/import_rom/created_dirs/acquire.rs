@@ -539,8 +539,11 @@ pub(super) enum ReopenedLevel {
 /// against the claim's identity, shedding a pin and retrying while
 /// descriptors run out; `before_reopen` is its test seam. The claim's own
 /// descriptor stays open throughout, so the level's inode cannot be freed and
-/// taken by a directory put at `name` since. Where `name` still resolves to
-/// it, that descriptor is the reopen, and no second one is needed.
+/// taken by a directory put at `name` since. The level is still reopened by
+/// name, so the descriptor descended through is opened after `before_reopen`;
+/// only when no descriptor is left to open and no pin to shed does the
+/// claim's descriptor stand in, and then only while `name` still resolves to
+/// it.
 #[cfg(unix)]
 pub(super) fn reopen_created_level(
     created: &mut [CreatedDirectory],
@@ -556,22 +559,22 @@ pub(super) fn reopen_created_level(
     let descend = loop {
         let attempt = match before_reopen() {
             Some(err) => Err(err),
-            None => match held.take() {
-                Some(level) if still_named(parent, name, identity) => Ok(level),
-                not_named => {
-                    held = not_named;
-                    dest::open_created_directory_at(parent, name)
-                }
-            }
-            .map(std::rc::Rc::new),
+            None => dest::open_created_directory_at(parent, name),
         };
         match attempt {
-            Err(source)
-                if is_out_of_descriptors_io(&source)
-                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            Err(source) if is_out_of_descriptors_io(&source) => {
+                if sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) {
+                    continue;
+                }
+                break match held.take() {
+                    Some(level) if still_named(parent, name, identity) => Ok(level),
+                    _ => Err(source),
+                };
+            }
             result => break result,
         }
-    };
+    }
+    .map(std::rc::Rc::new);
     let descend = match descend {
         Ok(fd) => fd,
         Err(source) => return ReopenedLevel::Unpinned(source),
