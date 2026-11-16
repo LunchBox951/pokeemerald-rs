@@ -219,7 +219,8 @@
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
 //! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
-//! (its end-turn stage in `Battle::residual_effects`), Run
+//! (its end-turn stage in `Battle::residual_effects`), Color Change (the
+//! on-damage seam, `battle::execute::color_change`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),

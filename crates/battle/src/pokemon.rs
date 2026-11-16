@@ -386,7 +386,14 @@ pub struct BattlePokemon {
     /// so it survives fainting and write-back; which items a battle accepts is
     /// decided by [`crate::battle::held_item`].
     held_item: ItemId,
+    /// Species typing, fixed at construction and the only typing a save or
+    /// switch-in reload sees (`gBaseStats[species].type1`/`type2`).
     types: [Type; 2],
+    /// A battle-only typing laid over [`Self::types`] while the mon is on the
+    /// field: Color Change's `SET_BATTLER_TYPE` writes `gBattleMons[].type1`
+    /// and `.type2`, never the party record (`src/battle_util.c:2749`-`:2766`).
+    /// Cleared with the rest of the battle scratch.
+    temporary_types: Option<[Type; 2]>,
     base_stats: BaseStats,
     experience: u32,
     stats: Stats,
@@ -440,6 +447,7 @@ impl PartialEq for BattlePokemon {
             traded_recipient,
             held_item,
             types,
+            temporary_types,
             base_stats,
             experience,
             stats,
@@ -466,6 +474,7 @@ impl PartialEq for BattlePokemon {
             && *traded_recipient == other.traded_recipient
             && *held_item == other.held_item
             && *types == other.types
+            && *temporary_types == other.temporary_types
             && *base_stats == other.base_stats
             && *experience == other.experience
             && *stats == other.stats
@@ -579,6 +588,7 @@ impl BattlePokemon {
             traded_recipient: false,
             held_item: ItemId::NONE,
             types: base.types,
+            temporary_types: None,
             base_stats: *base,
             experience,
             stats,
@@ -805,10 +815,29 @@ impl BattlePokemon {
         self.held_item = ItemId::NONE;
     }
 
-    /// Species types captured at construction.
+    /// The typing this Pokémon fights with: a battle-only change such as
+    /// Color Change's if it holds one, otherwise [`BattlePokemon::species_types`].
+    /// Every damage, STAB and type-immunity read goes through here
+    /// (`IS_BATTLER_OF_TYPE` reads `gBattleMons[].type1`/`.type2`).
     #[must_use]
     pub const fn types(&self) -> [Type; 2] {
+        match self.temporary_types {
+            Some(types) => types,
+            None => self.types,
+        }
+    }
+
+    /// Species types captured at construction: what a save holds and what
+    /// every switch-in reloads, whatever the battle has changed since.
+    #[must_use]
+    pub const fn species_types(&self) -> [Type; 2] {
         self.types
+    }
+
+    /// `SET_BATTLER_TYPE`: both of this battler's type slots become
+    /// `new_type` until it leaves the field (`src/battle_util.c:2757`).
+    pub(crate) const fn set_temporary_type(&mut self, new_type: Type) {
+        self.temporary_types = Some([new_type, new_type]);
     }
 
     /// Computed battle stats.
@@ -1008,9 +1037,19 @@ impl BattlePokemon {
     /// volatiles, not `gBattleMons[].ability` (`battle_main.c:3269`-`:3289`),
     /// and the corpse's contact abilities and replacement scoring still read it.
     pub(crate) fn clear_fainted_scratch(&mut self) {
+        self.reset_temporary_types();
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
         self.toxic_turns = self.stored_toxic_counter();
+    }
+
+    /// Restores the species typing: `FaintClearSetData` rewrites both type
+    /// slots from the species table (`src/battle_main.c:3350`-`:3351`),
+    /// `SwitchInClearSetData` does on entry (`:3414`-`:3420`) and
+    /// `Cmd_switchindataupdate` on a switch-in
+    /// (`src/battle_script_commands.c:4630`-`:4639`).
+    pub(crate) const fn reset_temporary_types(&mut self) {
+        self.temporary_types = None;
     }
 
     /// `AbilityBattleEffects`' Trace copy: this battler's ability becomes
