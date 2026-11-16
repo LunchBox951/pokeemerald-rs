@@ -139,6 +139,35 @@ fn run(f: &Fixture) -> Located<Vec<u8>> {
     })
 }
 
+type Permute = fn(&mut Vec<&str>);
+
+const TABLE_HEADER: &str = "const u8 *const gBattleStringsTable";
+
+/// Reorders the one-row-per-line initializer that follows `header`, keeping every row intact.
+fn permute_table_rows(message: &str, header: &str, permute: Permute) -> String {
+    let start = message.find(header).unwrap();
+    let body = message[start..].find("{\n").unwrap() + start + 2;
+    let end = message[body..].find("};\n").unwrap() + body;
+    let mut rows: Vec<&str> = message[body..end].lines().collect();
+    assert!(rows.len() > 2, "{header}: too few rows to permute");
+    let before = rows.clone();
+    permute(&mut rows);
+    assert_ne!(rows, before, "{header}: permutation left the rows in place");
+    let mut sorted_before = before;
+    sorted_before.sort_unstable();
+    let mut sorted_after = rows.clone();
+    sorted_after.sort_unstable();
+    assert_eq!(sorted_after, sorted_before, "{header}: rows were lost");
+    let mut out = String::with_capacity(message.len());
+    out.push_str(&message[..body]);
+    for row in rows {
+        out.push_str(row);
+        out.push('\n');
+    }
+    out.push_str(&message[end..]);
+    out
+}
+
 fn detail(result: Located<Vec<u8>>) -> String {
     match result {
         Err((_, fault)) => fault.detail,
@@ -176,7 +205,30 @@ fn builds_the_full_inventory_with_representative_tokens() {
 
 #[test]
 fn rebuilding_is_deterministic_regardless_of_row_order() {
-    assert_eq!(run(&fixture()).unwrap(), run(&fixture()).unwrap());
+    let reversed = fixture();
+    let baseline = run(&reversed).unwrap();
+
+    let permutations: [(&str, Permute); 3] = [
+        ("forward", |rows| rows.reverse()),
+        ("rotated", |rows| {
+            let third = rows.len() / 3;
+            rows.rotate_left(third);
+        }),
+        ("interleaved", |rows| {
+            let odd: Vec<&str> = rows.iter().skip(1).step_by(2).copied().collect();
+            let even: Vec<&str> = rows.iter().step_by(2).copied().collect();
+            *rows = odd.into_iter().chain(even).collect();
+        }),
+    ];
+    for (name, permute) in permutations {
+        let mut permuted = fixture();
+        permuted.message = permute_table_rows(&permuted.message, TABLE_HEADER, permute);
+        assert_ne!(
+            permuted.message, reversed.message,
+            "{name}: source order must differ"
+        );
+        assert_eq!(run(&permuted).unwrap(), baseline, "{name}");
+    }
 }
 
 #[test]
