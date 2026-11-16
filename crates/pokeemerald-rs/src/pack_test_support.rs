@@ -456,3 +456,36 @@ fn claim_scratch_exclusive_leaves_a_foreign_single_link_occupant_intact() {
         "the claim must fail naming the occupied path, got {message:?}"
     );
 }
+
+#[test]
+fn scratch_claim_drop_leaves_a_replacement_under_its_name_intact() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-claim-replaced-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let moved = path.with_extension("moved");
+    let claim = ScratchClaim::claim_with(path.clone(), b"claimed");
+    std::fs::rename(&path, &moved).unwrap();
+    write_scratch_exclusive(&path, b"replacement must survive");
+    drop(claim);
+    let after = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&moved);
+    assert_eq!(
+        after.ok().as_deref(),
+        Some(&b"replacement must survive"[..]),
+        "ScratchClaim's drop unlinked a replacement it never owned"
+    );
+}
+
+#[test]
+fn scratch_claim_drop_still_removes_its_own_file() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-claim-own-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    drop(ScratchClaim::claim_with(path.clone(), b"claimed"));
+    assert!(std::fs::symlink_metadata(&path).is_err(), "drop left its own file behind");
+}
