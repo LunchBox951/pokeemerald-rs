@@ -472,3 +472,80 @@ fn the_lock_handoff_settles_the_carried_trainer_not_its_entered_map_namesake() {
     assert_eq!(carried.state().previous_position(), (50, 8));
     assert_eq!(namesake.state().previous_position(), (60, 2));
 }
+
+/// Production detection of a carried sight trainer records the map it was
+/// carried out of, so the approach it starts walks that trainer and not the
+/// entered map's same-local-id namesake.
+#[test]
+fn a_detected_carried_trainer_approaches_and_not_the_entered_maps_namesake() {
+    const DEPARTED: assets::MapId = assets::MapId("MAP_ROUTE104");
+    let andrew_template = *assets::MapEventsTable::new()
+        .resolve(ROUTE_103)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|event| event.local_id == andrew_local_id())
+        .unwrap();
+    let carried_andrew = assets::ObjectEvent {
+        movement_type: engine::overworld::trainer_facing_movement_type(Direction::South),
+        ..andrew_template
+    };
+    let namesake_template = assets::ObjectEvent {
+        x: 60,
+        y: 3,
+        trainer_type: assets::TrainerType::None,
+        script: None,
+        ..carried_andrew
+    };
+    let departed: &'static [assets::ObjectEvent] = Box::leak(Box::new([carried_andrew]));
+    let entered: &'static [assets::ObjectEvent] = Box::leak(Box::new([namesake_template]));
+
+    // Outside the cone while the departed visit admits him.
+    let mut phase = phase_in_andrews_cone();
+    phase.player = PlayerState::new((50, 15), 3, Direction::North);
+    phase.object_events = ObjectEventCollection::from_templates(departed);
+    phase.step(ButtonState::new());
+    assert!(phase.sight_approach.is_none(), "setup: not yet in the cone");
+    phase.object_events =
+        phase
+            .object_events
+            .carry_across_connection(DEPARTED, ROUTE_103, entered, (0, 0));
+    let namesake = *phase.object_events.find(None, andrew_local_id()).unwrap();
+
+    // Into his cone, two tiles south: production detection starts the approach.
+    phase.player = PlayerState::new((50, 10), 3, Direction::North);
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase
+            .sight_approach
+            .as_ref()
+            .and_then(super::super::sight_trainer_approach::SightApproach::carried_from),
+        Some(DEPARTED),
+        "detection recorded the map the trainer was carried out of"
+    );
+    for _ in 0..300 {
+        if phase
+            .object_events
+            .find(Some(DEPARTED), andrew_local_id())
+            .unwrap()
+            .state()
+            .position()
+            == ANDREW_STOPPED_TILE
+        {
+            break;
+        }
+        phase.advance_sight_trainer_approach_frame(ButtonState::new());
+    }
+    assert_eq!(
+        phase
+            .object_events
+            .find(Some(DEPARTED), andrew_local_id())
+            .unwrap()
+            .state()
+            .position(),
+        ANDREW_STOPPED_TILE,
+        "the carried trainer walked up to the player"
+    );
+    let namesake_now = phase.object_events.find(None, andrew_local_id()).unwrap();
+    assert_eq!(namesake_now.state().position(), namesake.state().position());
+}
