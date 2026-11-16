@@ -239,7 +239,7 @@
 //! and the secondary Speed drop) —
 //! the effect of any held item but Oran Berry's end-turn heal (a mon carries
 //! one, and [`ensure_held_item_playable`] refuses every other item that has
-//! an effect), every primary status but [`status1::Status1::Paralysed`],
+//! an effect, except the Cleanse Tag, which has none in battle), every primary status but [`status1::Status1::Paralysed`],
 //! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
 //! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and

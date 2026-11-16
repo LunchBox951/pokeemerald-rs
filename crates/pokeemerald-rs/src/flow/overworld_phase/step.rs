@@ -497,6 +497,7 @@ impl OverworldPhase {
         let rolled_landing = wild_encounter::roll_eligible_landing(tile_center, door_warp)
             .filter(|_| wild_table_fightable && wild_lead_admissible);
         let slot_zero_ability = rolled_landing.and_then(|_| self.slot_zero_wild_level_ability());
+        let rate_modifiers = self.encounter_rate_modifiers();
         let encounter = wild_encounter::roll_for_step(
             &mut self.wild,
             &mut self.rng,
@@ -504,6 +505,7 @@ impl OverworldPhase {
             &runtime,
             rolled_landing,
             slot_zero_ability,
+            rate_modifiers,
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp

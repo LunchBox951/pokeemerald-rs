@@ -777,6 +777,22 @@ fn slot_zero_non_egg(
     Some((species, slot_zero.box_data.personality(), ability))
 }
 
+/// The item party slot 0 holds, whatever its HP, egg flag or place in the battle
+/// (`GetMonData(&gPlayerParty[0], MON_DATA_HELD_ITEM)`, `src/wild_encounter.c:965`).
+/// [`assets::items::ItemId::NONE`] for an empty party.
+///
+/// The bytes are read without the checksum, as upstream's accessor keeps reading
+/// the decrypted fields after it flags a mismatch (`src/pokemon.c:3742-3747`,
+/// `:3833-3835`).
+pub(crate) fn slot_zero_held_item(party: &[Pokemon]) -> assets::items::ItemId {
+    party
+        .first()
+        .map_or(assets::items::ItemId::NONE, |slot_zero| {
+            let substructures = slot_zero.box_data.substructures_unchecked();
+            assets::items::ItemId(read_u16(&substructures.growth, GROWTH_HELD_ITEM))
+        })
+}
+
 /// Species and personality of party slot 0 when it is a non-egg holder of
 /// `ability`; see [`slot_zero_non_egg`] for which slot-0 records count.
 fn slot_zero_ability_holder(
