@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 
 use assets::items::ItemId;
-use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
+use assets::{AbilityId, Effectiveness, MoveId, SpeciesId, Type};
 
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
@@ -659,6 +659,23 @@ pub enum BattleEvent {
         by_player: bool,
         /// The contact move that triggered Cute Charm.
         move_id: MoveId,
+    },
+    /// The holder's [`AbilityId::COLOR_CHANGE`] changed both of its types to
+    /// the type of the damaging move that just hit it and left it standing
+    /// (`BattleScript_ColorChangeActivates`, `data/battle_scripts_1.s:4179`-
+    /// `:4182`; `battle_util.c:2749`-`:2766`).
+    ///
+    /// It follows the [`BattleEvent::Hit`] that caused it, so a multi-hit move
+    /// emits it between the strikes it affects, and it is absent when the
+    /// holder already had that type. No `Random()` call is made.
+    TypeChanged {
+        /// Whether the player used the damaging move; the holder is the
+        /// other side.
+        by_player: bool,
+        /// The damaging move whose type the holder took.
+        move_id: MoveId,
+        /// The holder's new type in both slots.
+        new_type: Type,
     },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
     /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
