@@ -335,7 +335,7 @@ fn a_lost_sight_battle_keeps_the_start_count() {
 }
 
 #[test]
-fn a_sight_handoff_without_an_approach_counts_nothing() {
+fn a_confirm_press_with_no_approach_starts_and_counts_nothing() {
     let mut phase = synthetic_phase(PlayerState::new((10, 6), 3, Direction::North), None);
     assert!(phase.sight_approach.is_none());
     phase.step(pressed(Buttons::A));

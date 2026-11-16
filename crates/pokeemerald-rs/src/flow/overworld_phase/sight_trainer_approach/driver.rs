@@ -396,3 +396,34 @@ impl OverworldPhase {
         ));
     }
 }
+
+#[cfg(test)]
+mod handoff_boundary_tests {
+    use super::*;
+    use crate::flow::overworld_phase::test_support::synthetic_phase;
+    use engine::overworld::{Direction, PlayerState};
+    use engine::save::GameStat;
+
+    /// A handoff with no approach is refused before it starts or counts a battle.
+    #[test]
+    fn a_handoff_with_no_approach_is_refused_and_counts_nothing() {
+        let mut phase = synthetic_phase(PlayerState::new((10, 6), 3, Direction::North), None);
+        assert!(phase.sight_approach.is_none());
+
+        assert!(matches!(
+            phase.start_sight_trainer_battle(),
+            SightTrainerOutcome::Refused
+        ));
+
+        let stats = &phase.save1.game_stats;
+        assert_eq!(
+            (
+                stats.get(GameStat::TotalBattles),
+                stats.get(GameStat::WildBattles),
+                stats.get(GameStat::TrainerBattles)
+            ),
+            (0, 0, 0)
+        );
+        assert!(phase.active_battle.is_none());
+    }
+}
