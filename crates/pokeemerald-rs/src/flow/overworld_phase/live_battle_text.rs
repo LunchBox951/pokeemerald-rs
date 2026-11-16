@@ -36,21 +36,23 @@ pub(in crate::flow) enum BattleText {
 
 /// The name a saved member is printed under: its nickname, or its species'
 /// name when the record carries none.
-fn nickname_or_species(
+///
+/// # Errors
+///
+/// Returns [`NarrationError::Text`] for a nickname that does not decode, and
+/// [`NarrationError::UnknownName`] for a species with no name.
+pub(super) fn nickname_or_species(
     record: &Pokemon,
     species: assets::SpeciesId,
 ) -> Result<String, NarrationError> {
-    decode_to_string(&record.box_data.nickname())
-        .ok()
-        .filter(|name| !name.is_empty())
-        .map_or_else(
-            || {
-                AssetNames
-                    .species_name(species)
-                    .ok_or(NarrationError::UnknownName("species"))
-            },
-            Ok,
-        )
+    let nickname = decode_to_string(&record.box_data.nickname())?;
+    if nickname.is_empty() {
+        AssetNames
+            .species_name(species)
+            .ok_or(NarrationError::UnknownName("species"))
+    } else {
+        Ok(nickname)
+    }
 }
 
 impl OverworldPhase {

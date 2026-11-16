@@ -8,14 +8,14 @@
 //! hold the battle until that turn's last message is answered and its hold has
 //! elapsed.
 
-use super::live_battle_text::BattleText;
+use super::live_battle_text::{nickname_or_species, BattleText};
 use super::live_first_battle_tests::{
     composed_pixels, tapping, treecko, FAST_TEXT_SPEED, FRAME_LIMIT, IDLE_FRAMES, NEEDS_PACK,
     WAIT_TIME_LONG,
 };
 use super::test_support::*;
 use super::{ActiveBattle, OverworldPhase};
-use crate::battle_narration::TemplateId;
+use crate::battle_narration::{NarrationError, TemplateId};
 use crate::pack_source::PackSource;
 use crate::party;
 use assets::{MapId, MoveId, SpeciesId};
@@ -452,5 +452,31 @@ fn a_lost_wild_battle_whites_out_only_after_its_last_prompt_and_hold() {
     assert_eq!(
         lead.moves()[0].pp,
         Dex::new().move_data(MoveId::POUND).unwrap().pp
+    );
+}
+
+/// A saved nickname that does not decode is reported, never replaced by the
+/// species name; only a record with no nickname falls back to it.
+#[test]
+fn an_undecodable_nickname_is_an_error_and_only_an_empty_one_takes_the_species_name() {
+    const UNASSIGNED_CHARACTER: u8 = 0x60;
+    let terminated = [0xFFu8; engine::save::BOX_NICKNAME_LEN];
+    let mut unnamed = Pokemon::default();
+    unnamed.box_data.set_nickname(terminated);
+    assert_eq!(
+        nickname_or_species(&unnamed, SpeciesId::TREECKO).as_deref(),
+        Ok("TREECKO")
+    );
+
+    let mut malformed = terminated;
+    malformed[0] = UNASSIGNED_CHARACTER;
+    let mut record = Pokemon::default();
+    record.box_data.set_nickname(malformed);
+    assert!(
+        matches!(
+            nickname_or_species(&record, SpeciesId::TREECKO),
+            Err(NarrationError::Text(_))
+        ),
+        "a malformed nickname must not be narrated as the species"
     );
 }
