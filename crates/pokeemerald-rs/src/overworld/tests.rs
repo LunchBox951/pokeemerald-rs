@@ -144,30 +144,6 @@ fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
     );
 }
 
-struct TempPackGuard(std::path::PathBuf);
-
-impl Drop for TempPackGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Claims `path` through `claim` and writes `bytes` through the handle it
-/// returns, yielding the guard that removes `path` on drop. The guard is
-/// built only once `claim` has succeeded, so a failed claim never removes an
-/// entry the guard does not own; a write panic after it still cleans up.
-fn claim_pack_with(
-    path: &std::path::Path,
-    bytes: &[u8],
-    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
-) -> TempPackGuard {
-    use std::io::Write as _;
-    let mut file = claim(path);
-    let guard = TempPackGuard(path.to_path_buf());
-    file.write_all(bytes).unwrap();
-    guard
-}
-
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
@@ -179,24 +155,14 @@ fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
     with_palette_at(&path, color_count, check);
 }
 
+/// Claims `path` through a [`crate::pack_test_support::ScratchClaim`], which
+/// removes it on drop only while it still names the claimed file, and runs
+/// `check` against a pack palette of `color_count` colours. The guard is built
+/// only once the claim succeeded, so a failed claim never removes an entry the
+/// guard does not own; a panic after it still cleans up.
 fn with_palette_at(
     path: &std::path::Path,
     color_count: u16,
-    check: impl FnOnce(assets::PaletteRef<'_>),
-) {
-    with_palette_claimed(
-        path,
-        color_count,
-        crate::pack_test_support::claim_scratch_exclusive,
-        check,
-    );
-}
-
-/// [`with_palette_at`], claiming `path` through `claim`.
-fn with_palette_claimed(
-    path: &std::path::Path,
-    color_count: u16,
-    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
     check: impl FnOnce(assets::PaletteRef<'_>),
 ) {
     let payload: Vec<u8> = (0..color_count)
@@ -208,7 +174,7 @@ fn with_palette_claimed(
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let _guard = claim_pack_with(path, &bytes, claim);
+    let _guard = crate::pack_test_support::ScratchClaim::claim_with(path.to_path_buf(), bytes);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -224,17 +190,12 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
 fn a_failed_claim_leaves_the_unowned_entry_in_place() {
     let path = regression_pack_path("failed-claim-unowned");
     let _ = std::fs::remove_file(&path);
+    // Another owner holds `path`, so the claim loses.
+    std::fs::write(&path, b"not ours").unwrap();
     let outcome = std::panic::catch_unwind(|| {
-        with_palette_claimed(
-            &path,
-            3,
-            |path| {
-                // Another owner holds `path`, so this claim loses.
-                std::fs::write(path, b"not ours").unwrap();
-                panic!("the claim lost the path");
-            },
-            |_| unreachable!("a lost claim never loads the pack"),
-        );
+        with_palette_at(&path, 3, |_| {
+            unreachable!("a lost claim never loads the pack")
+        });
     });
     let survivor = std::fs::read(&path);
     let _ = std::fs::remove_file(&path);
@@ -261,6 +222,26 @@ fn with_palette_removes_its_pack_when_the_check_panics() {
     }));
     assert!(result.is_err());
     assert!(!path.exists());
+}
+
+#[test]
+fn with_palette_leaves_a_replacement_under_its_pack_name() {
+    let path = regression_pack_path("replaced-pack");
+    let moved = regression_pack_path("replaced-pack-moved");
+    let _ = std::fs::remove_file(&moved);
+    with_palette_at(&path, 3, |_| {
+        // The claimed pack is moved away and another file takes its name.
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+    });
+    let survivor = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&moved);
+    assert_eq!(
+        survivor.ok().as_deref(),
+        Some(&b"replacement"[..]),
+        "cleanup must leave a file that replaced the claimed pack"
+    );
 }
 
 fn sentinel_colors() -> [rendering::Bgr555; rendering::Palette::LEN] {
