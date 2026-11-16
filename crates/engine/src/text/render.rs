@@ -76,9 +76,9 @@ mod min_letter_spacing_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 
-/// The `autoScrollDelay` value at which `TextPrinterWaitAutoMode` returns true
-/// (`pokeemerald/src/text.c:854`).
-const AUTO_SCROLL_RELEASE_DELAY: u8 = 49;
+/// Waiting calls an auto-scroll prompt lasts, the releasing call included
+/// (`TextPrinterWaitAutoMode`, `pokeemerald/src/text.c:850-863`).
+const AUTO_SCROLL_WAIT_CALLS: u8 = 50;
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
 
@@ -410,8 +410,7 @@ pub struct Printer<S> {
     ab_speed_up_latched: bool,
     /// `gTextFlags.autoScroll`: prompt waits release themselves.
     wait_mode: WaitMode,
-    /// `autoScrollDelay`: the waiting calls an auto-scroll wait has counted.
-    auto_scroll_delay: u8,
+    auto_scroll_calls_left: u8,
     initial_colors: TextColors,
     colors: TextColors,
     background: BackgroundPaint,
@@ -445,7 +444,7 @@ impl<S: GlyphSource> Printer<S> {
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
             wait_mode: WaitMode::Manual,
-            auto_scroll_delay: 0,
+            auto_scroll_calls_left: AUTO_SCROLL_WAIT_CALLS,
             initial_colors: TextColors::MESSAGE_BOX,
             colors: TextColors::MESSAGE_BOX,
             background: BackgroundPaint::Window,
@@ -526,17 +525,11 @@ impl<S: GlyphSource> Printer<S> {
     /// Selects auto-scroll mode (`gTextFlags.autoScroll`).
     ///
     /// A clear prompt, a scroll prompt and `PAUSE_UNTIL_PRESS` then release on
-    /// their fiftieth waiting call whatever A or B do: `TextPrinterWaitAutoMode`
-    /// returns false while `autoScrollDelay` counts 0 to 48 and true when it
-    /// reads 49 (`pokeemerald/src/text.c:850-863`), and the tick that arms the
-    /// wait resets the delay (`:772-785`, `:1018-1022`, `:1102-1109`) without
-    /// counting as a waiting call. The release then behaves as a manual
-    /// confirmation does. Auto mode draws no prompt arrow
-    /// (`text.c:792`, `:868-871`); [`Self::is_auto_scroll`] tells a
-    /// consumer that draws one to suppress it.
+    /// the fiftieth tick after the one that reports the wait, whatever A or B
+    /// do. Upstream draws no prompt arrow in this mode (`text.c:792`,
+    /// `:868-871`); a consumer that draws one checks [`Self::is_auto_scroll`].
     ///
-    /// Select the mode before the first tick, as a recorded battle's player
-    /// sets the flag before printing; the mode survives [`Self::restart`].
+    /// Select the mode before the first tick; it survives [`Self::restart`].
     #[must_use]
     pub const fn with_auto_scroll(mut self) -> Self {
         self.wait_mode = WaitMode::AutoScroll;
@@ -648,7 +641,7 @@ impl<S: GlyphSource> Printer<S> {
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
-        self.auto_scroll_delay = 0;
+        self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
         self.active_font = Some(self.glyphs.font());
         self.clear_height = clear_span_height(self.glyphs.font());
         self.min_letter_spacing = 0;
@@ -717,15 +710,12 @@ impl<S: GlyphSource> Printer<S> {
     /// One waiting call of `TextPrinterWaitWithDownArrow` or `TextPrinterWait`
     /// (`text.c:850-899`): whether the wait is over.
     fn wait_released(&mut self, input: PrinterInput) -> bool {
-        if self.wait_mode == WaitMode::Manual {
-            return input.confirm_pressed();
-        }
-        // `TextPrinterWaitAutoMode` (`text.c:850-863`).
-        if self.auto_scroll_delay == AUTO_SCROLL_RELEASE_DELAY {
-            true
-        } else {
-            self.auto_scroll_delay += 1;
-            false
+        match self.wait_mode {
+            WaitMode::Manual => input.confirm_pressed(),
+            WaitMode::AutoScroll => {
+                self.auto_scroll_calls_left = self.auto_scroll_calls_left.saturating_sub(1);
+                self.auto_scroll_calls_left == 0
+            }
         }
     }
 
@@ -765,12 +755,12 @@ impl<S: GlyphSource> Printer<S> {
                     continue;
                 }
                 Token::PromptScroll => {
-                    self.auto_scroll_delay = 0;
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingScroll;
                     return TickEvent::AwaitingScroll;
                 }
                 Token::PromptClear => {
-                    self.auto_scroll_delay = 0;
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingClear;
                     return TickEvent::AwaitingClear;
                 }
@@ -780,10 +770,9 @@ impl<S: GlyphSource> Printer<S> {
                     self.state = PrinterState::Pause { frames_remaining };
                     return self.tick_pause(frames_remaining);
                 }
-                // `TextPrinterWait` (`text.c:884-899`); the control resets
-                // the auto-scroll delay on entry (`:1018-1022`).
+                // `TextPrinterWait` (`text.c:884-899`).
                 Token::ExtCtrl { sub, .. } if sub == ext_ctrl::PAUSE_UNTIL_PRESS => {
-                    self.auto_scroll_delay = 0;
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingPress;
                     return TickEvent::AwaitingPress;
                 }
