@@ -424,3 +424,51 @@ fn an_approach_walks_the_carried_trainer_and_not_the_entered_maps_namesake() {
     assert_eq!(namesake_now.state().position(), namesake.state().position());
     assert_eq!(namesake_now.state().facing(), namesake.state().facing());
 }
+
+/// The lock handoff's exclamation mark settles the carried trainer's previous
+/// tile, not the entered map's same-local-id namesake's.
+#[test]
+fn the_lock_handoff_settles_the_carried_trainer_not_its_entered_map_namesake() {
+    const DEPARTED: assets::MapId = assets::MapId("MAP_ROUTE104");
+    const LOCAL_ID: u8 = 1;
+    let object = |x: i16, y: i16| assets::ObjectEvent {
+        local_id: LOCAL_ID,
+        graphics_id: "OBJ_EVENT_GFX_HIKER",
+        x,
+        y,
+        elevation: 3,
+        movement_type: engine::overworld::trainer_facing_movement_type(Direction::South),
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: assets::TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: None,
+        flag: "0",
+    };
+    let departed: &'static [assets::ObjectEvent] = Box::leak(Box::new([object(50, 8)]));
+    let entered: &'static [assets::ObjectEvent] = Box::leak(Box::new([object(60, 3)]));
+    let mut phase = route_103_phase(PlayerState::new((50, 11), 3, Direction::North));
+    phase.object_events = ObjectEventCollection::from_templates(departed);
+    phase.step(ButtonState::new());
+    phase.object_events =
+        phase
+            .object_events
+            .carry_across_connection(DEPARTED, ROUTE_103, entered, (0, 0));
+    for (carried_from, unsettled_previous) in [(Some(DEPARTED), (50, 7)), (None, (60, 2))] {
+        let live = phase
+            .object_events
+            .find_mut(carried_from, LOCAL_ID)
+            .unwrap();
+        live.state_mut().walk(Direction::North);
+        live.state_mut().walk(Direction::South);
+        assert_eq!(live.state().previous_position(), unsettled_previous);
+    }
+    seed_approach_for(&mut phase, LOCAL_ID, Some(DEPARTED), 2);
+    for _ in 0..=LOCK_HANDOFF_AT_REST {
+        phase.advance_sight_trainer_approach_frame(ButtonState::new());
+    }
+    let carried = phase.object_events.find(Some(DEPARTED), LOCAL_ID).unwrap();
+    let namesake = phase.object_events.find(None, LOCAL_ID).unwrap();
+    assert_eq!(carried.state().previous_position(), (50, 8));
+    assert_eq!(namesake.state().previous_position(), (60, 2));
+}

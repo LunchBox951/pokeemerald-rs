@@ -144,7 +144,7 @@ impl OverworldPhase {
                 // until the handoff constants' frames have passed.
                 if let (Some(approach), Some(live)) = (
                     &mut self.sight_approach,
-                    self.object_events.get_mut(local_id),
+                    self.object_events.find_mut(carried_from, local_id),
                 ) {
                     approach.advance_lock_handoff(player_was_moving);
                     if matches!(approach.stage, ApproachStage::ExclamationIcon { .. }) {
