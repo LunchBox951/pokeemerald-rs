@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::overworld::object_event::ObjectEventCollection;
+use crate::overworld::object_event_harness::{admitted, template, Rig};
+use assets::MovementType;
 
 #[test]
 fn a_visible_object_event_blocks_the_step_and_leaves_the_player_facing_it() {
@@ -315,22 +317,23 @@ fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
     assert_eq!(player.facing(), Direction::North);
 }
 
-fn moved_east_runtime() -> MapRuntime<'static> {
-    // Authored at (2, 3); walked east to the live tile (3, 3).
+/// Authored at (2, 3), stepping east to the live tile (3, 3); `settled` ends the step, as its
+/// sixteenth frame does, so the tile it left stops being held.
+fn moved_east_runtime(settled: bool) -> MapRuntime<'static> {
     let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
-    let mut collection = ObjectEventCollection::from_templates(objects);
-    collection
-        .get_mut(1)
-        .unwrap()
-        .state_mut()
-        .walk(Direction::East);
+    let mut collection = admitted(objects, (2, 3));
+    let state = collection.get_mut(1).unwrap().state_mut();
+    state.walk(Direction::East);
+    if settled {
+        state.settle_previous_position();
+    }
     let collection: &'static ObjectEventCollection = Box::leak(Box::new(collection));
     runtime_with_objects(objects).with_object_events(collection)
 }
 
 #[test]
 fn a_moved_object_event_no_longer_blocks_its_authored_tile() {
-    let runtime = moved_east_runtime();
+    let runtime = moved_east_runtime(true);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
     assert_eq!(
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
@@ -343,7 +346,7 @@ fn a_moved_object_event_no_longer_blocks_its_authored_tile() {
 
 #[test]
 fn a_moved_object_event_blocks_its_live_tile() {
-    let runtime = moved_east_runtime();
+    let runtime = moved_east_runtime(true);
     let mut player = PlayerState::new((3, 2), 3, Direction::South);
     assert_eq!(
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
@@ -354,4 +357,80 @@ fn a_moved_object_event_blocks_its_live_tile() {
     );
     assert_eq!(player.position(), (3, 2));
     assert!(!player.in_transit());
+}
+
+#[test]
+fn an_object_event_mid_step_blocks_both_the_tile_it_left_and_the_tile_it_entered() {
+    let runtime = moved_east_runtime(false);
+    for tile in [(2, 2), (3, 2)] {
+        let mut player = PlayerState::new(tile, 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ObjectEvent,
+            },
+            "stepping south from {tile:?}"
+        );
+        assert!(!player.in_transit());
+    }
+}
+
+const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM";
+
+/// Steps a player at (2, 2) south toward the `Rig`'s lone entry at (2, 3).
+fn step_south_into(rig: &Rig) -> StepOutcome {
+    let templates: &'static [ObjectEvent] =
+        std::slice::from_ref(rig.collection.get(1).unwrap().template());
+    let runtime = runtime_with_objects(templates).with_object_events(&rig.collection);
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+    player.step(
+        Some(Direction::South),
+        &runtime,
+        &no_connections,
+        &rig.event_data,
+    )
+}
+
+#[test]
+fn an_object_the_scheduler_never_admitted_does_not_block_after_its_flag_clears() {
+    let mut rig = Rig::new(vec![template(1, 2, 3, MovementType::FaceUp, HIDE)], (2, 2));
+    let flag = assets::object_event_flags::resolve(HIDE).unwrap();
+    rig.event_data.flag_set(flag).unwrap();
+    rig.tick(1);
+    rig.event_data.flag_clear(flag).unwrap();
+    rig.tick(10);
+    assert!(!rig.collection.get(1).unwrap().is_active());
+    assert_eq!(
+        step_south_into(&rig),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (2, 3),
+        },
+        "no spawned object stands there while the camera has not moved"
+    );
+}
+
+#[test]
+fn an_admitted_object_keeps_blocking_after_its_flag_is_set() {
+    let mut rig = Rig::new(vec![template(1, 2, 3, MovementType::FaceUp, HIDE)], (2, 2));
+    rig.tick(1);
+    assert!(matches!(
+        step_south_into(&rig),
+        StepOutcome::Blocked {
+            collision: super::super::collision::Collision::ObjectEvent,
+            ..
+        }
+    ));
+    rig.event_data
+        .flag_set(assets::object_event_flags::resolve(HIDE).unwrap())
+        .unwrap();
+    rig.tick(10);
+    assert!(matches!(
+        step_south_into(&rig),
+        StepOutcome::Blocked {
+            collision: super::super::collision::Collision::ObjectEvent,
+            ..
+        }
+    ));
 }

@@ -265,6 +265,41 @@ impl OverworldPhase {
         (owners, unplayable_member_remains)
     }
 
+    /// The ability party slot 0 brings to wild level selection: the saved slot even when it
+    /// is fainted behind another battle lead, or the live lead of an unsaved party.
+    pub(super) fn slot_zero_wild_level_ability(&self) -> Option<assets::AbilityId> {
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        if stored == 0 {
+            return self.lead_battler().map(battle::BattlePokemon::ability);
+        }
+        crate::party::slot_zero_wild_level_ability(&Dex::new(), &self.save1.player_party[..stored])
+    }
+
+    /// The flute flags and the Cleanse Tag that scale this step's encounter rate
+    /// (`ApplyFluteEncounterRateMod`, `ApplyCleanseTagEncounterRateMod`,
+    /// `src/wild_encounter.c:507-508`). The Tag is the item the saved party slot 0
+    /// holds even when that slot is fainted, an egg, or not the battle lead, or the
+    /// live lead of an unsaved party.
+    pub(super) fn encounter_rate_modifiers(
+        &self,
+    ) -> engine::overworld::wild_encounter::EncounterRateModifiers {
+        let flag_set = |flag| matches!(self.save1.event_data.flag_get(flag), Ok(true));
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        let slot_zero_item = if stored == 0 {
+            self.lead_battler().map_or(
+                assets::items::ItemId::NONE,
+                battle::BattlePokemon::held_item,
+            )
+        } else {
+            crate::party::slot_zero_held_item(&self.save1.player_party[..stored])
+        };
+        engine::overworld::wild_encounter::EncounterRateModifiers {
+            encounter_up_flute: flag_set(engine::event_data::FLAG_SYS_ENC_UP_ITEM),
+            encounter_down_flute: flag_set(engine::event_data::FLAG_SYS_ENC_DOWN_ITEM),
+            slot_zero_holds_cleanse_tag: slot_zero_item == assets::items::ItemId::CLEANSE_TAG,
+        }
+    }
+
     /// Starts a wild battle from a fired encounter, taking the party lead into
     /// it. Nothing starts, and the lead stays in place, when the encounter is
     /// `None`, when no lead exists (a bare [`OverworldPhase::new`] phase), or
@@ -333,6 +368,7 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 match self.open_wild_battle_text(
                     &battle,
                     TurnPolicy::Run,

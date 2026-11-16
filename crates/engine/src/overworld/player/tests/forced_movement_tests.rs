@@ -598,7 +598,7 @@ fn blocked_placed_slide_dispatches_after_the_bump() {
 /// no handler would ever release it, so the player would be trapped.
 #[test]
 fn blocked_placed_deferred_tile_is_not_trapped_by_the_bump() {
-    let runtime = forced_mover_runtime(MB_SECRET_BASE_JUMP_MAT, Direction::West, true);
+    let runtime = forced_mover_runtime(MB_WATERFALL, Direction::West, true);
     let mut player = placed(false, Direction::West);
     assert!(matches!(
         player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),

@@ -305,3 +305,69 @@ fn a_rejected_battle_text_setup_leaves_the_rescue_armed() {
         "the rescue must stay armed after a setup rejection"
     );
 }
+
+/// A Route 101 phase on the rescue tile whose battle text has no pack to load.
+fn phase_with_missing_pack() -> OverworldPhase {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch-verify-pack").into_boxed_path());
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx, ty), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Test(missing),
+    );
+    phase.battle_text = BattleText::Played;
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    phase
+}
+
+/// The scripted opponent's personality and IVs, and the RNG state after the start.
+fn started_opponent(phase: &OverworldPhase) -> (u32, Ivs, u32) {
+    let Some(ActiveBattle::First(battle)) = &phase.active_battle else {
+        panic!("the first battle should be active");
+    };
+    let enemy = battle.enemy();
+    (enemy.personality(), enemy.ivs(), phase.rng.state())
+}
+
+/// A rejected battle-text setup draws nothing: the repaired retry starts the
+/// same opponent from the same stream as a clean start (`begin_first_battle`).
+#[test]
+fn a_rejected_battle_text_setup_leaves_the_rng_untouched() {
+    let mut phase = phase_with_missing_pack();
+    let rng_before = phase.rng.state();
+
+    phase.begin_first_battle();
+
+    assert!(
+        !phase.is_first_battle_active(),
+        "setup failed, so no battle"
+    );
+    assert!(phase.lead.is_some(), "the lead was restored");
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue stays armed"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        rng_before,
+        "a rejected setup must not consume RNG"
+    );
+
+    phase.battle_text = BattleText::Skipped;
+    phase.begin_first_battle();
+    let retried = started_opponent(&phase);
+
+    let mut clean = phase_with_missing_pack();
+    clean.battle_text = BattleText::Skipped;
+    clean.begin_first_battle();
+    assert_eq!(
+        retried,
+        started_opponent(&clean),
+        "the repaired retry matches a clean start"
+    );
+}

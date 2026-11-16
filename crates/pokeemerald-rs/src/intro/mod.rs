@@ -20,13 +20,13 @@ mod speech;
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
 use assets::KeypadIconSheet;
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
 use crate::new_game::{NewGameIdentity, NewGameOptions};
-use crate::textbox::{self, FrameAssets, WindowOp};
+use crate::textbox::{self, ArrowWindow, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 pub use speech::NUM_PAGES;
 
@@ -186,10 +186,15 @@ const fn normalized_text_speed(raw: u8) -> u8 {
 pub struct IntroScene {
     frame: FrameAssets,
     icons: KeypadIconSheet,
+    down_arrow: DownArrowSheet,
+    prompt_arrow: PromptArrow,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
     ops: Vec<WindowOp>,
+    /// The colors the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     finished: bool,
     /// The boot-recovered options (issue #1125) this NEW GAME will hand to
     /// [`crate::new_game::init_save_blocks_with_options`] once the intro
@@ -214,6 +219,7 @@ impl IntroScene {
         sources: OwnedGlyphSources,
         frame: FrameAssets,
         icons: KeypadIconSheet,
+        down_arrow: DownArrowSheet,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
@@ -230,10 +236,13 @@ impl IntroScene {
         Self {
             frame,
             icons,
+            down_arrow,
+            prompt_arrow: PromptArrow::default(),
             pages,
             page_index: 0,
             printer,
             ops: Vec::new(),
+            window_fill: None,
             finished: false,
             new_game_options,
             new_game_identity: NewGameIdentity::DEFAULT,
@@ -299,12 +308,13 @@ impl IntroScene {
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
         let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
+        let down_arrow = DownArrowSheet::new(&pack.text_printer_down_arrow()?);
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sources, frame, icons, speed, options))
+        Ok(Self::new(sources, frame, icons, down_arrow, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -350,14 +360,33 @@ impl IntroScene {
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
             self.ops.clear();
+            self.window_fill = self.printer.cleared_window_colors();
+        }
+        // The speech's genuine `\p` and `\l` prompts wait on the same arrow a
+        // field message does (`PromptArrow::tick`); a page whose `{P}` only
+        // stands in for a wait upstream draws none (`speech::pages`' table).
+        if speech::page_draws_down_arrow(self.page_index) {
+            self.prompt_arrow.tick(
+                &event,
+                ArrowWindow {
+                    cursor: self.printer.cursor(),
+                    colors: self.printer.colors(),
+                    content_height: textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
+                },
+                &self.down_arrow,
+                &mut self.ops,
+            );
         }
         match event {
             TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
-            TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
-            }
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
+            TickEvent::Scrolling { dy } => textbox::scroll_window_ops(
+                &mut self.ops,
+                dy,
+                self.printer.colors(),
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            ),
             TickEvent::Finished => self.advance_page(),
             TickEvent::Idle
             | TickEvent::Cleared
@@ -400,6 +429,7 @@ impl IntroScene {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
             self.ops.clear();
+            self.window_fill = None;
             self.printer.restart(self.pages[self.page_index].clone());
         } else {
             self.finished = true;
@@ -412,6 +442,8 @@ impl IntroScene {
         let mut fb = Framebuffer::new();
         fb.fill(Rgb888::BLACK);
 
+        // A transparent (index 0) fill or scroll fill shows what lies under the box.
+        let scene = textbox::needs_scene(&self.ops, self.window_fill).then(|| fb.clone());
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
         textbox::compose_window_ops(
@@ -419,9 +451,9 @@ impl IntroScene {
             &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
-            &self.frame.glyph_colors(),
             &self.icons,
             &self.frame.palette,
+            textbox::WindowBackdrop::message_box(self.window_fill, scene.as_ref()),
         );
 
         fb
@@ -497,6 +529,7 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         sources,
         frame,
         textbox::test_keypad_icons(&[]),
+        textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );

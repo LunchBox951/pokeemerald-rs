@@ -1,6 +1,7 @@
 //! Why a scene could not be built or drawn.
 
 use assets::{AssetError, PackError};
+use engine::text::TextError;
 use rendering::RenderError;
 
 /// Why a scene could not be built or drawn.
@@ -8,8 +9,10 @@ use rendering::RenderError;
 pub enum NamingSceneError {
     /// The pack lacks, or holds a malformed, naming-screen entry.
     Pack(PackError),
-    /// A font sheet did not decode.
+    /// A font sheet or the keypad-icon sheet did not decode.
     Font(AssetError),
+    /// The controls string did not decode.
+    Text(TextError),
     /// Pixel or tile data did not fit the renderer.
     Render(RenderError),
     /// A character has no Gen 3 encoding, so the printer cannot draw it.
@@ -21,6 +24,7 @@ impl std::fmt::Display for NamingSceneError {
         match self {
             Self::Pack(err) => write!(f, "naming screen: {err}"),
             Self::Font(err) => write!(f, "naming screen: {err}"),
+            Self::Text(err) => write!(f, "naming screen: {err:?}"),
             Self::Render(err) => write!(f, "naming screen: {err:?}"),
             Self::UnencodableCharacter(c) => {
                 write!(f, "naming screen: {c:?} has no Gen 3 encoding")
@@ -40,6 +44,12 @@ impl From<PackError> for NamingSceneError {
 impl From<AssetError> for NamingSceneError {
     fn from(err: AssetError) -> Self {
         Self::Font(err)
+    }
+}
+
+impl From<TextError> for NamingSceneError {
+    fn from(err: TextError) -> Self {
+        Self::Text(err)
     }
 }
 

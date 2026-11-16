@@ -92,6 +92,7 @@ impl OverworldPhase {
                                 face_player: npc_scripts::script_faces_player(object.script)
                                     .then_some(FacePlayer {
                                         local_id: object.local_id,
+                                        carried_from: object.carried_from,
                                         direction: object.player_facing.opposite(),
                                     }),
                             })
@@ -113,6 +114,9 @@ impl OverworldPhase {
 pub(super) struct FacePlayer {
     /// The selected object's id within its map (`gSelectedObjectEvent`).
     local_id: u8,
+    /// The map a connection crossing carried the object out of, if it did; with `local_id` the
+    /// live entry's identity (`ObjectEventCollection::find`).
+    carried_from: Option<assets::MapId>,
     /// The direction the object ends up facing: opposite the player's facing.
     direction: Direction,
 }
@@ -135,10 +139,11 @@ impl OverworldPhase {
     pub(super) fn start_script_dialog(&mut self, dialog: ScriptDialog) -> Vec<engine::text::Token> {
         if let Some(FacePlayer {
             local_id,
+            carried_from,
             direction,
         }) = dialog.face_player
         {
-            if let Some(entry) = self.object_events.get_mut(local_id) {
+            if let Some(entry) = self.object_events.find_mut(carried_from, local_id) {
                 entry.state_mut().face(direction);
             }
         }

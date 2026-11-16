@@ -10,8 +10,8 @@
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
 use crate::ability::{
-    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
-    suppresses_critical_hits, thick_fat_special_attack,
+    burn_halves_damage, pinch_boosts_power, plus_minus_special_attack, suppresses_critical_hits,
+    thick_fat_special_attack,
 };
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
@@ -23,7 +23,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
     is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
 };
 
@@ -123,15 +123,16 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
     // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT`, `EFFECT_SPEED_DOWN_HIT`,
-    // `EFFECT_ACCURACY_DOWN_HIT` and `EFFECT_THAW_HIT` resolve through this
-    // same damage script while keeping their own trampoline dispatch in
-    // `spend_effect_chance_draw`.
+    // `EFFECT_ACCURACY_DOWN_HIT`, `EFFECT_THAW_HIT` and the two flinch wrappers
+    // resolve through this same damage script while keeping their own
+    // trampoline dispatch in `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && !is_confuse_hit_effect(move_data.effect)
         && !is_speed_down_hit_effect(move_data.effect)
         && !is_accuracy_down_hit_effect(move_data.effect)
         && !is_thaw_hit_effect(move_data.effect)
+        && !is_flinch_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
@@ -291,19 +292,16 @@ fn damage_input(
     is_critical: bool,
 ) -> DamageInput {
     let move_category = MoveCategory::for_type(move_type);
-    let (raw_attack, attack_stage) = attacker.attacking_stat(move_category);
-    let ability_adjusted_attack = thick_fat_special_attack(
-        defender.ability(),
-        move_type,
-        huge_power_attack(attacker.ability(), move_category, raw_attack),
-    );
+    let (raw_attack, attack_stage) = attacker.damage_attacking_stat(move_category);
+    let ability_adjusted_attack =
+        thick_fat_special_attack(defender.ability(), move_type, raw_attack);
     let ability_adjusted_attack = plus_minus_special_attack(
         attacker.ability(),
         defender.ability(),
         move_category,
         ability_adjusted_attack,
     );
-    let (defense, defense_stage) = defender.defending_stat(move_category);
+    let (defense, defense_stage) = defender.damage_defending_stat(move_category);
     let (attack_stage, defense_stage) =
         crit_adjusted_stages(attack_stage, defense_stage, is_critical);
 
