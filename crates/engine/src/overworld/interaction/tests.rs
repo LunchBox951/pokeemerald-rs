@@ -486,13 +486,13 @@ fn select_stacked_after_admissions(
     })
 }
 
-fn selected_stacked(local_id: u8, script: &'static str) -> Option<InteractionTarget> {
-    Some(InteractionTarget::Object(ObjectInteraction {
+fn selected_stacked(local_id: u8, script: &'static str) -> InteractionTarget {
+    InteractionTarget::Object(ObjectInteraction {
         local_id,
         carried_from: None,
         script,
         player_facing: Direction::North,
-    }))
+    })
 }
 
 /// `GetObjectEventIdByPosition` returns the lowest `gObjectEvents` slot on the tile
@@ -505,7 +505,7 @@ fn a_hidden_earlier_stacked_template_admitted_later_loses_the_press_to_the_lower
     let later = object(2, FRONT, ELEVATION, "LaterScript");
     assert_eq!(
         select_stacked_after_admissions(vec![earlier, later], &[STANDING, (3, 3)], 1),
-        selected_stacked(2, "LaterScript"),
+        Some(selected_stacked(2, "LaterScript")),
         "the later template holds slot 1 and the earlier one slot 2"
     );
 }
@@ -528,7 +528,7 @@ fn a_later_stacked_template_admitted_into_a_reused_slot_wins_the_press() {
             &[STANDING, (3, 3), (4, 3)],
             2,
         ),
-        selected_stacked(3, "LaterScript"),
+        Some(selected_stacked(3, "LaterScript")),
         "the later template reused slot 1, below the earlier template's slot 2"
     );
 }
