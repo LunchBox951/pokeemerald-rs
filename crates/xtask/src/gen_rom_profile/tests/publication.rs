@@ -1,6 +1,9 @@
-//! Regression tests for where the generated profile is written: no output
-//! path may reach the ROM, and a publish leaves nothing but the output beside
-//! it unless its own cleanup fails, which it then reports.
+//! Regression tests for where the generated profile is written. An output
+//! that names the ROM is refused wherever the destination guard can tell, even
+//! after a missing parent directory is created; a hard link the guard cannot
+//! see off Unix costs only the alias, because publishing renames over it. A
+//! publish leaves nothing but the output beside it unless its own cleanup
+//! fails, which it then reports.
 
 use std::path::Path;
 
@@ -175,8 +178,9 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
 }
 
 /// A publish whose cleanup also fails reports the write's own error and names
-/// the temporary it left behind; `temp_sibling` never reuses a name, so no
-/// later run would clean it up.
+/// the temporary it left behind; `temp_sibling` draws a fresh name from the
+/// process id, the clock and a random salt, so no later run revisits the path
+/// to clean it up.
 ///
 /// The injected write swaps the temporary file for a non-empty directory, so
 /// `remove_file` fails for every user, root included, which a permission-based
