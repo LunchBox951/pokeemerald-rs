@@ -227,13 +227,15 @@ fn create_directories_with_hooks(
     .map(|creation| creation.created)
 }
 
-/// Records a level just claimed at `name` in `parent_fd` with `identity`:
+/// Records a level just claimed at `name` in `parent_fd` as `claim`:
 /// reopens it, and answers with the descriptor the next level descends
-/// through.
+/// through. The claim's descriptor on the level is held until the reopen has
+/// been checked, so the level's inode cannot be freed and handed to a
+/// replacement in between.
 #[cfg(unix)]
 #[expect(
     clippy::too_many_arguments,
-    reason = "the walk state, the pin window, the claimed identity and the two test seams are all needed to reopen one level"
+    reason = "the walk state, the pin window, the claim and the two test seams are all needed to reopen one level"
 )]
 fn create_missing_level(
     created: &mut Vec<CreatedDirectory>,
@@ -242,11 +244,12 @@ fn create_missing_level(
     parent_fd: std::rc::Rc<std::os::fd::OwnedFd>,
     path: PathBuf,
     name: std::ffi::OsString,
-    identity: rustix::fs::Stat,
+    claim: Claimed,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
     // `fstat` takes no descriptor, so it cannot fail for want of one.
+    let identity = claim.identity;
     let parent_identity = rustix::fs::fstat(&*parent_fd)?;
     // `identity` was taken before the reopen so a failed reopen cannot
     // un-record a level that was made.
@@ -259,7 +262,7 @@ fn create_missing_level(
         pin_from,
         &parent_fd,
         &name,
-        &identity,
+        claim,
         before_reopen,
         sync_reopen,
     ) {
@@ -459,7 +462,7 @@ fn create_directories_pinned_after_mkdir(
                 )
             };
         match claimed {
-            Ok(identity) => {
+            Ok(claim) => {
                 match create_missing_level(
                     &mut created,
                     &mut pin_from,
@@ -467,7 +470,7 @@ fn create_directories_pinned_after_mkdir(
                     parent_fd,
                     level,
                     name,
-                    identity,
+                    claim,
                     before_reopen,
                     sync_reopen,
                 ) {
@@ -576,7 +579,7 @@ mod sync;
 mod take_back;
 
 #[cfg(unix)]
-use acquire::{claim_level, reopen_created_level, ClaimError, ReopenedLevel};
+use acquire::{claim_level, reopen_created_level, ClaimError, Claimed, ReopenedLevel};
 
 #[cfg(unix)]
 use sync::sync_and_shed_outermost_pinned_level;

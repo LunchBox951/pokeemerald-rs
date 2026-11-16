@@ -13,9 +13,11 @@
 //! that could have been swapped since. A
 //! level whose name already resolves to a directory is never claimed at all:
 //! the walk goes through it, as it needs no write access to the parent. The
-//! reopen that follows compares the name against that identity, so a swap
-//! after the claim is refused too. Elsewhere a level is made at its final
-//! name and a same-user replacement in the gap cannot be told apart. So it
+//! reopen that follows compares the name against that identity while the
+//! claim still holds the directory open, so its inode cannot be freed and
+//! reused by a replacement, and a swap after the claim is refused too.
+//! Elsewhere a level is made at its final name and a same-user replacement in
+//! the gap cannot be told apart. So it
 //! is where the kernel or filesystem answers the no-replace rename with
 //! `EINVAL`, `ENOTSUP` or `ENOSYS` (an NFS mount, say): the private
 //! directory is removed after checking its identity, and the level is made
@@ -104,10 +106,24 @@ impl ClaimError {
     }
 }
 
+/// A level [`claim_level`] made: the identity of the directory, and a
+/// descriptor on it, which the caller keeps until the reopen has compared the
+/// name against `identity`. While it is open the directory's inode cannot be
+/// freed, so a directory put at the name after this one was removed cannot
+/// take the same device and inode and pass that comparison.
+#[cfg(unix)]
+pub(super) struct Claimed {
+    /// The device, inode, type and owner of the directory this run made.
+    pub(super) identity: rustix::fs::Stat,
+    /// The directory itself, held open; `None` only where a level made at
+    /// its final name could not be opened as the one stat'ed there.
+    pub(super) held: Option<std::os::fd::OwnedFd>,
+}
+
 /// Makes the level `name` in `parent` and answers with the identity of the
-/// directory this call made, owned by `owner`. `after_mkdir` runs once the
-/// directory is made and before anything looks at it, where a test replaces
-/// it.
+/// directory this call made, owned by `owner`, and a descriptor holding it.
+/// `after_mkdir` runs once the directory is made and before anything looks at
+/// it, where a test replaces it.
 ///
 /// Where the platform can rename without replacing, the directory is made
 /// under a private name no other account can predict, opened by that name,
@@ -133,7 +149,7 @@ pub(super) fn claim_level(
     owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> Result<rustix::fs::Stat, ClaimError> {
+) -> Result<Claimed, ClaimError> {
     let private = fresh_private_name(created, pin_from, sync_reopen)?;
     // Chosen now, while a descriptor can still be shed for it: cleanup runs
     // with the verified directory held open and must not fail for lack of one.
@@ -155,7 +171,10 @@ pub(super) fn claim_level(
             ))
         })?;
     match rename_no_replace(parent, &private, parent, name) {
-        Ok(()) => Ok(identity),
+        Ok(()) => Ok(Claimed {
+            identity,
+            held: Some(held),
+        }),
         Err(errno) => {
             report_left_standing(
                 &discard_private(parent, &private, &aside, &held, &mut || {}),
@@ -412,7 +431,7 @@ pub(super) fn claim_level(
     owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> Result<rustix::fs::Stat, ClaimError> {
+) -> Result<Claimed, ClaimError> {
     claim_at_final_name(
         created,
         pin_from,
@@ -426,7 +445,9 @@ pub(super) fn claim_level(
 
 /// Makes the level `name` in `parent` at that name and stats it there. A
 /// same-user writer of `parent` can replace it in the gap, which is the
-/// weaker guarantee this gives up the private-name claim for.
+/// weaker guarantee this gives up the private-name claim for. The level is
+/// then opened by name and held if it is still the one stat'ed; if not, or
+/// if the open fails, it is not held, and the reopen decides.
 #[cfg(unix)]
 fn claim_at_final_name(
     created: &mut [CreatedDirectory],
@@ -436,7 +457,7 @@ fn claim_at_final_name(
     owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> Result<rustix::fs::Stat, ClaimError> {
+) -> Result<Claimed, ClaimError> {
     mkdir_level(created, pin_from, parent, name, sync_reopen).map_err(ClaimError::from_errno)?;
     after_mkdir();
     let found = loop {
@@ -447,7 +468,19 @@ fn claim_at_final_name(
             result => break result.map_err(|errno| ClaimError::Failed(errno.into()))?,
         }
     };
-    vouch_owned_by(found, owner).map_err(ClaimError::Failed)
+    let identity = vouch_owned_by(found, owner).map_err(ClaimError::Failed)?;
+    let held = loop {
+        match dest::open_created_directory_at(parent, name) {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            result => break result.ok(),
+        }
+    }
+    .filter(|held| {
+        rustix::fs::fstat(held).is_ok_and(|found| same_directory_identity(&found, &identity))
+    });
+    Ok(Claimed { identity, held })
 }
 
 /// The identity of the directory `name` in `parent`, read through a
@@ -502,23 +535,35 @@ pub(super) enum ReopenedLevel {
     Unverified(io::Error),
 }
 
-/// Reopens the level just created at `name` in `parent` and checks it
-/// against `identity`, shedding a pin and retrying while descriptors run
-/// out; `before_reopen` is its test seam.
+/// Reopens the level just claimed at `name` in `parent` and checks it
+/// against the claim's identity, shedding a pin and retrying while
+/// descriptors run out; `before_reopen` is its test seam. The claim's own
+/// descriptor stays open throughout, so the level's inode cannot be freed and
+/// taken by a directory put at `name` since. Where `name` still resolves to
+/// it, that descriptor is the reopen, and no second one is needed.
 #[cfg(unix)]
 pub(super) fn reopen_created_level(
     created: &mut [CreatedDirectory],
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
-    identity: &rustix::fs::Stat,
+    claim: Claimed,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> ReopenedLevel {
+    let Claimed { identity, mut held } = claim;
+    let identity = &identity;
     let descend = loop {
         let attempt = match before_reopen() {
             Some(err) => Err(err),
-            None => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
+            None => match held.take() {
+                Some(level) if still_named(parent, name, identity) => Ok(level),
+                not_named => {
+                    held = not_named;
+                    dest::open_created_directory_at(parent, name)
+                }
+            }
+            .map(std::rc::Rc::new),
         };
         match attempt {
             Err(source)
@@ -540,6 +585,13 @@ pub(super) fn reopen_created_level(
         )),
         Err(source) => ReopenedLevel::Unverified(source.into()),
     }
+}
+
+/// Whether `name` in `parent` is the directory `identity` names now.
+#[cfg(unix)]
+fn still_named(parent: &std::os::fd::OwnedFd, name: &OsStr, identity: &rustix::fs::Stat) -> bool {
+    rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .is_ok_and(|found| same_directory_identity(&found, identity))
 }
 
 /// Whether `stat` is a directory owned by `owner`: the one thing about a

@@ -424,3 +424,72 @@ fn a_missing_level_is_created_where_noreplace_rename_is_unsupported() {
         super::acquire::tests_seam::refusals()
     );
 }
+
+/// How many of this process's descriptors are open on the directory `path`
+/// names now, read through `/proc/self/fd`.
+#[cfg(target_os = "linux")]
+fn descriptors_on(path: &std::path::Path) -> usize {
+    use std::os::unix::fs::MetadataExt as _;
+    let level = fs::symlink_metadata(path).unwrap();
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::metadata(entry.ok()?.path()).ok())
+        .filter(|found| found.dev() == level.dev() && found.ino() == level.ino())
+        .count()
+}
+
+/// Creates the one missing level `dir/a` and, just before its reopen,
+/// counts the descriptors held on it, then removes it and makes a fresh
+/// directory at its name, as a same-user writer of `dir` could. Answers the
+/// count and the creation's outcome.
+#[cfg(target_os = "linux")]
+fn replace_level_before_its_reopen(
+    dir: &TempDir,
+) -> (
+    usize,
+    Result<super::DirectoryCreation, (Vec<CreatedDirectory>, std::io::Error)>,
+) {
+    let level = dir.join("a");
+    let mut held = None;
+    let result = super::create_directories_pinned_after_mkdir(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || {
+            if held.is_none() {
+                held = Some(descriptors_on(&level));
+                fs::remove_dir(&level).unwrap();
+                fs::create_dir(&level).unwrap();
+            }
+            None
+        },
+        &mut || None,
+        &mut dest::reopen_for_sync,
+        rustix::process::geteuid().as_raw(),
+        &mut || {},
+    );
+    (held.expect("the reopen was reached"), result)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_claimed_level_stays_open_until_its_reopen_is_checked() {
+    // Between the claim and the reopen the level is synced into its parent,
+    // and a same-user writer of the parent can remove it there. Were nothing
+    // holding the level open, its inode could be freed and handed to a
+    // directory made at the name next, which the reopen's device-and-inode
+    // check would take for the level this run made. The claim's descriptor
+    // must still be open when the reopen runs, so the replacement is refused.
+    for refuse in [None, Some(rustix::io::Errno::INVAL)] {
+        let dir = TempDir::new("held-until-reopen");
+        let _refusing = refuse.map(super::acquire::tests_seam::refuse_noreplace);
+        let (held, result) = replace_level_before_its_reopen(&dir);
+        assert_eq!(
+            held, 1,
+            "the claimed level is held open until its reopen (refusing {refuse:?})"
+        );
+        let (created, _) = result.expect_err("the replacement is not taken for the level");
+        assert!(created.is_empty(), "the replacement is not recorded");
+        assert!(dir.join("a").is_dir(), "the replacement is left standing");
+    }
+}
