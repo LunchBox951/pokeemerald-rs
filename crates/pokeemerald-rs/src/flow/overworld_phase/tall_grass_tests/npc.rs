@@ -13,7 +13,9 @@ use engine::overworld::{Direction, PlayerState};
 use platform::Buttons;
 
 /// The Route 101 boy (`data/maps/Route101/map.json:95-107`) at (2, 13) with
-/// the given hide `flag`.
+/// the given hide `flag`. The map has him wander left and right; these tests
+/// isolate the grass effect from the scheduler's movement, so he stands still
+/// facing west.
 const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
     assets::ObjectEvent {
         local_id: 6,
@@ -21,7 +23,7 @@ const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
         x: 2,
         y: 13,
         elevation: 3,
-        movement_type: assets::MovementType::WanderLeftAndRight,
+        movement_type: assets::MovementType::FaceLeft,
         movement_range_x: 1,
         movement_range_y: 1,
         trainer_type: assets::TrainerType::None,
