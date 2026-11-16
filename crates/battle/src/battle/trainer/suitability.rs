@@ -5,8 +5,7 @@
 use assets::{AbilityId, Effectiveness, MoveId, Type, TypeChart};
 
 use crate::ability::{
-    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
-    thick_fat_special_attack,
+    burn_halves_damage, pinch_boosts_power, plus_minus_special_attack, thick_fat_special_attack,
 };
 use crate::damage::{
     apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
@@ -184,8 +183,7 @@ fn stale_base_damage(
         return Ok(None);
     };
     let category = MoveCategory::for_type(move_type);
-    let (attack_stat, attack_stage) = fainted.attacking_stat(category);
-    let attack_stat = huge_power_attack(fainted.ability(), category, attack_stat);
+    let (attack_stat, attack_stage) = fainted.damage_attacking_stat(category);
     // Thick Fat halves raw Special Attack before stage scaling
     // (`pokemon.c:3202-3204`), after Huge/Pure Power as in the trainer AI.
     let attack_stat = thick_fat_special_attack(player.ability(), move_type, attack_stat);
@@ -193,7 +191,7 @@ fn stale_base_damage(
     // (`pokemon.c:3207-3210`, `battle_util.c:3128-3137`).
     let attack_stat =
         plus_minus_special_attack(fainted.ability(), player.ability(), category, attack_stat);
-    let (defense_stat, defense_stage) = player.defending_stat(category);
+    let (defense_stat, defense_stage) = player.damage_defending_stat(category);
     let input = DamageInput {
         attacker_level: fainted.level(),
         power: u32::from(move_data.power),
@@ -396,7 +394,7 @@ mod tests {
     }
 
     /// The most-damage pass's shared base figure must inherit Hustle from
-    /// `fainted.attacking_stat`, the same accessor the real hit and
+    /// `fainted.damage_attacking_stat`, the same accessor the real hit and
     /// trainer-AI estimate read, so all three agree.
     #[test]
     fn stale_base_damage_carries_a_hustle_fainted_attackers_boost() {
@@ -430,6 +428,53 @@ mod tests {
             hustle_base > control_base,
             "a Hustle fainted attacker's stale base damage must carry the boost: \
              {hustle_base} vs {control_base}"
+        );
+    }
+
+    #[test]
+    fn stale_base_damage_reads_the_players_defense_badges() {
+        use crate::badge_boosts::BadgeBoosts;
+
+        const SQUIRTLE: SpeciesId = SpeciesId(7);
+        const WATER_GUN: MoveId = MoveId::WATER_GUN;
+        const TACKLE: MoveId = MoveId::TACKLE;
+
+        let dex = Dex::new();
+        let planted = || {
+            BattlePokemon::new(&dex, SQUIRTLE, 50, fixed_ivs(255), 0, vec![TACKLE])
+                .expect("dex-resident")
+                .with_cached_stats(
+                    crate::pokemon::Stats {
+                        max_hp: 1000,
+                        attack: 101,
+                        defense: 101,
+                        speed: 101,
+                        sp_attack: 101,
+                        sp_defense: 101,
+                    },
+                    1000,
+                )
+        };
+        let fainted = planted();
+        let player = planted();
+        let base = |move_id, badges: [bool; 4]| {
+            let player = player
+                .clone()
+                .with_stat_badges(BadgeBoosts::from_badges(badges));
+            super::stale_base_damage(&dex, move_id, &fainted, &player)
+                .unwrap()
+                .unwrap()
+        };
+        let no_badges = [false; 4];
+        assert!(base(TACKLE, [false, false, true, false]) < base(TACKLE, no_badges));
+        assert_eq!(
+            base(TACKLE, [true, true, false, true]),
+            base(TACKLE, no_badges)
+        );
+        assert!(base(WATER_GUN, [false, false, false, true]) < base(WATER_GUN, no_badges));
+        assert_eq!(
+            base(WATER_GUN, [true, true, true, false]),
+            base(WATER_GUN, no_badges)
         );
     }
 

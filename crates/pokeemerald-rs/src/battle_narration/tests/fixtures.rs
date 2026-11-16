@@ -74,6 +74,26 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                     ]);
                     continue;
                 }
+                if name == "FILL_WINDOW" {
+                    out.extend([0xFC, 0x0F]);
+                    continue;
+                }
+                if let Some(index) = name.strip_prefix("HIGHLIGHT ") {
+                    out.extend([
+                        0xFC,
+                        0x02,
+                        index.parse().expect("HIGHLIGHT takes a palette index"),
+                    ]);
+                    continue;
+                }
+                if let Some(width) = name.strip_prefix("CLEAR ") {
+                    out.extend([
+                        0xFC,
+                        0x11,
+                        width.parse().expect("CLEAR takes a pixel width"),
+                    ]);
+                    continue;
+                }
                 if let Some(frames) = name.strip_prefix("PAUSE ") {
                     out.extend([
                         0xFC,
@@ -218,6 +238,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
+    (74, "{B_ATK_NAME_WITH_PREFIX} flinched!"),
     (230, "It hurt itself in its\nconfusion!"),
     (35, "{B_EFF_NAME_WITH_PREFIX}\nfell asleep!"),
     (276, "{B_ATK_NAME_WITH_PREFIX} ignored\norders!"),
@@ -226,8 +247,11 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (279, "{B_ATK_NAME_WITH_PREFIX} won't\nobey!"),
     (280, "{B_ATK_NAME_WITH_PREFIX} turned away!"),
     (281, "{B_ATK_NAME_WITH_PREFIX} pretended\nnot to notice!"),
+    (182, "{B_ATK_NAME_WITH_PREFIX} made\n{B_DEF_NAME_WITH_PREFIX} drowsy!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
+    (194, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nraised its SPEED!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
+    (208, "{B_SCR_ACTIVE_NAME_WITH_PREFIX} TRACED\n{B_BUFF1}'s {B_BUFF2}!"),
     (209, "sharply "),
     (210, "rose!"),
     (211, "harshly "),
@@ -248,6 +272,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
+    (346, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade it ineffective!"),
     (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
 ];
 

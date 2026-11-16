@@ -255,7 +255,7 @@ fn find_sight_trainer(
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(live, objects, runtime, player, event_data) {
+        if !trainer_can_see_player(live, objects, runtime, player) {
             continue;
         }
         scan.any_cone_reached = true;
@@ -502,6 +502,7 @@ impl OverworldPhase {
                     approach_walk_tiles(live.state().position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(
                     live.template().local_id,
+                    live.carried_from(),
                     walk_tiles,
                     entry.intro,
                     battle,

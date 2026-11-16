@@ -359,6 +359,11 @@ fn sprite_roots(out: &mut String, plan: &ProfilePlan) {
     );
     image_slice(out, "        ", "sheets", &sprites.sheets);
     palette_slice(out, "        ", &sprites.palettes);
+    let _ = writeln!(out, "        field_effect_palettes: &[");
+    for palette in &sprites.field_effect_palettes {
+        let _ = writeln!(out, "            {},", palette_root(palette));
+    }
+    let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
 }
 
@@ -1261,6 +1266,27 @@ mod bag_field_tests {
         assert!(!module.contains("BattleInterfaceRoots::NONE"), "{module}");
     }
 
+    fn sprites_plan(base: u32) -> SpritePlan {
+        SpritePlan {
+            palette_table: base,
+            sheets: vec![],
+            palettes: vec![],
+            field_effect_palettes: vec![PalettePlan {
+                id: "field-effect/palette/general_1".to_owned(),
+                addr: 0x0850_0000,
+                color_count: 16,
+                encoding: Encoding::Raw,
+            }],
+        }
+    }
+
+    fn assert_field_effect_palette_root(module: &str) {
+        assert!(
+            module.contains("        field_effect_palettes: &[\n            PaletteRoot { id: \"field-effect/palette/general_1\", addr: GbaPtr::at(0x0850_0000), color_count: 16, encoding: Encoding::Raw },\n        ],"),
+            "{module}"
+        );
+    }
+
     fn assert_chooser_roots(module: &str) {
         assert!(
             module.contains("    starter_chooser: StarterChooserRoots {"),
@@ -1327,7 +1353,6 @@ mod bag_field_tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "one field per profile family")]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
         let plan = ProfilePlan {
@@ -1338,11 +1363,7 @@ mod bag_field_tests {
                 palettes: vec![],
                 bg_palettes: base,
             },
-            sprites: SpritePlan {
-                palette_table: base,
-                sheets: vec![],
-                palettes: vec![],
-            },
+            sprites: sprites_plan(base),
             layouts: vec![],
             fonts: vec![],
             font_images: vec![],
@@ -1405,6 +1426,7 @@ mod bag_field_tests {
             party_menu: party_menu_plan(),
         };
         let module = module(&plan, "0", &[]);
+        assert_field_effect_palette_root(&module);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
         assert_evolution_roots(&module);

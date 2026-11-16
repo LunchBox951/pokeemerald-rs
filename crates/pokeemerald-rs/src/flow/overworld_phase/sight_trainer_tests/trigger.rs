@@ -7,7 +7,7 @@ use assets::MapId;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
-use super::super::test_support::pressed;
+use super::super::test_support::{admitted_objects, pressed};
 use super::super::{OverworldPhase, SyntheticStartMenu};
 use super::support::*;
 use crate::flow::lead_screen::loaded_holding;
@@ -69,7 +69,7 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; the Headbutt party does not, so its id
+    // Rhett's party constructs; the Pursuit party does not, so its id
     // stands in for the refusal at Rhett's cone.
     refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     refused.step(pressed(Buttons::START));
@@ -91,7 +91,7 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (the Headbutt
+/// All three refusal shapes are covered: an unimplemented moveset (the Pursuit
 /// party at Rhett's cone, the trigger's own "Refusals cost nothing,
 /// forever"), another unimplemented moveset
 /// (Miguel's Sing, same), and a double battle refused before construction is even
@@ -103,7 +103,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (ax, ay) = AMY_TILE;
     let cases = [
         (
-            "the Headbutt party at Rhett's cone (unimplemented moveset)",
+            "the Pursuit party at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
         ("Miguel (unimplemented moveset)", (mx + 2, my)),
@@ -112,8 +112,8 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.set_fresh_lead_for_test(overwhelming_lead());
-        if name.starts_with("the Headbutt") {
-            // Rhett's party constructs; the Headbutt party refuses.
+        if name.starts_with("the Pursuit") {
+            // Rhett's party constructs; the Pursuit party refuses.
             phase.synthetic_sight_trainer =
                 Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
         }
@@ -417,8 +417,10 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         .iter()
         .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event");
-    let objects = engine::overworld::object_event::ObjectEventCollection::from_templates(
+    let objects = admitted_objects(
         scene.map_events().object_events,
+        &player,
+        &engine::event_data::EventData::new(),
     );
     assert!(
         engine::overworld::trainer_can_see_player(
@@ -428,7 +430,6 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
             &objects,
             &scene.runtime(),
             &player,
-            &engine::event_data::EventData::new(),
         ),
         "Rhett's real cone must reach a player standing one tile south of him over real \
          terrain -- including the final tile's own collision/impassability arms"
@@ -437,7 +438,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source)
         .with_private_object_event_rng();
     phase.set_fresh_lead_for_test(overwhelming_lead());
-    // Rhett's party constructs; the Headbutt party refuses, so its id stands
+    // Rhett's party constructs; the Pursuit party refuses, so its id stands
     // in at Rhett's real cone.
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     let before = phase.rng.state();
