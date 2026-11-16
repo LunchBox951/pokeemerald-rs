@@ -111,10 +111,18 @@ fn a_wanderer_draws_delay_direction_then_delay_on_upstreams_frames() {
 
     tick_to(&mut rig, &mut ran, 46);
     assert_eq!(step(&rig, 1), Some((StepKind::Walk, 15)));
-    assert_eq!(previous(&rig, 1), ORIGIN, "the tile it left is held to the end");
+    assert_eq!(
+        previous(&rig, 1),
+        ORIGIN,
+        "the tile it left is held to the end"
+    );
 
     tick_to(&mut rig, &mut ran, 47);
-    assert_eq!(step(&rig, 1), None, "the sixteenth frame completes the walk");
+    assert_eq!(
+        step(&rig, 1),
+        None,
+        "the sixteenth frame completes the walk"
+    );
     assert_eq!(previous(&rig, 1), (21, 20));
     assert_eq!(phase(&rig, 1), 1);
     assert_eq!(rig.rng.draws(), 2);
@@ -290,7 +298,11 @@ fn a_range_set_before_a_type_change_is_not_raised_to_one() {
 
     rig.tick(141);
 
-    assert_eq!(position(&rig, 1), (20, 23), "three steps south, beyond range one");
+    assert_eq!(
+        position(&rig, 1),
+        (20, 23),
+        "three steps south, beyond range one"
+    );
 }
 
 #[test]
@@ -363,7 +375,11 @@ fn a_patrol_that_leaves_its_range_and_finds_the_way_back_blocked_walks_in_place_
 
     for frame in [17, 33] {
         tick_to(&mut rig, &mut ran, frame);
-        assert_eq!(step(&rig, 1), Some((StepKind::WalkInPlace, 1)), "frame {frame}");
+        assert_eq!(
+            step(&rig, 1),
+            Some((StepKind::WalkInPlace, 1)),
+            "frame {frame}"
+        );
         assert_eq!(position(&rig, 1), (20, 19));
         assert_eq!(facing(&rig, 1), Direction::South);
         assert_eq!(sequence_index(&rig, 1), 1, "the outside-range turn is kept");
@@ -397,7 +413,11 @@ fn an_earlier_sprite_slot_releases_its_old_tile_to_a_later_one_in_the_same_frame
 
     rig.tick(31);
     assert_eq!(position(&rig, 2), (20, 21));
-    assert_eq!(previous(&rig, 1), (20, 20), "A still holds the tile it left");
+    assert_eq!(
+        previous(&rig, 1),
+        (20, 20),
+        "A still holds the tile it left"
+    );
 
     rig.tick(1);
     assert_eq!(previous(&rig, 1), (19, 20));
@@ -480,7 +500,11 @@ fn a_walk_updates_elevation_when_it_begins() {
     let state = rig.collection.get(1).unwrap().state();
     assert_eq!(state.position(), (20, 19));
     assert_eq!(state.elevation(), 0);
-    assert_eq!(state.previous_elevation(), 3, "a transition cell keeps the drawn level");
+    assert_eq!(
+        state.previous_elevation(),
+        3,
+        "a transition cell keeps the drawn level"
+    );
 }
 
 #[test]
