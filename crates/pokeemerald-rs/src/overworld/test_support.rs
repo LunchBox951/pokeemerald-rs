@@ -923,6 +923,19 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     sprite_paths: &[&str],
     with_tall_grass: bool,
 ) {
+    write_scratch_exclusive(
+        path,
+        route101_oldale_layout_pack_bytes_with(oldale_specials, sprite_paths, with_tall_grass),
+    );
+}
+
+/// The bytes [`write_route101_oldale_layout_pack_with`] writes, for a caller
+/// that claims the file itself.
+pub(crate) fn route101_oldale_layout_pack_bytes_with(
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+    with_tall_grass: bool,
+) -> Vec<u8> {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -965,5 +978,5 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     if with_tall_grass {
         entries.extend(tall_grass_entries());
     }
-    write_scratch_exclusive(path, write_synthetic_pack(entries));
+    write_synthetic_pack(entries)
 }

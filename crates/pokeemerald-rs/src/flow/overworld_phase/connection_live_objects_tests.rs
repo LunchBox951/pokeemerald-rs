@@ -9,6 +9,7 @@ use super::tall_grass_tests::{
 };
 use super::test_support::*;
 use super::OverworldPhase;
+use crate::pack_test_support::ScratchClaim;
 use assets::{MovementType, ObjectEvent, TrainerType};
 use engine::overworld::metatile_behavior::MB_TALL_GRASS;
 use engine::overworld::object_event::tile_is_in_view;
@@ -45,8 +46,8 @@ fn idle(phase: &mut OverworldPhase, frames: usize) {
 /// A phase at rest on Route 101's north edge whose live collection holds `npcs`, each admitted.
 fn route_101_with_live_npcs(
     npcs: Vec<ObjectEvent>,
-) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
-    let (mut phase, path) =
+) -> (OverworldPhase, &'static [ObjectEvent], ScratchClaim) {
+    let (mut phase, claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     let templates: &'static [ObjectEvent] = Box::leak(npcs.into_boxed_slice());
     phase.object_events = ObjectEventCollection::from_templates(templates);
@@ -60,7 +61,7 @@ fn route_101_with_live_npcs(
             template.local_id
         );
     }
-    (phase, templates, path)
+    (phase, templates, claim)
 }
 
 /// The live entry seeded from exactly `template`.
@@ -88,9 +89,8 @@ fn cross_north(phase: &mut OverworldPhase) {
 /// Route 101 NPC still in view vanished instead of being shifted into Oldale's coordinates.
 #[test]
 fn a_crossing_keeps_an_in_view_npc_at_its_translated_tile() {
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
     cross_north(&mut phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert!(
         has_entry(&phase, &templates[0]),
         "the in-view Route 101 NPC survives the crossing"
@@ -110,13 +110,12 @@ fn a_crossing_keeps_an_in_view_npc_at_its_translated_tile() {
 /// upstream's map load already spawned (`overworld.c:2163`).
 #[test]
 fn a_crossing_on_the_first_frame_after_continue_keeps_the_in_view_npc() {
-    let (mut phase, path) =
+    let (mut phase, _claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 4)].into_boxed_slice());
     // Exactly what `from_saved` installs: `connections::seed_object_events`.
     phase.object_events = ObjectEventCollection::from_templates(templates);
     cross_north(&mut phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert!(
         has_entry(&phase, &templates[0]),
         "the in-view Route 101 NPC survives an immediate post-Continue crossing"
@@ -128,7 +127,7 @@ fn a_crossing_on_the_first_frame_after_continue_keeps_the_in_view_npc() {
 /// frame 33 (`MovementType_LookAround`, `event_object_movement.c:2844-2892`).
 #[test]
 fn admitting_the_initial_map_before_input_runs_each_callback_once_per_frame() {
-    let (mut phase, path) =
+    let (mut phase, _claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     let templates: &'static [ObjectEvent] = Box::leak(
         vec![ObjectEvent {
@@ -144,7 +143,6 @@ fn admitting_the_initial_map_before_input_runs_each_callback_once_per_frame() {
     idle(&mut phase, 32);
     assert_eq!(facing(&phase), Direction::South, "still holding the delay");
     idle(&mut phase, 1);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(facing(&phase), Direction::West, "turned on frame 33");
 }
 
@@ -152,7 +150,7 @@ fn admitting_the_initial_map_before_input_runs_each_callback_once_per_frame() {
 /// alike (`event_object_movement.c:2167-2189`).
 #[test]
 fn a_survivor_keeps_its_previous_tile_translated_with_its_current_one() {
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
     phase
         .object_events
         .find_mut(None, 9)
@@ -160,7 +158,6 @@ fn a_survivor_keeps_its_previous_tile_translated_with_its_current_one() {
         .state_mut()
         .walk(Direction::South);
     cross_north(&mut phase);
-    std::fs::remove_file(path).expect("scratch pack");
     let state = entry_of(&phase, &templates[0]).state();
     assert_eq!(state.position(), (13, 25));
     assert_eq!(state.previous_position(), (13, 24));
@@ -173,10 +170,10 @@ fn a_survivor_keeps_its_previous_tile_translated_with_its_current_one() {
 /// `event_object_movement.c:1699-1713`).
 #[test]
 fn a_crossing_removes_an_npc_the_entered_view_no_longer_reaches() {
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(8, 13, 8), npc(9, 13, 9)]);
+    let (mut phase, templates, _claim) =
+        route_101_with_live_npcs(vec![npc(8, 13, 8), npc(9, 13, 9)]);
     cross_north(&mut phase);
     idle(&mut phase, 20);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(phase.player.position(), (LANDING_X, 19));
     assert!(
         has_entry(&phase, &templates[0]),
@@ -191,7 +188,7 @@ fn a_crossing_removes_an_npc_the_entered_view_no_longer_reaches() {
 /// An entry the departed visit never admitted has no upstream object to carry.
 #[test]
 fn an_npc_the_departed_visit_never_admitted_is_not_carried() {
-    let (mut phase, path) =
+    let (mut phase, _claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 15)].into_boxed_slice());
     phase.object_events = ObjectEventCollection::from_templates(templates);
@@ -201,7 +198,6 @@ fn an_npc_the_departed_visit_never_admitted_is_not_carried() {
         "outside the window"
     );
     cross_north(&mut phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert!(!has_entry(&phase, &templates[0]));
 }
 
@@ -209,7 +205,7 @@ fn an_npc_the_departed_visit_never_admitted_is_not_carried() {
 /// next frame sees.
 #[test]
 fn a_refused_crossing_leaves_the_departed_collection_untouched() {
-    let (mut phase, templates, path) =
+    let (mut phase, templates, _claim) =
         route_101_with_live_npcs(vec![npc(9, 13, 4), npc(10, 13, 6)]);
     phase
         .object_events
@@ -227,7 +223,6 @@ fn a_refused_crossing_leaves_the_departed_collection_untouched() {
     );
 
     assert!(!phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), SHIFT));
-    std::fs::remove_file(path).expect("scratch pack");
 
     assert_eq!(phase.map_id, ROUTE_101);
     let after: Vec<_> = phase
@@ -243,12 +238,11 @@ fn a_refused_crossing_leaves_the_departed_collection_untouched() {
 /// scheduler admits those the view reaches once it runs.
 #[test]
 fn a_crossing_admits_none_of_the_entered_maps_own_events() {
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![npc(9, 13, 4)]);
     // The crossing step's own frame also runs the scheduler, so rebind by hand to look at the
     // collection the crossing itself builds.
     phase.player = engine::overworld::PlayerState::new((LANDING_X, 19), 3, Direction::North);
     assert!(phase.cross_connection(OLDALE_TOWN, (LANDING_X, 19), SHIFT));
-    std::fs::remove_file(path).expect("scratch pack");
 
     let entered = phase.scene.map_events().object_events;
     assert!(!entered.is_empty(), "Oldale declares object events");
@@ -311,10 +305,9 @@ fn an_interaction_with_a_carried_npc_turns_it_and_not_the_entered_maps_namesake(
     const MOM_SCRIPT: &str = "PlayersHouse_1F_EventScript_Mom";
     let mut mom = npc(1, 13, 1);
     mom.script = Some(assets::ScriptRef::new(MOM_SCRIPT));
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![mom]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![mom]);
     cross_north(&mut phase);
     idle(&mut phase, 20);
-    std::fs::remove_file(path).expect("scratch pack");
     // It steps up beside the player, who turns to it.
     phase
         .object_events
@@ -365,9 +358,8 @@ fn an_interaction_with_a_carried_npc_turns_it_and_not_the_entered_maps_namesake(
 fn a_carried_npc_whose_sheet_the_entered_map_lacks_is_still_drawn() {
     let mut youngster = npc(1, 15, 3);
     youngster.flag = "FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE";
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![youngster]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![youngster]);
     cross_north(&mut phase);
-    std::fs::remove_file(path).expect("scratch pack");
     let entry = entry_of(&phase, &templates[0]);
     assert!(entry.is_active(), "carried and active");
     assert!(tile_is_in_view(
@@ -421,8 +413,8 @@ const GROUND: u8 = 3;
 fn route_101_with_npcs_on_grass(
     npcs: Vec<ObjectEvent>,
     grass: &[(u16, u16)],
-) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
-    let (mut phase, templates, path) = route_101_with_live_npcs(npcs);
+) -> (OverworldPhase, &'static [ObjectEvent], ScratchClaim) {
+    let (mut phase, templates, claim) = route_101_with_live_npcs(npcs);
     let specials: Vec<_> = grass
         .iter()
         .map(|&tile| (tile, MB_TALL_GRASS, GROUND))
@@ -431,7 +423,7 @@ fn route_101_with_npcs_on_grass(
         crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &specials)
             .in_room_for_test(ROUTE_101);
     idle(&mut phase, 1);
-    (phase, templates, path)
+    (phase, templates, claim)
 }
 
 /// The live effect count, and the image the one drawn effect shows (`None` unless exactly one is
@@ -447,14 +439,13 @@ fn effects(phase: &OverworldPhase) -> (usize, Option<u16>) {
 /// then named the wrong owner: the survivor's settled effect was re-rustled or lost.
 #[test]
 fn a_carried_survivor_keeps_its_grass_effect_when_an_earlier_carried_npc_leaves_view() {
-    let (mut phase, templates, path) =
+    let (mut phase, templates, _claim) =
         route_101_with_npcs_on_grass(vec![npc(8, 13, 9), npc(9, 13, 4)], &[(13, 9), (13, 4)]);
     assert_eq!(phase.scene.tall_grass_effect_count(), 2, "both settled");
     cross_north(&mut phase);
     let right_away = effects(&phase);
     idle(&mut phase, 3);
     let later = effects(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert!(has_entry(&phase, &templates[1]), "the later NPC stays");
     assert!(
         !has_entry(&phase, &templates[0]),
@@ -475,11 +466,10 @@ fn a_carried_survivor_keeps_its_grass_effect_when_an_earlier_carried_npc_leaves_
 /// The control: with no earlier carried NPC to compact away, the same effect carries.
 #[test]
 fn a_lone_carried_npc_keeps_its_settled_grass_effect() {
-    let (mut phase, _, path) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 4)]);
+    let (mut phase, _, _claim) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 4)]);
     cross_north(&mut phase);
     idle(&mut phase, 3);
     let after = effects(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(after, (1, Some(0)));
 }
 
@@ -488,7 +478,7 @@ fn a_lone_carried_npc_keeps_its_settled_grass_effect() {
 /// (`DoGroundEffects_OnSpawn`, `event_object_movement.c:8078-8096`).
 #[test]
 fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() {
-    let (mut phase, path) =
+    let (mut phase, _claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
         20,
@@ -501,7 +491,6 @@ fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() 
     cross_north(&mut phase);
     idle(&mut phase, 3);
     let after = effects(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(after, (1, Some(0)));
 }
 
@@ -510,7 +499,7 @@ fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() 
 /// the admission, and the NPC still gets its spawn-time pass before the input ends the visit.
 #[test]
 fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_load() {
-    let (mut phase, path) =
+    let (mut phase, _claim) =
         route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
     phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
         20,
@@ -529,7 +518,6 @@ fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_loa
     cross_north(&mut phase);
     idle(&mut phase, 3);
     let after = effects(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(after, (1, Some(0)));
 }
 
@@ -538,7 +526,7 @@ fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_loa
 /// rustle, which goes on from the image it had reached.
 #[test]
 fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
-    let (mut phase, _, path) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 5)]);
+    let (mut phase, _, _claim) = route_101_with_npcs_on_grass(vec![npc(9, 13, 4)], &[(13, 5)]);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0, "off the grass");
     phase
         .object_events
@@ -556,7 +544,6 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
     // The effect is drawn in the entered scene without a second pass restarting it.
     idle(&mut phase, 2);
     let later = effects(&phase);
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(after, (1, Some(2)), "carried at the image it had reached");
     assert_eq!(later.0, 1, "no second effect for the carried owner");
     assert!(
@@ -571,9 +558,8 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
 #[test]
 fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
     // One tile past Route 101's north edge, which the shift carries onto the landing tile.
-    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, -1)]);
+    let (mut phase, templates, _claim) = route_101_with_live_npcs(vec![npc(9, 13, -1)]);
     phase.step(held(Buttons::UP));
-    std::fs::remove_file(path).expect("scratch pack");
     assert_eq!(
         phase.map_id, ROUTE_101,
         "the crossing never rebound the scene"
