@@ -1,4 +1,6 @@
-//! Audio fixture, pack-entry and song regression tests.
+//! The audio fixtures and the tests of how [`audio::locate`] treats the pack's
+//! sample and song entries and the supported-song requirement. Voicegroup
+//! and song-bytecode tests build on these fixtures in `audio_bytecode`.
 
 use std::path::{Path, PathBuf};
 
@@ -16,10 +18,10 @@ use super::super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::super::Context;
 use super::{image_twin, scratch, synthetic_bag_ids};
 
-/// A synthetic `pokeemerald/` holding just the `sound/` files
-/// [`audio::locate`] reads, plus the `MUS_*` constants a multi-song pack
-/// would name. Not a real upstream checkout: `title.inc` declares one slot,
-/// enough to anchor the run [`audio_rom`] plants.
+/// A synthetic `pokeemerald/` holding only what [`audio::locate`] reads: the
+/// `voicegroup_title` source, an empty `keysplit_tables.inc`, and the
+/// `MUS_TITLE` and `MUS_OTHER` song constants. `voicegroup_title.inc` declares
+/// a single slot, matching the one [`audio_rom`] plants.
 fn audio_upstream(dir: &Path) -> PathBuf {
     let upstream = dir.join("upstream");
     std::fs::create_dir_all(upstream.join("sound/voicegroups")).expect("voicegroup dir");
@@ -38,21 +40,22 @@ fn audio_upstream(dir: &Path) -> PathBuf {
     upstream
 }
 
-/// A distinctive byte appended past `pcm`'s declared count: the retained
-/// interpolation guard `extract::wav` always keeps (its module docs).
+/// The interpolation-guard byte that follows a sample's logical PCM, as
+/// `extract::wav`'s module docs describe. The locator's PCM search needle
+/// includes it.
 const AUDIO_GUARD_SAMPLE: u8 = 0x2A;
 
-/// `pcm` with [`AUDIO_GUARD_SAMPLE`] appended, matching the buffer both the
-/// checkout extractor and the ROM importer retain past the logical count.
+/// `pcm` followed by [`AUDIO_GUARD_SAMPLE`]: the buffer a pack sample payload
+/// and the ROM both hold for one sample.
 fn with_audio_guard(pcm: &[u8]) -> Vec<u8> {
     let mut out = pcm.to_vec();
     out.push(AUDIO_GUARD_SAMPLE);
     out
 }
 
-/// The pack payload of one `DirectSound` sample, in the wire format
-/// `extract::audio_samples` writes: kind, freq, loop flag, loop start,
-/// logical sample count, PCM, and the retained guard byte.
+/// The pack payload of one non-looping `DirectSound` sample at `frequency`,
+/// laid out as `assets::audio::Sample::encode` does, with `pcm` as its logical
+/// samples followed by the guard byte.
 fn audio_direct_sound_payload(frequency: u32, pcm: &[u8]) -> Vec<u8> {
     let mut payload = vec![0u8];
     payload.extend_from_slice(&frequency.to_le_bytes());
@@ -63,12 +66,14 @@ fn audio_direct_sound_payload(frequency: u32, pcm: &[u8]) -> Vec<u8> {
     payload
 }
 
-/// The 12 bytes of a square-1 slot with no pointer, padding the addressable
-/// slots past `voicegroup_title`'s one declared slot.
+/// One 12-byte square-1 voice slot, matching what [`title_voicegroup_slots`]
+/// expects at each slot past `voicegroup_title`'s one declared slot. Its
+/// pointer word holds the duty, not an address, so it references no sample.
 const AUDIO_FILLER_SLOT: [u8; 12] = [1, 60, 0, 0, 2, 0, 0, 0, 0, 0, 15, 0];
 
-/// The slots [`audio_rom`] holds for `voicegroup_title`, as the importer
-/// reads them.
+/// The 128 slots the importer decodes from [`audio_rom`]'s `voicegroup_title`:
+/// the declared `DirectSound` voice, then 127 square-1 voices decoded from
+/// [`AUDIO_FILLER_SLOT`].
 pub(super) fn title_voicegroup_slots() -> Vec<VoiceEntry> {
     let mut slots = vec![VoiceEntry::DirectSound(DirectSoundVoice {
         base_key: 60,
@@ -100,15 +105,17 @@ pub(super) fn title_voicegroup_slots() -> Vec<VoiceEntry> {
     slots
 }
 
-/// The encoded pack voicegroup [`audio_rom`]'s title group yields.
+/// The pack payload of the `audio/voicegroup/title` entry that matches
+/// [`audio_rom`].
 pub(super) fn title_voicegroup_payload() -> Vec<u8> {
     VoiceGroup::new(title_voicegroup_slots())
         .expect("128 slots are a valid voicegroup")
         .encode()
 }
 
-/// A ROM holding one sample, `voicegroup_title`'s one slot, one song header
-/// that plays through it, and the `gSongTable` entry at `MUS_TITLE`'s index.
+/// A ROM holding one sample (`pcm` and its guard byte), `voicegroup_title`'s
+/// declared slot and 127 filler slots, a one-track song header that plays
+/// through that voicegroup, and the `gSongTable` entry at `MUS_TITLE`'s index.
 fn audio_rom(pcm: &[u8]) -> Vec<u8> {
     let mut header = Vec::new();
     header.extend_from_slice(&0u16.to_le_bytes());
@@ -130,26 +137,30 @@ fn audio_rom(pcm: &[u8]) -> Vec<u8> {
         .write(0x10_0000, &header)
         .write(0x10_0010, &with_audio_guard(pcm))
         .write(0x20_0000, &slot)
-        // Title is song-selected, so every one of its 128 slots is read.
+        // A song's header points at the group, so the importer reads all 128
+        // slots, not just the declared one.
         .write(0x20_0000 + 12, &AUDIO_FILLER_SLOT.repeat(127))
         .write(0x30_0000, &song_header)
-        // The one track: WAIT 1 tick (0x81), then FINE (0xB1).
+        // The track's bytecode: WAIT 1 tick (0x81), then FINE (0xB1).
         .write(0x40_0000, &[0x81, 0xB1])
-        // gSongTable at 0x0850_0000; MUS_TITLE is index 1.
+        // gSongTable starts at 0x0850_0000, so entry 1 (`MUS_TITLE`) points at
+        // the song header.
         .write(0x50_0008, &0x0830_0000u32.to_le_bytes())
-        // `Song.ms` is BGM (0); `Song.me` is a distinct value, so only `ms` matches the pack.
+        // `ms` is the BGM player (0), which the pack song names; `me` is 7 so
+        // that only `ms` can agree with the pack.
         .write(0x50_000C, &[0, 0, 7, 0])
         .finish()
 }
 
-/// Run `body` against the [`audio_rom`]/[`audio_upstream`] fixture, with
-/// `songs` as the pack's `audio/song/` ids.
+/// Runs `body` over [`audio_rom`] and [`audio_upstream`] with a pack that
+/// matches them and holds every id in `songs` as an `audio/song/` entry.
 fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<'_>) -> T) -> T {
     with_audio_song_payload(name, songs, &title_song_payload(0), body)
 }
 
-/// The encoded pack song [`audio_rom`]'s header describes: one track, the
-/// given priority, no reverb, playing through `voicegroup_title`.
+/// The pack payload of the song [`audio_rom`] holds, except for `priority`:
+/// player 0, no reverb, and one track of WAIT 1 then FINE, playing through
+/// `audio/voicegroup/title`. `audio_rom` has priority 0.
 pub(super) fn title_song_payload(priority: u8) -> Vec<u8> {
     assets::audio::Song::new(
         assets::audio::VoiceGroupId("audio/voicegroup/title".to_owned()),
@@ -165,7 +176,7 @@ pub(super) fn title_song_payload(priority: u8) -> Vec<u8> {
     .encode()
 }
 
-/// [`with_audio_context`] with every pack song carrying `song_payload`.
+/// [`with_audio_context`] with `song_payload` as every pack song's payload.
 fn with_audio_song_payload<T>(
     name: &str,
     songs: &[&str],
@@ -175,7 +186,8 @@ fn with_audio_song_payload<T>(
     with_audio_song_rom(name, songs, song_payload, |_| {}, body)
 }
 
-/// [`with_audio_song_payload`] after `mutate` has edited the ROM image.
+/// [`with_audio_song_payload`] with `mutate` applied to the ROM image first, so
+/// a test can corrupt one ROM field the pack still describes unchanged.
 pub(super) fn with_audio_song_rom<T>(
     name: &str,
     songs: &[&str],
@@ -187,8 +199,9 @@ pub(super) fn with_audio_song_rom<T>(
     with_audio_pack(name, songs, song_payload, Some(&voicegroup), mutate, body)
 }
 
-/// The deepest fixture: `voicegroup` is the payload of the pack's
-/// `audio/voicegroup/title` entry, or `None` to leave the entry out.
+/// [`with_audio_song_rom`] with `voicegroup` as the payload of the pack's
+/// `audio/voicegroup/title` entry (`None` leaves the entry out), so a test can
+/// supply a voicegroup that differs from the ROM's.
 pub(super) fn with_audio_pack<T>(
     name: &str,
     songs: &[&str],
@@ -207,7 +220,7 @@ pub(super) fn with_audio_pack<T>(
 }
 
 /// [`with_audio_pack`] with the `audio/voicegroup/` entries given whole, so a
-/// test can choose their kind and add groups the plan never reaches.
+/// test can give an entry another kind or add a group that no song reaches.
 pub(super) fn with_audio_pack_entry<T>(
     name: &str,
     songs: &[&str],
@@ -228,9 +241,9 @@ pub(super) fn with_audio_pack_entry<T>(
     )
 }
 
-/// [`with_audio_pack_entry`] with `extra` entries appended whole, and any
-/// `songs` or sample id listed in `skip` left out of the Raw defaults so
-/// `extra` can supply it under another kind.
+/// [`with_audio_pack_entry`] with `extra` entries added to the pack as given.
+/// An id in `skip` (a `songs` entry or the `DirectSound` demo sample) is left
+/// out of the default `Raw` entries, so `extra` can supply it as another kind.
 #[expect(
     clippy::too_many_arguments,
     reason = "a flat fixture signature keeps each audio test one call"
@@ -287,22 +300,27 @@ fn with_audio_pack_extra<T>(
     out
 }
 
+/// Proves the fixture is sound, so the refusal tests below can only fail on
+/// the one field each changes.
 #[test]
 fn the_audio_fixture_locates_its_one_song() {
-    // The sanity check the refusal test below leans on: the fixture itself
-    // resolves the header, the table, and exactly one voicegroup when the
-    // pack holds only the one song this locator supports.
     with_audio_context("audio-one-song", &["audio/song/mus_title"], |ctx| {
         let mut report = Vec::new();
         let plan = audio::locate(ctx, &mut report).expect("the one-song pack locates");
-        assert_eq!(plan.songs.len(), 1);
+        assert_eq!(plan.songs.len(), 1, "exactly the supported song is planned");
         assert_eq!(plan.songs[0].id, "audio/song/mus_title");
         assert_eq!(plan.songs[0].header, 0x0830_0000);
         assert_eq!(plan.song_table, 0x0850_0000);
-        assert_eq!(plan.voicegroups.len(), 1);
+        assert_eq!(
+            plan.voicegroups.len(),
+            1,
+            "only the title voicegroup is planned"
+        );
     });
 }
 
+/// The id a [`GenRomProfileError::WrongPackEntryKind`] names, or `None` for any
+/// other error.
 fn wrong_kind_id(err: &GenRomProfileError) -> Option<&str> {
     match err {
         GenRomProfileError::WrongPackEntryKind { id, .. } => Some(id),
@@ -375,9 +393,8 @@ fn a_song_entry_of_the_wrong_kind_is_refused() {
 
 #[test]
 fn a_song_payload_that_disagrees_with_the_rom_header_is_refused() {
-    // Same header, pointers, and sample as the passing fixture; only the
-    // pack song's priority differs from the ROM's, so a refusal can only
-    // come from validating the payload.
+    // Priority is the only field that differs from the ROM, so the refusal
+    // can only come from checking the pack song against the header.
     with_audio_song_payload(
         "audio-song-mismatch",
         &["audio/song/mus_title"],
@@ -385,7 +402,7 @@ fn a_song_payload_that_disagrees_with_the_rom_header_is_refused() {
         |ctx| {
             let mut report = Vec::new();
             let err = audio::locate(ctx, &mut report)
-                .expect_err("a song the ROM does not hold must be refused");
+                .expect_err("a pack song with another priority than the ROM header is refused");
             let GenRomProfileError::StructMismatch { id, reason } = &err else {
                 panic!("{err:?}");
             };
@@ -414,9 +431,9 @@ fn a_malformed_song_payload_is_refused_as_an_entry_shape() {
 
 #[test]
 fn songs_beside_mus_title_are_left_to_the_checkout_instead_of_refused() {
-    // `cargo xtask extract` emits the whole checkpoint manifest, but the ROM
-    // backend imports only `mus_title` until #1850; the locator plans that one
-    // song and claims nothing about the others.
+    // The checkout pack carries the whole checkpoint manifest, but the ROM
+    // backend imports only `mus_title` until #1850, so the other songs are
+    // neither planned nor reported, rather than refused.
     with_audio_context(
         "audio-two-songs",
         &["audio/song/mus_other", "audio/song/mus_title"],
@@ -436,11 +453,10 @@ fn songs_beside_mus_title_are_left_to_the_checkout_instead_of_refused() {
 
 #[test]
 fn no_song_at_all_is_refused_by_the_same_title_check() {
-    // Pins the same `StructMismatch` on an empty `audio/song/` id set.
     with_audio_context("audio-no-song", &[], |ctx| {
         let mut report = Vec::new();
         let err = audio::locate(ctx, &mut report)
-            .expect_err("a pack with no audio/song/ entries must be refused");
+            .expect_err("a pack with no audio/song/ entries lacks the supported song");
         assert!(
             matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/song/*"),
             "{err:?}"
@@ -450,11 +466,10 @@ fn no_song_at_all_is_refused_by_the_same_title_check() {
 
 #[test]
 fn a_lone_unsupported_song_is_refused_by_the_title_check() {
-    // Pins the id half of the title check: one entry, but not mus_title.
     with_audio_context("audio-lone-other", &["audio/song/mus_other"], |ctx| {
         let mut report = Vec::new();
         let err = audio::locate(ctx, &mut report)
-            .expect_err("a pack holding only an unsupported song must be refused");
+            .expect_err("a song count of one is not enough: the one song must be mus_title");
         let GenRomProfileError::StructMismatch { id, reason } = &err else {
             panic!("{err:?}");
         };
