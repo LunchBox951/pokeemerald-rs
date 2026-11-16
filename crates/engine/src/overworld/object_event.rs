@@ -420,6 +420,12 @@ impl ObjectEventState {
         self.step = Some(StepAction::begin(StepKind::WalkInPlace, direction));
     }
 
+    /// Drops the running normal-speed action without moving, as `ClearObjectEventMovement`
+    /// clears the object's movement action (`event_object_movement.c:4486-4493`).
+    pub const fn clear_step(&mut self) {
+        self.step = None;
+    }
+
     /// Returns the running normal-speed action, if any.
     #[must_use]
     pub const fn step(&self) -> Option<StepAction> {

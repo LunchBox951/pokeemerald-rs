@@ -360,6 +360,9 @@ impl ObjectEventCollection {
                 type_func_id: 0,
                 delay: 0,
                 scheduled: entry.state.movement_type(),
+                sequence_index: 0,
+                range_x: 0,
+                range_y: 0,
             };
         }
     }
