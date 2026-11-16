@@ -16,11 +16,10 @@ use super::{assert_survives_ld_map, distinctive_tiles, lz77_literals, scratch, w
 
 #[test]
 fn a_planted_sheet_is_found_once_with_the_shape_it_was_written_in() {
-    // A 4x4-tile sheet written in gbagfx's 2x4 metatile walk. Only that
-    // walk reproduces the planted bytes, so the locator has to discover it.
+    let metatile_shape = (2, 4);
     let tiles = distinctive_tiles(16);
-    let entry =
-        image_entry_from_tiles("sprite/x".into(), &tiles, 4, 32, 32, Some((2, 4))).expect("entry");
+    let entry = image_entry_from_tiles("sprite/x".into(), &tiles, 4, 32, 32, Some(metatile_shape))
+        .expect("entry");
     let rom = RomFixture::new()
         .emerald_header()
         .write(0x10_0000, &tiles)
@@ -32,7 +31,11 @@ fn a_planted_sheet_is_found_once_with_the_shape_it_was_written_in() {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].addr, 0x0810_0000);
         assert_eq!(plans[0].encoding, Encoding::Raw);
-        assert_eq!((plans[0].metatile_width, plans[0].metatile_height), (2, 4));
+        assert_eq!(
+            (plans[0].metatile_width, plans[0].metatile_height),
+            metatile_shape,
+            "the locator must recover the planted metatile walk"
+        );
         assert_eq!(plans[0].tile_count, 16);
         assert_eq!(report.len(), 1);
         assert!(report[0].note.is_none());
@@ -57,8 +60,6 @@ fn art_that_is_nowhere_in_the_rom_is_not_found() {
 
 #[test]
 fn two_ids_sharing_one_copy_of_art_are_ambiguous() {
-    // One copy, two ids: there is no copy each, so the locator must not
-    // alias both ids onto the same address.
     let tiles = distinctive_tiles(4);
     let rom = RomFixture::new()
         .emerald_header()
@@ -85,9 +86,6 @@ fn two_ids_sharing_one_copy_of_art_are_ambiguous() {
 
 #[test]
 fn two_ids_sharing_art_take_one_copy_each() {
-    // Upstream really does this: two object-event symbols hold identical
-    // sheets. Both copies are valid, so the ids are paired off in address
-    // order and both get a note.
     let tiles = distinctive_tiles(4);
     let rom = RomFixture::new()
         .emerald_header()
@@ -110,21 +108,19 @@ fn two_ids_sharing_art_take_one_copy_each() {
         assert_eq!(plans[0].addr, 0x0820_0000);
         assert_eq!(plans[1].addr, 0x0830_0000);
         assert!(report.iter().all(|line| line.note.is_some()), "{report:?}");
-        // An arbitrary pick must never claim to be evidence-based.
         assert!(
             report
                 .iter()
                 .all(|line| line.resolution == Resolution::ArbitraryAmongIdentical),
-            "{report:?}"
+            "identical-byte pairing is arbitrary, not structural evidence: {report:?}"
         );
     });
 }
 
-/// More ids than the ordinary locator hit cap, each sharing one sheet.
-const SHARING_IDS: usize = super::super::search::MATCH_LIMIT + 1;
+const SHARING_IDS_OVER_HIT_CAP: usize = super::super::search::MATCH_LIMIT + 1;
 
-/// Locate [`SHARING_IDS`] ids sharing one sheet planted once per id, by
-/// `encoding`, and require each to take its own copy in address order.
+/// Locates more ids than the locator's hit cap, all sharing one sheet planted
+/// once per id in `encoding`, and requires each to take its own copy.
 fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
     let tiles = distinctive_tiles(4);
     let stored = match encoding {
@@ -134,7 +130,7 @@ fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
     let mut fixture = RomFixture::new().emerald_header();
     let mut entries = Vec::new();
     let mut queries = Vec::new();
-    for slot in 0..SHARING_IDS {
+    for slot in 0..SHARING_IDS_OVER_HIT_CAP {
         fixture = fixture.write(0x20_0000 + slot * 0x100, &stored);
         let id = format!("sprite/{slot:02}");
         entries.push(image_entry_from_tiles(id.clone(), &tiles, 4, 16, 16, None).expect("entry"));
@@ -149,10 +145,13 @@ fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
         let mut report = Vec::new();
         let plans = locate_images(ctx, &queries, &mut report).expect("every id has a copy");
         let addrs: Vec<u32> = plans.iter().map(|plan| plan.addr).collect();
-        let expected: Vec<u32> = (0..SHARING_IDS)
+        let expected: Vec<u32> = (0..SHARING_IDS_OVER_HIT_CAP)
             .map(|slot| 0x0820_0000 + u32::try_from(slot).expect("small") * 0x100)
             .collect();
-        assert_eq!(addrs, expected);
+        assert_eq!(
+            addrs, expected,
+            "every shared-art id gets its own copy in address order beyond the ordinary hit cap"
+        );
         assert!(
             report
                 .iter()
@@ -332,10 +331,10 @@ fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not()
     assert_eq!(lines[0].note.as_deref(), Some("map: gTileset_General"));
     assert!(lines[3].note.is_none(), "an interior address is skipped");
 
-    // A name the map disagrees with is a failure, not an annotation.
     let mut wrong =
         vec![ReportLine::unique("tileset/general", 0x083D_F704, 24).symbol("gTileset_Petalburg")];
-    let err = crate::gen_rom_profile::cross_check(Some(&map_path), &mut wrong).unwrap_err();
+    let err = crate::gen_rom_profile::cross_check(Some(&map_path), &mut wrong)
+        .expect_err("a different symbol name is rejected, not annotated");
     let rendered = err.to_string();
     assert!(rendered.contains("gTileset_Petalburg"), "{rendered}");
     assert!(rendered.contains("gTileset_General"), "{rendered}");
@@ -344,24 +343,26 @@ fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not()
         "{rendered}"
     );
 
-    // So is a loose convention the symbol at that address does not follow.
     let mut wrong_family =
         vec![ReportLine::unique("sprite/x", 0x083D_F704, 24).symbol_contains(["gObjectEventPic_"])];
-    assert!(crate::gen_rom_profile::cross_check(Some(&map_path), &mut wrong_family).is_err());
+    assert!(
+        crate::gen_rom_profile::cross_check(Some(&map_path), &mut wrong_family).is_err(),
+        "a symbol from another family cannot confirm this root"
+    );
 
-    // And so is an address the map names nothing at.
     let mut absent = vec![ReportLine::unique("layout/x", 0x0812_3456, 24)];
-    let err = crate::gen_rom_profile::cross_check(Some(&map_path), &mut absent).unwrap_err();
+    let err = crate::gen_rom_profile::cross_check(Some(&map_path), &mut absent)
+        .expect_err("an address with no map symbol cannot confirm a root");
     assert!(err.to_string().contains("names nothing"), "{err}");
 
     let _ = std::fs::remove_file(&map_path);
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// Upstream `main_menu.c:406` declares `sMainMenuBgPal` `static`, so a GNU
-/// ld map lists nothing at its address.
+/// `main_menu.c:406` gives `sMainMenuBgPal` internal linkage, so GNU ld map
+/// evidence is not required at this palette's address.
 #[test]
-fn the_static_main_menu_bg_palette_survives_a_real_ld_map() {
+fn the_static_main_menu_bg_palette_needs_no_linker_global_evidence() {
     let id = "interface/palette/main_menu_bg";
     let mut lines = [ReportLine::unique(id, 0x0850_0000, 32)
         .with_symbol(super::super::interface_palette_symbol(id))];
@@ -373,10 +374,9 @@ fn the_static_main_menu_bg_palette_survives_a_real_ld_map() {
 }
 
 /// `main_menu.c:407` makes the text palette `static` as well, but extraction
-/// emits no pack entry for it, so an id outside the one fixed palette keeps
-/// the any-symbol check rather than an unverified `Local` claim.
+/// emits no pack entry for it, so other ids are not assumed local.
 #[test]
-fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
+fn an_unclassified_interface_palette_is_not_assumed_local() {
     assert_eq!(
         super::super::interface_palette_symbol("interface/palette/other"),
         SymbolExpectation::Unnamed
@@ -387,8 +387,6 @@ fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM, a pokeemerald/ checkout, and an extracted pack"]
 fn the_committed_profile_matches_a_fresh_generation() {
-    // The drift check: regenerating must reproduce the committed module
-    // byte for byte, or the table and the generator have diverged.
     let Ok(rom) = std::env::var("POKEEMERALD_ROM") else {
         panic!("set POKEEMERALD_ROM to the supported cartridge image");
     };
@@ -418,9 +416,6 @@ fn the_committed_profile_matches_a_fresh_generation() {
 
 #[test]
 fn an_eight_bit_sheet_with_indices_above_fifteen_is_still_located() {
-    // `title/image/pokemon_logo` is an 8-bit-indexed PNG using indices up
-    // to 223. `rom_depths(8)` speculatively probes 4bpp as well, so the
-    // 4bpp packing of this raster must not abort the whole search.
     let tiles: Vec<u8> = (0..4 * 64u32)
         .map(|index| u8::try_from(16 + index % 208).expect("fits in u8"))
         .collect();
@@ -442,11 +437,6 @@ fn an_eight_bit_sheet_with_indices_above_fifteen_is_still_located() {
 
 #[test]
 fn a_four_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
-    // Unlike the 8bpp probe above, a 4bpp entry has only one candidate
-    // depth (`rom_depths(4)` is `&[4]`), so this is never a speculative
-    // probe: an out-of-range index here is a malformed pack, and must
-    // surface as `EntryShape`, not read as the art simply not being
-    // anywhere in the ROM.
     let mut pixels = vec![0u8; 8 * 8];
     pixels[0] = 16;
     let entry = image_entry("sprite/x".into(), 8, 8, 4, pixels).expect("entry");
@@ -465,11 +455,6 @@ fn a_four_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
 
 #[test]
 fn a_two_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
-    // A 2bpp entry's sole ROM candidate is 4bpp too (`rom_depths(2)` is
-    // `&[4]`), exactly like the 4bpp case above, and just as
-    // non-speculative: there is no narrower depth being guessed at, so an
-    // out-of-range index here must also reach `EntryShape`, not read as a
-    // rejected speculative probe that leaves the art merely not found.
     let mut pixels = vec![0u8; 8 * 8];
     pixels[0] = 16;
     let entry = image_entry("sprite/x".into(), 8, 8, 2, pixels).expect("entry");
@@ -486,26 +471,21 @@ fn a_two_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
     });
 }
 
-/// Locates `sprite/x` built from a payload-shaped raster, and returns the error.
-fn locate_malformed_raster(name: &str, width: u32, height: u32) -> GenRomProfileError {
+fn malformed_raster_error(name: &str, width: u32, height: u32) -> GenRomProfileError {
     let pixels = vec![1u8; width as usize * height as usize];
     let entry = image_entry("sprite/x".into(), width, height, 4, pixels).expect("entry");
     let rom = RomFixture::new().emerald_header().finish();
-    let mut error = None;
     with_context(name, &rom, vec![entry], |ctx| {
         let mut report = Vec::new();
-        error = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report).err();
-    });
-    error.expect("a raster without whole 8x8 tiles is malformed, not located")
+        locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report)
+            .expect_err("a raster without whole 8x8 tiles is malformed, not located")
+    })
 }
 
-/// A payload-shaped raster that is empty or not a whole number of 8x8 tiles
-/// is a malformed pack: it must surface as `EntryShape` naming the dimensions,
-/// not as `NotFound` blaming art missing from the ROM.
 #[test]
 fn a_raster_that_is_not_whole_eight_pixel_tiles_is_an_entry_shape_error() {
     for (width, height) in [(4, 8), (7, 8), (8, 7), (12, 8), (0, 8), (8, 0), (0, 0)] {
-        let err = locate_malformed_raster("malformed-raster", width, height);
+        let err = malformed_raster_error("malformed-raster", width, height);
         assert!(
             matches!(&err, GenRomProfileError::EntryShape { id, reason }
                 if id == "sprite/x" && reason.contains(&format!("{width}x{height}"))),
@@ -514,9 +494,7 @@ fn a_raster_that_is_not_whole_eight_pixel_tiles_is_an_entry_shape_error() {
     }
 }
 
-/// A pack entry outside every domain this file tests, so a refusal proves
-/// the domain itself is missing rather than the whole pack being empty.
-fn unrelated_entry() -> pack_format::PackEntry {
+fn entry_outside_missing_domains() -> pack_format::PackEntry {
     pack_format::raw_entry("sprite/unrelated".to_owned(), vec![1, 2, 3, 4])
 }
 
@@ -524,57 +502,72 @@ fn unrelated_entry() -> pack_format::PackEntry {
 fn a_pack_missing_the_whole_font_domain_is_refused() {
     let rom = RomFixture::new().emerald_header().finish();
 
-    with_context("no-fonts", &rom, vec![unrelated_entry()], |ctx| {
-        let mut report = Vec::new();
-        let err = crate::gen_rom_profile::fonts::locate(ctx, &mut report)
-            .expect_err("a pack with no font/small/glyphs entries must be refused");
-        assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "font/small/glyphs"),
-            "{err:?}"
-        );
-        assert!(
-            report.is_empty(),
-            "refused before locating anything: {report:?}"
-        );
-    });
+    with_context(
+        "no-fonts",
+        &rom,
+        vec![entry_outside_missing_domains()],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = crate::gen_rom_profile::fonts::locate(ctx, &mut report)
+                .expect_err("a pack with no font/small/glyphs entries must be refused");
+            assert!(
+                matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "font/small/glyphs"),
+                "{err:?}"
+            );
+            assert!(
+                report.is_empty(),
+                "refused before locating anything: {report:?}"
+            );
+        },
+    );
 }
 
 #[test]
 fn a_pack_missing_the_whole_tileset_domain_is_refused() {
     let rom = RomFixture::new().emerald_header().finish();
 
-    with_context("no-tilesets", &rom, vec![unrelated_entry()], |ctx| {
-        let mut report = Vec::new();
-        let err = crate::gen_rom_profile::tilesets::locate(ctx, &mut report)
-            .expect_err("a pack with no fixed tileset roots must be refused");
-        assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "tileset/general/tiles"),
-            "{err:?}"
-        );
-        assert!(
-            report.is_empty(),
-            "refused before locating anything: {report:?}"
-        );
-    });
+    with_context(
+        "no-tilesets",
+        &rom,
+        vec![entry_outside_missing_domains()],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = crate::gen_rom_profile::tilesets::locate(ctx, &mut report)
+                .expect_err("a pack with no fixed tileset roots must be refused");
+            assert!(
+                matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "tileset/general/tiles"),
+                "{err:?}"
+            );
+            assert!(
+                report.is_empty(),
+                "refused before locating anything: {report:?}"
+            );
+        },
+    );
 }
 
 #[test]
 fn a_pack_missing_the_whole_layout_domain_is_refused() {
     let rom = RomFixture::new().emerald_header().finish();
 
-    with_context("no-layouts", &rom, vec![unrelated_entry()], |ctx| {
-        let mut report = Vec::new();
-        let err = crate::gen_rom_profile::layouts::locate(ctx, &mut report)
-            .expect_err("a pack with no layout/*/map entries must be refused");
-        assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/littleroot_town/map"),
-            "{err:?}"
-        );
-        assert!(
-            report.is_empty(),
-            "refused before locating anything: {report:?}"
-        );
-    });
+    with_context(
+        "no-layouts",
+        &rom,
+        vec![entry_outside_missing_domains()],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = crate::gen_rom_profile::layouts::locate(ctx, &mut report)
+                .expect_err("a pack with no layout/*/map entries must be refused");
+            assert!(
+                matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/littleroot_town/map"),
+                "{err:?}"
+            );
+            assert!(
+                report.is_empty(),
+                "refused before locating anything: {report:?}"
+            );
+        },
+    );
 }
 
 #[test]
@@ -584,7 +577,7 @@ fn a_pack_missing_the_whole_interface_palette_domain_is_refused() {
     with_context(
         "no-interface-palettes",
         &rom,
-        vec![unrelated_entry()],
+        vec![entry_outside_missing_domains()],
         |ctx| {
             let mut report = Vec::new();
             let err = crate::gen_rom_profile::locate_interface_palettes(ctx, &mut report)
