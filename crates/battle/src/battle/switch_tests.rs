@@ -2,7 +2,7 @@
 //! private action seam because no AI decision selects a switch yet.
 
 use assets::trainers::TrainerId;
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId, Type};
 
 use super::battler_state::MoveLock;
 use super::trainer::fixed_ivs;
@@ -123,6 +123,36 @@ fn switches_keep_every_party_member_in_its_original_slot() {
         assert_eq!(context.bench().len(), 3);
         assert_eq!(context.bench_len(), 3);
     }
+}
+
+#[test]
+fn a_switch_restores_a_color_change_members_species_typing_out_and_in() {
+    const KECLEON: SpeciesId = SpeciesId::KECLEON;
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE]);
+    let party = vec![
+        mon(&dex, KECLEON, 50, &[MoveId::TACKLE]),
+        mon(&dex, TREECKO, 50, &[MoveId::TACKLE]),
+    ];
+    let mut battle = battle_with_party(party, player);
+    let mut rng = ScriptedRng::new(&[]);
+    battle.enemy.set_temporary_type(Type::Water);
+    assert_eq!(battle.enemy().types(), [Type::Water, Type::Water]);
+
+    turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).expect("a healthy slot");
+    let benched = battle
+        .trainer()
+        .expect("a trainer battle")
+        .candidates()
+        .map(|(slot, mon)| (slot, mon.types()))
+        .find(|(slot, _)| *slot == 0)
+        .expect("the outgoing lead is benched");
+    assert_eq!(benched.1, [Type::Normal, Type::Normal]);
+
+    turn_with(&mut battle, 0, EnemyAction::Switch(0), &mut rng).expect("back to the lead");
+    assert_eq!(battle.enemy().species(), KECLEON);
+    assert_eq!(battle.enemy().types(), [Type::Normal, Type::Normal]);
+    assert_eq!(battle.enemy().ability(), AbilityId::COLOR_CHANGE);
 }
 
 #[test]
