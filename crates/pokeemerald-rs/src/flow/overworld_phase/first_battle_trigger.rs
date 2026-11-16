@@ -126,11 +126,15 @@ impl OverworldPhase {
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
         // The start consumes its copy; the lent original returns on rejection.
-        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
+        let mut staged_rng = self.rng.clone();
+        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut staged_rng) {
             Ok(battle) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
                 match self.open_wild_battle_text(&battle) {
-                    Ok(sequence) => self.battle_sequence = sequence,
+                    Ok(sequence) => {
+                        self.battle_sequence = sequence;
+                        self.rng = staged_rng;
+                    }
                     Err(error) => {
                         eprintln!("first battle: can't play its text ({error})");
                         self.restore_lead_battler(lead);

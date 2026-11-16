@@ -126,7 +126,7 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
 
     // Rattata L50 outspeeds Charmander L2, so its forced Struggle strikes
     // first.
-    let mut rng = SequenceRng::new([0, 0, 0, 1, 0]);
+    let mut rng = SequenceRng::new([0, 0, crate::common::STRUGGLE_TARGET_PLAYER, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -156,9 +156,10 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
     );
     assert_eq!(
         rng.draws(),
-        5,
-        "2 setup + Struggle's 3 draws; no selection draw for the forced \
-         pick, and the KO preempts the player's own queued Tackle"
+        6,
+        "2 setup + Struggle's `GetMoveTarget` draw + its 3 draws; no \
+         selection draw for the forced pick, and the KO preempts the \
+         player's own queued Tackle"
     );
     assert_eq!(
         battle.enemy().moves()[0].pp,
@@ -718,8 +719,11 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     let enemy_move_pp = enemy.moves()[0].pp;
 
     // Charmander L50 outspeeds Rattata L5, so the player's forced Struggle
-    // strikes first.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+    // strikes first. Its script: 2 setup draws, the enemy's slot pick (0),
+    // then the forced Struggle's `GetMoveTarget` draw (1: the opponent,
+    // accepted first try; `battle_util.c:100`-`:105`, `:3849`-`:3853`) and
+    // its accuracy, crit and variance draws.
+    let mut rng = SequenceRng::new([0, 0, 0, crate::common::STRUGGLE_TARGET_ENEMY, 0, 1, 0]);
     let mut battle = Battle::new(dex, drained, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -779,9 +783,10 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     );
     assert_eq!(
         rng.draws(),
-        6,
+        7,
         "2 setup + enemy selection (its one move lands at once, no PP \
-         screen in the wild rejection loop) + Struggle's 3 draws"
+         screen in the wild rejection loop) + Struggle's `GetMoveTarget` \
+         draw + its 3 draws"
     );
 }
 
