@@ -10,11 +10,9 @@ const PALETTE_PREFIX: &str = "battle-interface/palette";
 const RAW_PREFIX: &str = "battle-interface/raw";
 
 const TEXTBOX_SIZE: u32 = 128;
-const TEXTBOX_BIT_DEPTH: u8 = 4;
 const TEXTBOX_PALETTE_COLORS: u16 = 32;
 /// A 4bpp bank, the size of both text palettes.
 const BANK_COLORS: u16 = 16;
-const PALETTE_ENTRY_BYTES: usize = 2;
 /// `textbox_map.bin`: a 64x32 tilemap of 2-byte entries.
 const TEXTBOX_TILEMAP_BYTES: usize = 64 * 32 * 2;
 
@@ -66,40 +64,11 @@ impl AssetPack {
     }
 
     fn battle_textbox_image(&self) -> Result<ImageRef<'_>, PackError> {
-        let id = format!("{IMAGE_PREFIX}/textbox");
-        let image = self.image(&id)?;
-        let fault = |detail: String| PackError::MalformedBattleInterfaceAsset {
-            id: id.clone(),
-            detail,
-        };
-        if image.bit_depth != TEXTBOX_BIT_DEPTH {
-            return Err(fault(format!(
-                "is {}-bit: expected {TEXTBOX_BIT_DEPTH}-bit",
-                image.bit_depth
-            )));
-        }
-        if image.width != TEXTBOX_SIZE || image.height != TEXTBOX_SIZE {
-            return Err(fault(format!(
-                "is {}x{}: expected {TEXTBOX_SIZE}x{TEXTBOX_SIZE}",
-                image.width, image.height
-            )));
-        }
-        if image.pixels.len() != (TEXTBOX_SIZE * TEXTBOX_SIZE) as usize {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
-        {
-            return Err(fault(format!(
-                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
-            )));
-        }
-        Ok(image)
+        self.bank_image(
+            &format!("{IMAGE_PREFIX}/textbox"),
+            (TEXTBOX_SIZE, TEXTBOX_SIZE),
+            |id, detail| PackError::MalformedBattleInterfaceAsset { id, detail },
+        )
     }
 
     fn battle_interface_palette(
@@ -107,21 +76,9 @@ impl AssetPack {
         name: &str,
         colors: u16,
     ) -> Result<PaletteRef<'_>, PackError> {
-        let id = format!("{PALETTE_PREFIX}/{name}");
-        let palette = self.palette(&id)?;
-        if palette.color_count != colors
-            || palette.raw.len() != usize::from(colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(PackError::MalformedBattleInterfaceAsset {
-                id,
-                detail: format!(
-                    "declares {} colours in {} bytes: expected {colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            });
-        }
-        Ok(palette)
+        self.sized_palette(&format!("{PALETTE_PREFIX}/{name}"), colors, |id, detail| {
+            PackError::MalformedBattleInterfaceAsset { id, detail }
+        })
     }
 
     fn battle_interface_raw(&self, name: &str, expected_len: usize) -> Result<&[u8], PackError> {
@@ -398,40 +355,11 @@ impl AssetPack {
         width: u32,
         height: u32,
     ) -> Result<ImageRef<'_>, PackError> {
-        let id = format!("{IMAGE_PREFIX}/{name}");
-        let image = self.image(&id)?;
-        let fault = |detail: String| PackError::MalformedBattleInterfaceAsset {
-            id: id.clone(),
-            detail,
-        };
-        if image.bit_depth != TEXTBOX_BIT_DEPTH {
-            return Err(fault(format!(
-                "is {}-bit: expected {TEXTBOX_BIT_DEPTH}-bit",
-                image.bit_depth
-            )));
-        }
-        if (image.width, image.height) != (width, height) {
-            return Err(fault(format!(
-                "is {}x{}: expected {width}x{height}",
-                image.width, image.height
-            )));
-        }
-        if image.pixels.len() != (width * height) as usize {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
-        {
-            return Err(fault(format!(
-                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
-            )));
-        }
-        Ok(image)
+        self.bank_image(
+            &format!("{IMAGE_PREFIX}/{name}"),
+            (width, height),
+            |id, detail| PackError::MalformedBattleInterfaceAsset { id, detail },
+        )
     }
 
     /// The health-box element sheets in upstream table order.

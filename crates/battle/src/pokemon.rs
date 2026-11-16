@@ -16,11 +16,13 @@
 use assets::items::ItemId;
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
+use crate::badge_boosts::BadgeBoosts;
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
-use crate::status1::Status1;
+use crate::status1::{Status1, TOXIC_COUNTER_MAX};
 use crate::volatile::Volatiles;
 
 pub mod evs;
@@ -31,7 +33,9 @@ pub mod pp_bonuses;
 mod tests;
 
 pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
-pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use learn::{
+    ExperienceAward, LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn,
+};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// Maximum number of moves a Pokémon can know.
@@ -172,7 +176,9 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// Remaining PP, bounded by [`BattlePokemon::max_pp`].
+    /// Remaining PP. A battler built in-process holds at most
+    /// [`BattlePokemon::max_pp`]; one adopted from a save may hold more
+    /// ([`BattlePokemon::with_saved_pp`]).
     pub pp: u8,
 }
 
@@ -365,6 +371,12 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// Raw game-text OT name with its terminator; `None` when the boundary
+    /// that built this Pokémon never recorded one.
+    ///
+    /// Excluded from [`PartialEq`] (below): the save encoder does not write
+    /// it back, so a reloaded Pokémon differs only in this provenance.
+    original_trainer_name: Option<[u8; 8]>,
     /// Whether the save owner is not this Pokémon's original trainer
     /// (`IsTradedMon`, `pokeemerald/src/pokemon.c:6602-6609`). Decided at the
     /// save boundary, which alone sees the owner's name and id; battle only
@@ -374,7 +386,14 @@ pub struct BattlePokemon {
     /// so it survives fainting and write-back; which items a battle accepts is
     /// decided by [`crate::battle::held_item`].
     held_item: ItemId,
+    /// Species typing, fixed at construction and the only typing a save or
+    /// switch-in reload sees (`gBaseStats[species].type1`/`type2`).
     types: [Type; 2],
+    /// A battle-only typing laid over [`Self::types`] while the mon is on the
+    /// field: Color Change's `SET_BATTLER_TYPE` writes `gBattleMons[].type1`
+    /// and `.type2`, never the party record (`src/battle_util.c:2749`-`:2766`).
+    /// Cleared with the rest of the battle scratch.
+    temporary_types: Option<[Type; 2]>,
     base_stats: BaseStats,
     experience: u32,
     stats: Stats,
@@ -394,7 +413,21 @@ pub struct BattlePokemon {
     stages: StatStages,
     volatiles: Volatiles,
     status1: Status1,
+    /// The battle copy's toxic counter, advanced by
+    /// `ENDTURN_BAD_POISON` (`pokeemerald/src/battle_util.c:1542`-`:1544`).
+    /// [`BattlePokemon::status1`] keeps the party's stored word; this is the
+    /// separate count the battle's `gBattleMons` copy carries. Zero unless
+    /// `status1` is [`Status1::BadPoisoned`], which seeds it.
+    toxic_turns: u8,
+    /// See [`BattlePokemon::stat_badges`]. Excluded from [`PartialEq`]
+    /// (below): battle context, not identity.
+    stat_badges: BadgeBoosts,
     pending_move_learn: Option<PendingMoveLearn>,
+    /// The ability Trace copied for this battler's current time on the field
+    /// (`gBattleMons[].ability`, which `Cmd_switchindataupdate` reloads from
+    /// the species slot on every send-out). Never part of a save: see
+    /// [`BattlePokemon::native_ability`].
+    traced_ability: Option<AbilityId>,
 }
 
 // Manual, rather than derived, so `created_at_level` (its own doc comment)
@@ -410,9 +443,11 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            original_trainer_name: _,
             traded_recipient,
             held_item,
             types,
+            temporary_types,
             base_stats,
             experience,
             stats,
@@ -424,7 +459,10 @@ impl PartialEq for BattlePokemon {
             stages,
             volatiles,
             status1,
+            toxic_turns,
+            stat_badges: _,
             pending_move_learn,
+            traced_ability,
         } = self;
         *species == other.species
             && *level == other.level
@@ -436,6 +474,7 @@ impl PartialEq for BattlePokemon {
             && *traded_recipient == other.traded_recipient
             && *held_item == other.held_item
             && *types == other.types
+            && *temporary_types == other.temporary_types
             && *base_stats == other.base_stats
             && *experience == other.experience
             && *stats == other.stats
@@ -447,7 +486,9 @@ impl PartialEq for BattlePokemon {
             && *stages == other.stages
             && *volatiles == other.volatiles
             && *status1 == other.status1
+            && *toxic_turns == other.toxic_turns
             && *pending_move_learn == other.pending_move_learn
+            && *traced_ability == other.traced_ability
     }
 }
 
@@ -543,9 +584,11 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            original_trainer_name: None,
             traded_recipient: false,
             held_item: ItemId::NONE,
             types: base.types,
+            temporary_types: None,
             base_stats: *base,
             experience,
             stats,
@@ -561,7 +604,10 @@ impl BattlePokemon {
             stages: StatStages::default(),
             volatiles: Volatiles::default(),
             status1: Status1::default(),
+            toxic_turns: 0,
+            stat_badges: BadgeBoosts::NONE,
             pending_move_learn: None,
+            traced_ability: None,
         })
     }
 
@@ -577,6 +623,23 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
+        Ok(self)
+    }
+
+    /// Adopts a saved record's remaining PP for one move slot exactly as
+    /// stored, even above [`BattlePokemon::max_pp`]; upstream provenance is
+    /// in the `party` module docs ("Move PP"). Spending
+    /// ([`BattlePokemon::deduct_pp`]) counts down from the stored value and
+    /// [`BattlePokemon::heal`] restores the maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty.
+    pub fn with_saved_pp(mut self, index: usize, pp: u8) -> Result<Self, BattleError> {
+        self.moves
+            .get_mut(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?
+            .pp = pp;
         Ok(self)
     }
 
@@ -623,11 +686,28 @@ impl BattlePokemon {
         self.personality
     }
 
-    /// Ability selected by [`BattlePokemon::ability_slot`].
+    /// The ability battle mechanics read: the one Trace copied this turn on
+    /// the field, else [`BattlePokemon::native_ability`].
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        match self.traced_ability {
+            Some(traced) => traced,
+            None => self.native_ability(),
+        }
+    }
+
+    /// Gender from the species ratio and the personality's low byte.
+    #[must_use]
+    pub const fn gender(&self) -> Gender {
+        Gender::of_personality(self.base_stats.gender_ratio, self.personality)
+    }
+
+    /// Ability selected by [`BattlePokemon::ability_slot`], which a copy by
+    /// Trace never changes.
     ///
     /// Species without a secondary ability always use their primary ability.
     #[must_use]
-    pub const fn ability(&self) -> AbilityId {
+    pub const fn native_ability(&self) -> AbilityId {
         let [first, second] = self.base_stats.abilities;
         if second.0 == 0 || self.ability_slot == 0 {
             first
@@ -693,6 +773,27 @@ impl BattlePokemon {
         self
     }
 
+    /// The original trainer's raw game-text name, terminator appended
+    /// (`GetBoxMonData(MON_DATA_OT_NAME)`), when recorded.
+    #[must_use]
+    pub const fn original_trainer_name(&self) -> Option<&[u8; 8]> {
+        self.original_trainer_name.as_ref()
+    }
+
+    /// Records the original trainer's seven saved name bytes; the eighth
+    /// buffer byte is the terminator `GetBoxMonData` appends.
+    #[must_use]
+    pub const fn with_original_trainer_name(mut self, saved_name: [u8; 7]) -> Self {
+        let mut name = [crate::obedience::TEXT_EOS; 8];
+        let mut index = 0;
+        while index < 7 {
+            name[index] = saved_name[index];
+            index += 1;
+        }
+        self.original_trainer_name = Some(name);
+        self
+    }
+
     /// The item this Pokémon holds, [`ItemId::NONE`] when empty.
     #[must_use]
     pub const fn held_item(&self) -> ItemId {
@@ -714,10 +815,29 @@ impl BattlePokemon {
         self.held_item = ItemId::NONE;
     }
 
-    /// Species types captured at construction.
+    /// The typing this Pokémon fights with: a battle-only change such as
+    /// Color Change's if it holds one, otherwise [`BattlePokemon::species_types`].
+    /// Every damage, STAB and type-immunity read goes through here
+    /// (`IS_BATTLER_OF_TYPE` reads `gBattleMons[].type1`/`.type2`).
     #[must_use]
     pub const fn types(&self) -> [Type; 2] {
+        match self.temporary_types {
+            Some(types) => types,
+            None => self.types,
+        }
+    }
+
+    /// Species types captured at construction: what a save holds and what
+    /// every switch-in reloads, whatever the battle has changed since.
+    #[must_use]
+    pub const fn species_types(&self) -> [Type; 2] {
         self.types
+    }
+
+    /// `SET_BATTLER_TYPE`: both of this battler's type slots become
+    /// `new_type` until it leaves the field (`src/battle_util.c:2757`).
+    pub(crate) const fn set_temporary_type(&mut self, new_type: Type) {
+        self.temporary_types = Some([new_type, new_type]);
     }
 
     /// Computed battle stats.
@@ -820,16 +940,64 @@ impl BattlePokemon {
         &mut self.volatiles
     }
 
-    /// Current primary status.
+    /// Current primary status, as the party stores it.
+    ///
+    /// For [`Status1::BadPoisoned`] the counter is the stored word's, which a
+    /// save writes back untouched; the count the battle advances each end of
+    /// turn is separate (`ENDTURN_BAD_POISON` emits no status write-back,
+    /// `pokeemerald/src/battle_util.c:1536`-`:1549`), so a residual never
+    /// changes this value.
     #[must_use]
     pub const fn status1(&self) -> Status1 {
         self.status1
     }
 
-    /// Overwrites the primary status. `Asleep { turns: 0 }` is stored as
-    /// [`Status1::Healthy`]: upstream's cleared sleep bits are a healthy battler.
-    pub const fn set_status1(&mut self, status1: Status1) {
+    /// Overwrites the primary status: a whole-status write, which upstream
+    /// emits to the party and applies to the battle copy alike (infliction,
+    /// cure, faint). `Asleep { turns: 0 }` is stored as [`Status1::Healthy`]:
+    /// upstream's cleared sleep bits are a healthy battler. A
+    /// [`Status1::BadPoisoned`] counter seeds the battle's own count; every
+    /// other status zeroes it.
+    ///
+    /// The toxic residual must not call this: it advances only the battle
+    /// copy's count ([`BattlePokemon::advance_toxic_turns`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bad-poison counter exceeds [`TOXIC_COUNTER_MAX`], which no
+    /// four-bit status word can hold.
+    pub fn set_status1(&mut self, status1: Status1) {
         self.status1 = status1.normalised();
+        self.toxic_turns = self.stored_toxic_counter();
+    }
+
+    /// The counter in the stored status word, zero for any other status.
+    fn stored_toxic_counter(&self) -> u8 {
+        match self.status1 {
+            Status1::BadPoisoned { counter } => {
+                assert!(
+                    counter <= TOXIC_COUNTER_MAX,
+                    "a toxic counter of {counter} does not fit STATUS1_TOXIC_COUNTER's four bits"
+                );
+                counter
+            }
+            _ => 0,
+        }
+    }
+
+    /// `ENDTURN_BAD_POISON`'s counter step: raises the battle copy's toxic
+    /// count by one unless it already sits at [`TOXIC_COUNTER_MAX`], and
+    /// returns the count to multiply by
+    /// (`pokeemerald/src/battle_util.c:1542`-`:1544`). Returns `None`, changing
+    /// nothing, for a battler that is not badly poisoned.
+    pub(crate) fn advance_toxic_turns(&mut self) -> Option<u8> {
+        if !self.status1.is_bad_poisoned() {
+            return None;
+        }
+        if self.toxic_turns < TOXIC_COUNTER_MAX {
+            self.toxic_turns += 1;
+        }
+        Some(self.toxic_turns)
     }
 
     /// Resets stat stages and volatile conditions before returning this
@@ -850,9 +1018,44 @@ impl BattlePokemon {
     /// explicit [`BattlePokemon::set_status1`] call, right alongside this
     /// method (`crate::battle::execute::Battle::settle_faint`, the
     /// double-faint arm of `crate::battle::execute::pipelines`).
+    ///
+    /// The toxic counter the battle advanced is battle scratch too: it is
+    /// reseeded from the stored status word, which is what a switch-in
+    /// reloads (`Cmd_switchindataupdate` copies the party record whole and
+    /// `SwitchInClearSetData` never writes `status1`,
+    /// `pokeemerald/src/battle_script_commands.c:4606`-`:4657`,
+    /// `pokeemerald/src/battle_main.c:3152`-`:3262`). A stored `0x80` therefore
+    /// re-enters at zero and an imported `0x580` at five; the stored word
+    /// itself is never touched.
     pub fn clear_battle_scratch(&mut self) {
+        self.clear_fainted_scratch();
+        self.traced_ability = None;
+    }
+
+    /// [`BattlePokemon::clear_battle_scratch`] for a battler that just fainted
+    /// but is still on the field: `FaintClearSetData` clears stages and
+    /// volatiles, not `gBattleMons[].ability` (`battle_main.c:3269`-`:3289`),
+    /// and the corpse's contact abilities and replacement scoring still read it.
+    pub(crate) fn clear_fainted_scratch(&mut self) {
+        self.reset_temporary_types();
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
+        self.toxic_turns = self.stored_toxic_counter();
+    }
+
+    /// Restores the species typing: `FaintClearSetData` rewrites both type
+    /// slots from the species table (`src/battle_main.c:3350`-`:3351`),
+    /// `SwitchInClearSetData` does on entry (`:3414`-`:3420`) and
+    /// `Cmd_switchindataupdate` on a switch-in
+    /// (`src/battle_script_commands.c:4630`-`:4639`).
+    pub(crate) const fn reset_temporary_types(&mut self) {
+        self.temporary_types = None;
+    }
+
+    /// `AbilityBattleEffects`' Trace copy: this battler's ability becomes
+    /// `copied` until it leaves the field (`src/battle_util.c:3053`-`:3058`).
+    pub(crate) fn trace_ability(&mut self, copied: AbilityId) {
+        self.traced_ability = Some(copied);
     }
 
     /// Applies earned experience one level threshold at a time, capping both
@@ -881,11 +1084,33 @@ impl BattlePokemon {
         dex: &Dex,
         amount: u32,
     ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        Ok(self.apply_experience_reporting(dex, amount)?.pending)
+    }
+
+    /// Applies an award exactly like [`BattlePokemon::apply_experience`] and
+    /// also reports the moves a free slot took without asking, in learning
+    /// order, so the caller can announce each one before any prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
+    /// decision is already pending.
+    #[must_use = "the report carries the open move prompt and the moves \
+                  learned without asking"]
+    pub fn apply_experience_reporting(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<ExperienceAward, BattleError> {
         if let Some(pending) = self.pending_move_learn {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
-        self.pending_move_learn = self.advance_experience(dex, amount);
-        Ok(self.pending_move_learn)
+        let mut learned = Vec::new();
+        self.pending_move_learn = self.advance_experience(dex, amount, &mut learned);
+        Ok(ExperienceAward {
+            pending: self.pending_move_learn,
+            learned,
+        })
     }
 
     /// Adopts a loaded experience total verbatim, without moving the level or
@@ -1012,17 +1237,11 @@ impl BattlePokemon {
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
     /// special Attack is returned raw: Thick Fat and Plus/Minus depend on the
     /// other battler, so callers apply them before the stage.
+    ///
+    /// Badge-free; damage reads [`BattlePokemon::damage_attacking_stat`].
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
-        match category {
-            crate::damage::MoveCategory::Physical => {
-                let raw_attack = crate::ability::hustle_attack(self.ability(), self.stats.attack);
-                let raw_attack =
-                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
-                (raw_attack, self.stages.attack)
-            }
-            crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),
-        }
+        self.attacking_stat_with(category, false, BadgeBoosts::NONE)
     }
 
     /// Defending stat and stage for the move category.
@@ -1031,19 +1250,93 @@ impl BattlePokemon {
     /// before the stage is applied, matching upstream's
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
     /// Defense never changes.
+    ///
+    /// Badge-free; damage reads [`BattlePokemon::damage_defending_stat`].
     #[must_use]
     pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.defending_stat_with(category, BadgeBoosts::NONE)
+    }
+
+    /// [`BattlePokemon::attacking_stat`] in `CalculateBaseDamage`'s order:
+    /// Huge Power, then the badge, then Hustle and Guts
+    /// (`pokeemerald/src/pokemon.c:3158`-`:3168`, `:3205`-`:3212`). Thick Fat
+    /// and Plus/Minus read the other battler, so the caller applies them.
+    #[must_use]
+    pub fn damage_attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.attacking_stat_with(category, true, self.stat_badges)
+    }
+
+    /// [`BattlePokemon::defending_stat`] with the badge applied before Marvel
+    /// Scale (`pokeemerald/src/pokemon.c:3163`-`:3168`, `:3213`-`:3214`).
+    #[must_use]
+    pub fn damage_defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
+        self.defending_stat_with(category, self.stat_badges)
+    }
+
+    fn attacking_stat_with(
+        &self,
+        category: crate::damage::MoveCategory,
+        huge_power: bool,
+        badges: BadgeBoosts,
+    ) -> (u32, StatStage) {
         match category {
             crate::damage::MoveCategory::Physical => {
-                let raw_defense = crate::ability::marvel_scale_defense(
-                    self.ability(),
-                    self.status1,
-                    self.stats.defense,
-                );
+                let raw_attack = if huge_power {
+                    crate::ability::huge_power_attack(self.ability(), category, self.stats.attack)
+                } else {
+                    self.stats.attack
+                };
+                let raw_attack = badges.boost_attack(raw_attack);
+                let raw_attack = crate::ability::hustle_attack(self.ability(), raw_attack);
+                let raw_attack =
+                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
+                (raw_attack, self.stages.attack)
+            }
+            crate::damage::MoveCategory::Special => (
+                badges.boost_special(self.stats.sp_attack),
+                self.stages.sp_attack,
+            ),
+        }
+    }
+
+    fn defending_stat_with(
+        &self,
+        category: crate::damage::MoveCategory,
+        badges: BadgeBoosts,
+    ) -> (u32, StatStage) {
+        match category {
+            crate::damage::MoveCategory::Physical => {
+                let raw_defense = badges.boost_defense(self.stats.defense);
+                let raw_defense =
+                    crate::ability::marvel_scale_defense(self.ability(), self.status1, raw_defense);
                 (raw_defense, self.stages.defense)
             }
-            crate::damage::MoveCategory::Special => (self.stats.sp_defense, self.stages.sp_defense),
+            crate::damage::MoveCategory::Special => (
+                badges.boost_special(self.stats.sp_defense),
+                self.stages.sp_defense,
+            ),
         }
+    }
+
+    /// The stat badges of the side this battler fights on: battle context that
+    /// never changes [`BattlePokemon::stats`] or [`BattlePokemon::cached_stats`]
+    /// (`pokeemerald/src/pokemon.c:3407`-`:3420`). [`crate::Battle`] clears it on
+    /// enemies and shares the lead's with the reserves.
+    #[must_use]
+    pub const fn stat_badges(&self) -> BadgeBoosts {
+        self.stat_badges
+    }
+
+    /// Sets [`BattlePokemon::stat_badges`]; call it on the lead before
+    /// building a [`crate::Battle`] so the opening Speed comparison sees it.
+    #[must_use]
+    pub const fn with_stat_badges(mut self, badges: BadgeBoosts) -> Self {
+        self.stat_badges = badges;
+        self
+    }
+
+    pub(crate) const fn set_stat_badges(&mut self, badges: BadgeBoosts) {
+        self.stat_badges = badges;
     }
 
     /// Speed after applying its stat stage.
@@ -1056,14 +1349,15 @@ impl BattlePokemon {
         self.stages.speed.apply(self.stats.speed)
     }
 
-    /// [`BattlePokemon::effective_speed`] with paralysis' quarter modifier
-    /// applied after stage scaling, truncating independently
+    /// [`BattlePokemon::effective_speed`] with this battler's Speed badge
+    /// ([`BattlePokemon::stat_badges`]) and then paralysis' quarter modifier
+    /// applied after stage scaling, each truncating independently
     /// (`speedBattler /= 4`, `battle_main.c:4650`-`:4651`,
     /// `:4684`-`:4685`). Turn order is the only reader of this modifier —
     /// see [`BattlePokemon::effective_speed`]'s own doc.
     #[must_use]
     pub const fn speed_for_turn_order(&self) -> u32 {
-        let speed = self.effective_speed();
+        let speed = self.stat_badges.boost_speed(self.effective_speed());
         if self.status1.is_paralysed() {
             speed / PARALYSIS_SPEED_DIVISOR
         } else {
@@ -1121,7 +1415,7 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
-        self.status1 = Status1::default();
+        self.set_status1(Status1::default());
         Ok(())
     }
 }

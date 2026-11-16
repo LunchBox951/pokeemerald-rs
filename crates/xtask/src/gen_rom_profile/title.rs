@@ -5,14 +5,14 @@
 //!
 //! `gTitleScreenBgPalettes` concatenates the logo palette and the
 //! rayquaza/clouds palette, so the logo palette is located as whatever sits
-//! immediately before the rayquaza palette ([`locate_trimmed_palette`]),
-//! trying cuts longest-first.
+//! immediately before the rayquaza palette ([`locate_trimmed_palette`]).
 //!
 //! Upstream's build rule cuts the logo palette to 224 colours
 //! (`graphics_file_rules.mk`'s `-num_colors 224`) while its `.pal` holds 256
 //! with the last 32 black. `xtask::extract::scope::TITLE_SCREEN_PALETTE_CUTS`
-//! applies the same cut, so the first candidate normally matches. The walk
-//! stays as the adjacency check and still reports a changed upstream cut.
+//! applies the same cut, so the pack's whole palette matches. Palette import
+//! never restores omitted black, so a pack cut differently from the ROM fails
+//! closed rather than yielding a plan that imports to a different entry.
 
 use rom_import::Encoding;
 
@@ -108,14 +108,14 @@ fn locate_palettes(
         .ok_or_else(|| GenRomProfileError::MissingPackEntry(ADJACENT_PALETTE.to_owned()))?
         .addr;
 
-    let (addr, color_count, dropped) = locate_trimmed_palette(ctx, adjacent)?;
+    let (addr, color_count) = locate_trimmed_palette(ctx, adjacent)?;
     report.push(
         ReportLine::unique(TRIMMED_PALETTE, addr, u32::from(color_count) * 2)
             .with(Resolution::StructDerived)
             .symbol("gTitleScreenBgPalettes")
             .note(format!(
                 "located by adjacency: {color_count} colours ending where \
-                 {ADJACENT_PALETTE} begins, {dropped} of the pack's colours dropped"
+                 {ADJACENT_PALETTE} begins"
             )),
     );
     plans.push(PalettePlan {
@@ -150,31 +150,41 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
 
 /// Find the logo palette by walking back from the palette stored after it.
 ///
-/// Returns its address, the colour count the ROM really holds, and how many
-/// of the pack's colours were dropped.
+/// The palette must be the pack's whole colour count: the importer reads
+/// exactly `color_count` colours and never restores omitted trailing black,
+/// so a plan that stored a shorter prefix would import to a different pack
+/// entry. A pack cut differently from the ROM therefore fails closed
+/// instead of being trimmed to fit.
+///
+/// Returns its address and colour count.
 fn locate_trimmed_palette(
     ctx: &Context<'_>,
     adjacent: u32,
-) -> Result<(u32, u16, u16), GenRomProfileError> {
+) -> Result<(u32, u16), GenRomProfileError> {
     let asset = ctx.pack.get(TRIMMED_PALETTE)?;
-    let (payload, pack_colors) = asset.palette_payload(TRIMMED_PALETTE)?;
-
-    // The ROM holds a prefix of the pack's colours; the rest must be black.
-    for colors in (1..=pack_colors).rev() {
-        let bytes = usize::from(colors) * 2;
-        let Some(addr) = adjacent.checked_sub(u32::from(colors) * 2) else {
-            continue;
-        };
-        if slice_at_addr(ctx.rom, addr, bytes) == Some(&payload[..bytes])
-            && payload[bytes..].iter().all(|&byte| byte == 0)
-        {
-            return Ok((addr, colors, pack_colors - colors));
-        }
-    }
-    Err(GenRomProfileError::StructMismatch {
+    let (payload, colors) = asset.palette_payload(TRIMMED_PALETTE)?;
+    let mismatch = |reason: String| GenRomProfileError::StructMismatch {
         id: TRIMMED_PALETTE.to_owned(),
-        reason: format!("no prefix of it sits immediately before {adjacent:08X}"),
-    })
+        reason,
+    };
+
+    let bytes = payload.len();
+    let addr = u32::try_from(bytes)
+        .ok()
+        .and_then(|len| adjacent.checked_sub(len))
+        .ok_or_else(|| {
+            mismatch(format!(
+                "its {colors} colours do not fit before {adjacent:08X}"
+            ))
+        })?;
+    if slice_at_addr(ctx.rom, addr, bytes) == Some(payload) {
+        Ok((addr, colors))
+    } else {
+        Err(mismatch(format!(
+            "its {colors} colours do not sit immediately before {adjacent:08X}; \
+             the pack must be cut the way the ROM stores it"
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -270,7 +280,7 @@ mod tests {
     /// A complete synthetic title pack and ROM. The ROM holds 8 logo colours
     /// with the rayquaza/clouds palette right after them; the pack holds
     /// those 8 followed by `logo_pack_tail`.
-    fn title_fixture(logo_pack_tail: [u16; 8]) -> (Vec<u8>, Vec<pack_format::PackEntry>) {
+    fn title_fixture(logo_pack_tail: &[u16]) -> (Vec<u8>, Vec<pack_format::PackEntry>) {
         let images = [
             ("clouds", 0x11u8),
             ("emerald_version", 0x22),
@@ -304,7 +314,7 @@ mod tests {
         }
         let logo_rom: Vec<u16> = palette_colors(9)[..8].to_vec();
         let mut logo_pack = logo_rom.clone();
-        logo_pack.extend(logo_pack_tail);
+        logo_pack.extend_from_slice(logo_pack_tail);
         let rayquaza = palette_colors(10);
         let rom = fixture
             .write(LOGO_ADDR, &color_bytes(&logo_rom))
@@ -316,8 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn locate_composes_the_title_and_trims_the_logo_palette_by_adjacency() {
-        let (rom, entries) = title_fixture([0; 8]);
+    fn locate_composes_the_title_and_places_the_logo_palette_by_adjacency() {
+        let (rom, entries) = title_fixture(&[]);
         with_context("title-locate-e2e", &rom, entries, |ctx| {
             let mut report = Vec::new();
             let plan = locate(ctx, &mut report).expect("title located");
@@ -354,9 +364,9 @@ mod tests {
                 SymbolExpectation::Exact("gTitleScreenBgPalettes".to_owned())
             );
             assert!(
-                line.note.as_deref().is_some_and(
-                    |note| note.contains("8 colours") && note.contains("8 of the pack")
-                ),
+                line.note
+                    .as_deref()
+                    .is_some_and(|note| note.contains("8 colours") && note.contains("begins")),
                 "{:?}",
                 line.note
             );
@@ -364,15 +374,65 @@ mod tests {
     }
 
     #[test]
-    fn a_logo_palette_whose_dropped_tail_is_not_black_is_refused() {
+    fn importing_the_logo_plan_reproduces_the_source_pack_entry() {
+        // Import reads exactly `color_count * 2` bytes at the root's address
+        // and builds the entry from them (rom-import domains/mod.rs), so this
+        // mirrors that read and compares it with the entry the plan came from.
+        let (rom, entries) = title_fixture(&[]);
+        let source = entries
+            .iter()
+            .find(|e| e.id == TRIMMED_PALETTE)
+            .map(|e| (format!("{:?}", e.kind), e.payload.clone()))
+            .expect("source logo entry");
+        let logo = with_context("title-trim-roundtrip", &rom, entries, |ctx| {
+            locate(ctx, &mut Vec::new())
+        })
+        .expect("title located")
+        .palettes
+        .into_iter()
+        .find(|p| p.id == TRIMMED_PALETTE)
+        .expect("logo plan");
+        let bytes =
+            slice_at_addr(&rom, logo.addr, usize::from(logo.color_count) * 2).expect("in rom");
+        let colors: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let imported = palette_entry(TRIMMED_PALETTE.into(), &colors).expect("palette");
+        assert_eq!(
+            (format!("{:?}", imported.kind), imported.payload),
+            source,
+            "import of the plan must reproduce the pack entry"
+        );
+    }
+
+    #[test]
+    fn a_pack_logo_palette_longer_than_the_rom_stores_is_refused() {
+        // The pack holds 16 colours, the last 8 black, and the ROM only the
+        // first 8. Import would emit the shorter palette, so the plan cannot
+        // be trimmed to fit: the stale cut fails closed.
+        let (rom, entries) = title_fixture(&[0; 8]);
+        let err = with_context("title-locate-stale-cut", &rom, entries, |ctx| {
+            locate(ctx, &mut Vec::new())
+        })
+        .expect_err("a pack cut differently from the ROM fails closed");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, reason }
+                if id == TRIMMED_PALETTE && reason.contains("16 colours")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_pack_logo_palette_with_a_non_black_tail_is_refused() {
         // The ROM holds the first 8 colours, but the pack's other 8 are not
-        // black, so neither the full palette nor the 8-colour prefix is a
-        // faithful match for the bytes before the adjacent palette.
-        let (rom, entries) = title_fixture([0x7fff; 8]);
+        // black, so the pack's palette does not match the bytes before the
+        // adjacent palette.
+        let (rom, entries) = title_fixture(&[0x7fff; 8]);
         let err = with_context("title-locate-bad-tail", &rom, entries, |ctx| {
             locate(ctx, &mut Vec::new())
         })
-        .expect_err("a non-black dropped tail fails closed");
+        .expect_err("a non-black pack tail fails closed");
         assert!(
             matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == TRIMMED_PALETTE),
             "{err:?}"
@@ -381,7 +441,7 @@ mod tests {
 
     #[test]
     fn a_logo_palette_not_adjacent_to_the_rayquaza_palette_is_refused() {
-        let (mut rom, entries) = title_fixture([0; 8]);
+        let (mut rom, entries) = title_fixture(&[]);
         // Corrupt the last logo colour in the ROM.
         rom[LOGO_ADDR + 14] ^= 0xff;
         let err = with_context("title-locate-bad-adjacency", &rom, entries, |ctx| {

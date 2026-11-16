@@ -252,7 +252,7 @@ fn controls_and_the_terminator_survive_expansion() {
             Token::Char('a'),
             Token::Newline,
             Token::Char('b'),
-            Token::PromptScroll,
+            Token::PromptClear,
             Token::End,
         ]
     );

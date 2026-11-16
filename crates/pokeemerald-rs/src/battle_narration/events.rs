@@ -9,8 +9,9 @@
 //! scripting battler and the afflicted battler as the effect battler.
 
 use assets::{AbilityId, Effectiveness};
-use battle::{BattleEvent, ChangedStat, Status1};
+use battle::{BattleEvent, ChangedStat, LoafMessage, Status1};
 
+use super::attract;
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
 use super::lifecycle;
 use super::names::NarrationNames;
@@ -18,7 +19,7 @@ use super::narrator::Narrator;
 use super::string_ids as id;
 use super::{NarrationError, NarrationRequest, TemplateId};
 
-fn table(template: u16, context: NarrationContext) -> NarrationRequest {
+pub(super) fn table(template: u16, context: NarrationContext) -> NarrationRequest {
     NarrationRequest {
         template: TemplateId::Table(template),
         context,
@@ -60,7 +61,9 @@ fn stat_change_buffer(rose: bool, magnitude: u8) -> BattleBuffer {
 
 fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     match status {
-        Status1::Poisoned => Ok(BattleBuffer::Status(StatusName::Poison)),
+        Status1::Poisoned | Status1::BadPoisoned { .. } => {
+            Ok(BattleBuffer::Status(StatusName::Poison))
+        }
         Status1::Burned => Ok(BattleBuffer::Status(StatusName::Burn)),
         Status1::Paralysed => Ok(BattleBuffer::Status(StatusName::Paralysis)),
         Status1::Asleep { .. } => Ok(BattleBuffer::Status(StatusName::Sleep)),
@@ -81,10 +84,31 @@ pub(super) fn requests(
     if let Some(requests) = setseeded_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = attract::requests(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = sleep_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = disobedience_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = ability_results(narrator, event)? {
+        return Ok(requests);
+    }
+    if let BattleEvent::TypeChanged {
+        by_player,
+        new_type,
+        ..
+    } = *event
+    {
+        return Ok(vec![type_changed_request(
+            narrator.context(),
+            by_player,
+            new_type,
+        )]);
+    }
+    if let Some(requests) = yawn_protection_results(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = status_results(narrator, event) {
@@ -124,7 +148,9 @@ fn setseeded_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Nar
 /// `gGotDefrostedStringIds` names the thaw-hit move for `B_MSG_DEFROSTED_BY_MOVE`
 /// (`src/battle_message.c:1102`-`:1106`). `BattleScript_MoveUsedLoafingAround`
 /// prints `gInobedientStringIds`'s `B_MSG_LOAFING` entry in place of the
-/// announcement (`:4232`-`:4240`).
+/// announcement (`:4232`-`:4240`). `BattleScript_MoveUsedFlinched` likewise
+/// prints `STRINGID_PKMNFLINCHED` in the cancelled battler's name
+/// (`:3780`-`:3783`).
 fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let (template, by_player, current_move) = match *event {
         BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player, None),
@@ -135,6 +161,7 @@ fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             (id::PKMNWASDEFROSTEDBY, by_player, Some(move_id))
         }
         BattleEvent::LoafingAround { by_player, .. } => (id::PKMNLOAFING, by_player, None),
+        BattleEvent::Flinched { by_player, .. } => (id::PKMNFLINCHED, by_player, None),
         _ => return None,
     };
     let mut context = narrator.context().user_vs_target(Side::user(by_player));
@@ -142,6 +169,57 @@ fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         context = context.with_move(move_id);
     }
     Some(vec![table(template, context)])
+}
+
+/// `IsMonDisobedient`'s outcomes, in the user's own name and with no move
+/// announcement of the chosen move: a loaf prints the drawn
+/// `gInobedientStringIds` entry (`BattleScript_MoveUsedLoafingAround`,
+/// `data/battle_scripts_1.s:4232`-`:4242`; `src/battle_message.c:1176`-
+/// `:1182`); the alternate move prints `STRINGID_PKMNIGNOREDORDERS` before
+/// the move's own announcement (`BattleScript_IgnoresAndUsesRandomMove`,
+/// `:4227`-`:4230`); the nap prints `STRINGID_PKMNBEGANTONAP` and then
+/// `SetMoveEffect`'s `gFellAsleepStringIds` entry for the user as
+/// `gEffectBattler` (`BattleScript_IgnoresAndFallsAsleep`, `:4244`-`:4250`;
+/// `BattleScript_MoveEffectSleep`, `:3869`-`:3872`); the self-hit prints
+/// `STRINGID_PKMNWONTOBEY` before `BattleScript_DoSelfConfusionDmg`'s
+/// `STRINGID_ITHURTCONFUSION` (`:4252`-`:4255`, `:3801`-`:3804`). Only the
+/// player's battler is gated, so the fieldless events name the player's side.
+fn disobedience_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    match event {
+        BattleEvent::IgnoredOrders => Some(vec![table(
+            id::PKMNIGNOREDORDERS,
+            narrator.context().user_vs_target(Side::user(true)),
+        )]),
+        BattleEvent::DisobedientNap => {
+            let user = Side::user(true);
+            let mut asleep = narrator.context().user_vs_target(user);
+            asleep.effect = Some(user);
+            Some(vec![
+                table(id::PKMNBEGANTONAP, narrator.context().user_vs_target(user)),
+                table(id::PKMNFELLASLEEP, asleep),
+            ])
+        }
+        BattleEvent::Disobeyed { message } => {
+            let template = match message {
+                LoafMessage::Loafing => id::PKMNLOAFING,
+                LoafMessage::WontObey => id::PKMNWONTOBEY,
+                LoafMessage::TurnedAway => id::PKMNTURNEDAWAY,
+                LoafMessage::PretendedNotToNotice => id::PKMNPRETENDNOTNOTICE,
+            };
+            Some(vec![table(
+                template,
+                narrator.context().user_vs_target(Side::user(true)),
+            )])
+        }
+        BattleEvent::DisobedientSelfHit { by_player, .. } => Some(vec![
+            table(
+                id::PKMNWONTOBEY,
+                narrator.context().user_vs_target(Side::user(*by_player)),
+            ),
+            table(id::ITHURTCONFUSION, narrator.context()),
+        ]),
+        _ => None,
+    }
 }
 
 /// Announcements and failures printed in the user's own name.
@@ -201,6 +279,10 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         BattleEvent::LiquidOoze { .. } => table(id::ITSUCKEDLIQUIDOOZE, base),
         BattleEvent::NothingHappened { .. } => table(id::BUTNOTHINGHAPPENED, base),
         BattleEvent::ButItFailed { .. } => table(id::BUTITFAILED, base),
+        BattleEvent::MadeDrowsy { by_player, .. } => table(
+            id::PKMNWASMADEDROWSY,
+            base.user_vs_target(Side::user(by_player)),
+        ),
         BattleEvent::GettingPumped { by_player, .. } => table(
             id::PKMNGETTINGPUMPED,
             base.user_vs_target(Side::user(by_player)),
@@ -241,6 +323,25 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         _ => return None,
     };
     Some(vec![request])
+}
+
+/// `BattleScript_ColorChangeActivates`' `STRINGID_PKMNCHANGEDTYPEWITH`: the
+/// holder, on the side opposite the damaging move's user, names its ability and
+/// the type it took (`B_BUFF1`, a `gTypeNames` index).
+fn type_changed_request(
+    base: NarrationContext,
+    by_player: bool,
+    new_type: assets::Type,
+) -> NarrationRequest {
+    table(
+        id::PKMNCHANGEDTYPEWITH,
+        base.user_vs_target(Side::user(by_player))
+            .with_ability(Side::user(by_player).other(), AbilityId::COLOR_CHANGE)
+            .with_buffer(
+                0,
+                BattleBuffer::Program(vec![BufferOp::Type(new_type.id())]),
+            ),
+    )
 }
 
 /// Results that name an ability, and the stat changes it prevents.
@@ -333,6 +434,12 @@ fn ability_results(
             context.scripting = Some(side);
             table(id::PKMNSXCUREDYPROBLEM, context)
         }
+        BattleEvent::SpeedBoostActivated { by_player, .. } => {
+            let side = Side::user(by_player);
+            let mut context = base.with_ability(side, AbilityId::SPEED_BOOST);
+            context.scripting = Some(side);
+            table(id::PKMNRAISEDSPEED, context)
+        }
         BattleEvent::RoughSkinDamage { by_player, .. } => table(
             id::PKMNHURTSWITH,
             base.user_vs_target(Side::user(by_player))
@@ -341,6 +448,29 @@ fn ability_results(
         _ => return Ok(None),
     };
     Ok(Some(vec![request]))
+}
+
+/// `BattleScript_EffectYawn`'s Insomnia and Vital Spirit jump, which names the
+/// target's ability with its holder as the scripting battler
+/// (`BattleScript_PrintBankAbilityMadeIneffective`,
+/// `data/battle_scripts_1.s:2451`-`:2473`).
+fn yawn_protection_results(
+    narrator: &Narrator,
+    event: &BattleEvent,
+) -> Option<Vec<NarrationRequest>> {
+    let BattleEvent::YawnAbilityProtected {
+        by_player, ability, ..
+    } = *event
+    else {
+        return None;
+    };
+    let holder = Side::user(by_player).other();
+    let mut context = narrator
+        .context()
+        .user_vs_target(Side::user(by_player))
+        .with_ability(holder, ability);
+    context.scripting = Some(holder);
+    Some(vec![table(id::PKMNSXMADEITINEFFECTIVE, context)])
 }
 
 /// Status moves and the abilities that pass a status on.
@@ -495,6 +625,11 @@ fn end_turn_and_spore_results(
             AbilityId::EFFECT_SPORE,
             Holder::Target,
         ),
+        BattleEvent::FellAsleepFromYawn { by_player } => {
+            let mut context = base;
+            context.effect = Some(Side::user(by_player));
+            table(id::PKMNFELLASLEEP, context)
+        }
         BattleEvent::PoisonedByEffectSpore { by_player, .. } => reflected(
             id::PKMNPOISONEDBY,
             base,

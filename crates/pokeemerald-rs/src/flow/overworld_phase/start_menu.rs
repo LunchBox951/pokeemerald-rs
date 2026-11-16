@@ -66,7 +66,6 @@ impl OverworldPhase {
         // Step does not run on frames the menu owns.
         self.advance_tileset_anim_tick();
         self.scene.seed_tall_grass_placement(&self.player);
-        self.scene.advance_tall_grass(&self.player);
 
         let mut target = PhaseSaveTarget {
             phase: RefCell::new(self),
@@ -82,6 +81,11 @@ impl OverworldPhase {
             // already back; the message box then takes it again.
             StartMenuOutcome::TakeItem => self.show_take_item_outcome(),
         }
+        // As in `step`: the menu is a task, so the sprites run after it
+        // (`OverworldBasic`, `src/overworld.c:1465-1476`).
+        self.advance_object_events();
+        self.scene
+            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
         true
     }
 
@@ -109,7 +113,7 @@ impl OverworldPhase {
             // `ConfigureAndSetUpOneTrainerBattle` (`src/battle_setup.c`); the
             // port has no lock, and the approach is neither a battle nor a step.
             && self.sight_approach.is_none()
-            && !self.player.field_input_suppressed()
+            && !self.field_input_closed()
     }
 
     /// Builds the menu a fresh `START` press would open, without committing it,

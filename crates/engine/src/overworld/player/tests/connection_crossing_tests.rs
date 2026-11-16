@@ -1,6 +1,8 @@
 //! Map-connection crossing regressions.
 
+use super::super::collision::Collision;
 use super::*;
+use crate::overworld::object_event_harness::admitted;
 
 #[test]
 fn stepping_off_the_edge_with_a_connection_crosses_maps() {
@@ -169,6 +171,120 @@ fn connection_crossing_does_not_check_local_object_events() {
         },
         "a connection crossing must never consult this map's own object events"
     );
+}
+
+/// The south map's landing tile `(2, 0)` is the departed map's `(2, 5)` one step past its
+/// edge, so a live object carried out of the south map before sits there.
+fn carrying_south_map(
+    landing_cell: MetatileCell,
+    carried_object: ObjectEvent,
+) -> CarryingConnectedMap {
+    let objects: &'static [ObjectEvent] = Box::leak(Box::new([carried_object]));
+    CarryingConnectedMap {
+        map: SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell,
+            landing_behavior: MB_NORMAL,
+        },
+        departed: admitted(objects, (2, 4)),
+    }
+}
+
+const OPEN_LANDING: MetatileCell = MetatileCell {
+    metatile_id: 1,
+    collision: 0,
+    elevation: 3,
+};
+
+fn blocked_by(collision: Collision) -> StepOutcome {
+    StepOutcome::Blocked {
+        direction: Direction::South,
+        collision,
+    }
+}
+
+#[test]
+fn a_carried_live_object_on_the_landing_tile_blocks_the_crossing() {
+    let runtime = south_connected_runtime();
+    let maps = carrying_south_map(OPEN_LANDING, object(1, 2, 5, 3, "0"));
+    let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+        blocked_by(Collision::ObjectEvent)
+    );
+    assert_eq!(player.position(), (2, 4));
+    assert!(!player.in_transit());
+}
+
+#[test]
+fn a_carried_live_object_beside_the_landing_tile_leaves_the_crossing_open() {
+    let runtime = south_connected_runtime();
+    let maps = carrying_south_map(OPEN_LANDING, object(1, 3, 5, 3, "0"));
+    let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+        StepOutcome::Crossed {
+            to_map: MapId("MAP_SOUTH"),
+            to_position: (2, 0),
+        }
+    );
+}
+
+#[test]
+fn a_carried_live_object_at_another_elevation_leaves_the_crossing_open() {
+    let runtime = south_connected_runtime();
+    let maps = carrying_south_map(OPEN_LANDING, object(1, 2, 5, 5, "0"));
+    let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert!(matches!(
+        player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+        StepOutcome::Crossed { .. }
+    ));
+}
+
+#[test]
+fn a_connection_collision_bit_outranks_a_carried_live_object() {
+    let runtime = south_connected_runtime();
+    let walled = MetatileCell {
+        collision: 1,
+        ..OPEN_LANDING
+    };
+    let maps = carrying_south_map(walled, object(1, 2, 5, 3, "0"));
+    let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+        blocked_by(Collision::Impassable)
+    );
+}
+
+#[test]
+fn a_connection_elevation_mismatch_outranks_a_carried_live_object() {
+    let runtime = south_connected_runtime();
+    let raised = MetatileCell {
+        elevation: 4,
+        ..OPEN_LANDING
+    };
+    let maps = carrying_south_map(raised, object(1, 2, 5, 3, "0"));
+    let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+        blocked_by(Collision::ElevationMismatch)
+    );
+}
+
+#[test]
+fn a_carried_live_object_makes_the_read_only_blocked_probe_true() {
+    let runtime = south_connected_runtime();
+    let maps = carrying_south_map(OPEN_LANDING, object(1, 2, 5, 3, "0"));
+    let player = PlayerState::new((2, 4), 3, Direction::South);
+
+    assert!(player.step_blocked(Direction::South, MB_NORMAL, &runtime, &maps, &NO_FLAGS));
 }
 
 #[test]

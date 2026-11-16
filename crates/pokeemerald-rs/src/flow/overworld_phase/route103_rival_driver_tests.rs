@@ -423,7 +423,8 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
             Direction::East,
         ),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     route_101.rng = Rng::new(1);
     let ivs = Ivs {
         hp: battle::MAX_IV,
