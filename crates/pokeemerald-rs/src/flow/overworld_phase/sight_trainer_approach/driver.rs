@@ -317,6 +317,9 @@ impl OverworldPhase {
             battle: approach.battle,
             trainer_id: approach.trainer_id,
         });
+        // The approach's built battle commits here, once: `take` above leaves no approach for
+        // a second call (`DoTrainerBattle`, `pokeemerald/src/battle_setup.c:462-463`).
+        self.count_trainer_battle_start();
         // Mirrors `begin_route103_rival_battle`'s own
         // `restart_immunity_steps` call -- see that method's own
         // doc comment for why this is kept for stream-order parity
