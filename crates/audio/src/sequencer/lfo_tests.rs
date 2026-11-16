@@ -230,7 +230,7 @@ fn cgb_note_resets_modulation_only_after_allocation() {
     let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
         .as_ref()
         .expect("the original square-1 occupant must remain");
-    assert_eq!(square1.track(), 0);
+    assert_eq!(square1.track(), Some(0));
     assert_eq!(square1.midi_key(), 50);
 
     seq.tracks[1].priority = 20;
@@ -241,7 +241,7 @@ fn cgb_note_resets_modulation_only_after_allocation() {
     let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
         .as_ref()
         .expect("the higher-priority note must replace square 1");
-    assert_eq!(square1.track(), 1);
+    assert_eq!(square1.track(), Some(1));
     assert_eq!(square1.midi_key(), 70);
 }
 

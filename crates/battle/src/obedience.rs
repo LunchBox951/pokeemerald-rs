@@ -20,6 +20,7 @@
 
 use assets::{AbilityId, MoveTarget, SpeciesId};
 
+use crate::badge_boosts::BadgeBoosts;
 use crate::damage::BattleRng;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::status1::Status1;
@@ -46,6 +47,7 @@ pub struct PlayerObedience {
     trainer_name: [u8; PLAYER_NAME_BUF_LEN],
     /// `None` once badge 8 is held: every Pokémon obeys.
     limit: Option<u8>,
+    stat_badges: BadgeBoosts,
 }
 
 impl PlayerObedience {
@@ -72,7 +74,22 @@ impl PlayerObedience {
             trainer_id,
             trainer_name,
             limit,
+            stat_badges: BadgeBoosts::NONE,
         }
+    }
+
+    /// Adds the stat badges ([`crate::Battle::with_player_obedience`] applies
+    /// them); they are not obedience limits.
+    #[must_use]
+    pub const fn with_stat_badges(mut self, stat_badges: BadgeBoosts) -> Self {
+        self.stat_badges = stat_badges;
+        self
+    }
+
+    /// The stat badges this context hands to the player's side.
+    #[must_use]
+    pub const fn stat_badges(&self) -> BadgeBoosts {
+        self.stat_badges
     }
 
     /// `IsOtherTrainer` (`pokemon.c:6611`-`:6626`): the full id, then the

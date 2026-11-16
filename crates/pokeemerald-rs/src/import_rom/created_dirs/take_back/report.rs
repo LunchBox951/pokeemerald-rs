@@ -2,6 +2,8 @@
 //! standing is now, read through the held descriptors and `/proc/self/fd`
 //! where that can say, and why it was left.
 
+#[cfg(any(target_vendor = "apple", test))]
+use std::ffi::CString;
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -145,9 +147,9 @@ pub(super) fn warn_put_back_unexamined(
 
 /// Reports that the directory rollback made for `dir`, no longer under its
 /// name, was moved away rather than removed, naming where the held
-/// original is now where `/proc` can say. Silent when it has no link left
-/// (removed outright) or is no longer held open, so nothing can be said;
-/// where its link count cannot tell moved from removed ([`Standing::Unknown`]),
+/// original is now where `/proc` or `F_GETPATH` can say. Silent when it has
+/// no link left (removed outright) or is no longer held open, so nothing can
+/// be said; where neither can tell moved from removed ([`Standing::Unknown`]),
 /// the warning says it may have been moved.
 pub(super) fn warn_if_moved_away(dir: &CreatedDirectory) {
     report_moved_away(dir, standing(dir));
@@ -185,16 +187,18 @@ pub(super) enum Standing {
     /// Removed outright (a link count of 0), or no longer held, so nothing
     /// can be said about it.
     Gone,
-    /// Still linked somewhere; where, if `/proc` can say.
+    /// Still linked somewhere; where, if `/proc` or `F_GETPATH` can say.
     Linked(Option<PathBuf>),
-    /// Its link count does not tell: on Apple a directory removed while
-    /// held open still reads a nonzero `st_nlink` (the
-    /// `a_level_removed_and_replaced_after_validation_is_not_reported_as_moved`
-    /// failure on macOS CI), so outside Linux and Android only a count of 0
-    /// is trusted.
+    /// Neither its link count nor a platform path tells: on Apple a
+    /// directory removed while held open still reads a nonzero `st_nlink`,
+    /// so outside Linux and Android only a count of 0 is trusted, and a path
+    /// from `F_GETPATH` only if it resolves to the held directory
+    /// ([`verified_location`]).
     Unknown,
-    /// Its `fstat` failed: it may still be linked anywhere, so the error is
-    /// reported rather than read as its removal.
+    /// Its `fstat` failed, or (on Apple) the probe of where it is now did
+    /// (`F_GETPATH` or the `lstat` of its answer failing other than as
+    /// `ENOENT`): it may still be linked anywhere, so the error is reported
+    /// rather than read as its removal.
     Unexamined(rustix::io::Errno),
 }
 
@@ -218,25 +222,93 @@ pub(super) fn held_standing_as(
     examined: rustix::io::Result<rustix::fs::Stat>,
     held: BorrowedFd<'_>,
 ) -> Standing {
-    match examined {
-        Ok(stat) if stat.st_nlink != 0 => {}
+    let stat = match examined {
+        Ok(stat) if stat.st_nlink != 0 => stat,
         Ok(_) => return Standing::Gone,
         Err(err) => return Standing::Unexamined(err),
-    }
+    };
     if cfg!(any(target_os = "linux", target_os = "android")) {
         Standing::Linked(held_location(held))
     } else {
-        Standing::Unknown
+        // Apple's link count cannot tell, but its path for the descriptor
+        // can, once the path is checked to be the held directory.
+        match moved_location(held, &stat) {
+            Ok(Some(now)) => Standing::Linked(Some(now)),
+            Ok(None) => Standing::Unknown,
+            Err(err) => Standing::Unexamined(err),
+        }
     }
+}
+
+/// Where the held directory `held`, whose `fstat` was `examined`, is now
+/// where its link count could not say it still has one: the path
+/// `fcntl(F_GETPATH)` gives for it on Apple, but only if that path still
+/// resolves to it. A directory removed while held open may read back its
+/// old path, so the answer is trusted only for a path whose entry is the
+/// held directory itself. `Ok(None)` when it cannot say, and an error when
+/// the probe itself failed, which is not the same as the directory being
+/// gone. `Ok(None)` elsewhere.
+#[cfg(target_vendor = "apple")]
+fn moved_location(
+    held: BorrowedFd<'_>,
+    examined: &rustix::fs::Stat,
+) -> rustix::io::Result<Option<PathBuf>> {
+    verified_location(rustix::fs::getpath(held), examined)
+}
+
+/// `Ok(None)`: no platform call here says where a held directory is.
+#[cfg(not(target_vendor = "apple"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Apple probe can fail; this signature must match it"
+)]
+fn moved_location(
+    held: BorrowedFd<'_>,
+    examined: &rustix::fs::Stat,
+) -> rustix::io::Result<Option<PathBuf>> {
+    let _ = (held, examined);
+    Ok(None)
+}
+
+/// The absolute path in `answer`, as what a platform said for a held
+/// directory, if its entry (not following a symlink) is the directory whose
+/// `fstat` was `examined`; `None` if the platform could not say, the path
+/// is relative, or it names nothing or something else (a removed directory's
+/// old path, vacant or retaken). Only those answers are `Ok(None)`: a probe
+/// that fails otherwise (the platform's own error other than `ENOENT`, or an
+/// `lstat` other than `ENOENT`, such as `EACCES` on a parent the path
+/// passes through) says nothing about the directory, so its error is
+/// returned rather than read as the path being vacant.
+#[cfg(any(target_vendor = "apple", test))]
+pub(in super::super) fn verified_location(
+    answer: rustix::io::Result<CString>,
+    examined: &rustix::fs::Stat,
+) -> rustix::io::Result<Option<PathBuf>> {
+    use std::os::unix::ffi::OsStringExt as _;
+    let bytes = match answer {
+        Ok(path) => path.into_bytes(),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    if !path.is_absolute() {
+        return Ok(None);
+    }
+    let entry = match rustix::fs::lstat(&path) {
+        Ok(entry) => entry,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(super::super::same_directory_identity(&entry, examined).then_some(path))
 }
 
 /// Reports a quarantine whose name no longer resolves to it, so it was not
 /// removed: whatever now holds the name is described as such, and the held
 /// quarantine, the directory rollback actually leaves, is named where it is
-/// now where `/proc` can say, as `standing` (the held quarantine's
-/// examination) tells. Its name is all that is known when (outside Linux
-/// and Android) its link count does not tell whether it was moved or
-/// removed; when the held quarantine could not be examined, the error is
+/// now where `/proc` or `F_GETPATH` can say, as `standing` (the held
+/// quarantine's examination) tells. Its name is all that is known when
+/// (outside Linux, Android and Apple) its link count does not tell whether
+/// it was moved or removed; when the held quarantine could not be examined, the error is
 /// reported too.
 pub(super) fn warn_quarantine_not_at_name(
     quarantine: &Quarantine<'_>,
