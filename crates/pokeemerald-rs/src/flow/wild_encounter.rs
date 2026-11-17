@@ -14,7 +14,9 @@
 //!
 //! # Headless action policy
 //!
-//! With no battle menu, [`advance_wild_battle`] attempts to run every turn. Scripted and
+//! With no battle menu, a wild battle attempts to run every turn: [`take_run_turn`], which
+//! the running game plays through `flow::battle_sequence` with the battle's text and
+//! [`advance_wild_battle`] plays with none. Scripted and
 //! trainer battles use separate drivers because they require different legal actions. A
 //! rolled encounter without a party lead is logged and dropped before construction, so it
 //! spends no battle-construction draws.
@@ -38,10 +40,15 @@
 //! refused by the shared lead screen (`lead_screen::ensure_lead_can_battle`), which disables
 //! the encounter roll before any draw.
 
-use battle::{Battle, BattleError, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleEvent, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
+    TurnError,
+};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
-use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
+use engine::overworld::wild_encounter::{
+    EncounterRateModifiers, WildEncounter, WildEncounterState,
+};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
@@ -82,11 +89,18 @@ pub(super) fn roll_for_step(
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
     slot_zero_ability: Option<assets::AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter(metatile_behavior, encounter_header, slot_zero_ability, rng)
+    state.check_standard_wild_encounter_with_rate_modifiers(
+        metatile_behavior,
+        encounter_header,
+        slot_zero_ability,
+        rate_modifiers,
+        rng,
+    )
 }
 
 /// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
@@ -255,6 +269,14 @@ pub(super) fn start_wild_battle_with_lead_effects(
     )
 }
 
+/// The wild flow's one player action, an attempt to run, as a single turn of `battle`.
+pub(super) fn take_run_turn(
+    battle: &mut Battle,
+    rng: &mut Rng,
+) -> Result<Vec<BattleEvent>, TurnError> {
+    battle.take_turn(PlayerAction::Run, &mut SharedRng::new(rng))
+}
+
 /// Plays one turn of `battle_slot`. A battle that ends, or whose turn fails, leaves the slot
 /// empty and is returned with its whole player-side party; an ongoing one, or an empty
 /// slot, returns `None`.
@@ -263,8 +285,7 @@ pub(super) fn advance_wild_battle(
     rng: &mut Rng,
 ) -> Option<PartyBattleEnd> {
     let battle = battle_slot.as_mut()?;
-    let player_action = PlayerAction::Run;
-    let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
+    let turn_failed = match take_run_turn(battle, rng) {
         Ok(_) => false,
         Err(error) => {
             eprintln!("wild battle: turn failed ({error:?}) -- ending the encounter");
@@ -281,6 +302,8 @@ mod battle_write_back_tests;
 mod completed_turn_tests;
 #[cfg(test)]
 mod cute_charm_gender_tests;
+#[cfg(test)]
+mod encounter_rate_modifier_tests;
 #[cfg(test)]
 mod encounter_roll_tests;
 #[cfg(test)]

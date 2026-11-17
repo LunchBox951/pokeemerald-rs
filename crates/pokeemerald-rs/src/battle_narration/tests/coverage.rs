@@ -1,7 +1,7 @@
 //! Every battle event the turn engine can report has a narration mapping.
 
 use assets::items::ItemId;
-use assets::{AbilityId, Effectiveness, MoveId};
+use assets::{AbilityId, Effectiveness, MoveId, Type};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
@@ -202,6 +202,11 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             new_stage: StatStage::new(1).unwrap(),
         },
+        BattleEvent::TypeChanged {
+            by_player,
+            move_id,
+            new_type: Type::Water,
+        },
     ]
 }
 
@@ -257,7 +262,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 93;
+const VARIANTS: usize = 94;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -357,6 +362,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::FellAsleepFromYawn { .. } => 90,
         BattleEvent::TracedAbility { .. } => 91,
         BattleEvent::Flinched { .. } => 92,
+        BattleEvent::TypeChanged { .. } => 93,
     }
 }
 

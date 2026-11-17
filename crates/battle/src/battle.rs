@@ -269,6 +269,15 @@ fn refresh_carried_speed_forme_stats(
     }
 }
 
+/// Restores every entrant's species typing at battle entry: a battle never
+/// starts holding a type change a previous battle left on a carried mon
+/// (`SwitchInClearSetData`, `src/battle_main.c:3414`-`:3420`).
+fn restore_entrant_species_types<'a>(mons: impl IntoIterator<Item = &'a mut BattlePokemon>) {
+    for mon in mons {
+        mon.reset_temporary_types();
+    }
+}
+
 impl Battle {
     /// Starts an ordinary wild battle or the scripted first battle.
     ///
@@ -330,7 +339,7 @@ impl Battle {
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
-    /// Color Change, Flame Body,
+    /// Flame Body,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`]; so does a Trace holder
     /// that could copy an ability whose interaction with it, or with the
@@ -347,6 +356,11 @@ impl Battle {
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
         refresh_carried_speed_forme_stats(&mut player, &mut player_reserves);
+        restore_entrant_species_types(
+            std::iter::once(&mut player)
+                .chain(player_reserves.iter_mut())
+                .chain(std::iter::once(&mut enemy)),
+        );
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -477,6 +491,11 @@ impl Battle {
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
         refresh_carried_speed_forme_stats(&mut player, &mut player_reserves);
+        restore_entrant_species_types(
+            std::iter::once(&mut player)
+                .chain(player_reserves.iter_mut())
+                .chain(party.iter_mut()),
+        );
         if party.is_empty() {
             return Err(BattleError::EmptyTrainerParty(trainer));
         }
@@ -2220,7 +2239,7 @@ impl Battle {
         let Some(obedience) = self.player_obedience.filter(|_| player_is_attacker) else {
             return Ok(Admission::Proceed);
         };
-        match crate::obedience::check(&obedience, &self.player, slot, rng)? {
+        match crate::obedience::check(&obedience, &self.player, slot, rng) {
             crate::obedience::Obedience::Obeys => Ok(Admission::Proceed),
             crate::obedience::Obedience::Loafs(message) => {
                 events.push(BattleEvent::Disobeyed { message });

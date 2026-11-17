@@ -11,7 +11,6 @@ const fn always_refused(ability: AbilityId) -> bool {
     matches!(
         ability,
         AbilityId::INTIMIDATE
-            | AbilityId::COLOR_CHANGE
             | AbilityId::FLAME_BODY
             | AbilityId::DRIZZLE
             | AbilityId::DROUGHT
@@ -23,7 +22,7 @@ const fn always_refused(ability: AbilityId) -> bool {
 /// the move-end immunity cure (`battle_util.c:2873-2951`, which cures a Water Veil burn, a Magma Armor
 /// freeze, an Immunity poisoning, and wakes an Insomnia or Vital Spirit sleeper),
 /// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
-/// Color Change (`:2749-2766`), Flame Body (`:2836-2850`; burn infliction by a contact hit is
+/// Flame Body (`:2836-2850`; burn infliction by a contact hit is
 /// unmodelled), or the switch-in weather setters
 /// Drizzle, Sand Stream, and Drought (`:2532-2558`), whose weather lifecycle is unmodelled.
 /// A seeded Liquid Ooze holder is refused too: the inverted drain
