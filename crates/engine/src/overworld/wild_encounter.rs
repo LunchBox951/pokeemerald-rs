@@ -7,11 +7,12 @@
 //! map header and slot 0's ability, and builds a battle participant from the
 //! returned [`WildEncounter`].
 //!
-//! The rate roll applies the two flute flags and a Cleanse Tag held by slot 0
-//! ([`EncounterRateModifiers`]) before its clamp; none of them draws. This module
-//! does not apply bike, other item, other ability, or repel modifiers, and it
-//! does not select water, fishing, rock-smash, roamer, outbreak, or special-mode
-//! encounters.
+//! The rate roll applies the two flute flags, a Cleanse Tag held by slot 0, and
+//! slot 0's Stench, Illuminate, White Smoke or Arena Trap ([`EncounterRateModifiers`])
+//! before its clamp; none of them draws. This module does not apply the bike, other
+//! item, Sand Veil (it needs saved weather the port does not type), the Battle Pyramid
+//! Stench variant, or repel modifiers, and it does not select water, fishing,
+//! rock-smash, roamer, outbreak, or special-mode encounters.
 
 use assets::{AbilityId, LandEncounters, SpeciesId, WildEncounterHeader, WildPokemon};
 
@@ -141,8 +142,8 @@ pub fn encounter_odds_check(encounter_rate: u32, rng: &mut impl RandomSource) ->
 }
 
 /// The field inputs that scale an encounter rate between its table scaling and
-/// its clamp (`WildEncounterCheck`, `src/wild_encounter.c:502-528`). None of
-/// them draws from the RNG.
+/// its clamp (`WildEncounterCheck`, `src/wild_encounter.c:502-528`), in upstream's
+/// order. None of them draws from the RNG.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EncounterRateModifiers {
     /// `FLAG_SYS_ENC_UP_ITEM`: adds half the current rate.
@@ -151,14 +152,18 @@ pub struct EncounterRateModifiers {
     pub encounter_down_flute: bool,
     /// Whether party slot 0 holds a Cleanse Tag, with no HP or egg condition.
     pub slot_zero_holds_cleanse_tag: bool,
+    /// The ability of a non-egg party slot 0, or `None` for an egg or when the caller
+    /// ignores abilities (`ignoreAbility`, `:509`). Stench and White Smoke halve the rate
+    /// and Illuminate and Arena Trap double it; any other ability changes nothing.
+    pub slot_zero_ability: Option<AbilityId>,
 }
 
 impl EncounterRateModifiers {
-    /// Applies the flute flags, then the Cleanse Tag, to a rate already scaled
-    /// by 16. The up flag wins over the down flag (`ApplyFluteEncounterRateMod`,
+    /// Applies the flute flags, the Cleanse Tag, then the slot 0 ability, to a rate
+    /// already scaled by 16. The up flag wins over the down flag (`ApplyFluteEncounterRateMod`,
     /// `:946-952`); a Tag multiplies by 2 and divides by 3 with integer
-    /// truncation (`ApplyCleanseTagEncounterRateMod`, `:961-967`). The result is
-    /// not clamped.
+    /// truncation (`ApplyCleanseTagEncounterRateMod`, `:961-967`); the ability halves
+    /// or doubles the result (`:515-522`). The result is not clamped.
     #[must_use]
     pub fn apply(self, scaled_rate: u32) -> u32 {
         let mut rate = scaled_rate;
@@ -170,11 +175,16 @@ impl EncounterRateModifiers {
         if self.slot_zero_holds_cleanse_tag {
             rate = rate * 2 / 3;
         }
+        match self.slot_zero_ability {
+            Some(AbilityId::STENCH | AbilityId::WHITE_SMOKE) => rate /= 2,
+            Some(AbilityId::ILLUMINATE | AbilityId::ARENA_TRAP) => rate *= 2,
+            _ => {}
+        }
         rate
     }
 }
 
-/// [`wild_encounter_check_with_rate_modifiers`] with no flute flag and no Cleanse Tag.
+/// [`wild_encounter_check_with_rate_modifiers`] with no flute flag, no Cleanse Tag and no ability.
 pub fn wild_encounter_check(encounter_rate: u8, rng: &mut impl RandomSource) -> bool {
     wild_encounter_check_with_rate_modifiers(encounter_rate, EncounterRateModifiers::default(), rng)
 }
@@ -213,7 +223,7 @@ pub fn try_generate_wild_mon_land(
     }
 }
 
-/// [`standard_wild_encounter_with_rate_modifiers`] with no flute flag and no Cleanse Tag.
+/// [`standard_wild_encounter_with_rate_modifiers`] with no flute flag, no Cleanse Tag and no ability.
 pub fn standard_wild_encounter(
     header: Option<&WildEncounterHeader>,
     current_metatile_behavior: u8,
@@ -302,8 +312,8 @@ impl WildEncounterState {
         self.prev_metatile_behavior
     }
 
-    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with no flute flag and
-    /// no Cleanse Tag.
+    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with no flute flag, no
+    /// Cleanse Tag and no ability.
     pub fn check_standard_wild_encounter(
         &mut self,
         current_metatile_behavior: u8,
