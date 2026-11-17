@@ -1,4 +1,5 @@
-//! Participant admission ahead of constructor RNG.
+//! Participant admission ahead of constructor RNG, and again for an enemy
+//! Trace holder's return from the bench (`trace::ensure_trace_reentry_admissible`).
 
 use super::BattlePokemon;
 use crate::dex::Dex;
