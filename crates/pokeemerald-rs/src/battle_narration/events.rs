@@ -96,6 +96,18 @@ pub(super) fn requests(
     if let Some(requests) = ability_results(narrator, event)? {
         return Ok(requests);
     }
+    if let BattleEvent::TypeChanged {
+        by_player,
+        new_type,
+        ..
+    } = *event
+    {
+        return Ok(vec![type_changed_request(
+            narrator.context(),
+            by_player,
+            new_type,
+        )]);
+    }
     if let Some(requests) = yawn_protection_results(narrator, event) {
         return Ok(requests);
     }
@@ -311,6 +323,25 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
         _ => return None,
     };
     Some(vec![request])
+}
+
+/// `BattleScript_ColorChangeActivates`' `STRINGID_PKMNCHANGEDTYPEWITH`: the
+/// holder, on the side opposite the damaging move's user, names its ability and
+/// the type it took (`B_BUFF1`, a `gTypeNames` index).
+fn type_changed_request(
+    base: NarrationContext,
+    by_player: bool,
+    new_type: assets::Type,
+) -> NarrationRequest {
+    table(
+        id::PKMNCHANGEDTYPEWITH,
+        base.user_vs_target(Side::user(by_player))
+            .with_ability(Side::user(by_player).other(), AbilityId::COLOR_CHANGE)
+            .with_buffer(
+                0,
+                BattleBuffer::Program(vec![BufferOp::Type(new_type.id())]),
+            ),
+    )
 }
 
 /// Results that name an ability, and the stat changes it prevents.

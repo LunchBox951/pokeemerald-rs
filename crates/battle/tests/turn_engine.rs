@@ -18,6 +18,8 @@ mod bad_poison;
 mod badge_boosts;
 #[path = "turn_engine/burn.rs"]
 mod burn;
+#[path = "turn_engine/color_change.rs"]
+mod color_change;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
 #[path = "turn_engine/confusion_explosion.rs"]

@@ -39,6 +39,7 @@ use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
 mod attract;
 mod burn;
+mod color_change;
 mod cute_charm;
 mod effect_spore;
 mod pipelines;
@@ -231,9 +232,11 @@ impl Battle {
         );
     }
 
-    /// `MOVEEND_ON_DAMAGE_ABILITIES` for the contact abilities the engine
-    /// models (`battle_script_commands.c:4280`-`:4284`); a holder carries
-    /// at most one, so at most one of them acts.
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for the on-damage abilities the engine
+    /// models, Color Change and the contact abilities
+    /// (`battle_script_commands.c:4280`-`:4284`); a holder carries
+    /// at most one, so at most one of them acts. Callers reach it only after
+    /// the hit cost the target HP.
     ///
     /// # Errors
     ///
@@ -245,6 +248,7 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        self.apply_color_change(attacker_is_player, move_id, events)?;
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
