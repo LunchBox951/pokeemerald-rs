@@ -8,6 +8,7 @@
 //! transition is done (`:943-944`). The first battle counts as wild, not as a
 //! trainer fight.
 
+use super::live_battle_text::BattleText;
 use super::route103_rival_test_support::{
     overmatched_treecko_lead, overwhelming_treecko_lead, play_out_rival_battle,
     route_103_phase_facing_the_rival,
@@ -55,6 +56,18 @@ fn play_out_active_battle(phase: &mut OverworldPhase) {
 fn wild_phase() -> OverworldPhase {
     let mut phase = new_game_phase();
     phase.set_fresh_lead_for_test(crate::new_game::provisional_starter());
+    phase
+}
+
+/// A new-game phase with a lead whose battle text must play but whose pack
+/// cannot be loaded, so a start the engine accepts is still rejected when its
+/// text cannot open.
+fn phase_whose_battle_text_cannot_open() -> OverworldPhase {
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch-verify-pack").into_boxed_path());
+    let mut phase = wild_phase();
+    phase.pack_source = crate::pack_source::PackSource::Test(missing);
+    phase.battle_text = BattleText::Played;
     phase
 }
 
@@ -133,6 +146,23 @@ fn a_refused_or_unstartable_wild_battle_counts_nothing_and_a_retry_counts_once()
     assert_eq!(counts(&phase), (1, 1, 0));
 }
 
+/// The engine accepts the start, but its battle text cannot open: the start is
+/// dropped before the battle becomes active, so nothing counts.
+#[test]
+fn a_wild_start_whose_text_cannot_open_counts_nothing_and_its_retry_counts_once() {
+    let mut phase = phase_whose_battle_text_cannot_open();
+
+    phase.begin_wild_battle(Some(ENCOUNTER));
+    assert!(!phase.is_wild_battle_active(), "setup: the text is refused");
+    assert!(phase.lead_for_test().is_some(), "the lead was restored");
+    assert_eq!(counts(&phase), (0, 0, 0));
+
+    phase.battle_text = BattleText::Skipped;
+    phase.begin_wild_battle(Some(ENCOUNTER));
+    assert!(phase.is_wild_battle_active());
+    assert_eq!(counts(&phase), (1, 1, 0));
+}
+
 // -- first battle ----------------------------------------------------------
 
 /// The rescue trigger frame opens the battle; the battle-open frames that
@@ -184,6 +214,23 @@ fn a_refused_first_battle_counts_nothing_and_its_retry_counts_once() {
     assert_eq!(counts(&leadless), (0, 0, 0));
 
     phase.set_fresh_lead_for_test(crate::new_game::provisional_starter());
+    phase.begin_first_battle();
+    assert!(phase.is_first_battle_active());
+    assert_eq!(counts(&phase), (1, 1, 0));
+}
+
+#[test]
+fn a_first_battle_whose_text_cannot_open_counts_nothing_and_its_retry_counts_once() {
+    let mut phase = phase_whose_battle_text_cannot_open();
+
+    phase.begin_first_battle();
+    assert!(
+        !phase.is_first_battle_active(),
+        "setup: the text is refused"
+    );
+    assert_eq!(counts(&phase), (0, 0, 0));
+
+    phase.battle_text = BattleText::Skipped;
     phase.begin_first_battle();
     assert!(phase.is_first_battle_active());
     assert_eq!(counts(&phase), (1, 1, 0));
