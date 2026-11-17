@@ -456,7 +456,9 @@ enum OversizePalette {
 /// # Errors
 ///
 /// Returns [`PngError`] when framing, the supported image shape, compressed
-/// data, scanline filters, or an optional palette is invalid.
+/// data, scanline filters, or the palette is invalid. An indexed (colour type
+/// 3) image with no `PLTE` is [`PngError::MissingOrBadPalette`]; a greyscale
+/// image needs none and decodes with an empty `palette`.
 pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
     decode_with(data, OversizePalette::Reject)
 }
@@ -498,6 +500,13 @@ fn decode_with(data: &[u8], oversize: OversizePalette) -> Result<IndexedImage, P
     if idat.is_empty() {
         return Err(PngError::Truncated);
     }
+    let plte = chunks.iter().find(|chunk| chunk.kind == PLTE);
+    // PLTE is mandatory for an indexed image, unlike greyscale: libpng's
+    // `png_read_info` raises `png_chunk_error("Missing PLTE before IDAT")`
+    // for a palette image, and gbagfx's `ReadPng` goes through it.
+    if plte.is_none() && header.color_type == INDEXED_COLOR_TYPE {
+        return Err(PngError::MissingOrBadPalette);
+    }
 
     let raw = inflate::inflate_zlib(&idat)?;
     let mut pixels = defilter_and_unpack(&raw, header.width, header.height, header.bit_depth)?;
@@ -506,7 +515,7 @@ fn decode_with(data: &[u8], oversize: OversizePalette) -> Result<IndexedImage, P
             *pixel = GRAYSCALE_INDEX_MAX - *pixel;
         }
     }
-    let palette = match chunks.iter().find(|chunk| chunk.kind == PLTE) {
+    let palette = match plte {
         Some(chunk) => {
             let entries = header.parse_palette(chunk.data)?;
             match oversize {
@@ -859,8 +868,14 @@ pub(crate) mod tests {
         png
     }
 
+    /// An indexed PNG carrying a valid grey-ramp `PLTE` of every slot the bit
+    /// depth can address, as the mandatory chunk requires.
     fn indexed_png_from_raw(bit_depth: u8, width: u32, height: u32, raw: &[u8]) -> Vec<u8> {
-        indexed_png(bit_depth, width, height, raw, None)
+        let slots = 1usize << bit_depth;
+        let palette: Vec<u8> = (0..slots)
+            .flat_map(|slot| [u8::try_from(slot).unwrap(); 3])
+            .collect();
+        indexed_png(bit_depth, width, height, raw, Some(&palette))
     }
 
     pub(crate) fn indexed_png_from_raw_with_plte(
@@ -879,6 +894,23 @@ pub(crate) mod tests {
         height: u32,
         packed_rows: &[u8],
     ) -> Vec<u8> {
+        let raw = unfiltered_rows(height, packed_rows);
+        indexed_png_from_raw(bit_depth, width, height, &raw)
+    }
+
+    /// Like [`tiny_indexed_png`] but without the mandatory `PLTE` chunk, a
+    /// malformed indexed image.
+    pub(crate) fn tiny_indexed_png_without_plte(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        packed_rows: &[u8],
+    ) -> Vec<u8> {
+        let raw = unfiltered_rows(height, packed_rows);
+        indexed_png(bit_depth, width, height, &raw, None)
+    }
+
+    fn unfiltered_rows(height: u32, packed_rows: &[u8]) -> Vec<u8> {
         let packed_row_bytes = packed_rows.len() / usize::try_from(height).unwrap();
         let mut raw = Vec::new();
         for row in 0..height as usize {
@@ -887,7 +919,7 @@ pub(crate) mod tests {
                 &packed_rows[row * packed_row_bytes..(row + 1) * packed_row_bytes],
             );
         }
-        indexed_png_from_raw(bit_depth, width, height, &raw)
+        raw
     }
 
     fn filtered_indexed_png(
@@ -1325,10 +1357,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn decode_without_a_plte_chunk_leaves_the_palette_empty() {
-        let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 2, &[1, 2, 3, 0]);
-        let image = decode(&png).unwrap();
-        assert!(image.palette.is_empty());
+    fn indexed_png_without_plte_is_rejected_by_both_entry_points() {
+        let png = tiny_indexed_png_without_plte(super::EIGHT_BIT_DEPTH, 2, 2, &[1, 2, 3, 0]);
+        assert_eq!(decode(&png).unwrap_err(), PngError::MissingOrBadPalette);
+        assert_eq!(
+            super::decode_truncating_palette(&png).unwrap_err(),
+            PngError::MissingOrBadPalette
+        );
+    }
+
+    #[test]
+    fn grayscale_png_without_plte_still_decodes_with_an_empty_palette() {
+        let png = grayscale_png_from_raw(4, 2, 1, &[super::FILTER_NONE, 0x1F]);
+        for image in [
+            decode(&png).unwrap(),
+            super::decode_truncating_palette(&png).unwrap(),
+        ] {
+            assert_eq!(image.pixels, [14, 0]);
+            assert!(image.palette.is_empty());
+        }
     }
 
     #[test]
@@ -1366,7 +1413,7 @@ pub(crate) mod tests {
 
     #[test]
     fn decode_palette_rejects_missing_plte() {
-        let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 1, &[1, 2]);
+        let png = tiny_indexed_png_without_plte(super::EIGHT_BIT_DEPTH, 2, 1, &[1, 2]);
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
     }
