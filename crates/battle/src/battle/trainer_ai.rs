@@ -725,6 +725,16 @@ fn score_bad_move_prologue(
     Ok(false)
 }
 
+/// `damage * percent / 100`, widened through `u64` and saturating to `u32::MAX`
+/// like the other damage scaling helpers: a cache-adopted stat can already
+/// saturate the base damage, and `percent` is a plain `u32`.
+fn scale_simulated_damage(damage: u32, simulated_damage_percent: u32) -> u32 {
+    u32::try_from(
+        u64::from(damage) * u64::from(simulated_damage_percent) / u64::from(PERCENT_SCALE),
+    )
+    .unwrap_or(u32::MAX)
+}
+
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -778,7 +788,7 @@ fn estimated_damage(
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
-        return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
+        return Ok(scale_simulated_damage(damage, simulated_damage_percent).max(MINIMUM_DAMAGE));
     }
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
     let damage = if defender_levitate_blocked(move_type, defender.ability()) {
@@ -786,7 +796,7 @@ fn estimated_damage(
     } else {
         fold_ai_type_effectiveness(damage, move_type, defender.types())
     };
-    Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
+    Ok(scale_simulated_damage(damage, simulated_damage_percent).max(MINIMUM_DAMAGE))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1806,6 +1816,66 @@ mod tests {
             assert_eq!(rng.draws(), 1);
             rng.assert_exhausted();
         }
+    }
+
+    /// A level-100 Treecko and Squirtle with cache-adopted (unclamped) stats:
+    /// Attack `u32::MAX` against Defense 1, so the base damage already
+    /// saturates at `u32::MAX`.
+    fn saturated_damage_pair(dex: &Dex) -> (BattlePokemon, BattlePokemon) {
+        let attacker = BattlePokemon::new(
+            dex,
+            TREECKO,
+            100,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap();
+        let mut stats = attacker.stats();
+        stats.attack = u32::MAX;
+        let hp = stats.max_hp;
+        let attacker = attacker.with_cached_stats(stats, hp);
+        let defender = BattlePokemon::new(
+            dex,
+            SQUIRTLE,
+            100,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap();
+        let mut stats = defender.stats();
+        stats.defense = 1;
+        let hp = stats.max_hp;
+        (attacker, defender.with_cached_stats(stats, hp))
+    }
+
+    #[test]
+    fn estimated_damage_scales_a_saturated_base_damage_without_overflow() {
+        let dex = Dex::new();
+        let (attacker, defender) = saturated_damage_pair(&dex);
+
+        // STAB-less Tackle is neutral on Squirtle, so the base damage reaches
+        // the percentage step as `u32::MAX`: 4_294_967_295 * 95 / 100.
+        assert_eq!(
+            estimated_damage(&dex, TACKLE, &attacker, &defender, 95),
+            Ok(4_080_218_930)
+        );
+        assert_eq!(
+            estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE),
+            Ok(4_294_967_295)
+        );
+    }
+
+    #[test]
+    fn estimated_struggle_damage_scales_a_saturated_base_damage_without_overflow() {
+        let dex = Dex::new();
+        let (attacker, defender) = saturated_damage_pair(&dex);
+
+        assert_eq!(
+            estimated_damage(&dex, MoveId::STRUGGLE, &attacker, &defender, 95),
+            Ok(4_080_218_930)
+        );
     }
 
     #[test]

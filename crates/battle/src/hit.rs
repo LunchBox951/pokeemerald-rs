@@ -391,13 +391,16 @@ pub(crate) fn damage_before_roll_with_power(
     let input = damage_input(power, move_type, attacker, defender, is_critical);
 
     let base_damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
+    // Cache-adopted stats are not bounded to a saved `u16`, so the base damage
+    // can already be `u32::MAX`; each multiplier saturates there like
+    // `apply_stab` and `base_damage_with_flash_fire` do.
     let damage_after_critical = if is_critical {
-        base_damage * CRITICAL_DAMAGE_MULTIPLIER
+        base_damage.saturating_mul(CRITICAL_DAMAGE_MULTIPLIER)
     } else {
         base_damage
     };
     let damage_after_charge = if attacker.volatiles().charged_up() && move_type == Type::Electric {
-        damage_after_critical * CHARGE_DAMAGE_MULTIPLIER
+        damage_after_critical.saturating_mul(CHARGE_DAMAGE_MULTIPLIER)
     } else {
         damage_after_critical
     };

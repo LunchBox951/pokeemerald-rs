@@ -1760,3 +1760,135 @@ fn a_landed_flinch_hit_spends_four_draws_and_residues_29_and_30_split_apply_from
         }
     }
 }
+
+/// `SPECIES_RATTATA` is Normal, so an Electric hit on it is neutral and a
+/// Bulbasaur attacker has no Electric STAB: only the multiplier stages move
+/// the damage.
+const THUNDER_SHOCK: MoveId = MoveId::THUNDER_SHOCK;
+/// Draw 0 is a guaranteed critical at stage 0; 1 is never one.
+const SATURATION_CRIT_DRAWS: [u16; 1] = [ORDINARY_CRIT_DRAW];
+const SATURATION_NO_CRIT_DRAWS: [u16; 1] = [ORDINARY_NO_CRIT_DRAW];
+
+/// A level-100 Bulbasaur and Rattata with the given adopted (unclamped) cached
+/// stats; every other stat stays as built.
+fn cache_adopted_pair(
+    dex: &Dex,
+    attack: u32,
+    sp_attack: u32,
+    defense: u32,
+    sp_defense: u32,
+) -> (BattlePokemon, BattlePokemon) {
+    let attacker = mon(dex, BULBASAUR, 100, vec![TACKLE, THUNDER_SHOCK]);
+    let mut stats = attacker.stats();
+    stats.attack = attack;
+    stats.sp_attack = sp_attack;
+    let hp = stats.max_hp;
+    let attacker = attacker.with_cached_stats(stats, hp);
+    let defender = mon(dex, RATTATA, 100, vec![TACKLE]);
+    let mut stats = defender.stats();
+    stats.defense = defense;
+    stats.sp_defense = sp_defense;
+    let hp = stats.max_hp;
+    (attacker, defender.with_cached_stats(stats, hp))
+}
+
+#[test]
+fn critical_hit_on_saturated_base_damage_does_not_overflow() {
+    let dex = Dex::new();
+    let (attacker, defender) = cache_adopted_pair(&dex, u32::MAX, 1, 1, 1);
+    let mut rng = SequenceRng::new(SATURATION_CRIT_DRAWS);
+    let raw = damage_before_roll(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(raw.is_critical);
+    assert_eq!(raw.damage, 4_294_967_295);
+}
+
+#[test]
+fn critical_hit_saturates_instead_of_wrapping_past_u32_max() {
+    // Base damage is 100_000_000 * 35 * 42 / 50 + 2 = 2_940_000_002; doubled it
+    // is 5_880_000_004, which a wrapping multiply would turn into 1_585_032_708.
+    let dex = Dex::new();
+    let (attacker, defender) = cache_adopted_pair(&dex, 100_000_000, 1, 1, 1);
+    let mut rng = SequenceRng::new(SATURATION_CRIT_DRAWS);
+    let raw = damage_before_roll(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(raw.is_critical);
+    assert_eq!(raw.damage, 4_294_967_295);
+}
+
+#[test]
+fn critical_hit_doubles_exactly_when_the_result_still_fits_u32() {
+    // Base damage is 68_000_000 * 35 * 42 / 50 + 2 = 1_999_200_002.
+    let dex = Dex::new();
+    let (attacker, defender) = cache_adopted_pair(&dex, 68_000_000, 1, 1, 1);
+    let mut rng = SequenceRng::new(SATURATION_CRIT_DRAWS);
+    let raw = damage_before_roll(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(raw.is_critical);
+    assert_eq!(raw.damage, 3_998_400_004);
+}
+
+#[test]
+fn charge_on_saturated_base_damage_does_not_overflow() {
+    let dex = Dex::new();
+    let (mut attacker, defender) = cache_adopted_pair(&dex, 1, u32::MAX, 1, 1);
+    attacker.volatiles_mut().set_charge();
+    let mut rng = SequenceRng::new(SATURATION_NO_CRIT_DRAWS);
+    let raw =
+        damage_before_roll(&dex, THUNDER_SHOCK, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(!raw.is_critical);
+    assert_eq!(raw.damage, 4_294_967_295);
+}
+
+#[test]
+fn charge_saturates_instead_of_wrapping_past_u32_max() {
+    // Base damage is 100_000_000 * 40 * 42 / 50 + 2 = 3_360_000_002; doubled it
+    // is 6_720_000_004, which a wrapping multiply would turn into 2_425_032_708.
+    let dex = Dex::new();
+    let (mut attacker, defender) = cache_adopted_pair(&dex, 1, 100_000_000, 1, 1);
+    attacker.volatiles_mut().set_charge();
+    let mut rng = SequenceRng::new(SATURATION_NO_CRIT_DRAWS);
+    let raw =
+        damage_before_roll(&dex, THUNDER_SHOCK, &attacker, &defender, false, &mut rng).unwrap();
+    assert_eq!(raw.damage, 4_294_967_295);
+}
+
+#[test]
+fn charge_doubles_exactly_when_the_result_still_fits_u32() {
+    // Base damage is 60_000_000 * 40 * 42 / 50 + 2 = 2_016_000_002.
+    let dex = Dex::new();
+    let (mut attacker, defender) = cache_adopted_pair(&dex, 1, 60_000_000, 1, 1);
+    attacker.volatiles_mut().set_charge();
+    let mut rng = SequenceRng::new(SATURATION_NO_CRIT_DRAWS);
+    let raw =
+        damage_before_roll(&dex, THUNDER_SHOCK, &attacker, &defender, false, &mut rng).unwrap();
+    assert_eq!(raw.damage, 4_032_000_004);
+}
+
+#[test]
+fn a_charged_critical_saturates_at_the_second_doubling() {
+    // 2_016_000_002 doubles to 4_032_000_004 for the critical, which still fits;
+    // the Charge doubling then reaches 8_064_000_008, which wraps to 3_769_032_712
+    // in plain u32 arithmetic.
+    let dex = Dex::new();
+    let (mut attacker, defender) = cache_adopted_pair(&dex, 1, 60_000_000, 1, 1);
+    attacker.volatiles_mut().set_charge();
+    let mut rng = SequenceRng::new(SATURATION_CRIT_DRAWS);
+    let raw =
+        damage_before_roll(&dex, THUNDER_SHOCK, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(raw.is_critical);
+    assert_eq!(raw.damage, 4_294_967_295);
+}
+
+#[test]
+fn a_saturated_critical_still_takes_the_damage_roll() {
+    // The roll scales the saturated damage: 4_294_967_295 * 85 / 100.
+    let dex = Dex::new();
+    let (attacker, defender) = cache_adopted_pair(&dex, u32::MAX, 1, 1, 1);
+    let mut rng = SequenceRng::new([ORDINARY_CRIT_DRAW, 15]);
+    let outcome = damage_core(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: 3_650_722_200,
+            is_critical: true
+        }
+    );
+}
