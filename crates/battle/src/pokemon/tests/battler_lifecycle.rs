@@ -18,7 +18,7 @@ use crate::nature::Nature;
 use crate::stat_change::CLEAR_BODY;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
-use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable};
+use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable, Type};
 
 const TACKLE_BASE_PP: u8 = 35;
 const SCRATCH: MoveId = MoveId::SCRATCH;
@@ -637,6 +637,35 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
         "paralysis outlives an ordinary win -- only a faint's own cleanup or \
          a heal cures it, and this method is shared with the post-battle \
          return-to-overworld path where the battler did not faint"
+    );
+}
+
+#[test]
+fn a_temporary_type_is_battle_scratch_apart_from_species_typing() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let species_types = mon.types();
+    let untouched = mon.clone();
+    mon.set_temporary_type(Type::Ghost);
+
+    assert_eq!(mon.types(), [Type::Ghost, Type::Ghost]);
+    assert_eq!(mon.species_types(), species_types);
+    assert_eq!(mon.clone().types(), [Type::Ghost, Type::Ghost]);
+    assert_ne!(
+        mon, untouched,
+        "a live type change is battle-state, not identity"
+    );
+
+    mon.clear_battle_scratch();
+    assert_eq!(mon.types(), species_types);
+    assert_eq!(mon, untouched);
+
+    mon.set_temporary_type(Type::Ghost);
+    mon.clear_fainted_scratch();
+    assert_eq!(
+        mon.types(),
+        species_types,
+        "FaintClearSetData restores the species types (battle_main.c:3350-3351)"
     );
 }
 
