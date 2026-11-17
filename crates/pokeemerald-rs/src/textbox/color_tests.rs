@@ -19,7 +19,7 @@ fn distinct_palette() -> Vec<Rgb888> {
 /// A 6-wide glyph: foreground at (0,0), shadow at (1,0), a value-3 cell
 /// background at (3,0), background pixels at (2,0) inside its footprint, (10,0) beyond its advance width,
 /// and (2,15), the first row below the raster height.
-fn mixed_glyph(colors: TextColors, paint_background: bool) -> RevealedGlyph {
+fn mixed_glyph(colors: TextColors) -> RevealedGlyph {
     let mut pixels = [0u8; GLYPH_PIXELS];
     pixels[0] = 1;
     pixels[1] = 2;
@@ -30,7 +30,6 @@ fn mixed_glyph(colors: TextColors, paint_background: bool) -> RevealedGlyph {
         pixels,
     };
     glyph.colors = colors;
-    glyph.paint_background = paint_background;
     glyph
 }
 
@@ -63,7 +62,7 @@ fn a_color_blue_glyph_paints_palette_index_8_where_the_plain_one_paints_2() {
         let mut fb = marker.clone();
         compose_window_ops(
             &mut fb,
-            &glyph_ops(vec![mixed_glyph(c, false)]),
+            &glyph_ops(vec![mixed_glyph(c)]),
             (0, 0),
             (200, 32),
             &super::test_keypad_icons(&[]),
@@ -92,8 +91,8 @@ fn a_color_blue_glyph_paints_palette_index_8_where_the_plain_one_paints_2() {
 #[test]
 fn colors_apply_per_glyph_not_to_the_whole_page() {
     let palette = distinct_palette();
-    let mut first = mixed_glyph(TextColors::default(), false);
-    let mut second = mixed_glyph(colors(8, 1, 3), false);
+    let mut first = mixed_glyph(TextColors::default());
+    let mut second = mixed_glyph(colors(8, 1, 3));
     first.x = 0;
     second.x = 20;
     let mut fb = marker_fb();
@@ -122,7 +121,7 @@ fn default_colors_through_the_palette_match_the_fixed_role_slots_byte_for_byte()
     for (i, pixel) in pixels.iter_mut().enumerate() {
         *pixel = u8::try_from(i % 4).unwrap();
     }
-    let mut glyph = mixed_glyph(TextColors::default(), false);
+    let mut glyph = mixed_glyph(TextColors::default());
     glyph.glyph.pixels = pixels;
 
     // The default background now paints palette[1] over the window interior
@@ -160,7 +159,7 @@ fn a_highlight_paints_only_the_glyphs_actual_footprint() {
     let mut fb = marker_fb();
     compose_window_ops(
         &mut fb,
-        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3), true)]),
+        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3))]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -187,7 +186,7 @@ fn an_explicit_highlight_of_the_default_background_repaints_it() {
     let mut fb = marker_fb();
     compose_window_ops(
         &mut fb,
-        &glyph_ops(vec![mixed_glyph(colors(2, 1, 3), true)]),
+        &glyph_ops(vec![mixed_glyph(colors(2, 1, 3))]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -203,7 +202,7 @@ fn transparent_and_missing_palette_entries_skip_safely() {
     let mut fb = marker_fb();
     compose_window_ops(
         &mut fb,
-        &glyph_ops(vec![mixed_glyph(colors(0, 0, 200), true)]),
+        &glyph_ops(vec![mixed_glyph(colors(0, 0, 200))]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -229,7 +228,7 @@ fn a_clear_erases_with_its_own_background() {
     let marker = marker_fb();
     let compose = |background: u8| {
         let mut fb = marker.clone();
-        let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
+        let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
         ops.push(span_with(background));
         compose_window_ops(
             &mut fb,
@@ -260,7 +259,7 @@ fn a_clear_erases_with_its_own_background() {
     let mut scene = Framebuffer::new();
     scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
     let mut fb = marker.clone();
-    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
     ops.push(span_with(0));
     assert!(!needs_scene(&ops, None));
     compose_window_ops(
@@ -282,7 +281,7 @@ fn a_transparent_scroll_fill_shows_the_scene() {
     let mut scene = Framebuffer::new();
     scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
     let mut fb = marker.clone();
-    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default(), false)]);
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
     let WindowOp::ClearSpan(span) = span_with(0) else {
         unreachable!("span_with builds a ClearSpan")
     };
@@ -349,7 +348,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
     let mut fb = marker_fb();
     compose_window_ops(
         &mut fb,
-        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3), true)]),
+        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3))]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -363,7 +362,7 @@ fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
     let mut plain = marker_fb();
     compose_window_ops(
         &mut plain,
-        &glyph_ops(vec![mixed_glyph(TextColors::default(), false)]),
+        &glyph_ops(vec![mixed_glyph(TextColors::default())]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -383,7 +382,7 @@ fn a_highlight_paints_the_real_fonts_cell_background() {
         assets::OwnedFontGlyphSheet::new(pack.font(assets::FontId::Normal).unwrap()).unwrap();
     // pokeemerald charmap: 'A' = 0xBB.
     let glyph = sheet.glyph(0xBB).expect("glyph A");
-    let mut revealed = mixed_glyph(colors(2, 4, 3), true);
+    let mut revealed = mixed_glyph(colors(2, 4, 3));
     revealed.glyph = glyph;
     let palette = distinct_palette();
     let mut fb = marker_fb();
@@ -416,27 +415,21 @@ fn a_highlight_paints_the_real_fonts_cell_background() {
 #[test]
 fn a_default_glyph_drawn_over_earlier_foreground_repaints_its_background() {
     let palette = distinct_palette();
-    let first = mixed_glyph(TextColors::default(), false);
-    let compose = |paint_background: bool| {
-        let mut second = mixed_glyph(TextColors::default(), paint_background);
-        second.glyph.pixels[0] = 0;
-        let mut fb = marker_fb();
-        compose_window_ops(
-            &mut fb,
-            &glyph_ops(vec![first, second]),
-            (0, 0),
-            (200, 32),
-            &super::test_keypad_icons(&[]),
-            &palette,
-            WindowBackdrop::message_box(None, None),
-        );
-        fb
-    };
-    let default = compose(false);
+    let first = mixed_glyph(TextColors::default());
+    let mut second = mixed_glyph(TextColors::default());
+    second.glyph.pixels[0] = 0;
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![first, second]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
     // The second glyph has background where the first has foreground.
-    assert_eq!(default.pixel(0, 0), Some(palette[1]));
-    // An explicit `HIGHLIGHT 1` (same colours) changes nothing.
-    assert_eq!(default.pixels(), compose(true).pixels());
+    assert_eq!(fb.pixel(0, 0), Some(palette[1]));
 }
 
 /// A space decodes to all-background pixels; drawn over earlier text (after a
@@ -445,25 +438,19 @@ fn a_default_glyph_drawn_over_earlier_foreground_repaints_its_background() {
 #[test]
 fn a_default_space_over_earlier_text_blanks_only_its_footprint() {
     let palette = distinct_palette();
-    let text = mixed_glyph(TextColors::default(), false);
-    let mut space = mixed_glyph(TextColors::default(), false);
+    let text = mixed_glyph(TextColors::default());
+    let mut space = mixed_glyph(TextColors::default());
     space.glyph.pixels = [0; GLYPH_PIXELS];
-    let compose = |paint_background: bool| {
-        let mut space = space;
-        space.paint_background = paint_background;
-        let mut fb = marker_fb();
-        compose_window_ops(
-            &mut fb,
-            &glyph_ops(vec![text, space]),
-            (0, 0),
-            (200, 32),
-            &super::test_keypad_icons(&[]),
-            &palette,
-            WindowBackdrop::message_box(None, None),
-        );
-        fb
-    };
-    let fb = compose(false);
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![text, space]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
     // The text's foreground (0,0) and shadow (1,0) pixels are overwritten.
     assert_eq!(fb.pixel(0, 0), Some(palette[1]));
     assert_eq!(fb.pixel(1, 0), Some(palette[1]));
@@ -474,7 +461,6 @@ fn a_default_space_over_earlier_text_blanks_only_its_footprint() {
         marker_fb().pixel(0, 15),
         "below the raster"
     );
-    assert_eq!(fb.pixels(), compose(true).pixels());
 }
 
 /// Background index 0 stays transparent: a default-coloured glyph whose
@@ -485,7 +471,7 @@ fn a_background_of_palette_index_0_still_leaves_earlier_pixels_alone() {
     let mut fb = marker_fb();
     compose_window_ops(
         &mut fb,
-        &glyph_ops(vec![mixed_glyph(colors(2, 0, 3), false)]),
+        &glyph_ops(vec![mixed_glyph(colors(2, 0, 3))]),
         (0, 0),
         (200, 32),
         &super::test_keypad_icons(&[]),
@@ -493,4 +479,57 @@ fn a_background_of_palette_index_0_still_leaves_earlier_pixels_alone() {
         WindowBackdrop::message_box(None, None),
     );
     assert_eq!(fb.pixel(2, 0), marker_fb().pixel(2, 0));
+}
+
+/// A short font's glyph is a `Glyph::clipped_to_height` cell: rows at or past
+/// the font's height are zeroed, and zero now paints the default background.
+/// `CopyGlyphToWindow` copies only `gCurGlyph.width` by `gCurGlyph.height`
+/// (`text.c:608-612`), so a space drawn over earlier pixels must blank exactly
+/// that rectangle and leave the rows below the font's height alone.
+#[test]
+fn a_short_fonts_default_background_stops_at_the_fonts_height() {
+    let palette = distinct_palette();
+    let font = assets::FontId::SmallNarrow;
+    let height = usize::from(font.glyph_height());
+    assert_eq!(height, 12);
+    let width = 6;
+    let earlier = {
+        let mut earlier = mixed_glyph(TextColors::default());
+        // Foreground over the whole cell, so every row 0-15 holds pixels.
+        earlier.glyph = Glyph {
+            advance_width: 16,
+            pixels: [1; GLYPH_PIXELS],
+        };
+        earlier
+    };
+    let space = {
+        let mut space = mixed_glyph(TextColors::default());
+        space.glyph = Glyph {
+            advance_width: u8::try_from(width).unwrap(),
+            pixels: [0; GLYPH_PIXELS],
+        }
+        .clipped_to_height(font.glyph_height());
+        space.raster_height = i32::from(font.glyph_height());
+        space
+    };
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![earlier, space]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    for y in 0..16usize {
+        for x in 0..16usize {
+            let expected = if x < width && y < height {
+                palette[1]
+            } else {
+                palette[2]
+            };
+            assert_eq!(fb.pixel(x, y), Some(expected), "({x}, {y})");
+        }
+    }
 }

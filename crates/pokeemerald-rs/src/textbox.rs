@@ -1021,7 +1021,6 @@ mod tests {
             },
             colors: TextColors::default(),
             raster_height: 15,
-            paint_background: false,
         }
     }
 
@@ -1152,7 +1151,6 @@ mod tests {
             },
             colors: TextColors::default(),
             raster_height: 15,
-            paint_background: false,
         };
 
         blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);
