@@ -144,30 +144,6 @@ fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
     );
 }
 
-struct TempPackGuard(std::path::PathBuf);
-
-impl Drop for TempPackGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Claims `path` through `claim` and writes `bytes` through the handle it
-/// returns, yielding the guard that removes `path` on drop. The guard is
-/// built only once `claim` has succeeded, so a failed claim never removes an
-/// entry the guard does not own; a write panic after it still cleans up.
-fn claim_pack_with(
-    path: &std::path::Path,
-    bytes: &[u8],
-    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
-) -> TempPackGuard {
-    use std::io::Write as _;
-    let mut file = claim(path);
-    let guard = TempPackGuard(path.to_path_buf());
-    file.write_all(bytes).unwrap();
-    guard
-}
-
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
@@ -179,24 +155,12 @@ fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
     with_palette_at(&path, color_count, check);
 }
 
+/// Runs `check` against a pack palette of `color_count` colours, held in a
+/// [`crate::pack_test_support::ScratchClaim`] at `path` that cleans up only
+/// the file it claimed, panic or not.
 fn with_palette_at(
     path: &std::path::Path,
     color_count: u16,
-    check: impl FnOnce(assets::PaletteRef<'_>),
-) {
-    with_palette_claimed(
-        path,
-        color_count,
-        crate::pack_test_support::claim_scratch_exclusive,
-        check,
-    );
-}
-
-/// [`with_palette_at`], claiming `path` through `claim`.
-fn with_palette_claimed(
-    path: &std::path::Path,
-    color_count: u16,
-    claim: impl FnOnce(&std::path::Path) -> std::fs::File,
     check: impl FnOnce(assets::PaletteRef<'_>),
 ) {
     let payload: Vec<u8> = (0..color_count)
@@ -208,7 +172,7 @@ fn with_palette_claimed(
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let _guard = claim_pack_with(path, &bytes, claim);
+    let _guard = crate::pack_test_support::ScratchClaim::claim_with(path.to_path_buf(), bytes);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -220,24 +184,54 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
+/// A directory this test created (it panics on an occupied path), removed with
+/// its contents on drop. Files a test plants, moves, or removes live inside it,
+/// so the test never unlinks a name in the shared temp directory it did not create.
+struct OwnedScratchDir(std::path::PathBuf);
+
+impl OwnedScratchDir {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-palette-bank-dir-{name}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path)
+            .unwrap_or_else(|err| panic!("the scratch directory {path:?} is not ours: {err}"));
+        Self(path)
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for OwnedScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Plants `bytes` at `path` through an exclusive claim (never following a
+/// link nor truncating an occupant), for a file the test then leaves alone.
+fn plant(path: &std::path::Path, bytes: &[u8]) {
+    use std::io::Write as _;
+    crate::pack_test_support::claim_scratch_exclusive(path)
+        .write_all(bytes)
+        .unwrap();
+}
+
 #[test]
 fn a_failed_claim_leaves_the_unowned_entry_in_place() {
-    let path = regression_pack_path("failed-claim-unowned");
-    let _ = std::fs::remove_file(&path);
+    let dir = OwnedScratchDir::new("failed-claim-unowned");
+    let path = dir.join("pack");
+    // Another owner holds `path`, so the claim loses.
+    plant(&path, b"not ours");
     let outcome = std::panic::catch_unwind(|| {
-        with_palette_claimed(
-            &path,
-            3,
-            |path| {
-                // Another owner holds `path`, so this claim loses.
-                std::fs::write(path, b"not ours").unwrap();
-                panic!("the claim lost the path");
-            },
-            |_| unreachable!("a lost claim never loads the pack"),
-        );
+        with_palette_at(&path, 3, |_| {
+            unreachable!("a lost claim never loads the pack")
+        });
     });
     let survivor = std::fs::read(&path);
-    let _ = std::fs::remove_file(&path);
     assert!(outcome.is_err(), "the failed claim must propagate");
     assert_eq!(
         survivor.ok().as_deref(),
@@ -261,6 +255,33 @@ fn with_palette_removes_its_pack_when_the_check_panics() {
     }));
     assert!(result.is_err());
     assert!(!path.exists());
+}
+
+#[test]
+fn with_palette_leaves_a_replacement_under_its_pack_name() {
+    let dir = OwnedScratchDir::new("replaced-pack");
+    let path = dir.join("pack");
+    let moved = dir.join("moved");
+    let bystander = dir.join("bystander");
+    plant(&bystander, b"unrelated");
+    with_palette_at(&path, 3, |_| {
+        // The claimed pack is moved away and another file takes its name.
+        std::fs::rename(&path, &moved).unwrap();
+        plant(&path, b"replacement");
+    });
+    let survivor = std::fs::read(&path);
+    let bystander_after = std::fs::read(&bystander);
+    assert_eq!(
+        survivor.ok().as_deref(),
+        Some(&b"replacement"[..]),
+        "cleanup must leave a file that replaced the claimed pack"
+    );
+    assert!(moved.exists(), "cleanup must not touch the moved-away pack");
+    assert_eq!(
+        bystander_after.ok().as_deref(),
+        Some(&b"unrelated"[..]),
+        "cleanup must leave an unrelated file beside the pack"
+    );
 }
 
 fn sentinel_colors() -> [rendering::Bgr555; rendering::Palette::LEN] {
@@ -2370,7 +2391,8 @@ fn compose_paints_each_latched_flower_frame_into_the_animated_tile_range() {
 #[cfg(unix)]
 #[test]
 fn with_palette_refuses_a_planted_symlink() {
-    let path = regression_pack_path("planted-symlink");
+    let dir = OwnedScratchDir::new("planted-symlink");
+    let path = dir.join("pack");
     super::test_support::assert_planted_symlink_untouched(&path, || {
         with_palette_at(&path, 3, |_| {});
     });
@@ -2393,7 +2415,8 @@ fn scene_scratch_pack_refuses_a_planted_symlink() {
 #[cfg(unix)]
 #[test]
 fn layout_pack_writers_refuse_a_planted_symlink() {
-    let path = regression_pack_path("planted-layout-symlink");
+    let dir = OwnedScratchDir::new("planted-layout-symlink");
+    let path = dir.join("pack");
     super::test_support::assert_planted_symlink_untouched(&path, || {
         super::test_support::write_oldale_layout_pack(&path, &[]);
     });
@@ -2405,7 +2428,8 @@ fn layout_pack_writers_refuse_a_planted_symlink() {
 #[cfg(unix)]
 #[test]
 fn scratch_writer_refuses_a_planted_symlink_and_keeps_the_link() {
-    let path = regression_pack_path("planted-symlink-kept");
+    let dir = OwnedScratchDir::new("planted-symlink-kept");
+    let path = dir.join("pack");
     super::test_support::assert_planted_symlink_untouched(&path, || {
         super::test_support::write_scratch_exclusive(&path, b"fresh scratch pack");
     });
@@ -2441,13 +2465,12 @@ fn build_route_122_scene(
     layout: &assets::MapLayout,
     events: &assets::MapEvents,
 ) -> Result<super::OverworldScene, OverworldSceneError> {
-    let path = super::test_support::scene_scratch_pack_path();
-    super::test_support::write_scratch_exclusive(
-        &path,
+    let claim = crate::pack_test_support::ScratchClaim::claim_with(
+        super::test_support::scene_scratch_pack_path(),
         synthetic_overworld_pack_bytes_for("petalburg", 4, 4),
     );
-    let pack = AssetPack::load(&path).unwrap();
-    std::fs::remove_file(path).unwrap();
+    let pack = AssetPack::load(claim.path()).unwrap();
+    drop(claim);
     super::OverworldScene::from_pack(
         &pack,
         header,
