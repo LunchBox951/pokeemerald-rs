@@ -893,17 +893,20 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        if let (ValidatedPlayerAction::UseMove { move_id, .. }, EnemyAction::Switch(slot)) =
-            (player_action, enemy_action)
-        {
-            // The player's move was admitted against the outgoing defender.
+        if let EnemyAction::Switch(slot) = enemy_action {
             let incoming = match &self.kind {
                 BattleKind::Trainer(context) => context.switch_target(slot)?,
                 BattleKind::Wild | BattleKind::FirstBattle => {
                     return Err(BattleError::InvalidTrainerSwitch(slot));
                 }
             };
-            secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+            if let ValidatedPlayerAction::UseMove { move_id, .. } = player_action {
+                // The player's move was admitted against the outgoing defender.
+                secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+            }
+            // A switch precedes every player move, so the entrant copies the
+            // ability the player holds now.
+            trace::ensure_trace_reentry_admissible(incoming, &self.player)?;
         }
         let chosen = ChosenMoves {
             player: match player_action {
@@ -1742,8 +1745,10 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`BattleError::InvalidTrainerSwitch`] when this is not a
-    /// trainer battle or `slot` is not a healthy non-active member; nothing
-    /// changes then.
+    /// trainer battle or `slot` is not a healthy non-active member, and
+    /// [`BattleError::UnportedAbilityInteraction`] when the member is a Trace
+    /// holder whose status the player's ability forbids it to copy
+    /// ([`trace::ensure_trace_reentry_admissible`]); nothing changes then.
     fn switch_enemy_to(
         &mut self,
         slot: usize,
@@ -1752,7 +1757,7 @@ impl Battle {
         let BattleKind::Trainer(context) = &mut self.kind else {
             return Err(BattleError::InvalidTrainerSwitch(slot));
         };
-        context.switch_target(slot)?;
+        trace::ensure_trace_reentry_admissible(context.switch_target(slot)?, &self.player)?;
         // `Cmd_switchoutabilities` cures the leaving member before it returns
         // to its party record (`battle_script_commands.c:9590`-`:9603`). A
         // fainted member leaving for a forced replacement is already healthy.

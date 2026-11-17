@@ -6,6 +6,13 @@
 //! `HandleFaintedMonActions`, `battle_util.c:1958`-`:1963`). Only the doubles
 //! branch draws from `Random()` to pick a target (`battle_util.c:3031`), so a
 //! singles copy never touches the RNG.
+//!
+//! A copy that would leave its holder with a status its new ability forbids is
+//! refused: at construction by [`ensure_copies_admissible`], and when a benched
+//! holder that gained a status on the field returns, by
+//! [`ensure_trace_reentry_admissible`]. Upstream cures that pairing at move end
+//! (`ABILITYEFFECT_IMMUNITY`, `battle_util.c:2873`-`:2951`), which the engine
+//! does not model.
 
 use assets::AbilityId;
 
@@ -50,6 +57,12 @@ impl Battle {
         while self.settle_next_trace(events) {}
     }
 
+    /// Every copy this drain makes is already admitted, so it checks no
+    /// status: the constructors screen each opening and replacement holder
+    /// ([`ensure_copies_admissible`]), a player holder cannot gain a status
+    /// between its entry and its copy, and an enemy holder returning from the
+    /// bench is screened by [`ensure_trace_reentry_admissible`] before it
+    /// enters.
     fn settle_next_trace(&mut self, events: &mut Vec<BattleEvent>) -> bool {
         for holder in [BattlerSide::Player, BattlerSide::Enemy] {
             let (holder_mon, source) = match holder {
@@ -134,6 +147,45 @@ pub(super) fn ensure_copies_admissible(
         }
     }
     Ok(())
+}
+
+/// Refuses a switch that would send in a native Trace holder whose status
+/// the opposing battler's current ability forbids, before the switch changes
+/// anything.
+///
+/// A holder that gained a primary status while it held a copied ability keeps
+/// that status on the bench, so its re-copy can pair the status with an
+/// ability that cures it. Upstream never holds that pairing: the move-end
+/// immunity pass clears the status (`battle_util.c:2873`-`:2951`, reached from
+/// `MOVEEND_IMMUNITY_ABILITIES`, `battle_script_commands.c:4285`-`:4289`),
+/// which the engine does not model, so the entry is refused as construction
+/// refuses the same pairing ([`ensure_participant_admissible`]).
+///
+/// The projection is the incoming member after the switch-in reset (primary
+/// status kept; volatiles and any stale copy cleared) holding `opponent`'s
+/// current ability. A copy that stays queued, because the opponent has fainted
+/// or has no ability, is not screened: its copy happens later, against the
+/// opponent then present.
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnportedAbilityInteraction`] for the refused
+/// pairing.
+pub(super) fn ensure_trace_reentry_admissible(
+    incoming: &BattlePokemon,
+    opponent: &BattlePokemon,
+) -> Result<(), BattleError> {
+    let copied = opponent.ability();
+    if incoming.native_ability() != AbilityId::TRACE
+        || opponent.is_fainted()
+        || copied == AbilityId::NONE
+    {
+        return Ok(());
+    }
+    let mut entering = incoming.clone();
+    entering.clear_battle_scratch();
+    entering.trace_ability(copied);
+    ensure_participant_admissible(&entering)
 }
 
 fn has_trace_holder(side: &[&BattlePokemon]) -> bool {
