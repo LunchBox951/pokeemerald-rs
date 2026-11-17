@@ -32801,7 +32801,7 @@
     "src/m4a.c": {
       "artifacts": {
         "CgbModVol": {
-          "reason": "CgbModVol's envelope-goal/sustain-goal resolution re-implemented as cgb_envelope::cgb_envelope_goal + CgbEnvelope::new/latch_goal, folded in only at note-on and each envelopeCounter==0 boundary via step_with_goal/step_frame; a live track-volume write (CgbVoice::set_track_volume) queues the routing state alone and never latches directly (issue #1210, S-3 slice 2).",
+          "reason": "CgbModVol's envelope-goal/sustain-goal resolution re-implemented as cgb_envelope::cgb_envelope_goal + CgbEnvelope::new/latch_goal, folded in only at note-on and each envelopeCounter==0 boundary via step_with_goal/step_frame; a live track-volume write (CgbVoice::set_track_volume) queues the routing state alone and never latches directly (issue #1210, S-3 slice 2).  The sustain goal is stored as upstream's u8 field does (m4a.c:921): sustain_goal_of keeps the low byte of (goal * sustain + 15) >> 4 instead of saturating, so a full-byte xSUST operand with goal 31 and sustain 255 stores 239, not 255. CgbEnvelope::decay_step then decrements the volume byte with wrapping first and compares both bytes as signed (m4a.c:1119-1123), so goal 15 with sustain 255 (goal 240, s8 -16) keeps decaying 15, 14, 13, 12 and wraps through zero up to 240 rather than entering sustain at once. Sustains of 0..15 give goals below 128 and decay as before. Pinned by the cgb_envelope tests full_byte_sustain_keeps_decaying_under_upstream_signed_compare, sustain_goal_keeps_only_its_low_byte and sustain_goal_wraps_exactly_at_the_byte_boundary.",
           "rust_target": "crates/audio/src/cgb_envelope.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -32909,7 +32909,7 @@
           "status": "rewritten"
         },
         "ply_xsust": {
-          "reason": "ply_xsust (xSUST, XCMD kind 6, m4a.c:1567-1589; dispatch m4a_tables.c:297-300) stores its operand byte into the track-local tone's sustain. Modelled as sequencer::adsr_override::AdsrOverride, a per-track set of overridden ADSR bytes dispatched from Sequencer::handle_event; Event::Voice replaces it (ply_voice's tone copy, m4a_1.s:945-965), and note_on applies it over a direct tone's bank ADSR (DirectSound and CGB) as ply_note snapshots track->tone (m4a_1.s:1750-1758). The shared bank, already-sounding voices, and key-split/rhythm children (read from the bank, m4a_1.s:1580-1609) never see it. Pinned by sequencer/adsr_override_tests.rs.",
+          "reason": "ply_xsust (xSUST, XCMD kind 6, m4a.c:1567-1589; dispatch m4a_tables.c:297-300) stores its operand byte into the track-local tone's sustain. Modelled as sequencer::adsr_override::AdsrOverride, a per-track set of overridden ADSR bytes dispatched from Sequencer::handle_event; Event::Voice replaces it (ply_voice's tone copy, m4a_1.s:945-965), and note_on applies it over a direct tone's bank ADSR (DirectSound and CGB) as ply_note snapshots track->tone (m4a_1.s:1750-1758). The shared bank, already-sounding voices, and key-split/rhythm children (read from the bank, m4a_1.s:1580-1609) never see it. Pinned by sequencer/adsr_override_tests.rs.  The operand reaches the CGB envelope as a full byte with no 0..15 clamp, pinned by a_full_byte_xsust_reaches_the_cgb_envelope_unclamped.",
           "rust_target": "crates/audio/src/sequencer/adsr_override.rs",
           "spec": "S-3",
           "status": "rewritten"
