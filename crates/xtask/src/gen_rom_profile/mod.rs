@@ -502,8 +502,8 @@ fn restore_owner_access(_file: &std::fs::File) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Folds a cleanup failure into `original`, keeping its `ErrorKind`, because
-/// [`temp_sibling`] never reuses a name and nothing would clean it later.
+/// Folds a cleanup failure into `original`, keeping its `ErrorKind`: no later
+/// run revisits the temporary path, so the failure must be reported now.
 /// `NotFound` means nothing was left to remove.
 fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
     match std::fs::remove_file(path) {
@@ -520,9 +520,9 @@ fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
 }
 
 /// Same directory as `path`, so the rename never crosses filesystems. The
-/// clock and `RandomState` salt keep concurrent runs apart where a PID
-/// alone would not (separate PID namespaces); [`publish`]'s exclusive
-/// create turns a collision into an error.
+/// clock and `RandomState` salt make a name clash between concurrent runs
+/// unlikely where a PID alone would not (separate PID namespaces);
+/// [`publish`]'s exclusive create turns a clash into an error.
 fn temp_sibling(path: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
