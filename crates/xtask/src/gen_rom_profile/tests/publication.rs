@@ -1,9 +1,4 @@
-//! Regression tests for where the generated profile is written. An output
-//! that names the ROM is refused wherever the destination guard can tell, even
-//! after a missing parent directory is created; a hard link the guard cannot
-//! see off Unix costs only the alias, because publishing renames over it. A
-//! publish leaves nothing but the output beside it unless its own cleanup
-//! fails, which it then reports.
+//! Destination and cleanup regression tests for the generated profile.
 
 use std::path::Path;
 
@@ -12,9 +7,8 @@ use rom_import::fixture::RomFixture;
 use super::super::error::GenRomProfileError;
 use super::scratch;
 
-/// Writes a ROM-shaped image to `path` and returns its bytes. The header is
-/// valid but the build is not the supported one, so a run either stops at the
-/// destination guard or, once past it, fails on the build check.
+/// The header is valid but the build is not the supported one, so a run stops
+/// at the destination guard or, past it, on the build check.
 fn rom_shaped_file(path: &Path) -> Vec<u8> {
     let bytes = RomFixture::new().emerald_header().finish();
     std::fs::write(path, &bytes).expect("the stand-in ROM writes");
@@ -141,15 +135,9 @@ fn an_ordinary_output_is_not_mistaken_for_the_rom() {
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// Publishing over a hard link to the ROM replaces the alias's directory
-/// entry instead of truncating the inode both names share, so the ROM keeps
-/// its bytes.
-///
-/// This is the hole the destination guard leaves off Unix: `std` exposes no
-/// file identity on Windows, so `overwrites_rom` compares canonical paths
-/// there, and two hard links canonicalize to two distinct names. The
-/// property belongs to `publish` and holds on every platform; this test runs
-/// on Unix only.
+/// Off Unix the guard compares canonical paths and misses a hard link, so
+/// `publish`'s rename must replace the alias's entry, not truncate the shared
+/// inode. Unix-only because that is where a test can make the link.
 #[cfg(unix)]
 #[test]
 fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
@@ -177,17 +165,9 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// A publish whose cleanup also fails reports the write's own error and names
-/// the temporary it left behind; `temp_sibling` draws a fresh name from the
-/// process id, the clock and a random salt, so no later run revisits the path
-/// to clean it up.
-///
-/// The injected write swaps the temporary file for a non-empty directory, so
-/// `remove_file` fails for every user, root included, which a permission-based
-/// seam would not. Mirrors `rom_import`'s
-/// `a_failed_cleanup_names_the_partial_file_it_left_behind` and
-/// `crates/xtask/src/extract/mod.rs`'s
-/// `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
+/// `temp_sibling` never repeats a name, so no later run cleans up a leftover
+/// temporary; the error must name it. The injected write swaps the temporary
+/// for a non-empty directory so `remove_file` fails even as root.
 #[test]
 #[cfg(unix)]
 fn a_failed_cleanup_names_the_partial_profile_it_left_behind() {
@@ -276,10 +256,9 @@ fn a_successful_write_leaves_only_the_output() {
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// On Unix, `absent/..` resolves to nothing while `absent/` does not exist, so
-/// the pre-check in `run` lets the path through. Creating the directory is what
-/// makes the output name the ROM, and the publishing rename would land on it;
-/// `write_module` asks again after creating it.
+/// `absent/..` resolves to nothing until `absent/` exists, so `run`'s pre-check
+/// passes; creating the directory is what makes the output name the ROM, so
+/// `write_module` asks again.
 #[test]
 fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
     let dir = scratch("out-reaches-rom-through-missing-dir");
@@ -314,8 +293,7 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
         .collect();
     assert!(
         stray.is_empty(),
-        "a refused write may leave the directory it created to ask the question, \
-         but no module and no temporary beside the ROM: {stray:?}"
+        "a refused write leaves no module or temporary beside the ROM: {stray:?}"
     );
 
     let _ = std::fs::remove_dir(dir.join("absent"));
@@ -323,9 +301,9 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// Marks the re-run of
+/// Set in the child that
 /// [`publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable`]
-/// that executes the test body, so only that child changes its own umask.
+/// re-runs itself as, so only that child changes its own umask.
 #[cfg(unix)]
 const PUBLISH_UMASK_CHILD: &str = "POKEEMERALD_GEN_ROM_PROFILE_UMASK_CHILD";
 
