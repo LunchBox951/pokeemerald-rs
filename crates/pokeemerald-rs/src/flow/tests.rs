@@ -574,10 +574,11 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
         "a save just written must be offerable as CONTINUE"
     );
 
-    let expected = MainMenuScene::from_pack_with_window_frame(
+    let expected = MainMenuScene::from_pack_with_summary(
         &pack,
         MainMenuType::SavedGame,
         SAVED_WINDOW_FRAME,
+        super::summary_for(&state.saved).as_ref(),
     )
     .expect("run `cargo xtask extract` first")
     .compose_frame();

@@ -6,7 +6,7 @@
 use platform::{ButtonState, Frame};
 
 use super::fade_wait::MainMenuFadeIn;
-use super::{menu_type_for, window_frame_for, AppScene, MainMenuState};
+use super::{menu_type_for, summary_for, window_frame_for, AppScene, MainMenuState};
 use crate::main_menu::{self, MainMenuItem};
 use crate::options::{OptionsEvent, OptionsMenu};
 use crate::pack_source::PackSource;
@@ -97,6 +97,7 @@ fn return_to_main_menu(state: OptionsState, pack_source: &PackSource) -> (AppSce
         pack_source,
         menu_type_for(&main.saved),
         window_frame_for(&main.saved),
+        summary_for(&main.saved).as_ref(),
     ) {
         Ok(scene) => main.scene = scene,
         Err(err) => eprintln!(

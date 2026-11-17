@@ -37,7 +37,10 @@ const HEADER_GLYPH_COLORS: [Option<Rgb888>; 4] =
     [None, Some(HEADER_TEXT_FG), Some(HEADER_TEXT_SHADOW), None];
 
 mod items;
+mod summary;
 pub use items::{ItemWindow, MainMenuItem, MainMenuType};
+pub(crate) use summary::SaveSummary;
+use summary::{LineX, SummaryLine};
 
 /// An error that prevents main-menu construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,11 +82,22 @@ impl MainMenuSceneError {
     }
 }
 
+/// A summary string laid out in window-local pixels.
+#[derive(Debug)]
+struct RenderedLine {
+    x: i32,
+    y: i32,
+    glyphs: Vec<RevealedGlyph>,
+}
+
 #[derive(Debug)]
 struct RenderedMenuItem {
     item: MainMenuItem,
     window: ItemWindow,
     glyphs: Vec<RevealedGlyph>,
+    /// The saved-game summary strings, printed below the header in
+    /// [`MainMenuScene::info_color`].
+    lines: Vec<RenderedLine>,
 }
 
 /// A selectable main-menu scene.
@@ -94,6 +108,7 @@ pub struct MainMenuScene {
     menu_type: MainMenuType,
     rendered_items: Vec<RenderedMenuItem>,
     selected_index: usize,
+    info_color: Rgb888,
 }
 
 impl MainMenuScene {
@@ -109,7 +124,7 @@ impl MainMenuScene {
         Self::from_pack_with_window_frame(pack, menu_type, FRAME_ID)
     }
 
-    /// Builds a menu with the selected window frame.
+    /// Builds a menu with the selected window frame and no saved-game summary.
     ///
     /// # Errors
     ///
@@ -119,6 +134,21 @@ impl MainMenuScene {
         menu_type: MainMenuType,
         window_frame: u8,
     ) -> Result<Self, MainMenuSceneError> {
+        Self::from_pack_with_summary(pack, menu_type, window_frame, None)
+    }
+
+    /// Builds a menu with the selected window frame, printing `summary` in the
+    /// CONTINUE window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required asset is missing or invalid.
+    pub(crate) fn from_pack_with_summary(
+        pack: &AssetPack,
+        menu_type: MainMenuType,
+        window_frame: u8,
+        summary: Option<&SaveSummary>,
+    ) -> Result<Self, MainMenuSceneError> {
         let frame = FrameAssets::from_handle(pack.text_window_frame(window_frame)?);
         let background = textbox::palette_colors(pack.palette(BACKGROUND_PALETTE_ID)?)
             .first()
@@ -127,13 +157,16 @@ impl MainMenuScene {
 
         let sources = load_sources(pack)?;
 
-        Ok(Self::from_assets(frame, background, menu_type, &sources))
+        Ok(Self::from_assets(
+            frame, background, menu_type, summary, &sources,
+        ))
     }
 
     fn from_assets(
         frame: FrameAssets,
         background: Rgb888,
         menu_type: MainMenuType,
+        summary: Option<&SaveSummary>,
         sources: &GlyphSources<FontGlyphSheet<'_>>,
     ) -> Self {
         let rendered_items = menu_type
@@ -145,6 +178,12 @@ impl MainMenuScene {
                     .window(item)
                     .expect("every item in a menu type's own list has a window in that list"),
                 glyphs: render_label(item.label(), sources),
+                lines: match (item, summary) {
+                    (MainMenuItem::Continue, Some(summary)) => {
+                        render_summary_lines(summary, sources)
+                    }
+                    _ => Vec::new(),
+                },
             })
             .collect();
 
@@ -154,6 +193,7 @@ impl MainMenuScene {
             menu_type,
             rendered_items,
             selected_index: 0,
+            info_color: summary.map_or(HEADER_TEXT_FG, SaveSummary::text_color),
         }
     }
 
@@ -242,6 +282,8 @@ impl MainMenuScene {
         let frame_palette: Vec<Rgb888> = self.frame.palette.iter().map(|&c| map(c)).collect();
         let glyph_colors = HEADER_GLYPH_COLORS.map(|color| color.map(map));
         let header_background = map(HEADER_TEXT_BG);
+        let info_glyph_colors =
+            [None, Some(self.info_color), Some(HEADER_TEXT_SHADOW), None].map(|c| c.map(map));
 
         let mut fb = Framebuffer::new();
         fb.fill(map(self.background));
@@ -257,6 +299,7 @@ impl MainMenuScene {
                     frame_palette: &frame_palette,
                     header_background,
                     glyphs: &glyph_colors,
+                    info_glyphs: &info_glyph_colors,
                 },
             );
         }
@@ -288,6 +331,7 @@ struct MenuColors<'a> {
     frame_palette: &'a [Rgb888],
     header_background: Rgb888,
     glyphs: &'a [Option<Rgb888>; 4],
+    info_glyphs: &'a [Option<Rgb888>; 4],
 }
 
 fn draw_item(
@@ -323,6 +367,17 @@ fn draw_item(
         label_bounds,
         colors.glyphs,
     );
+
+    for line in &item.lines {
+        textbox::blit_glyphs_colored_tracked(
+            fb,
+            painted_bg0,
+            &line.glyphs,
+            (content_origin.0 + line.x, content_origin.1 + line.y),
+            (content_size.0 - line.x, content_size.1 - line.y),
+            colors.info_glyphs,
+        );
+    }
 }
 
 /// Returns the half-open pixel bounds of an item's selection highlight.
@@ -390,6 +445,7 @@ pub fn load_default_with_window_frame(
         &crate::pack_source::PackSource::Runtime,
         menu_type,
         window_frame,
+        None,
     )
 }
 
@@ -397,9 +453,10 @@ pub(crate) fn load_with_window_frame(
     source: &crate::pack_source::PackSource,
     menu_type: MainMenuType,
     window_frame: u8,
+    summary: Option<&SaveSummary>,
 ) -> Result<MainMenuScene, MainMenuSceneError> {
     let pack = source.load()?;
-    MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame)
+    MainMenuScene::from_pack_with_summary(&pack, menu_type, window_frame, summary)
 }
 
 /// Every modelled Latin font's sheet, which a main-menu label's printer
@@ -425,12 +482,46 @@ fn label_printer<'a>(
 }
 
 fn render_label(label: &str, sources: &GlyphSources<FontGlyphSheet<'_>>) -> Vec<RevealedGlyph> {
-    let mut tokens: Vec<Token> = label.chars().map(Token::Char).collect();
+    render_tokens(label.chars().map(Token::Char).collect(), sources)
+}
+
+/// Lays out the summary strings, right-aligned ones by their pixel width in
+/// the Normal font (`GetStringRightAlignXOffset`).
+fn render_summary_lines(
+    summary: &SaveSummary,
+    sources: &GlyphSources<FontGlyphSheet<'_>>,
+) -> Vec<RenderedLine> {
+    summary
+        .lines()
+        .into_iter()
+        .map(|SummaryLine { x, y, tokens }| {
+            let glyphs = render_tokens(tokens, sources);
+            let x = match x {
+                LineX::Left(x) => x,
+                LineX::RightEdge(edge) => edge - advance_of(&glyphs),
+            };
+            RenderedLine { x, y, glyphs }
+        })
+        .collect()
+}
+
+/// A glyph run's width: the sum of its advances.
+fn advance_of(glyphs: &[RevealedGlyph]) -> i32 {
+    glyphs
+        .iter()
+        .map(|g| i32::from(g.glyph.advance_width))
+        .sum()
+}
+
+fn render_tokens(
+    mut tokens: Vec<Token>,
+    sources: &GlyphSources<FontGlyphSheet<'_>>,
+) -> Vec<RevealedGlyph> {
     tokens.push(Token::End);
     let tick_limit = tokens.len();
 
     let mut printer = label_printer(tokens, sources);
-    let mut glyphs = Vec::with_capacity(label.chars().count());
+    let mut glyphs = Vec::with_capacity(tick_limit);
     for _ in 0..tick_limit {
         match printer.tick(PrinterInput::none()) {
             TickEvent::Glyph(g) => glyphs.push(*g),
@@ -471,10 +562,12 @@ pub(crate) fn synthetic_scene(menu_type: MainMenuType) -> MainMenuScene {
         palette: vec![Rgb888::BLACK; 16],
     };
 
-    MainMenuScene::from_assets(frame, Rgb888::BLACK, menu_type, &sources)
+    MainMenuScene::from_assets(frame, Rgb888::BLACK, menu_type, None, &sources)
 }
 
 #[cfg(test)]
 mod saved_game_tests;
+#[cfg(test)]
+mod summary_tests;
 #[cfg(test)]
 mod tests;

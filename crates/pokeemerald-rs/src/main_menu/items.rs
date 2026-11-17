@@ -21,6 +21,13 @@ impl MainMenuItem {
     }
 }
 
+/// `gText_ContinueMenuPlayer` (`pokeemerald/src/strings.c:1362`).
+pub(super) const PLAYER_LABEL: &str = "PLAYER";
+/// `gText_ContinueMenuTime` (`pokeemerald/src/strings.c:1363`).
+pub(super) const TIME_LABEL: &str = "TIME";
+/// `gText_ContinueMenuBadges` (`pokeemerald/src/strings.c:1365`).
+pub(super) const BADGES_LABEL: &str = "BADGES";
+
 /// An item's content rectangle in tile rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemWindow {
