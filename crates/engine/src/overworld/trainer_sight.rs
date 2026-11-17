@@ -69,15 +69,19 @@ pub fn trainer_can_see_player(
 /// The distance from `trainer_pos` to `player_pos` along `facing`, or
 /// `None` when `player_pos` is off that axis, behind the trainer, or past
 /// `range`.
+///
+/// Every comparison is made in `i64`, so the result is exact for every `i32` pair: a sight line
+/// that would pass `i32::MAX` or `i32::MIN` simply ends there, and a player billions of tiles
+/// away is past `range` rather than wrapped back into it.
 fn approach_distance(
     trainer_pos: (i32, i32),
     player_pos: (i32, i32),
     facing: Direction,
     range: u8,
 ) -> Option<u8> {
-    let (tx, ty) = trainer_pos;
-    let (px, py) = player_pos;
-    let range = i32::from(range);
+    let (tx, ty) = (i64::from(trainer_pos.0), i64::from(trainer_pos.1));
+    let (px, py) = (i64::from(player_pos.0), i64::from(player_pos.1));
+    let range = i64::from(range);
     let distance = match facing {
         Direction::South if tx == px && py > ty && py <= ty + range => py - ty,
         Direction::North if tx == px && py < ty && py >= ty - range => ty - py,
@@ -752,6 +756,65 @@ mod tests {
         };
         assert!(!live_sees(vec![t], walked, 1, &player_at(5, 8, 3)));
         assert!(live_sees(vec![t], walked, 1, &player_at(8, 8, 3)));
+    }
+
+    #[test]
+    fn a_trainer_translated_to_the_positive_extreme_has_no_cell_to_see_into() {
+        // East-facing at `i32::MAX - 1`, range 3, player at `i32::MAX`: the sight end
+        // `tx + range` does not fit in `i32`, but the player is one tile away and the tile
+        // is off the map, so terrain rejects the line.
+        let t = trainer(5, 5, 3, MovementType::FaceRight, "3");
+        let to_the_edge = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.translate((i32::MAX - 1 - 5, 0));
+        };
+        assert!(!live_sees(
+            vec![t],
+            to_the_edge,
+            1,
+            &player_at(i32::MAX, 5, 3)
+        ));
+    }
+
+    #[test]
+    fn a_trainer_translated_to_the_negative_extreme_has_no_cell_to_see_into() {
+        let t = trainer(5, 5, 3, MovementType::FaceLeft, "3");
+        let to_the_edge = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.translate((i32::MIN, 0));
+            s.translate((1 - 5, 0));
+        };
+        assert!(!live_sees(
+            vec![t],
+            to_the_edge,
+            1,
+            &player_at(i32::MIN, 5, 3)
+        ));
+    }
+
+    #[test]
+    fn the_approach_distance_is_exact_at_both_coordinate_extremes() {
+        let (hi, lo) = (i32::MAX, i32::MIN);
+        let east = |t, p, r| approach_distance(t, p, Direction::East, r);
+        let west = |t, p, r| approach_distance(t, p, Direction::West, r);
+        let south = |t, p, r| approach_distance(t, p, Direction::South, r);
+        let north = |t, p, r| approach_distance(t, p, Direction::North, r);
+        // The sight line ends at the integer limit: no tile past it exists to be seen.
+        assert_eq!(east((hi - 1, 20), (hi, 20), 3), Some(1));
+        assert_eq!(east((hi, 20), (hi, 20), 3), None);
+        assert_eq!(south((20, hi - 1), (20, hi), 3), Some(1));
+        assert_eq!(west((lo + 1, 20), (lo, 20), 3), Some(1));
+        assert_eq!(north((20, lo + 1), (20, lo), 3), Some(1));
+        // A player at the far limit is beyond range, not wrapped back into it.
+        assert_eq!(east((lo, 20), (hi, 20), 255), None);
+        assert_eq!(west((hi, 20), (lo, 20), 255), None);
+        assert_eq!(south((20, lo), (20, hi), 255), None);
+        assert_eq!(north((20, hi), (20, lo), 255), None);
+        // The edge of range stays inclusive away from the limits.
+        assert_eq!(east((hi - 3, 20), (hi, 20), 3), Some(3));
+        assert_eq!(west((lo + 3, 20), (lo, 20), 3), Some(3));
+        assert_eq!(west((lo + 3, 20), (lo, 20), 2), None);
+        // Facing away from a nearby extreme player is still "behind".
+        assert_eq!(west((hi - 1, 20), (hi, 20), 3), None);
+        assert_eq!(east((lo + 1, 20), (lo, 20), 3), None);
     }
 
     #[test]
