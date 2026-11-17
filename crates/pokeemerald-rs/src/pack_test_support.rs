@@ -457,13 +457,8 @@ fn claim_scratch_exclusive_leaves_a_foreign_single_link_occupant_intact() {
     );
 }
 
-/// A directory this test created exclusively, so every name inside it is the
-/// test's own. `create_dir` fails on an occupied path, which panics naming it
-/// rather than adopting or removing an entry the test did not create; only a
-/// directory this call created is ever removed (with whatever the test put in
-/// it). There is no shared owned-directory helper to reuse: the `import_rom`
-/// and save-file `TempDir`s sit in private test modules and `remove_dir_all`
-/// a pre-existing path of the same name.
+/// A directory this test created, never adopted: an occupied path panics, so
+/// the drop only removes what this test made.
 struct OwnedScratchDir(std::path::PathBuf);
 
 impl OwnedScratchDir {
@@ -495,13 +490,8 @@ impl Drop for OwnedScratchDir {
     }
 }
 
-/// Renames the claimed file away and writes a different file under its name,
-/// the replacement `ScratchClaim`'s drop must not delete. The rename works on
-/// Windows too: the claim opens through `std`'s default share mode, which
-/// includes `FILE_SHARE_DELETE`, so the held file can be renamed while the
-/// claim lives. There the drop's `remove_through_verified_handle` finds a file
-/// ID that differs from the claim's and reports `NotOurs`; on Unix
-/// `pathname_is_still_ours` finds a different inode.
+/// A replacement written under the claimed name after the claim's file moved
+/// away survives the claim's drop.
 #[test]
 fn scratch_claim_drop_leaves_a_replacement_under_its_name_intact() {
     let dir = OwnedScratchDir::new("claim-replaced");
