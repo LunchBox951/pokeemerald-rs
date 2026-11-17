@@ -49,6 +49,8 @@ const INITIAL_CAPACITY: usize = 64 * 1024;
 /// [`Lz77Fault::UnexpectedEnd`] if a token needs bytes past the end of
 /// `stream`; [`Lz77Fault::BackReferenceTooFar`] if a back-reference reaches
 /// further back than the output produced so far;
+/// [`Lz77Fault::ReferencePastEnd`] if a back-reference is longer than the
+/// declared output still to produce;
 /// [`Lz77Fault::SizeMismatch`] if `expected_len` disagrees with the result.
 pub fn decompress(stream: &[u8], expected_len: Option<usize>) -> Result<Vec<u8>, Lz77Fault> {
     let header = stream.get(..4).ok_or(Lz77Fault::UnexpectedEnd)?;
@@ -89,13 +91,20 @@ pub fn decompress(stream: &[u8], expected_len: Option<usize>) -> Result<Vec<u8>,
                         produced: out.len(),
                     });
                 }
+                // The loop guard keeps `declared > out.len()` here.
+                let remaining = declared - out.len();
+                if len > remaining {
+                    // mGBA's BIOS model flags this as improperly compressed
+                    // data that overruns the buffer on hardware (it only
+                    // truncates in its VBA-compatibility mode), and the
+                    // decomp compressor never emits it.
+                    return Err(Lz77Fault::ReferencePastEnd {
+                        length: len,
+                        remaining,
+                    });
+                }
                 let start = out.len() - displacement;
                 for step in 0..len {
-                    if out.len() >= declared {
-                        // The last token of a stream may claim more than the
-                        // declared size; the BIOS stops at the size too.
-                        break;
-                    }
                     let byte = out[start + step];
                     out.push(byte);
                 }
@@ -184,11 +193,37 @@ mod tests {
     }
 
     #[test]
-    fn a_token_past_the_declared_size_is_clamped() {
+    fn a_token_past_the_declared_size_is_rejected() {
         // The back-reference asks for 18 bytes with only 3 left to produce.
+        // mGBA flags this as improperly compressed (a buffer overrun on
+        // hardware), so the importer refuses it rather than truncating.
         let mut stream = header(4);
         stream.extend_from_slice(&[0b0100_0000, b'A', 0xF0, 0x00]);
+        let fault = Lz77Fault::ReferencePastEnd {
+            length: 18,
+            remaining: 3,
+        };
+        assert_eq!(decompress(&stream, Some(4)), Err(fault));
+        assert_eq!(decompress(&stream, None), Err(fault));
+    }
+
+    #[test]
+    fn a_token_ending_exactly_at_the_declared_size_is_accepted() {
+        // Three left to produce and a 3-byte reference: the boundary case.
+        let mut stream = header(4);
+        stream.extend_from_slice(&[0b0100_0000, b'A', 0x00, 0x00]);
         assert_eq!(decompress(&stream, Some(4)).unwrap(), b"AAAA");
+
+        // One byte over the boundary is refused.
+        let mut stream = header(3);
+        stream.extend_from_slice(&[0b0100_0000, b'A', 0x00, 0x00]);
+        assert_eq!(
+            decompress(&stream, None),
+            Err(Lz77Fault::ReferencePastEnd {
+                length: 3,
+                remaining: 2
+            })
+        );
     }
 
     #[test]
