@@ -6,15 +6,21 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.135.0] - 2026-11-16
 
-- Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
+- Wild battles now show their text and wait on it: encounters in grass play the introduction and send-out messages and show whether you got away, and the battle ends only once the last message is answered and its pause has elapsed, so your party and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
 
 ## [0.0.134.0] - 2026-11-16
 
-- Pokémon with the Color Change ability, such as Kecleon, are now supported in battle: after surviving a damaging move they change to that move's type, with a message, as in the original game.
+- Pokémon with the Color Change ability, such as Kecleon, are now supported in battle: after surviving a damaging move they change to that move's type, with a message, as in the original game. A Pokémon that knows a move not yet supported, such as Kecleon's Lick, still cannot battle.
+- General improvements in preparation for the Black and White Flutes and the Cleanse Tag, which raise or lower how often wild Pokémon appear: the chance of an encounter now accounts for them, and a Pokémon holding a Cleanse Tag can battle and keeps it. You cannot get or use either item yet.
+- A traded Mew or Deoxys without its special-event mark now disobeys even from its original trainer, as in the original game. Only a Pokémon carried in from a saved game can show this for now.
+- General improvements in preparation for items that Pokémon pick up after battles: the original game's level-tiered Pickup item lists are now in place. No Pokémon picks anything up yet.
+- General improvements in preparation for text that moves on by itself after a short wait instead of waiting for a button press.
+- Letters in dialogue and menus are now trimmed to the size the original game draws, removing stray edge pixels that some letters could show.
 
 ## [0.0.133.0] - 2026-11-15
 
 - Page prompts in dialogue now show the bobbing down arrow while they wait for A or B, in field messages and in Professor Birch's opening speech, as in the original game.
+- General improvements in preparation for gym badges: badges you have earned now raise your Pokémon's stats in battle, as in the original game. Badges cannot be earned yet.
 
 ## [0.0.132.0] - 2026-11-15
 
@@ -69,7 +75,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.119.0] - 2026-11-09
 
-- A traded Pokémon above the level your badges allow can now disobey in battle as in the original game: it may loaf around, use one of its other moves instead, begin to nap and fall asleep, or hurt itself. Obedience for a traded Mew or Deoxys is still being prepared.
+- A traded Pokémon above the level your badges allow can now disobey in battle as in the original game: it may loaf around, use one of its other moves instead, begin to nap and fall asleep, or hurt itself. A traded Mew or Deoxys follows its own obedience rules, added in a later version.
 
 ## [0.0.118.0] - 2026-11-09
 
