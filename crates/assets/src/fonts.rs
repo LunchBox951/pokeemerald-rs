@@ -127,6 +127,22 @@ impl FontId {
         }
     }
 
+    /// The number of rows of each glyph cell upstream copies into a window:
+    /// the `gCurGlyph.height` every `DecompressGlyph_*` stores for its Latin
+    /// glyphs (`pokeemerald/src/text.c`) -- Small 13 (`:1713`), Narrow 15
+    /// (`:1755`), `SmallNarrow` 12 (`:1797`), Short 14 (`:1841`), Normal 15
+    /// (`:1883`). `CopyGlyphToWindow` stops there (`text.c:611-612`), so a
+    /// cell row at or past it is sheet padding that upstream never draws.
+    #[must_use]
+    pub const fn glyph_height(self) -> u8 {
+        match self {
+            Self::Small => 13,
+            Self::Normal | Self::Narrow => 15,
+            Self::Short => 14,
+            Self::SmallNarrow => 12,
+        }
+    }
+
     /// This font's position in [`FontId::ALL`].
     const fn index(self) -> usize {
         match self {
@@ -152,8 +168,34 @@ pub struct Glyph {
     /// Advance width in pixels (upstream `gFont*LatinGlyphWidths[glyphId]`).
     pub advance_width: u8,
     /// [`GLYPH_PIXELS`] palette-index bytes in `0..=`[`MAX_PALETTE_INDEX`],
-    /// row-major within the glyph cell.
+    /// row-major within the glyph cell. [`FontGlyphSheet::glyph`] returns the
+    /// whole raw cell, padding included; [`Glyph::clipped_to_height`] cuts it
+    /// to the rectangle upstream copies into a window.
     pub pixels: [u8; GLYPH_PIXELS],
+}
+
+impl Glyph {
+    /// This glyph with every pixel outside the rectangle upstream's
+    /// `CopyGlyphToWindow` copies cleared to the transparent index 0:
+    /// columns at or past `advance_width` (`gCurGlyph.width`) and rows at or
+    /// past `height` (`gCurGlyph.height`) (`pokeemerald/src/text.c:608-612`).
+    /// The rest of the 16x16 cell is sheet padding that never reaches a
+    /// window; the canonical Narrow glyph 0xCD (width 5) carries a stroke at
+    /// columns 8-11 that upstream never draws. In-bounds pixels and the
+    /// advance width are unchanged. `height` is the glyph's font's
+    /// [`FontId::glyph_height`].
+    #[must_use]
+    pub fn clipped_to_height(mut self, height: u8) -> Self {
+        let side = GLYPH_SIZE as usize;
+        let width = usize::from(self.advance_width);
+        let height = usize::from(height);
+        for (index, pixel) in self.pixels.iter_mut().enumerate() {
+            if index % side >= width || index / side >= height {
+                *pixel = 0;
+            }
+        }
+        self
+    }
 }
 
 /// A borrowed font image bound to the [`FontId`] used to fetch it.
@@ -788,6 +830,42 @@ mod tests {
 
         let neighbor = sheet.glyph(18).unwrap();
         assert!(neighbor.pixels.iter().all(|&p| p == 0));
+    }
+
+    #[test]
+    fn glyph_height_mirrors_each_decompress_glyph_latin_constant() {
+        // `gCurGlyph.height` for the Latin branch of each `DecompressGlyph_*`
+        // (`pokeemerald/src/text.c:1713,1883,1841,1755,1797`).
+        assert_eq!(FontId::Small.glyph_height(), 13);
+        assert_eq!(FontId::Normal.glyph_height(), 15);
+        assert_eq!(FontId::Short.glyph_height(), 14);
+        assert_eq!(FontId::Narrow.glyph_height(), 15);
+        assert_eq!(FontId::SmallNarrow.glyph_height(), 12);
+    }
+
+    #[test]
+    fn clipped_to_height_clears_exactly_the_columns_and_rows_upstream_never_copies() {
+        let glyph = super::Glyph {
+            advance_width: 5,
+            pixels: [MAX_PALETTE_INDEX; GLYPH_PIXELS],
+        };
+        let clipped = glyph.clipped_to_height(12);
+        assert_eq!(clipped.advance_width, 5);
+        let side = GLYPH_SIZE as usize;
+        for row in 0..side {
+            for column in 0..side {
+                let expected = if column < 5 && row < 12 {
+                    MAX_PALETTE_INDEX
+                } else {
+                    0
+                };
+                assert_eq!(clipped.pixels[row * side + column], expected);
+            }
+        }
+        // A height beyond the cell keeps every row inside the width.
+        let tall = glyph.clipped_to_height(u8::MAX);
+        assert_eq!(tall.pixels[(side - 1) * side + 4], MAX_PALETTE_INDEX);
+        assert_eq!(tall.pixels[(side - 1) * side + 5], 0);
     }
 
     #[test]
