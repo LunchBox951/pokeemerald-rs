@@ -557,3 +557,127 @@ fn the_first_battle_conclusion_rolls_pickup_only_for_a_win() {
         );
     }
 }
+
+// -- Items a battle cannot carry yet are withheld, not stored --
+
+/// King's Rock, White Herb and Leftovers: the rare table entries
+/// `battle::ensure_held_item_playable` refuses today, each with the
+/// `(level, percentile)` pairs that select it (`rare[tier + 99 - percentile]`,
+/// tier `(level - 1) / 10`).
+const WITHHELD: [(ItemId, [(u8, u16); 2]); 3] = [
+    (ItemId::KINGS_ROCK, [(15, 98), (25, 99)]),
+    (ItemId::WHITE_HERB, [(45, 98), (55, 99)]),
+    (ItemId::LEFTOVERS, [(85, 98), (95, 99)]),
+];
+
+/// The streams whose first two draws are a Pickup hit and the named percentile:
+/// `Rng::new(195)` draws 6670, 11098 and `Rng::new(3453)` draws 12240, 13499.
+fn seed_for_percentile(percentile: u16) -> u32 {
+    match percentile {
+        98 => 195,
+        99 => 3453,
+        other => panic!("no pinned seed for percentile {other}"),
+    }
+}
+
+#[test]
+fn withheld_items_are_exactly_those_the_battle_refuses() {
+    // When a battle learns an item's effect it is admitted, and this fails:
+    // drop that item from `WITHHELD` and from the module docs.
+    let tables = assets::pickup::PickupTables::new();
+    let mut refused = std::collections::BTreeMap::new();
+    for tier in 0..10u8 {
+        for percentile in 0..100u8 {
+            let item = tables.lookup(tier, percentile).unwrap().item();
+            if battle::ensure_held_item_playable(item).is_err() {
+                refused
+                    .entry(item)
+                    .or_insert_with(Vec::new)
+                    .push((tier * 10 + 1, u16::from(percentile)));
+            }
+        }
+    }
+    let named: std::collections::BTreeMap<_, _> = WITHHELD
+        .iter()
+        .map(|(item, pairs)| (*item, pairs.to_vec()))
+        .collect();
+    // `refused` holds the first level of each tier (11, 21, ...); compare the
+    // tier and percentile of every pair named here.
+    let tier_of = |level: u8| (level - 1) / 10 * 10 + 1;
+    for (item, pairs) in &named {
+        let seen = refused.get(item).expect("the item is refused");
+        let named_pairs: Vec<_> = pairs.iter().map(|&(l, p)| (tier_of(l), p)).collect();
+        assert_eq!(seen, &named_pairs, "{item:?}");
+    }
+    assert_eq!(
+        refused.keys().collect::<Vec<_>>(),
+        named.keys().collect::<Vec<_>>(),
+        "every refused item is named"
+    );
+}
+
+#[test]
+fn a_found_item_a_battle_cannot_carry_is_withheld_after_both_draws() {
+    for (item, pairs) in WITHHELD {
+        for (level, percentile) in pairs {
+            let seed = seed_for_percentile(percentile);
+            let owner = trainer_id(&new_game_phase());
+            let lead = mon(TREECKO, 20, owner);
+            let reserve_record = record(&mon(ZIGZAGOON, level, owner));
+            let mut phase = phase_with_party(&[record(&lead), reserve_record], 0, &lead, seed);
+
+            phase.roll_pickup_after_win();
+
+            assert_eq!(
+                phase.rng.state(),
+                rng_after(seed, 2),
+                "{item:?}: both draws are made"
+            );
+            assert_eq!(
+                phase.save1.player_party[1], reserve_record,
+                "{item:?} (level {level}, percentile {percentile}): nothing is stored"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_lead_that_found_a_refused_item_still_enters_battle() {
+    // Level 15, percentile 98: King's Rock. Stored, it would refuse the lead
+    // every trainer battle and disable wild encounters.
+    let mut phase = new_game_phase();
+    let owner = trainer_id(&phase);
+    phase.set_fresh_lead_for_test(mon(ZIGZAGOON, 15, owner));
+    phase.rng = Rng::new(seed_for_percentile(98));
+
+    phase.roll_pickup_after_win();
+
+    let lead = phase.lead_for_test().unwrap();
+    assert_eq!(lead.held_item(), ItemId::NONE);
+    assert_eq!(
+        crate::flow::lead_screen::ensure_lead_can_battle(lead),
+        Ok(())
+    );
+    assert!(phase.wild_lead_admissible());
+}
+
+#[test]
+fn a_reserve_that_found_an_item_is_still_playable_after_a_reload() {
+    // A reserve is left out of a wild roster when it holds a refused item, so
+    // whatever Pickup stores must pass the same screen after the save round
+    // trip: level 100, percentile 98 is TM Earthquake, which it does carry.
+    let owner = trainer_id(&new_game_phase());
+    let lead = mon(TREECKO, 20, owner);
+    let reserve_record = record(&mon(ZIGZAGOON, 100, owner));
+    let mut phase = phase_with_party(&[record(&lead), reserve_record], 0, &lead, 195);
+
+    phase.roll_pickup_after_win();
+
+    let stored = phase.save1.player_party[1];
+    assert_eq!(held_item_of(&stored), ItemId::TM_EARTHQUAKE);
+    let reloaded = crate::party::from_save_pokemon(&Dex::new(), &stored).unwrap();
+    assert_eq!(
+        crate::flow::lead_screen::ensure_lead_can_battle(&reloaded),
+        Ok(())
+    );
+}
