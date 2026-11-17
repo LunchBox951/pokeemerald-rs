@@ -46,10 +46,13 @@ impl GlyphColors<'_> {
                     // `GenerateFontHalfRowLookupTable` maps glyph values 0 and
                     // 3 both to `bgColor` (`pokeemerald/src/text.c:363-420`);
                     // the real fonts use 3 for the cell background.
+                    // `GLYPH_COPY` writes every nonzero mapped nibble
+                    // (`text.c:583-591`), so the default background paints
+                    // over earlier pixels like a `HIGHLIGHT`ed one; a
+                    // background of palette index 0 stays transparent below.
                     GLYPH_BACKGROUND_INDEX | GLYPH_CELL_BACKGROUND_INDEX
-                        if revealed.paint_background
-                            && i32::try_from(x)
-                                .is_ok_and(|x| x < i32::from(revealed.glyph.advance_width))
+                        if i32::try_from(x)
+                            .is_ok_and(|x| x < i32::from(revealed.glyph.advance_width))
                             && i32::try_from(y).is_ok_and(|y| y < revealed.raster_height) =>
                     {
                         colors.background
