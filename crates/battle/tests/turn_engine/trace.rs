@@ -11,6 +11,7 @@ use crate::common::{
     SECONDARY_ABILITY_PERSONALITY,
 };
 use assets::{AbilityId, MoveId, SpeciesId};
+use battle::stat_stage::StatStage;
 use battle::{Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 
 /// The constructor's turn-number seed; no Speed tie, so no order draw.
@@ -100,6 +101,53 @@ fn the_copy_is_announced_with_the_first_turn_only() {
     };
     assert_eq!((copies(&first), copies(&second)), (1, 0));
     assert_eq!(battle.player().ability(), AbilityId::HUGE_POWER);
+    rng.assert_exhausted();
+}
+
+#[test]
+fn a_traced_speed_boost_boosts_at_the_end_of_turn_one_for_both_leads() {
+    let dex = Dex::new();
+    let player = trace_holder(&dex, SpeciesId::PORYGON2, 50, &[MoveId::SPLASH]);
+    let enemy = mon(&dex, SpeciesId::NINJASK, 10, &[MoveId::SPLASH], 0);
+    assert_eq!(enemy.ability(), AbilityId::SPEED_BOOST);
+    assert!(player.stats().speed > enemy.stats().speed, "no order draw");
+    let mut rng = SequenceRng::new(script(&[&C, &W]));
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(battle.player().ability(), AbilityId::SPEED_BOOST);
+    assert_eq!(battle.player().native_ability(), AbilityId::TRACE);
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let boosted = |by_player| BattleEvent::SpeedBoostActivated {
+        by_player,
+        new_stage: StatStage::new(1).unwrap(),
+    };
+    let splash = |by_player| {
+        [
+            BattleEvent::UsedMove {
+                by_player,
+                move_id: MoveId::SPLASH,
+            },
+            BattleEvent::NothingHappened {
+                by_player,
+                move_id: MoveId::SPLASH,
+            },
+        ]
+    };
+    assert_eq!(
+        events,
+        [
+            &[traced(true, AbilityId::SPEED_BOOST)][..],
+            &splash(true),
+            &splash(false),
+            &[boosted(true), boosted(false)],
+        ]
+        .concat()
+    );
+    assert_eq!(battle.player().stages().speed, StatStage::new(1).unwrap());
+    assert_eq!(battle.enemy().stages().speed, StatStage::new(1).unwrap());
     rng.assert_exhausted();
 }
 
