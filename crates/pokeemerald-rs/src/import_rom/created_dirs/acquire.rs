@@ -16,13 +16,14 @@
 //! reopen that follows compares the name against that identity while the
 //! claim still holds the directory open, so its inode cannot be freed and
 //! reused by a replacement, and a swap after the claim is refused too.
-//! Elsewhere a level is made at its final name and a same-user replacement in
-//! the gap cannot be told apart. So it
-//! is where the kernel or filesystem answers the no-replace rename with
-//! `EINVAL`, `ENOTSUP` or `ENOSYS` (an NFS mount, say): the private
-//! directory is removed after checking its identity, and the level is made
-//! at its final name, which gives up the guarantee on that mount in
-//! exchange for importing at all.
+//! Elsewhere a level is made at its final name, where a same-user
+//! replacement in the gap cannot be told apart, so it is not claimed: it is
+//! walked through like a level that already existed, never recorded, and
+//! never removed on rollback. So it is where the kernel or filesystem
+//! answers the no-replace rename with `EINVAL`, `ENOTSUP` or `ENOSYS` (an NFS
+//! mount, say): the private directory is removed after checking its
+//! identity, and the level is made at its final name and left unclaimed, so
+//! a failed import there leaves the levels it made standing.
 //!
 //! # Accepted residuals
 //!
@@ -88,6 +89,12 @@ pub(super) enum ClaimError {
     /// this run's to record, and the caller decides whether it can be walked
     /// through.
     Taken(io::Error),
+    /// A directory was made at `name` itself, where nothing can tie what
+    /// stands there now to this run's `mkdirat`: a same-user writer of the
+    /// parent may have put its own there since. It is walked through as an
+    /// existing level, never recorded, so rollback leaves it standing; the
+    /// error is for when `name` is no longer a directory.
+    Unowned(io::Error),
     /// Anything else, including everything that went wrong once a directory
     /// was made: the caller must not take the name for an existing level.
     Failed(io::Error),
@@ -115,9 +122,8 @@ impl ClaimError {
 pub(super) struct Claimed {
     /// The device, inode, type and owner of the directory this run made.
     pub(super) identity: rustix::fs::Stat,
-    /// The directory itself, held open; `None` only where a level made at
-    /// its final name could not be opened as the one stat'ed there.
-    pub(super) held: Option<std::os::fd::OwnedFd>,
+    /// The directory itself, held open.
+    pub(super) held: std::os::fd::OwnedFd,
 }
 
 /// Makes the level `name` in `parent` and answers with the identity of the
@@ -136,7 +142,8 @@ pub(super) struct Claimed {
 /// private directory is removed by [`discard_private`], which only removes
 /// what it finds to be the one that was verified; one that fails
 /// verification is left untouched, since it may be someone else's. Elsewhere
-/// there is no such rename, so the directory is made at `name` and stat'ed there, which a same-user writer can race.
+/// there is no such rename, so the directory is made at `name` and is
+/// [`ClaimError::Unowned`], as nothing can show that what stands there is it.
 #[cfg(all(
     unix,
     any(target_os = "linux", target_os = "android", target_vendor = "apple")
@@ -171,10 +178,7 @@ pub(super) fn claim_level(
             ))
         })?;
     match rename_no_replace(parent, &private, parent, name) {
-        Ok(()) => Ok(Claimed {
-            identity,
-            held: Some(held),
-        }),
+        Ok(()) => Ok(Claimed { identity, held }),
         Err(errno) => {
             report_left_standing(
                 &discard_private(parent, &private, &aside, &held, &mut || {}),
@@ -183,16 +187,16 @@ pub(super) fn claim_level(
             if no_replace_unsupported(errno) {
                 // This filesystem cannot refuse to replace (an NFS mount, say):
                 // make the level at its final name, as where no such rename
-                // exists, rather than refuse to import at all.
-                return claim_at_final_name(
+                // exists, rather than refuse to import at all, but do not
+                // claim it.
+                return Err(claim_at_final_name(
                     created,
                     pin_from,
                     parent,
                     name,
-                    owner,
                     after_mkdir,
                     sync_reopen,
-                );
+                ));
             }
             Err(ClaimError::from_errno(errno))
         }
@@ -418,7 +422,7 @@ fn fresh_private_name(
 }
 
 /// [`claim_level`] where there is no no-replace rename: the directory is made
-/// at `name` itself.
+/// at `name` itself and never claimed.
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
@@ -428,59 +432,42 @@ pub(super) fn claim_level(
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
-    owner: u32,
+    _owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<Claimed, ClaimError> {
-    claim_at_final_name(
+    Err(claim_at_final_name(
         created,
         pin_from,
         parent,
         name,
-        owner,
         after_mkdir,
         sync_reopen,
-    )
+    ))
 }
 
-/// Makes the level `name` in `parent` at that name and stats it there. A
-/// same-user writer of `parent` can replace it in the gap, which is the
-/// weaker guarantee this gives up the private-name claim for. The level is
-/// then opened by name and held if it is still the one stat'ed; if not, or
-/// if the open fails, it is not held, and the reopen decides.
+/// Makes the level `name` in `parent` at that name, and answers why it is
+/// not claimed. `mkdirat` returns no descriptor, so a same-user writer of
+/// `parent` can move the new directory away and put its own at `name` before
+/// anything looks there, and no check made afterwards can tell the two
+/// apart. The level is therefore [`ClaimError::Unowned`]: walked through like
+/// one that already existed, never recorded, never removed on rollback.
 #[cfg(unix)]
 fn claim_at_final_name(
     created: &mut [CreatedDirectory],
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
-    owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> Result<Claimed, ClaimError> {
-    mkdir_level(created, pin_from, parent, name, sync_reopen).map_err(ClaimError::from_errno)?;
-    after_mkdir();
-    let found = loop {
-        match rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-            Err(err)
-                if is_out_of_descriptors(err)
-                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            result => break result.map_err(|errno| ClaimError::Failed(errno.into()))?,
-        }
-    };
-    let identity = vouch_owned_by(found, owner).map_err(ClaimError::Failed)?;
-    let held = loop {
-        match dest::open_created_directory_at(parent, name) {
-            Err(source)
-                if is_out_of_descriptors_io(&source)
-                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            result => break result.ok(),
-        }
+) -> ClaimError {
+    if let Err(errno) = mkdir_level(created, pin_from, parent, name, sync_reopen) {
+        return ClaimError::from_errno(errno);
     }
-    .filter(|held| {
-        rustix::fs::fstat(held).is_ok_and(|found| same_directory_identity(&found, &identity))
-    });
-    Ok(Claimed { identity, held })
+    after_mkdir();
+    ClaimError::Unowned(io::Error::other(
+        "directory level made at its final name is no longer a directory",
+    ))
 }
 
 /// The identity of the directory `name` in `parent`, read through a
@@ -511,7 +498,10 @@ fn identity_of(
 }
 
 /// `identity` if it is a directory of `owner`'s, else the refusal.
-#[cfg(unix)]
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
 fn vouch_owned_by(identity: rustix::fs::Stat, owner: u32) -> io::Result<rustix::fs::Stat> {
     if made_by(&identity, owner) {
         Ok(identity)
@@ -554,7 +544,8 @@ pub(super) fn reopen_created_level(
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> ReopenedLevel {
-    let Claimed { identity, mut held } = claim;
+    let Claimed { identity, held } = claim;
+    let mut held = Some(held);
     let identity = &identity;
     let descend = loop {
         let attempt = match before_reopen() {

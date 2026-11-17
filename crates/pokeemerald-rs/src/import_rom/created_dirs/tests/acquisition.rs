@@ -342,8 +342,9 @@ fn only_a_directory_of_the_given_user_is_made_by_that_user() {
 #[test]
 fn a_level_is_made_at_its_final_name_where_no_rename_can_refuse_to_replace() {
     // The fallback contract: the directory is made at the name itself, so
-    // the seam sees it there and nothing is made privately. What it does not
-    // give is protection from a same-user writer replacing it in the gap.
+    // the seam sees it there and nothing is made privately. Nothing can tell
+    // it from a same-user replacement put there in the gap, so neither level
+    // is recorded as this run's.
     let dir = TempDir::new("final-name");
     let first = dir.join("a");
     let target = first.join("b");
@@ -355,7 +356,11 @@ fn a_level_is_made_at_its_final_name_where_no_rename_can_refuse_to_replace() {
     })
     .expect("both levels are created");
 
-    assert_eq!(creation.created.len(), 2);
+    assert!(target.is_dir());
+    assert!(
+        creation.created.is_empty(),
+        "a level made at its final name was claimed"
+    );
     assert_eq!(seen[0], ["a"], "the level is already at its final name");
 }
 
@@ -400,7 +405,9 @@ fn a_private_directory_whose_open_fails_is_not_left_behind_silently() {
 fn a_missing_level_is_created_where_noreplace_rename_is_unsupported() {
     // On a filesystem that cannot refuse to replace (Linux NFS answers
     // `EINVAL`), the private-name claim cannot finish. Creating the level
-    // must still work, at its final name, and leave no private directory.
+    // must still work, at its final name, and leave no private directory;
+    // nothing there is claimed, since a same-user replacement in the gap
+    // could not be told apart.
     // Every no-replace rename on this thread answers `EINVAL`, through the
     // seam in `acquire`, so this runs wherever the platform renames at all.
     let dir = TempDir::new("noreplace-einval");
@@ -412,7 +419,10 @@ fn a_missing_level_is_created_where_noreplace_rename_is_unsupported() {
     let creation = result
         .map_err(|(_, source)| source)
         .expect("creating a missing level failed");
-    assert_eq!(creation.created.len(), 2);
+    assert!(
+        creation.created.is_empty(),
+        "a level made at its final name was claimed"
+    );
     assert!(target.is_dir());
     assert_eq!(private_entries(&dir.path), Vec::<String>::new());
     assert_eq!(private_entries(&dir.join("a")), Vec::<String>::new());
@@ -480,16 +490,54 @@ fn a_claimed_level_stays_open_until_its_reopen_is_checked() {
     // directory made at the name next, which the reopen's device-and-inode
     // check would take for the level this run made. The claim's descriptor
     // must still be open when the reopen runs, so the replacement is refused.
-    for refuse in [None, Some(rustix::io::Errno::INVAL)] {
-        let dir = TempDir::new("held-until-reopen");
-        let _refusing = refuse.map(super::acquire::tests_seam::refuse_noreplace);
-        let (held, result) = replace_level_before_its_reopen(&dir);
-        assert_eq!(
-            held, 1,
-            "the claimed level is held open until its reopen (refusing {refuse:?})"
-        );
-        let (created, _) = result.expect_err("the replacement is not taken for the level");
-        assert!(created.is_empty(), "the replacement is not recorded");
-        assert!(dir.join("a").is_dir(), "the replacement is left standing");
-    }
+    // A level made at its final name is never claimed, so has no reopen; see
+    // `a_replacement_put_at_a_levels_name_after_the_fallback_mkdir_is_not_claimed`.
+    let dir = TempDir::new("held-until-reopen");
+    let (held, result) = replace_level_before_its_reopen(&dir);
+    assert_eq!(held, 1, "the claimed level is held open until its reopen");
+    let (created, _) = result.expect_err("the replacement is not taken for the level");
+    assert!(created.is_empty(), "the replacement is not recorded");
+    assert!(dir.join("a").is_dir(), "the replacement is left standing");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_replacement_put_at_a_levels_name_after_the_fallback_mkdir_is_not_claimed() {
+    // Where the no-replace rename is refused (`EINVAL`, as on NFS), the level
+    // is made at its final name. A same-user writer moves it away right after
+    // `mkdirat` and puts its own directory there: that replacement must not
+    // be recorded as this run's, so rollback leaves it standing.
+    let dir = TempDir::new("fallback-swap");
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
+    let first = dir.join("a");
+    let target = first.join("b");
+    let moved = dir.join("a-original");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut swapped = false;
+    let result = create_as(&target, owner, &mut || {
+        if !swapped && first.exists() {
+            swapped = true;
+            fs::rename(&first, &moved).unwrap();
+            fs::create_dir(&first).unwrap();
+        }
+    });
+    assert!(
+        swapped,
+        "the fallback never made the level at its final name"
+    );
+    let replacement_ino = rustix::fs::stat(&first).unwrap().st_ino;
+    let created = match result {
+        Ok(creation) => creation.created,
+        Err((created, _)) => created,
+    };
+    let adopted = created
+        .iter()
+        .any(|level| level.identity.st_ino == replacement_ino);
+    super::undo_created_directories(&created);
+    assert!(
+        !adopted,
+        "the replacement (ino {replacement_ino}) was recorded as a created level; after rollback it exists: {}",
+        first.exists()
+    );
+    assert!(first.is_dir(), "rollback removed the replacement");
 }

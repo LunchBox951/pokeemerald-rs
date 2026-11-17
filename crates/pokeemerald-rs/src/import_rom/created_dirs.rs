@@ -480,7 +480,9 @@ fn create_directories_pinned_after_mkdir(
             }
             // An existing directory is no failure and not this run's to
             // record; a final symlink to one counts, as for `Path::is_dir`.
-            Err(ClaimError::Taken(mkdir_err)) => {
+            // So is one made at its final name, which nothing ties to this
+            // run's `mkdirat`.
+            Err(ClaimError::Taken(mkdir_err) | ClaimError::Unowned(mkdir_err)) => {
                 let already_a_directory =
                     rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
                         |stat| {
