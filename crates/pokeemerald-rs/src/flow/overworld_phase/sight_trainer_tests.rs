@@ -72,6 +72,7 @@ mod approach_timing;
 mod battle;
 mod live_selection;
 mod live_writeback;
+mod pickup;
 mod real_parties;
 mod support;
 mod trigger;

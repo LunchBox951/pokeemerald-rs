@@ -300,6 +300,7 @@ pub mod multi_hit;
 pub mod nature;
 pub mod obedience;
 pub mod paralyze;
+pub mod pickup;
 pub mod pokemon;
 pub mod rollout;
 pub mod secondary;
@@ -350,6 +351,7 @@ pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
 pub use obedience::{LoafMessage, PlayerObedience};
 pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
+pub use pickup::{roll_pickup, PickupFind, PickupSlotFacts};
 pub use pokemon::{
     calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, ExperienceAward, Ivs,
     LearnedMove, MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses,

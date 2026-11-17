@@ -56,6 +56,7 @@ mod lead_owner;
 mod live_battle_text;
 mod object_events;
 mod placement;
+mod post_battle_pickup;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
