@@ -216,15 +216,15 @@ struct SightScan {
     doubles_refused: Vec<TrainerId>,
 }
 
-/// Scan `objects`' live entries, in declaration order, for the first `TRAINER_TYPE_NORMAL` sight
+/// Scan `objects`' admitted entries, in object-slot order, for the first `TRAINER_TYPE_NORMAL` sight
 /// trainer whose cone reaches `player` and who is currently eligible to
 /// fight.
 ///
 /// This is `CheckForTrainersWantingBattle` (`trainer_see.c:189-222`) plus
-/// `CheckTrainer` (`:224-256`): the scan order is
-/// `data/maps/Route103/map.json`'s own `object_events` declaration order --
-/// the order [`MapRuntime::object_events_at`]'s own docs cite for every
-/// other scan in this crate -- an already-defeated trainer is skipped
+/// `CheckTrainer` (`:224-256`): the scan order is the live object slot
+/// ([`LiveObjectEvent::object_slot`], upstream's `gObjectEvents` index) --
+/// not the map's `object_events` declaration order -- an already-defeated
+/// trainer is skipped
 /// ([`already_defeated`]), and the geometry itself
 /// (`GetTrainerApproachDistance` + `CheckPathBetweenTrainerAndPlayer`) lives
 /// in [`engine::overworld::trainer_can_see_player`].
@@ -241,7 +241,18 @@ fn find_sight_trainer(
     event_data: &EventData,
 ) -> SightScan {
     let mut scan = SightScan::default();
-    for live in objects.entries() {
+    // `CheckForTrainersWantingBattle` walks `gObjectEvents` by index and skips
+    // inactive slots (`trainer_see.c:198-204`), so visit the admitted entries
+    // in object-slot order. Declaration order is not that order: an object
+    // takes the lowest free slot when it spawns (`GetAvailableObjectEventId`,
+    // `event_object_movement.c:1358-1380`). The slots are distinct, so the
+    // sort is total.
+    let mut slotted: Vec<(usize, &LiveObjectEvent)> = objects
+        .entries()
+        .filter_map(|live| live.object_slot().map(|slot| (slot, live)))
+        .collect();
+    slotted.sort_unstable_by_key(|&(slot, _)| slot);
+    for (_, live) in slotted {
         let event = live.template();
         if event.trainer_type != TrainerType::Normal {
             continue;

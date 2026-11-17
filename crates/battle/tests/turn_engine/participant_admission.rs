@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
 //! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate,
-//! Color Change, Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 19] {
+fn refused() -> [(BattlePokemon, AbilityId); 18] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -28,7 +28,6 @@ fn refused() -> [(BattlePokemon, AbilityId); 19] {
             mon(SpeciesId::MAWILE, 1, Status1::Healthy),
             AbilityId::INTIMIDATE,
         ),
-        (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
         (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
         (
             mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
@@ -445,7 +444,6 @@ fn confusion_is_refused_only_for_own_tempo() {
 fn an_always_refused_ability_is_refused_whatever_the_status() {
     for (species, ability) in [
         (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
-        (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, AbilityId::DROUGHT),
@@ -560,8 +558,44 @@ fn a_speed_boost_holder_does_not_excuse_an_unrelated_refusal() {
     let result = trainer(
         healthy(SpeciesId::ZIGZAGOON),
         vec![],
-        vec![holder(), healthy(SpeciesId::KECLEON)],
+        vec![holder(), healthy(SpeciesId::MAGMAR)],
         &mut rng,
     );
-    assert_refused_without_draws(&result, AbilityId::COLOR_CHANGE, &rng);
+    assert_refused_without_draws(&result, AbilityId::FLAME_BODY, &rng);
+}
+
+/// Color Change is modelled: its type change lives in the on-damage seam and the
+/// battle-only typing, so every side and bench slot admits it, whatever the
+/// holder's status, while unrelated refusals stay.
+#[test]
+fn color_change_holders_are_admitted_on_every_side_and_slot() {
+    let tie_script = |player: &BattlePokemon, enemy: &BattlePokemon| {
+        SequenceRng::new(admission_script(
+            player.speed_for_turn_order() == enemy.speed_for_turn_order(),
+        ))
+    };
+    for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+        let holder = || mon(SpeciesId::KECLEON, 0, status);
+        assert_eq!(holder().ability(), AbilityId::COLOR_CHANGE);
+        let foe = || healthy(SpeciesId::ZIGZAGOON);
+
+        let mut rng = tie_script(&holder(), &foe());
+        wild(holder(), vec![], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        wild(foe(), vec![], holder(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        wild(foe(), vec![holder()], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![holder()], vec![foe()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![], vec![foe(), holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        trainer(foe(), vec![], vec![holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+    }
 }

@@ -219,7 +219,8 @@
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
 //! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
-//! (its end-turn stage in `Battle::residual_effects`), Run
+//! (its end-turn stage in `Battle::residual_effects`), Color Change (the
+//! on-damage seam, `battle::execute::color_change`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
@@ -238,7 +239,7 @@
 //! and the secondary Speed drop) —
 //! the effect of any held item but Oran Berry's end-turn heal (a mon carries
 //! one, and [`ensure_held_item_playable`] refuses every other item that has
-//! an effect), every primary status but [`status1::Status1::Paralysed`],
+//! an effect, except the Cleanse Tag, which has none in battle), every primary status but [`status1::Status1::Paralysed`],
 //! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
 //! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
