@@ -287,6 +287,16 @@ pub(super) fn load_synthetic_scene_of_with_window_frame(
     load_synthetic_scene_inner(TRANSPARENT_FONT_INDEX, menu_type, window_frame)
 }
 
+pub(super) fn load_synthetic_scene_with_summary(
+    font_index: u8,
+    menu_type: MainMenuType,
+    summary: Option<&super::SaveSummary>,
+) -> MainMenuScene {
+    let temp_pack = claim_synthetic_pack(font_index, super::FRAME_ID);
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    MainMenuScene::from_pack_with_summary(&pack, menu_type, super::FRAME_ID, summary).unwrap()
+}
+
 fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame, super::FRAME_ID)
 }
@@ -532,6 +542,41 @@ fn compose_from_synthetic_pack_is_deterministic_and_selection_changes_the_frame(
         after_move.pixels(),
         "moving the selection must change the composed highlight"
     );
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn checkout_pack_composes_the_continue_summary_in_the_gender_colour() {
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let summary = super::SaveSummary::from_save(
+        &engine::save::SaveBlock1::default(),
+        &engine::save::SaveBlock2 {
+            player_name: *b"RUSTY\xFF\xFF\xFF",
+            ..Default::default()
+        },
+    );
+    let with_summary = MainMenuScene::from_pack_with_summary(
+        &pack,
+        MainMenuType::SavedGame,
+        super::FRAME_ID,
+        Some(&summary),
+    )
+    .expect("run `cargo xtask extract` first")
+    .compose();
+    let without = MainMenuScene::from_pack(&pack, MainMenuType::SavedGame)
+        .expect("run `cargo xtask extract` first")
+        .compose();
+
+    let info_pixels = with_summary
+        .pixels()
+        .iter()
+        .filter(|&&p| p == summary.text_color())
+        .count();
+    assert!(
+        info_pixels > 0,
+        "the summary must paint in the male text colour"
+    );
+    assert_ne!(with_summary.pixels(), without.pixels());
 }
 
 #[test]

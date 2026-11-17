@@ -129,6 +129,7 @@ impl Fixture {
             &self.pack_source,
             menu_type,
             window_frame_for(&saved),
+            super::summary_for(&saved).as_ref(),
         )
         .unwrap();
         while menu.selected() != MainMenuItem::Option {

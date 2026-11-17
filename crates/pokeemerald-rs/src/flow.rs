@@ -63,7 +63,9 @@ use platform::{ButtonState, Buttons, Frame};
 
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
-use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
+use crate::main_menu::{
+    self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType, SaveSummary,
+};
 use crate::new_game::NewGameOptions;
 use crate::title::TitleScene;
 use fade_wait::{
@@ -397,6 +399,16 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
+/// The CONTINUE window's summary lines, present exactly when the menu shows
+/// CONTINUE (`MainMenu_FormatSavegameText` runs only in the `HAS_SAVED_GAME`
+/// layouts, `main_menu.c:794-803`).
+fn summary_for(saved: &SavedGame) -> Option<SaveSummary> {
+    saved
+        .status
+        .menu_shows_continue()
+        .then(|| SaveSummary::from_save(&saved.block1, &saved.block2))
+}
+
 /// The boot load of `save_slot`, before the title's first frame: upstream's
 /// `LoadGameSave(SAVE_NORMAL)` and the `Empty`/`Corrupt` defaulting in
 /// `CB2_InitCopyrightScreenAfterBootup` (`pokeemerald/src/intro.c:1147-1159`).
@@ -606,6 +618,7 @@ fn load_menu_for(
         pack_source,
         menu_type_for(saved),
         window_frame_for(saved),
+        summary_for(saved).as_ref(),
     ) {
         Ok(menu) => Some(menu),
         Err(err) => {
