@@ -7,19 +7,19 @@ use rom_import::fixture::RomFixture;
 use super::super::error::GenRomProfileError;
 use super::scratch;
 
-/// A ROM-shaped image at `path`, structurally valid but not the supported
-/// build, so a run reaches the destination guard and stops there.
+/// The header is valid but the build is not the supported one, so a run stops
+/// at the destination guard or, past it, on the build check.
 fn rom_shaped_file(path: &Path) -> Vec<u8> {
     let bytes = RomFixture::new().emerald_header().finish();
     std::fs::write(path, &bytes).expect("the stand-in ROM writes");
     bytes
 }
 
+/// One path given to both `--rom` and `--out` would cost a developer their
+/// cartridge dump. The whole ROM is already in memory when the module is
+/// written, so nothing downstream would notice.
 #[test]
 fn an_output_naming_the_rom_itself_is_refused_and_the_rom_survives() {
-    // The typo that costs a developer their cartridge dump: one path given
-    // to both `--rom` and `--out`. The whole ROM is in memory by the time
-    // the module is written, so nothing downstream would notice.
     let dir = scratch("out-is-rom");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
@@ -45,11 +45,11 @@ fn an_output_naming_the_rom_itself_is_refused_and_the_rom_survives() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// A symlink is a different path *string* for the same file: comparing the
+/// two spellings would miss it, resolving them does not.
 #[cfg(unix)]
 #[test]
 fn an_output_symlinked_to_the_rom_is_refused_and_the_rom_survives() {
-    // A different path *string*, the same file. Comparing the two spellings
-    // would miss this; resolving them does not.
     let dir = scratch("out-links-to-rom");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
@@ -78,11 +78,11 @@ fn an_output_symlinked_to_the_rom_is_refused_and_the_rom_survives() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// A hard link is two directory entries for one inode. `canonicalize` reports
+/// two distinct names for it, so only a device/inode comparison sees it.
 #[cfg(unix)]
 #[test]
 fn an_output_hard_linked_to_the_rom_is_refused_and_the_rom_survives() {
-    // Two directory entries, one inode. `canonicalize` reports two distinct
-    // names here, so only a device/inode comparison sees it.
     let dir = scratch("out-hardlinks-rom");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
@@ -111,11 +111,10 @@ fn an_output_hard_linked_to_the_rom_is_refused_and_the_rom_survives() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// A distinct output path gets past the destination guard and fails later,
+/// on the ROM not being the supported build.
 #[test]
 fn an_ordinary_output_is_not_mistaken_for_the_rom() {
-    // The guard must not refuse the normal case: a distinct output path
-    // gets past it and fails later, on the ROM not being the supported
-    // build.
     let dir = scratch("out-is-not-rom");
     let rom = dir.join("emerald.gba");
     rom_shaped_file(&rom);
@@ -136,19 +135,12 @@ fn an_ordinary_output_is_not_mistaken_for_the_rom() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// Off Unix the guard compares canonical paths and misses a hard link, so
+/// `publish`'s rename must replace the alias's entry, not truncate the shared
+/// inode. Unix-only because that is where a test can make the link.
 #[cfg(unix)]
 #[test]
 fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
-    // The residual the destination guard cannot close off Unix: `std`
-    // exposes no file identity on Windows, so `overwrites_rom` there
-    // compares canonical paths, and two hard links canonicalize to two
-    // distinct names. Publishing by rename is what makes that survivable --
-    // it replaces the alias's directory entry rather than truncating the
-    // inode both names share.
-    //
-    // Exercised on Unix because that is where a hard link can be made in a
-    // test; the property under test is `publish`'s, and it is the same on
-    // every platform.
     let dir = scratch("write-through-hard-link");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
@@ -173,22 +165,12 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// `temp_sibling` never repeats a name, so no later run cleans up a leftover
+/// temporary; the error must name it. The injected write swaps the temporary
+/// for a non-empty directory so `remove_file` fails even as root.
 #[test]
 #[cfg(unix)]
 fn a_failed_cleanup_names_the_partial_profile_it_left_behind() {
-    // `remove_after`'s own removal must also be able to fail -- silently
-    // dropping that failure would leave a `.profile.*.tmp` directory behind
-    // permanently: `temp_sibling`'s name is never chosen twice, so no later
-    // run ever revisits this exact path to clean it up. The injected write
-    // swaps the temporary file for a non-empty directory before returning
-    // its error,
-    // so `remove_after`'s `remove_file` fails deterministically
-    // (`remove_file` refuses any directory, empty or not, regardless of the
-    // runner's privileges -- unlike a permission-based seam, which root
-    // bypasses). Mirrors `rom_import`'s own
-    // `a_failed_cleanup_names_the_partial_file_it_left_behind` and
-    // `crates/xtask/src/extract/mod.rs`'s
-    // `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
     let dir = scratch("cleanup-fails");
     let out = dir.join("bpee_rev0.rs");
     let mut swapped_temp = None;
@@ -208,8 +190,6 @@ fn a_failed_cleanup_names_the_partial_profile_it_left_behind() {
     .unwrap_err();
     let swapped_temp = swapped_temp.expect("the write ran");
 
-    // The write's own error kind survives the additional cleanup failure,
-    // and the message names what cleanup left behind.
     let crate::gen_rom_profile::GenRomProfileError::WriteFailed { reason, .. } = &err else {
         panic!("{err:?}");
     };
@@ -229,10 +209,10 @@ fn a_failed_cleanup_names_the_partial_profile_it_left_behind() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A directory at the output path makes the rename fail after the temporary
+/// is written; the write and the rename share one cleanup.
 #[test]
 fn a_failed_publish_leaves_no_temporary_beside_the_output() {
-    // A directory at the output path makes the rename fail after the
-    // temporary is written; the write and rename share one cleanup.
     let dir = scratch("failed-publish-leaves-no-litter");
     let out = dir.join("bpee_rev0.rs");
     std::fs::create_dir_all(&out).expect("the colliding directory");
@@ -276,12 +256,11 @@ fn a_successful_write_leaves_only_the_output() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// `absent/..` resolves to nothing until `absent/` exists, so `run`'s pre-check
+/// passes; creating the directory is what makes the output name the ROM, so
+/// `write_module` asks again.
 #[test]
 fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
-    // The alias the pre-check cannot answer: `absent/` does not exist when
-    // `run` asks, so `absent/..` resolves to nothing and the guard lets the
-    // path through. Creating that directory is what makes the output name
-    // the ROM, and the publishing rename is what would land on it.
     let dir = scratch("out-reaches-rom-through-missing-dir");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
@@ -306,22 +285,24 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
         before,
         "the ROM must be byte-identical after a refused write"
     );
-    // The refused write leaves the directory it had to create to ask the
-    // question, and nothing else: no module, no temporary beside the ROM.
     let stray: Vec<_> = std::fs::read_dir(&dir)
         .expect("listing")
         .filter_map(Result::ok)
         .map(|entry| entry.file_name())
         .filter(|name| name != "emerald.gba" && name != "absent")
         .collect();
-    assert!(stray.is_empty(), "{stray:?}");
+    assert!(
+        stray.is_empty(),
+        "a refused write leaves no module or temporary beside the ROM: {stray:?}"
+    );
 
     let _ = std::fs::remove_dir(dir.join("absent"));
     let _ = std::fs::remove_file(&rom);
     let _ = std::fs::remove_dir(&dir);
 }
 
-/// Set in the child [`publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable`]
+/// Set in the child that
+/// [`publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable`]
 /// re-runs itself as, so only that child changes its own umask.
 #[cfg(unix)]
 const PUBLISH_UMASK_CHILD: &str = "POKEEMERALD_GEN_ROM_PROFILE_UMASK_CHILD";
@@ -372,9 +353,11 @@ fn publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable() {
     let text = std::fs::read(&out);
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_dir(&dir);
-    // 0666 & !0444 leaves 0222; only the owner read is restored, so the
-    // group and other bits still honour the umask.
-    assert_eq!(mode, 0o622, "published module mode: {mode:o}");
+    assert_eq!(
+        mode, 0o622,
+        "0666 & !0444 leaves 0222 and only the owner's read is restored, so the \
+         group and other bits still honour the umask: {mode:o}"
+    );
     assert_eq!(
         text.expect("module reads back"),
         b"pub const GENERATED: u32 = 0;\n"
