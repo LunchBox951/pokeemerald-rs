@@ -259,12 +259,12 @@ fn key_split_trumpet() -> VoiceEntry {
 }
 
 /// Notes 0..24 read the last 24 of trumpet's bytes, 108..128 the first 20 of
-/// french_horn's (all child 0).
+/// `french_horn`'s (all child 0).
 fn key_split_tuba() -> VoiceEntry {
     key_split(0, &[(2, 24), (0, 18), (1, 66), (0, 20)], "tuba_keysplit")
 }
 
-/// Notes 0..36 read the last 36 of tuba's bytes; french_horn is the last block
+/// Notes 0..36 read the last 36 of tuba's bytes; `french_horn` is the last block
 /// in the file, so the table ends at note 107.
 fn key_split_french_horn() -> VoiceEntry {
     key_split(0, &[(1, 36), (0, 30), (1, 42)], "french_horn_keysplit")
@@ -335,8 +335,8 @@ fn title_declared() -> Vec<VoiceEntry> {
 
 /// The 36 records `drumsets/rs.inc`'s `voice_group rs_drumset, 36` aliases:
 /// the last 36 declared in `dummy.inc` (lines 64-99, which links right before
-/// it in `sound/voice_groups.inc`), then rs.inc's own 29.
-fn rs_drumset_declared() -> Vec<VoiceEntry> {
+/// it in `sound/voice_groups.inc`).
+fn dummy_tail_aliased_by_rs_drumset() -> Vec<VoiceEntry> {
     let mut s = Slots::default();
     s.fill(8);
     s.one(sq1(60, 0, 2, [0, 1, 6, 0], false)); // dummy.inc:72
@@ -374,6 +374,13 @@ fn rs_drumset_declared() -> Vec<VoiceEntry> {
     s.one(direct(60, 0, "ethnic_flavours_ohtsuzumi", [255, 0, 255, 0])); // dummy.inc:98
     s.one(direct(60, 0, "ethnic_flavours_hyoushigi", [255, 0, 255, 0])); // dummy.inc:99
     assert_eq!(s.0.len(), 36);
+    s.0
+}
+
+/// `rs_drumset`'s slots 0..65: the aliased `dummy.inc` tail, then rs.inc's own
+/// 29 records.
+fn rs_drumset_declared() -> Vec<VoiceEntry> {
+    let mut s = Slots(dummy_tail_aliased_by_rs_drumset());
     s.one(direct_fixed(60, 64, "sc88pro_rnd_kick", [255, 0, 255, 242])); // rs.inc:2
     s.fill(1);
     s.one(direct_fixed(
