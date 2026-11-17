@@ -104,6 +104,15 @@ pub enum Lz77Fault {
         /// How many bytes had been produced when it was hit.
         produced: usize,
     },
+    /// A back-reference is longer than the declared output still to produce.
+    /// The BIOS would write past the declared size, so the stream is
+    /// malformed. Carries the reference length and the bytes remaining.
+    ReferencePastEnd {
+        /// The back-reference length, in bytes.
+        length: usize,
+        /// How many declared bytes were still to produce when it was hit.
+        remaining: usize,
+    },
     /// The stream decoded to a different length than the caller expected.
     SizeMismatch {
         /// The length the caller asked for.
@@ -124,6 +133,10 @@ impl fmt::Display for Lz77Fault {
             } => write!(
                 f,
                 "a back-reference reaches {displacement} bytes back with only {produced} produced"
+            ),
+            Self::ReferencePastEnd { length, remaining } => write!(
+                f,
+                "a back-reference copies {length} bytes with only {remaining} left to produce"
             ),
             Self::SizeMismatch { expected, actual } => {
                 write!(f, "decoded {actual} bytes, expected {expected}")
@@ -972,6 +985,14 @@ mod tests {
             }
             .to_string(),
             "a back-reference reaches 4 bytes back with only 2 produced"
+        );
+        assert_eq!(
+            Lz77Fault::ReferencePastEnd {
+                length: 18,
+                remaining: 3
+            }
+            .to_string(),
+            "a back-reference copies 18 bytes with only 3 left to produce"
         );
         assert_eq!(
             Lz77Fault::SizeMismatch {
