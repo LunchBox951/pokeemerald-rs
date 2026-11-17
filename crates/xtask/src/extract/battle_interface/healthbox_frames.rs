@@ -144,7 +144,9 @@ mod tests {
 
     use assets::AssetPack;
 
-    use super::super::super::png::tests::{indexed_png_from_raw_with_plte, tiny_indexed_png};
+    use super::super::super::png::tests::{
+        indexed_png_from_raw_with_plte, tiny_indexed_png_without_plte,
+    };
     use super::super::super::png::{self, PngError};
     use super::super::super::{extract_to, repo_root, upstream_present};
     use super::{extract_healthbox_frames, pack_ids, DIRECTORY, FRAME_SOURCES};
@@ -386,7 +388,11 @@ mod tests {
     fn a_palette_source_without_a_usable_plte_is_rejected() {
         let dir = scratch_dir("plte");
         write_valid_checkout(&dir);
-        let path = write(&dir, STATUS_BAR, tiny_indexed_png(8, 2, 1, &[1, 2]));
+        let path = write(
+            &dir,
+            STATUS_BAR,
+            tiny_indexed_png_without_plte(8, 2, 1, &[1, 2]),
+        );
         let err = extract_healthbox_frames(&dir, &mut PackWriter::new()).unwrap_err();
         assert!(matches!(
             err,
