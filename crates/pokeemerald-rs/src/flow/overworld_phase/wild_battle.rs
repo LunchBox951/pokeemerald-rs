@@ -179,6 +179,9 @@ impl OverworldPhase {
         } else if files_party {
             self.select_lead_after_wild_battle(&dex, entered_owners);
         }
+        if outcome == Some(battle::BattleOutcome::PlayerWon) {
+            self.roll_pickup_after_win();
+        }
     }
 
     /// The field lead once a wild battle has filed its party: the first usable saved slot,

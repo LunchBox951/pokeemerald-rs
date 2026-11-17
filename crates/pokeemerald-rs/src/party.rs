@@ -175,6 +175,10 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
 )]
 mod starter;
 
+/// What `Cmd_pickup` reads of a saved slot, and how it writes a found item.
+mod pickup;
+pub(crate) use pickup::{set_record_held_item, slot_facts as pickup_slot_facts};
+
 /// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
 mod take_item;
 pub(crate) use take_item::{take_held_item, TakeHeldItem};

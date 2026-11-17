@@ -102,7 +102,10 @@
 //!
 //! # RNG
 //!
-//! The conclusion draws nothing from the RNG stream.
+//! The conclusion draws nothing from the RNG stream, except that a won battle
+//! rolls Pickup for a member that holds the ability
+//! ([`OverworldPhase::roll_pickup_after_win`]); the starters the first battle
+//! can begin with have none, so the stream is untouched.
 
 use engine::event_data::EventData;
 
@@ -168,6 +171,11 @@ impl OverworldPhase {
              warping to the lab"
         );
 
+        // A won battle runs the outcome script's Pickup roll before anything
+        // else; the heal below must not hand a holder its item's turn first.
+        if self.first_battle_outcome == Some(battle::BattleOutcome::PlayerWon) {
+            self.roll_pickup_after_win();
+        }
         self.heal_whole_party_and_reselect_lead("first battle");
 
         // The writes below and the lab warp are one unit; see the module docs.

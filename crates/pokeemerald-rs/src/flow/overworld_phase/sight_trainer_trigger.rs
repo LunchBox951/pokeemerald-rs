@@ -562,6 +562,7 @@ impl OverworldPhase {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
+                self.roll_pickup_after_win();
                 if let Err(error) = self
                     .save1
                     .event_data

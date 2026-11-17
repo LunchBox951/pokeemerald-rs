@@ -421,6 +421,7 @@ impl OverworldPhase {
             eprintln!("route 103 rival: ended -- {outcome:?}");
             self.rival_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
+                self.roll_pickup_after_win();
                 if let Err(error) = self.save1.event_data.flag_set(FLAG_HIDE_ROUTE_103_RIVAL) {
                     eprintln!(
                         "route 103 rival: couldn't set FLAG_HIDE_ROUTE_103_RIVAL ({error}) -- \
