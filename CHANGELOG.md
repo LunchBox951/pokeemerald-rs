@@ -26,7 +26,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.130.0] - 2026-11-15
 
-- Pokémon with the Trace ability, such as Ralts, can now take part in battles: they copy the opposing Pokémon's ability as they enter, as in the original game.
+- Pokémon with the Trace ability, such as Ralts, can now take part in supported battles by copying the opposing Pokémon's ability as they enter. Some battles in which Trace would copy an ability that is not yet supported, such as Intimidate, remain unavailable.
 
 ## [0.0.129.0] - 2026-11-15
 
