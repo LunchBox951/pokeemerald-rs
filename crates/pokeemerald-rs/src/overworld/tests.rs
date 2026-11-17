@@ -155,11 +155,9 @@ fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
     with_palette_at(&path, color_count, check);
 }
 
-/// Claims `path` through a [`crate::pack_test_support::ScratchClaim`], which
-/// removes it on drop only while it still names the claimed file, and runs
-/// `check` against a pack palette of `color_count` colours. The guard is built
-/// only once the claim succeeded, so a failed claim never removes an entry the
-/// guard does not own; a panic after it still cleans up.
+/// Runs `check` against a pack palette of `color_count` colours, held in a
+/// [`crate::pack_test_support::ScratchClaim`] at `path` that cleans up only
+/// the file it claimed, panic or not.
 fn with_palette_at(
     path: &std::path::Path,
     color_count: u16,
@@ -186,12 +184,9 @@ fn regression_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
-/// A directory this test created, which refuses an occupied path, and removes
-/// with everything inside it on drop. A test that must plant, move, or remove
-/// a file keeps it here, so it never unlinks a name in the shared temp
-/// directory that it did not create. The same helper is the shape of
-/// `OwnedScratchDir` in draft PR #3446; the two can be unified once that
-/// lands in `pack_test_support.rs`.
+/// A directory this test created (it panics on an occupied path), removed with
+/// its contents on drop. Files a test plants, moves, or removes live inside it,
+/// so the test never unlinks a name in the shared temp directory it did not create.
 struct OwnedScratchDir(std::path::PathBuf);
 
 impl OwnedScratchDir {
