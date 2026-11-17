@@ -405,7 +405,11 @@ fn a_slot_zero_ability_scales_the_production_roll() {
         let build = |seed: u32| {
             let mut phase = grass_phase(NONE);
             lead_from_slot_one(&mut phase, saved(&fainted_holder(species, slot)));
-            assert_eq!(phase.lead_slot_for_test(), Some(1), "{ability:?}: not the lead");
+            assert_eq!(
+                phase.lead_slot_for_test(),
+                Some(1),
+                "{ability:?}: not the lead"
+            );
             roll_on_grass(phase, seed)
         };
         let (seed, label) = if doubles {
@@ -450,12 +454,20 @@ fn an_egg_or_an_unrelated_ability_in_slot_zero_leaves_the_rate_unchanged() {
     for (species, slot, ability, doubles) in HOLDERS {
         let seed = if doubles { double_seed } else { halve_seed };
         let egg = into_egg(saved(&holder(species, slot)));
-        assert_eq!(saved_ability(&egg), None, "{ability:?}: an egg has no ability");
+        assert_eq!(
+            saved_ability(&egg),
+            None,
+            "{ability:?}: an egg has no ability"
+        );
         let mut phase = grass_phase(NONE);
         lead_from_slot_one(&mut phase, egg);
         let phase = roll_on_grass(phase, seed);
         if doubles {
-            assert_no_encounter(&phase, seed, &format!("{ability:?} egg, baseline refuses 336"));
+            assert_no_encounter(
+                &phase,
+                seed,
+                &format!("{ability:?} egg, baseline refuses 336"),
+            );
         } else {
             assert_encounter(&phase, &format!("{ability:?} egg, baseline accepts 170"));
         }
@@ -503,10 +515,17 @@ fn only_slot_zero_supplies_the_rate_ability() {
     let mut phase = grass_phase(NONE);
     phase.set_fresh_lead_for_test(holder(GRIMER, 0));
     assert_eq!(phase.save1.player_party_count, 0, "setup: an unsaved party");
-    assert_no_encounter(&roll_on_grass(phase, halve_seed), halve_seed, "unsaved Stench lead");
+    assert_no_encounter(
+        &roll_on_grass(phase, halve_seed),
+        halve_seed,
+        "unsaved Stench lead",
+    );
     let mut phase = grass_phase(NONE);
     phase.set_fresh_lead_for_test(holder(VOLBEAT, 0));
-    assert_encounter(&roll_on_grass(phase, double_seed), "unsaved Illuminate lead");
+    assert_encounter(
+        &roll_on_grass(phase, double_seed),
+        "unsaved Illuminate lead",
+    );
 }
 
 /// Seed 138 accepts under every ability (138 < 160), so the whole encounter -- slot, level and

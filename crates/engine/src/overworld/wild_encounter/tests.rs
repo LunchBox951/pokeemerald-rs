@@ -325,7 +325,11 @@ fn a_lead_ability_halves_or_doubles_a_table_rate_of_twenty() {
     for ability in [AbilityId::ILLUMINATE, AbilityId::ARENA_TRAP] {
         assert_eq!(with_ability(ability).apply(20 * 16), 640, "{ability:?}");
     }
-    assert_eq!(with_ability(AbilityId::STENCH).apply(5), 2, "integer halving");
+    assert_eq!(
+        with_ability(AbilityId::STENCH).apply(5),
+        2,
+        "integer halving"
+    );
 }
 
 /// Each row is `(ability, last accepted draw, first refused draw)`, with `+ 2880` showing
@@ -391,7 +395,11 @@ fn an_absent_or_unrelated_ability_leaves_the_rate_at_320() {
 #[test]
 fn the_clamp_follows_a_doubling_ability() {
     let illuminate = with_ability(AbilityId::ILLUMINATE);
-    assert_eq!(illuminate.apply(180 * 16), 5760, "apply leaves the clamp to the check");
+    assert_eq!(
+        illuminate.apply(180 * 16),
+        5760,
+        "apply leaves the clamp to the check"
+    );
     for draw in [0, 2879, 2880, 5759, 5760, u16::MAX] {
         let mut rng = ScriptedRng::new([draw]);
         assert!(
@@ -450,7 +458,13 @@ fn every_ability_combination_draws_exactly_once() {
         Some(AbilityId::ARENA_TRAP),
         Some(AbilityId::SAND_VEIL),
     ] {
-        for base in [EncounterRateModifiers::default(), UP, DOWN, TAG, BOTH_FLUTES] {
+        for base in [
+            EncounterRateModifiers::default(),
+            UP,
+            DOWN,
+            TAG,
+            BOTH_FLUTES,
+        ] {
             let modifiers = EncounterRateModifiers {
                 slot_zero_ability: ability,
                 ..base
