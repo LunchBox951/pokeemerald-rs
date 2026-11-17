@@ -138,3 +138,54 @@ fn clipping_leaves_the_cursor_advance_unchanged() {
     };
     assert_eq!(second.x - first.x, 5);
 }
+
+/// `SmallNarrow` glyph 0x04, whose cell in `graphics/fonts/latin_small_narrow.png`
+/// holds shadow (2) pixels at row 12, below the font's 12-row height.
+const SMALL_NARROW_04: u8 = 0x04;
+
+/// The same case as the synthetic row-twelve test, on the real `SmallNarrow`
+/// sheet read from the local asset pack at test time: the cell's artwork is
+/// never committed (`CONTRIBUTING.md` §Clean-room rules), so the gated run
+/// is what proves real data below the height stays hidden
+/// (`pokeemerald/src/text.c:1797`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn canonical_small_narrow_cell_keeps_rows_below_twelve_and_hides_row_twelve() {
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let font_image = pack.font(FontId::SmallNarrow).expect("SmallNarrow sheet");
+    let sheet_pixels = font_image.image().pixels;
+    let cell = |column: usize, row: usize| -> u8 {
+        let stride = SHEET_WIDTH as usize;
+        let origin_x = (usize::from(SMALL_NARROW_04) % 16) * SIDE;
+        let origin_y = (usize::from(SMALL_NARROW_04) / 16) * SIDE;
+        sheet_pixels[(origin_y + row) * stride + origin_x + column]
+    };
+    let height = usize::from(FontId::SmallNarrow.glyph_height());
+    assert_eq!(height, 12);
+    let width = usize::from(
+        FontId::SmallNarrow
+            .glyph_width(u16::from(SMALL_NARROW_04))
+            .unwrap(),
+    );
+    assert!(width >= 3, "width {width}");
+    // The real artwork below the height: shadow at (1, 12). If upstream's
+    // sheet ever stops carrying it, this test no longer proves the clip.
+    assert_eq!(cell(1, height), 2);
+
+    let sheet = assets::fonts::FontGlyphSheet::new(font_image).unwrap();
+    let tokens = decode_tokens(&[SMALL_NARROW_04, crate::text::EOS]);
+    let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
+    let TickEvent::Glyph(revealed) = printer.tick(PrinterInput::none()) else {
+        panic!("expected a glyph")
+    };
+    for row in 0..SIDE {
+        for column in 0..SIDE {
+            let drawn = revealed.glyph.pixels[row * SIDE + column];
+            if column < width && row < height {
+                assert_eq!(drawn, cell(column, row), "in-bounds ({column}, {row})");
+            } else {
+                assert_eq!(drawn, 0, "out-of-bounds ({column}, {row})");
+            }
+        }
+    }
+}
