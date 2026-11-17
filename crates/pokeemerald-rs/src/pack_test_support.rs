@@ -456,3 +456,84 @@ fn claim_scratch_exclusive_leaves_a_foreign_single_link_occupant_intact() {
         "the claim must fail naming the occupied path, got {message:?}"
     );
 }
+
+/// A directory this test created, never adopted: an occupied path panics, so
+/// the drop only removes what this test made.
+struct OwnedScratchDir(std::path::PathBuf);
+
+impl OwnedScratchDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => Self(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => panic!(
+                "the scratch directory {} is already occupied by an entry this test did not \
+                 create; refusing to remove it",
+                path.display()
+            ),
+            Err(e) => panic!("the temp directory is writable: {e}"),
+        }
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for OwnedScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A replacement written under the claimed name after the claim's file moved
+/// away survives the claim's drop.
+#[test]
+fn scratch_claim_drop_leaves_a_replacement_under_its_name_intact() {
+    let dir = OwnedScratchDir::new("claim-replaced");
+    let path = dir.join("claimed");
+    let moved = dir.join("moved");
+    let bystander = dir.join("bystander");
+    write_scratch_exclusive(&bystander, b"unrelated file");
+    let claim = ScratchClaim::claim_with(path.clone(), b"claimed");
+    std::fs::rename(&path, &moved).unwrap();
+    write_scratch_exclusive(&path, b"replacement must survive");
+    drop(claim);
+    assert_eq!(
+        std::fs::read(&path).ok().as_deref(),
+        Some(&b"replacement must survive"[..]),
+        "ScratchClaim's drop unlinked a replacement it never owned"
+    );
+    assert_eq!(
+        std::fs::read(&moved).ok().as_deref(),
+        Some(&b"claimed"[..]),
+        "ScratchClaim's drop touched the claimed file it no longer names"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).ok().as_deref(),
+        Some(&b"unrelated file"[..]),
+        "ScratchClaim's drop removed an unrelated neighbour"
+    );
+}
+
+#[test]
+fn scratch_claim_drop_still_removes_its_own_file() {
+    let dir = OwnedScratchDir::new("claim-own");
+    let path = dir.join("claimed");
+    let bystander = dir.join("bystander");
+    write_scratch_exclusive(&bystander, b"unrelated file");
+    drop(ScratchClaim::claim_with(path.clone(), b"claimed"));
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "drop left its own file behind"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).ok().as_deref(),
+        Some(&b"unrelated file"[..]),
+        "ScratchClaim's drop removed an unrelated neighbour"
+    );
+}
