@@ -21,7 +21,7 @@ pub(super) struct RandomFacing {
     /// with `mask` one less than the length.
     directions: &'static [Direction],
     /// `gGetVectorDirectionFuncs[RUNFOLLOW_*]`, the facing a running player nearby forces.
-    encounter: fn(dx: i32, dy: i32) -> Direction,
+    encounter: fn(dx: i64, dy: i64) -> Direction,
 }
 
 /// `MovementType_LookAround` (`:2844-2892`).
@@ -114,8 +114,8 @@ impl LiveObjectEvent {
             return false;
         };
         let (dx, dy) = offset_to_player(self.state.position(), context.player_position);
-        let range = i32::from(range);
-        dx.abs() <= range && dy.abs() <= range
+        let range = u64::from(range);
+        dx.unsigned_abs() <= range && dy.unsigned_abs() <= range
     }
 
     /// `TryGetTrainerEncounterDirection` (`:2822-2841`): the facing toward a running player
@@ -133,13 +133,19 @@ impl LiveObjectEvent {
     }
 }
 
-fn offset_to_player(object: TilePos, player: TilePos) -> (i32, i32) {
-    (player.0 - object.0, player.1 - object.1)
+/// The tile offset from `object` to `player`, taken in `i64` so it is exact for every `i32` pair
+/// (as `tile_is_in_view` does): a player billions of tiles away is a large offset, not an
+/// overflow, and `abs()` of it cannot overflow either.
+fn offset_to_player(object: TilePos, player: TilePos) -> (i64, i64) {
+    (
+        i64::from(player.0) - i64::from(object.0),
+        i64::from(player.1) - i64::from(object.1),
+    )
 }
 
 /// `GetVectorDirection` (`:2663-2679`): the dominant axis, vertical on a tie, with south for a
 /// zero offset on the chosen axis (east on the horizontal axis).
-fn vector_direction(dx: i32, dy: i32) -> Direction {
+fn vector_direction(dx: i64, dy: i64) -> Direction {
     if dx.abs() > dy.abs() {
         if dx < 0 {
             Direction::West
@@ -155,7 +161,7 @@ fn vector_direction(dx: i32, dy: i32) -> Direction {
 
 /// `GetLimitedVectorDirection_EastSouth` (`:2762-2779`): `GetVectorDirection`, with a north
 /// result turned to east or south by the horizontal sign and a west result turned to south.
-fn east_south_vector_direction(dx: i32, dy: i32) -> Direction {
+fn east_south_vector_direction(dx: i64, dy: i64) -> Direction {
     match vector_direction(dx, dy) {
         Direction::North if dx < 0 => Direction::South,
         Direction::North => Direction::East,

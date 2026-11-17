@@ -501,6 +501,84 @@ mod trainer_proximity {
         }
     }
 
+    /// Frame 1 draws the delay with the player at `FAR`; the trainer is then shifted by `shift`
+    /// (its template tile with it) and a dashing player at `player` runs frame 2.
+    fn wake_at_extreme(shift: (i32, i32), player: (i32, i32)) -> Rig {
+        let mut rig = trainer_rig(MovementType::LookAround, TrainerType::Normal, "3", FAR);
+        rig.rng = ScriptedRng::new([3, 1, 0, 0]);
+        rig.tick(1);
+        rig.collection
+            .get_mut(1)
+            .unwrap()
+            .state_mut()
+            .translate(shift);
+        rig.player = player;
+        rig.dashing = true;
+        rig.tick(1);
+        rig
+    }
+
+    #[test]
+    fn a_dashing_player_at_the_coordinate_extreme_is_far_not_an_overflow() {
+        // The offset `i32::MIN - 20` does not fit in `i32`; the player is billions of tiles away,
+        // so the trainer sleeps (one draw) and the camera pass retires it.
+        let rig = wake_at_extreme((0, 0), (i32::MIN, 20));
+        assert_eq!(rig.rng.draws(), 1);
+        assert!(!rig.collection.get(1).unwrap().is_active());
+    }
+
+    #[test]
+    fn an_offset_of_exactly_i32_min_is_far_not_an_abs_overflow() {
+        // `i32::MIN + 20 - 20 == i32::MIN`, whose `abs()` overflows in `i32`.
+        let rig = wake_at_extreme((0, 0), (i32::MIN + 20, 20));
+        assert_eq!(rig.rng.draws(), 1);
+        assert!(!rig.collection.get(1).unwrap().is_active());
+    }
+
+    #[test]
+    fn opposite_coordinate_extremes_are_far_in_both_axes() {
+        // Trainer at `x == i32::MIN + 20`, player at `i32::MAX`: the offset is `2^32 - 21`.
+        let rig = wake_at_extreme((i32::MIN, 0), (i32::MAX, 20));
+        assert_eq!(rig.rng.draws(), 1);
+        let rig = wake_at_extreme((0, i32::MIN), (20, i32::MAX));
+        assert_eq!(rig.rng.draws(), 1);
+    }
+
+    #[test]
+    fn a_dashing_player_beside_a_trainer_at_the_positive_extreme_still_wakes_it() {
+        // Trainer at `i32::MAX - 1`, player at `i32::MAX`: in range 3, dx 1 dy 0 -> east.
+        let rig = wake_at_extreme((i32::MAX - 1 - 20, 0), (i32::MAX, 20));
+        assert!(rig.collection.get(1).unwrap().is_active());
+        assert_eq!(facing(&rig.collection, 1), Direction::East);
+        assert_eq!(rig.rng.draws(), 2);
+    }
+
+    #[test]
+    fn a_dashing_player_beside_a_trainer_at_the_negative_extreme_still_wakes_it() {
+        // Trainer at `i32::MIN + 20`, player one tile east of it: dx 1 dy 0 -> east.
+        let rig = wake_at_extreme((i32::MIN, 0), (i32::MIN + 21, 20));
+        assert!(rig.collection.get(1).unwrap().is_active());
+        assert_eq!(facing(&rig.collection, 1), Direction::East);
+        assert_eq!(rig.rng.draws(), 2);
+    }
+
+    #[test]
+    fn the_vector_direction_of_the_widest_offsets_is_the_dominant_axis() {
+        use super::super::{east_south_vector_direction, offset_to_player, vector_direction};
+        let (dx, dy) = offset_to_player((i32::MAX, 0), (i32::MIN, 0));
+        assert_eq!((dx, dy), (i64::from(i32::MIN) - i64::from(i32::MAX), 0));
+        assert_eq!(vector_direction(dx, dy), Direction::West);
+        let (dx, dy) = offset_to_player((20, 20), (i32::MIN + 20, 20));
+        assert_eq!(dx, i64::from(i32::MIN));
+        assert_eq!(vector_direction(dx, dy), Direction::West);
+        let (dx, dy) = offset_to_player((i32::MIN, i32::MIN), (i32::MAX, i32::MAX));
+        assert_eq!(vector_direction(dx, dy), Direction::South);
+        assert_eq!(east_south_vector_direction(dx, dy), Direction::South);
+        let (dx, dy) = offset_to_player((i32::MIN, 0), (i32::MAX, i32::MIN));
+        assert_eq!(vector_direction(dx, dy), Direction::East);
+        assert_eq!(east_south_vector_direction(dx, dy), Direction::East);
+    }
+
     #[test]
     fn look_around_faces_the_dominant_axis_toward_the_player_with_ties_vertical() {
         let cases = [
