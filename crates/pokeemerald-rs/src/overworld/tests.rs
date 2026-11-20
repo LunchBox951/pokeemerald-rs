@@ -538,14 +538,18 @@ fn a_nonblack_primary_source_color_zero_still_composes_a_black_backdrop() {
 }
 
 /// [`compose_applies_the_reduced_954_cycle_hblank_free_oam_budget`]'s own
-/// fixture.
+/// fixture: two NPCs, a transparent "filler" and an opaque "target", at the
+/// two tiles the test's OAM list repeats and ends on.
+///
+/// Upstream holds at most 15 NPCs beside the player
+/// (`GetAvailableObjectEventId`, `event_object_movement.c:1367-1374`), so the
+/// scanline's OAM budget cannot be spent by NPC objects alone; the test
+/// repeats this scene's own filler entry instead.
 fn hblank_budget_regression_fixture() -> (
     super::OverworldScene,
     PlayerState,
     engine::event_data::EventData,
 ) {
-    const FILLER_COUNT: usize = 64;
-
     let mut pack_entries = synthetic_overworld_pack_entries_for("general", 4, 4);
     // Filler sheets are palette index 0 (transparent on real hardware) so
     // each filler spends OAM admission budget without painting a pixel; the
@@ -568,25 +572,22 @@ fn hblank_budget_regression_fixture() -> (
     // One metatile right of the player: its own, non-overlapping OAM column.
     let npc_tile = (player_tile.0 + 1, player_tile.1);
 
-    let mut object_events = Vec::with_capacity(FILLER_COUNT + 1);
-    for local_id in 1..=FILLER_COUNT {
-        object_events.push(ObjectEvent {
-            local_id: u8::try_from(local_id).unwrap(),
-            graphics_id: "OBJ_EVENT_GFX_MOM",
-            x: npc_tile.0,
-            y: npc_tile.1,
-            elevation: 3,
-            movement_type: MovementType::FaceDown,
-            movement_range_x: 0,
-            movement_range_y: 0,
-            trainer_type: TrainerType::None,
-            trainer_sight_or_berry_tree_id: "0",
-            script: None,
-            flag: "0",
-        });
-    }
+    let mut object_events = vec![ObjectEvent {
+        local_id: 1,
+        graphics_id: "OBJ_EVENT_GFX_MOM",
+        x: npc_tile.0,
+        y: npc_tile.1,
+        elevation: 3,
+        movement_type: MovementType::FaceDown,
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: None,
+        flag: "0",
+    }];
     object_events.push(ObjectEvent {
-        local_id: u8::try_from(FILLER_COUNT + 1).unwrap(),
+        local_id: 2,
         graphics_id: "OBJ_EVENT_GFX_TWIN",
         x: npc_tile.0,
         y: npc_tile.1,
@@ -617,7 +618,7 @@ fn hblank_budget_regression_fixture() -> (
         &[],
         events,
     )
-    .expect("synthetic pack with 65 object events should decode cleanly");
+    .expect("synthetic pack with two object events should decode cleanly");
 
     let player = PlayerState::new(
         (i32::from(player_tile.0), i32::from(player_tile.1)),
@@ -632,17 +633,41 @@ fn hblank_budget_regression_fixture() -> (
 /// on `OverworldScene::compose`); the budget math is pinned in `rendering`.
 #[test]
 fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
+    const FILLER_COPIES: usize = 64;
+
     let (scene, player, event_data) = hblank_budget_regression_fixture();
 
     let target_x =
         usize::from(super::avatar::PLAYER_OBJ_X) + usize::try_from(super::METATILE_PX).unwrap();
     let target_y = usize::from(super::avatar::PLAYER_OBJ_Y);
 
-    // Controls, built independently over the same entries `compose` draws
-    // from: confirm this arrangement straddles both budgets' cutoffs.
-    let sprite_entries: Vec<rendering::OamEntry> = scene
-        .sprite_entries(&player, &event_data)
-        .into_iter()
+    // The scene's own production list is [player, filler, target]; repeating
+    // the filler stands in for the NPCs a 15-NPC pool cannot hold. Each filler
+    // is a 16x32 entry covering the target's scanline, so it costs
+    // `width - 2 = 14` processing cycles plus 2 traversal cycles
+    // (`mgba/src/gba/renderers/common.c:13-45`,
+    // `video-software.c:1029-1064`); the player at OAM index 0 costs 14 and no
+    // traversal. With 64 fillers the target (traversed for 2 more) is reached
+    // with
+    //   normal:  1210 - 14 - 64 * 16 - 2 = 170 cycles left (> 0, admitted);
+    //   reduced:  954 - 14 - 58 * 16 = 12 after the 58th filler, the 59th
+    //             leaves -4, and the 60th's traversal ends the walk (dropped).
+    // Any count from 59 to 74 straddles the two cutoffs.
+    let production = scene.sprite_entries(&player, &event_data);
+    assert_eq!(
+        production.len(),
+        3,
+        "the scene lists the player, the filler and the target"
+    );
+    let mut oam_list = vec![production[0]];
+    oam_list.extend(std::iter::repeat_n(production[1], FILLER_COPIES));
+    oam_list.push(production[2]);
+
+    // Controls, built independently over the same list `compose` draws from:
+    // confirm this arrangement straddles both budgets' cutoffs.
+    let sprite_entries: Vec<rendering::OamEntry> = oam_list
+        .iter()
+        .copied()
         .map(super::SheetSprite::oam)
         .collect();
     let normal_budget = rendering::SpriteLayer::new(
@@ -667,7 +692,9 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
         "control: the reduced 954-cycle budget must drop the target NPC"
     );
 
-    let frame = scene.compose(&player, &event_data, 0);
+    // `compose` is `sprite_entries` then this tail, which owns the budget.
+    let frame =
+        scene.compose_with_sprite_entries(&player, 0, &oam_list, super::PaletteStage::default());
     assert_eq!(
         frame.pixel(target_x, target_y),
         Some(rendering::Bgr555::from_raw(0x001F).to_rgb888()),

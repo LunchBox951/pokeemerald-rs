@@ -43,6 +43,8 @@ const MAX_SWEEP_TICKS_PER_FRAME: usize =
     (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
 const MAX_LENGTH_TICKS_PER_FRAME: usize =
     (SAMPLES_PER_FRAME * 256).div_ceil(crate::pitch::MIXER_RATE as usize);
+const MAX_ENVELOPE_TICKS_PER_FRAME: usize =
+    (SAMPLES_PER_FRAME * 64).div_ceil(crate::pitch::MIXER_RATE as usize);
 
 #[derive(Clone, Copy, Debug)]
 enum VoiceSlot {
@@ -106,6 +108,7 @@ impl Mixer {
             clocks: FrameClocks::with_capacity(
                 MAX_SWEEP_TICKS_PER_FRAME,
                 MAX_LENGTH_TICKS_PER_FRAME,
+                MAX_ENVELOPE_TICKS_PER_FRAME,
             ),
             cgb_envelope_cadence: CgbEnvelopeCadence::default(),
         }
@@ -298,7 +301,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.tick_gate();
             }
         }
@@ -325,7 +328,9 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
+                voice.track() == Some(track)
+                    && voice.is_end_tie_eligible()
+                    && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
 
@@ -360,8 +365,11 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track && !voice.is_stopping() {
-                voice.note_off();
+            if voice.track() == Some(track) {
+                if !voice.is_stopping() {
+                    voice.note_off();
+                }
+                voice.detach_track();
             }
         }
     }
@@ -379,7 +387,7 @@ impl Mixer {
         }
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
-                if voice.track() == track {
+                if voice.track() == Some(track) {
                     Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
                     *slot = None;
                 }
@@ -408,7 +416,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
@@ -422,7 +430,7 @@ impl Mixer {
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_pitch(key_m, pit_m);
             }
         }
@@ -465,7 +473,8 @@ impl Mixer {
             .advance_clocks_into(self.mix_buffer.len(), &mut self.clocks);
         debug_assert!(
             self.clocks.sweep.len() <= MAX_SWEEP_TICKS_PER_FRAME
-                && self.clocks.length.len() <= MAX_LENGTH_TICKS_PER_FRAME,
+                && self.clocks.length.len() <= MAX_LENGTH_TICKS_PER_FRAME
+                && self.clocks.envelope.len() <= MAX_ENVELOPE_TICKS_PER_FRAME,
             "a frame's tick buffers must never have to grow",
         );
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
@@ -485,6 +494,7 @@ impl Mixer {
                         &mut self.mix_buffer,
                         &self.clocks.sweep,
                         &self.clocks.length,
+                        &self.clocks.envelope,
                     );
                 }
                 if !voice.is_active() {
@@ -590,3 +600,7 @@ mod psg_balance_tests;
 #[cfg(test)]
 #[path = "mixer_length.rs"]
 mod length_tests;
+
+#[cfg(test)]
+#[path = "mixer_hardware_envelope.rs"]
+mod hardware_envelope_tests;

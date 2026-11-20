@@ -1,14 +1,24 @@
-//! Draws text-window frames, revealed glyphs, and keypad icons directly into
-//! framebuffers.
+//! Draws text-window frames, revealed glyphs, keypad icons, and the page-prompt
+//! down arrow directly into framebuffers.
 //!
 //! Revealed glyphs have pixel positions inside a window, so they do not fit
 //! the tile-aligned background compositor. Glyphs, keypad icons, and frame
 //! tiles all draw with colors read from the loaded window palette
 //! `(behavioral-fidelity)`.
+//!
+//! # Page-prompt down arrow
+//!
+//! `TextPrinterWaitWithDownArrow` draws an 8x16 arrow at the printer cursor
+//! while a `\p` or `\l` prompt waits for A or B, and `TextPrinterClearDownArrow`
+//! removes it (`pokeemerald/src/text.c:787-882`). [`PromptArrow`] holds that
+//! pacing and records the arrow in the same ordered [`WindowOp`] list as the
+//! glyphs, so a dialog and the intro scene share one path.
 
-use assets::pack::ImageRef;
+use assets::pack::{ImageRef, TextPrinterDownArrow};
 use assets::KeypadIconSheet;
-use engine::text::render::{ClearedSpan, KeypadIconPlacement, RevealedGlyph, TextColors};
+use engine::text::render::{
+    ClearedSpan, KeypadIconPlacement, RevealedGlyph, TextColors, TickEvent,
+};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
@@ -217,8 +227,14 @@ pub(crate) fn blit_glyphs_colored_tracked<'a>(
     let colors = colors.into();
     let (content_width, content_height) = content_size;
     for revealed in glyphs {
+        // `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); the cell's right-hand padding is
+        // not drawn. The rows were already clipped to the font's
+        // `gCurGlyph.height` when the printer produced the glyph
+        // (`Glyph::clipped_to_height`).
+        let copied_width = GLYPH_SIZE.min(usize::from(revealed.glyph.advance_width));
         for pixel_y in 0..GLYPH_SIZE {
-            for pixel_x in 0..GLYPH_SIZE {
+            for pixel_x in 0..copied_width {
                 let value = revealed.glyph.pixels[pixel_y * GLYPH_SIZE + pixel_x];
                 let Some(color) = colors.resolve(revealed, value, pixel_x, pixel_y) else {
                     continue;
@@ -264,10 +280,33 @@ fn blit_keypad_icon(
     origin: (i32, i32),
     content_size: (i32, i32),
 ) {
+    blit_indexed_rect(
+        fb,
+        (icon.x, icon.y),
+        (u32::from(icon.width), u32::from(icon.height)),
+        |x, y| icons.pixel(icon.id, x, y),
+        palette,
+        origin,
+        content_size,
+    );
+}
+
+/// Draws a `size` rectangle of window-palette indices at window-local `at`,
+/// skipping the transparent index `0` and clipping to the content bounds.
+/// `pixel_at(x, y)` reads the rectangle's own `(x, y)` offset.
+fn blit_indexed_rect(
+    fb: &mut Framebuffer,
+    at: (i32, i32),
+    size: (u32, u32),
+    pixel_at: impl Fn(u32, u32) -> Option<u8>,
+    palette: &[Rgb888],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
     let (content_width, content_height) = content_size;
-    for pixel_y in 0..u32::from(icon.height) {
-        for pixel_x in 0..u32::from(icon.width) {
-            let Some(palette_index) = icons.pixel(icon.id, pixel_x, pixel_y) else {
+    for pixel_y in 0..size.1 {
+        for pixel_x in 0..size.0 {
+            let Some(palette_index) = pixel_at(pixel_x, pixel_y) else {
                 continue;
             };
             if usize::from(palette_index) == TRANSPARENT_PALETTE_INDEX {
@@ -281,7 +320,7 @@ fn blit_keypad_icon(
                 continue;
             };
             let (Some(content_x), Some(content_y)) =
-                (icon.x.checked_add(pixel_x), icon.y.checked_add(pixel_y))
+                (at.0.checked_add(pixel_x), at.1.checked_add(pixel_y))
             else {
                 continue;
             };
@@ -318,9 +357,14 @@ pub(crate) enum WindowOp {
     ClearSpan(ClearedSpan),
     /// A keypad icon the printer placed (`Printer::keypad_icon`).
     KeypadIcon(KeypadIconPlacement),
-    /// The rows a window scroll exposed ([`scroll_window_ops`]), filled with
-    /// the background in force. Unlike a `ClearSpan`, a background of index 0
-    /// writes transparent pixels, as `ScrollWindow`'s `PIXEL_FILL(0)` does.
+    /// The page-prompt down arrow ([`PromptArrow`]). Its rectangle is filled
+    /// the way a `ScrollFill` is before the frame lands.
+    DownArrow(Box<DownArrowDraw>),
+    /// The rows a window scroll exposed ([`scroll_window_ops`]), or the
+    /// rectangle `TextPrinterClearDownArrow` erased ([`PromptArrow`]), filled
+    /// with the background in force. Unlike a `ClearSpan`, a background of
+    /// index 0 writes transparent pixels, as `ScrollWindow`'s `PIXEL_FILL(0)`
+    /// and `FillWindowPixelRect` do.
     ScrollFill(ClearedSpan),
 }
 
@@ -355,6 +399,7 @@ impl WindowOp {
             Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
             Self::ClearSpan(span) | Self::ScrollFill(span) => span.y = span.y.saturating_add(dy),
             Self::KeypadIcon(icon) => icon.y = icon.y.saturating_add(dy),
+            Self::DownArrow(arrow) => arrow.y = arrow.y.saturating_add(dy),
         }
     }
 
@@ -404,6 +449,10 @@ impl WindowOp {
                     .min(u8::try_from(visible_rows).unwrap_or(u8::MAX));
                 Some(Self::KeypadIcon(icon))
             }
+            Self::DownArrow(mut arrow) => {
+                arrow.height = arrow.height.min(content_height.saturating_sub(arrow.y));
+                (arrow.height > 0).then_some(Self::DownArrow(arrow))
+            }
         }
     }
 }
@@ -416,7 +465,197 @@ pub(crate) fn push_clipped(ops: &mut Vec<WindowOp>, op: WindowOp, content_height
     }
 }
 
-/// Replays ordered glyph, keypad-icon, and clear-span ops onto `fb`, which
+const ARROW_WIDTH: u32 = 8;
+const ARROW_HEIGHT: u32 = 16;
+const ARROW_PIXELS: usize = (ARROW_WIDTH * ARROW_HEIGHT) as usize;
+/// `downArrowDelay = 8` after each draw (`pokeemerald/src/text.c:831`): the
+/// arrow redraws on every ninth waiting frame.
+const ARROW_REDRAW_DELAY: u8 = 8;
+/// `downArrowYPosIdx` is a two-bit field (`pokeemerald/include/text.h`).
+const ARROW_FRAME_MASK: u8 = 0b11;
+
+/// An owned copy of the printer's down-arrow frames.
+///
+/// [`TextPrinterDownArrow`] borrows the asset pack; a dialog outlives the
+/// pack's borrow, so it keeps its own copy, as it does the keypad-icon sheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DownArrowSheet {
+    frames: [[u8; ARROW_PIXELS]; TextPrinterDownArrow::FRAME_COUNT],
+}
+
+impl DownArrowSheet {
+    /// Copies each frame of the pack's validated arrow.
+    pub(crate) fn new(arrow: &TextPrinterDownArrow<'_>) -> Self {
+        let mut frames = [[0u8; ARROW_PIXELS]; TextPrinterDownArrow::FRAME_COUNT];
+        for (index, frame) in frames.iter_mut().enumerate() {
+            let index = u8::try_from(index).expect("the frame count is four");
+            frame.copy_from_slice(arrow.frame(index).pixels);
+        }
+        Self { frames }
+    }
+
+    fn draw(&self, x: i32, y: i32, frame: u8, colors: TextColors) -> Box<DownArrowDraw> {
+        Box::new(DownArrowDraw {
+            x,
+            y,
+            height: ARROW_HEIGHT.cast_signed(),
+            colors,
+            pixels: self.frames[usize::from(frame & ARROW_FRAME_MASK)],
+        })
+    }
+}
+
+/// One drawing of the down arrow: its window-local top-left corner and the
+/// 8x16 frame `TextPrinterDrawDownArrow` blitted there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DownArrowDraw {
+    x: i32,
+    y: i32,
+    /// The rows inside the window: [`ARROW_HEIGHT`] unless the window's
+    /// bottom edge cut the arrow ([`WindowOp::clipped_below`]).
+    height: i32,
+    /// The printer colours when it drew; `colors.background` is the
+    /// `bgColor` its rectangle is filled with (`pokeemerald/src/text.c:800-807`).
+    colors: TextColors,
+    pixels: [u8; ARROW_PIXELS],
+}
+
+impl DownArrowDraw {
+    /// The rectangle `TextPrinterDrawDownArrow` and
+    /// `TextPrinterClearDownArrow` fill with the background first.
+    fn rect(&self) -> ClearedSpan {
+        ClearedSpan {
+            height: self.height,
+            ..arrow_rect(self.x, self.y, self.colors)
+        }
+    }
+
+    fn pixel(&self, x: u32, y: u32) -> Option<u8> {
+        if x >= ARROW_WIDTH || y >= ARROW_HEIGHT || i64::from(y) >= i64::from(self.height) {
+            return None;
+        }
+        self.pixels
+            .get(usize::try_from(y * ARROW_WIDTH + x).ok()?)
+            .copied()
+    }
+}
+
+const fn arrow_rect(x: i32, y: i32, colors: TextColors) -> ClearedSpan {
+    ClearedSpan {
+        x,
+        y,
+        width: ARROW_WIDTH.cast_signed(),
+        height: ARROW_HEIGHT.cast_signed(),
+        colors,
+    }
+}
+
+/// The printer state a [`PromptArrow`] reads after a tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ArrowWindow {
+    /// The printer's cursor *after* the tick (`Printer::cursor`).
+    pub(crate) cursor: (i32, i32),
+    /// The printer's colours (`Printer::colors`); the background fills the
+    /// arrow's rectangle.
+    pub(crate) colors: TextColors,
+    /// The window's content height, which clips the arrow at reveal time
+    /// ([`WindowOp::clipped_below`]).
+    pub(crate) content_height: i32,
+}
+
+/// Where a waiting prompt's arrow sits and how far its bob has advanced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ArrowWait {
+    x: i32,
+    y: i32,
+    /// `downArrowDelay`.
+    delay: u8,
+    /// `downArrowYPosIdx`.
+    frame: u8,
+}
+
+/// The pacing of `TextPrinterWaitWithDownArrow` for one printer
+/// (`pokeemerald/src/text.c:787-882`).
+///
+/// Feed it every [`TickEvent`] together with the printer's [`ArrowWindow`]
+/// and the owner's op list. The tick that reaches a `\p` or `\l` only arms the wait, as
+/// upstream's `RENDER_UPDATE` does; the arrow first draws one frame later and
+/// then redraws every ninth. Confirming a scroll erases the arrow
+/// (`TextPrinterClearDownArrow`) with a [`WindowOp::ScrollFill`], since
+/// `FillWindowPixelRect` writes a transparent background too
+/// (`pokeemerald/src/text.c:838-849`); confirming a page clear empties the
+/// window, so the owner's own clear removes it. The auto-scroll mode and the
+/// select sound effect of `TextPrinterWaitWithDownArrow` are not modelled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PromptArrow {
+    wait: Option<ArrowWait>,
+}
+
+impl PromptArrow {
+    /// Records the arrow effect of one printer frame into `ops`.
+    ///
+    /// `window.cursor` is the printer's cursor *after* the tick; a waiting
+    /// printer does not move it until its confirm tick, which this reads from
+    /// the wait it armed instead.
+    pub(crate) fn tick(
+        &mut self,
+        event: &TickEvent,
+        window: ArrowWindow,
+        sheet: &DownArrowSheet,
+        ops: &mut Vec<WindowOp>,
+    ) {
+        let ArrowWindow {
+            cursor,
+            colors,
+            content_height,
+        } = window;
+        match event {
+            TickEvent::AwaitingScroll | TickEvent::AwaitingClear => match &mut self.wait {
+                None => {
+                    self.wait = Some(ArrowWait {
+                        x: cursor.0,
+                        y: cursor.1,
+                        delay: 0,
+                        frame: 0,
+                    });
+                }
+                Some(wait) if wait.delay != 0 => wait.delay -= 1,
+                Some(wait) => {
+                    Self::drop_trailing_arrow(ops);
+                    push_clipped(
+                        ops,
+                        WindowOp::DownArrow(sheet.draw(wait.x, wait.y, wait.frame, colors)),
+                        content_height,
+                    );
+                    wait.delay = ARROW_REDRAW_DELAY;
+                    wait.frame = wait.frame.wrapping_add(1) & ARROW_FRAME_MASK;
+                }
+            },
+            TickEvent::ScrollStarted => {
+                if let Some(wait) = self.wait.take() {
+                    Self::drop_trailing_arrow(ops);
+                    push_clipped(
+                        ops,
+                        WindowOp::ScrollFill(arrow_rect(wait.x, wait.y, colors)),
+                        content_height,
+                    );
+                }
+            }
+            TickEvent::Cleared => self.wait = None,
+            _ => {}
+        }
+    }
+
+    /// A redraw replaces the arrow it follows: both fill the same rectangle
+    /// first, so keeping the older one would only grow the op list.
+    fn drop_trailing_arrow(ops: &mut Vec<WindowOp>) {
+        if matches!(ops.last(), Some(WindowOp::DownArrow(_))) {
+            ops.pop();
+        }
+    }
+}
+
+/// Replays ordered glyph, keypad-icon, down-arrow, and clear-span ops onto `fb`, which
 /// must already hold the window's frame tiles and nothing else.
 ///
 /// Each glyph maps the [`TextColors`] it carries through `palette`, the
@@ -474,17 +713,32 @@ pub(crate) fn compose_window_ops(
             WindowOp::ScrollFill(span) => {
                 eraser.erase(fb, *span, backdrop.scene);
             }
+            WindowOp::DownArrow(arrow) => {
+                // `FillWindowPixelRect` with the background colour, then the
+                // blit (`text.c:800-830`).
+                eraser.erase(fb, arrow.rect(), backdrop.scene);
+                blit_indexed_rect(
+                    fb,
+                    (arrow.x, arrow.y),
+                    (ARROW_WIDTH, ARROW_HEIGHT),
+                    |x, y| arrow.pixel(x, y),
+                    palette,
+                    origin,
+                    content_size,
+                );
+            }
         }
     }
 }
 
 /// Whether composing `ops` and `window_fill` needs the pre-frame scene: a
-/// whole-window fill or a `ScrollFill` with background 0, which
-/// [`compose_window_ops`] restores from it.
+/// whole-window fill, a `ScrollFill`, or a `DownArrow` with background 0,
+/// which [`compose_window_ops`] restores from it.
 pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> bool {
     window_fill.is_some_and(|fill| fill.background == 0)
         || ops.iter().any(|op| match op {
             WindowOp::ScrollFill(span) => span.colors.background == 0,
+            WindowOp::DownArrow(arrow) => arrow.colors.background == 0,
             WindowOp::Glyph(_) | WindowOp::ClearSpan(_) | WindowOp::KeypadIcon(_) => false,
         })
 }
@@ -707,6 +961,25 @@ pub(crate) fn test_keypad_icons(marks: &[(u32, u32, u8)]) -> KeypadIconSheet {
     .expect("this is the exact real keypad-icon sheet shape")
 }
 
+/// A down-arrow sheet whose frame `n` is transparent except for one pixel
+/// at row `n`, column 0, holding palette index `index`.
+#[cfg(test)]
+pub(crate) fn test_down_arrow(index: u8) -> DownArrowSheet {
+    let mut frames = [[0u8; ARROW_PIXELS]; TextPrinterDownArrow::FRAME_COUNT];
+    for (row, frame) in frames.iter_mut().enumerate() {
+        frame[row * ARROW_WIDTH as usize] = index;
+    }
+    DownArrowSheet { frames }
+}
+
+/// A down-arrow sheet that draws nothing.
+#[cfg(test)]
+pub(crate) fn test_blank_down_arrow() -> DownArrowSheet {
+    DownArrowSheet {
+        frames: [[0u8; ARROW_PIXELS]; TextPrinterDownArrow::FRAME_COUNT],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,7 +1014,9 @@ mod tests {
             x,
             y,
             glyph: Glyph {
-                advance_width: u8::try_from(msgwin::TILE_SIZE).unwrap(),
+                // The whole 16x16 cell is in-width, so the clip tests below
+                // see the window clip alone.
+                advance_width: u8::try_from(GLYPH_SIZE).unwrap(),
                 pixels: [OPAQUE_GLYPH_PALETTE_INDEX; GLYPH_PIXELS],
             },
             colors: TextColors::default(),
@@ -856,6 +1131,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn blit_glyphs_clips_cell_padding_past_the_glyph_advance_width() {
+        // Upstream `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); latin_narrow.png glyph 0xCD
+        // (width 5) carries stroke pixels at local x=8..11.
+        let mut fb = Framebuffer::new();
+        let origin = (10, 10);
+        let mut pixels = [0u8; GLYPH_PIXELS];
+        pixels[3 * 16 + 8] = OPAQUE_GLYPH_PALETTE_INDEX;
+        pixels[3 * 16 + 4] = OPAQUE_GLYPH_PALETTE_INDEX;
+        let glyph = RevealedGlyph {
+            x: 0,
+            y: 0,
+            glyph: Glyph {
+                advance_width: 5,
+                pixels,
+            },
+            colors: TextColors::default(),
+            raster_height: 15,
+            paint_background: false,
+        };
+
+        blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 4, origin.1 + 3)),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the last in-width column stays painted"
+        );
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 8, origin.1 + 3)),
+            Some(Rgb888::BLACK)
+        );
+    }
+
+    #[test]
+    fn blit_glyphs_draws_nothing_for_a_zero_width_glyph() {
+        let mut fb = Framebuffer::new();
+        let mut glyph = opaque_glyph_at(0, 0);
+        glyph.glyph.advance_width = 0;
+
+        blit_glyphs_colored(&mut fb, &[glyph], (10, 10), (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(pixel_at(&fb, (10, 10)), Some(Rgb888::BLACK));
     }
 
     #[test]
@@ -1119,6 +1440,169 @@ mod tests {
         coverage.mark(0, wrapping_y);
 
         assert!(!coverage.is_painted(0, 0));
+    }
+
+    /// The arrow fills its 8x16 rectangle with the window background first
+    /// (`FillWindowPixelRect`, `text.c:800-817`), then blits its frame with
+    /// index 0 transparent; rows past the content bounds are clipped.
+    #[test]
+    fn a_down_arrow_erases_its_rectangle_then_draws_its_frame_clipped_to_the_window() {
+        let sheet = test_down_arrow(2);
+        // Frame 3 marks row 3. The window's bottom edge is at row 4 of the
+        // content, so a rectangle starting at row 2 keeps only two rows.
+        let arrow = WindowOp::DownArrow(sheet.draw(1, 2, 3, TextColors::default()));
+        let background = Rgb888 { r: 9, g: 9, b: 9 };
+        let mut fb = Framebuffer::new();
+        fb.fill(background);
+        let content = (20, 4);
+        let stale = WindowOp::Glyph(Box::new(opaque_glyph_at(0, 0)));
+
+        compose_window_ops(
+            &mut fb,
+            &[stale, arrow],
+            (0, 0),
+            content,
+            &test_keypad_icons(&[]),
+            &icon_palette(),
+            WindowBackdrop::message_box(None, None),
+        );
+
+        // The marker lands on row 2 + 3 = 5, outside the 4-row window: it is clipped,
+        // and the glyph pixels the erase covered are restored to the background.
+        assert_eq!(
+            pixel_at(&fb, (1, 2)),
+            Some(background),
+            "erased glyph pixel"
+        );
+        assert_eq!(pixel_at(&fb, (1, 5)), Some(background), "clipped marker");
+        assert_eq!(
+            pixel_at(&fb, (0, 0)),
+            Some(ICON_SECOND_COLOR),
+            "the glyph outside the arrow rectangle stays"
+        );
+    }
+
+    /// `FillWindowPixelRect` writes `bgColor` whatever it is
+    /// (`text.c:800-807`, `:838-849`): a transparent background shows the
+    /// scene under the window, for the draw and for the erase alike, and any
+    /// other index paints that palette entry.
+    #[test]
+    fn a_down_arrow_and_its_erase_fill_with_the_printer_background() {
+        let transparent = TextColors {
+            background: 0,
+            ..TextColors::default()
+        };
+        let painted = TextColors {
+            background: 3,
+            ..TextColors::default()
+        };
+        let window = |colors| ArrowWindow {
+            cursor: (0, 0),
+            colors,
+            content_height: 32,
+        };
+        let scene_color = Rgb888 { r: 5, g: 6, b: 7 };
+        let mut scene = Framebuffer::new();
+        scene.fill(scene_color);
+        let stale = || WindowOp::Glyph(Box::new(opaque_glyph_at(0, 0)));
+        let compose = |ops: &[WindowOp]| {
+            let mut fb = Framebuffer::new();
+            compose_window_ops(
+                &mut fb,
+                ops,
+                (0, 0),
+                (20, 32),
+                &test_keypad_icons(&[]),
+                &icon_palette(),
+                WindowBackdrop::message_box(None, Some(&scene)),
+            );
+            fb
+        };
+        let sheet = test_blank_down_arrow();
+
+        // Arm, then draw.
+        let mut arrow = PromptArrow::default();
+        let mut ops = vec![stale()];
+        arrow.tick(
+            &TickEvent::AwaitingScroll,
+            window(transparent),
+            &sheet,
+            &mut ops,
+        );
+        arrow.tick(
+            &TickEvent::AwaitingScroll,
+            window(transparent),
+            &sheet,
+            &mut ops,
+        );
+        assert!(matches!(ops.last(), Some(WindowOp::DownArrow(_))));
+        assert!(needs_scene(&ops, None));
+        assert_eq!(pixel_at(&compose(&ops), (1, 2)), Some(scene_color));
+
+        // The confirm erases with the same fill, not a `ClearSpan`, which
+        // would skip a transparent background and leave the glyph.
+        arrow.tick(
+            &TickEvent::ScrollStarted,
+            window(transparent),
+            &sheet,
+            &mut ops,
+        );
+        assert!(matches!(ops.last(), Some(WindowOp::ScrollFill(_))));
+        assert!(needs_scene(&ops, None));
+        assert_eq!(pixel_at(&compose(&ops), (1, 2)), Some(scene_color));
+
+        let mut arrow = PromptArrow::default();
+        let mut ops = vec![stale()];
+        arrow.tick(
+            &TickEvent::AwaitingScroll,
+            window(painted),
+            &sheet,
+            &mut ops,
+        );
+        arrow.tick(
+            &TickEvent::AwaitingScroll,
+            window(painted),
+            &sheet,
+            &mut ops,
+        );
+        assert!(!needs_scene(&ops, None));
+        assert_eq!(pixel_at(&compose(&ops), (1, 2)), Some(ICON_THIRD_COLOR));
+    }
+
+    /// The window bitmap clips the arrow at its bottom edge when it is drawn,
+    /// so a later scroll brings none of the cut rows back
+    /// ([`WindowOp::clipped_below`]).
+    #[test]
+    fn a_down_arrow_is_cut_at_the_window_bottom_when_it_is_drawn() {
+        let window = ArrowWindow {
+            cursor: (0, 24),
+            colors: TextColors::default(),
+            content_height: 32,
+        };
+        let sheet = test_down_arrow(2);
+        let mut arrow = PromptArrow::default();
+        let mut ops = Vec::new();
+        arrow.tick(&TickEvent::AwaitingScroll, window, &sheet, &mut ops);
+        arrow.tick(&TickEvent::AwaitingScroll, window, &sheet, &mut ops);
+        let Some(WindowOp::DownArrow(drawn)) = ops.last() else {
+            panic!("the second waiting frame draws the arrow");
+        };
+        assert_eq!(drawn.rect().height, 8);
+        assert_eq!(drawn.pixel(0, 7), Some(0));
+        assert_eq!(drawn.pixel(0, 8), None, "a row below the window");
+
+        let below = WindowOp::DownArrow(sheet.draw(0, 32, 0, TextColors::default()));
+        assert_eq!(below.clipped_below(32), None);
+    }
+
+    #[test]
+    fn a_window_scroll_moves_a_down_arrow_with_its_window() {
+        let mut op = WindowOp::DownArrow(test_down_arrow(2).draw(4, 20, 0, TextColors::default()));
+        op.shift_y(-16);
+        let WindowOp::DownArrow(arrow) = op else {
+            unreachable!()
+        };
+        assert_eq!((arrow.x, arrow.y), (4, 4));
     }
 
     const WINDOW_HEIGHT_PX: i32 = 32;

@@ -305,6 +305,67 @@ fn route_101s_table_is_fightable_and_route_102s_is_not_yet() {
     )));
 }
 
+/// Route 102's real Lotad slots (levels 3 and 4,
+/// `wild_encounters.json:108-141`) know Astonish, which used to refuse them
+/// outright. The map as a whole stays gated by its Seedot's Bide
+/// ([`route_101s_table_is_fightable_and_route_102s_is_not_yet`]), so this pins
+/// Lotad on its own, with its real learnset rather than a substituted moveset.
+#[test]
+fn route_102s_real_lotad_slots_pass_the_battle_preflight_and_start() {
+    let header = assets::WildEncounterTable::new()
+        .get_by_map(assets::MapId("MAP_ROUTE102"))
+        .expect("Route 102 has a wild header");
+    let land = header.land.expect("Route 102 has a land table");
+    let lotad_slots: Vec<_> = land
+        .mons
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.species == SpeciesId::LOTAD)
+        .collect();
+    assert!(!lotad_slots.is_empty(), "Route 102 rolls Lotad");
+
+    let dex = Dex::new();
+    for (index, wild_slot) in lotad_slots {
+        for level in wild_slot.min_level..=wild_slot.max_level {
+            assert!(
+                battle::initial_moveset(SpeciesId::LOTAD, level).contains(&MoveId::ASTONISH),
+                "level {level}"
+            );
+            assert_eq!(
+                battle::ensure_wild_startable(&dex, SpeciesId::LOTAD, level),
+                Ok(()),
+                "level {level}"
+            );
+            let mut rng = Rng::new(ENCOUNTER_SEED);
+            let encounter = WildEncounter {
+                species: SpeciesId::LOTAD,
+                level,
+                slot: index,
+            };
+            let lead = player_mon(277, 50, vec![MoveId::POUND]);
+            let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
+                .unwrap_or_else(|error| panic!("level {level}: {error:?}"));
+            assert_eq!(battle.enemy().species(), SpeciesId::LOTAD);
+            assert!(battle
+                .enemy()
+                .moves()
+                .iter()
+                .any(|slot| slot.move_id == MoveId::ASTONISH));
+        }
+    }
+}
+
+/// Mirage Tower 1F rolls Trapinch (Arena Trap), whose trap refuses the
+/// driver's standing Run; Bite made its moveset fightable, so the screen
+/// itself now refuses the table
+/// ([`no_fightable_land_table_can_roll_a_trapping_opponent`]).
+#[test]
+fn a_table_that_can_roll_a_trapping_opponent_is_not_fightable() {
+    assert!(!super::map_wild_table_fightable(assets::MapId(
+        "MAP_MIRAGE_TOWER_1F"
+    )));
+}
+
 /// On a map whose table fails the screen, a grass step must draw **nothing
 /// at all** -- not roll-and-reject, which would spend `CreateWildMon`'s draws
 /// on a battle that cannot start (upstream never rejects one, so those
