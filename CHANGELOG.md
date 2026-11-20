@@ -6,8 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.137.0] - 2026-11-20
 
-- The summary screen's nature names, region-map section names and species-to-National-Dex conversion are now packed from both the source checkout and the supported ROM, ready for the summary memo. Nothing on screen changes yet.
-- The asset pack now carries the summary screen's move descriptions, each move's contest effect and category, and the contest effect table with its descriptions, extracted from both the source checkout and the supported ROM. Nothing on screen changes yet; this is the data the summary screen's move pages will read.
+- General improvements in preparation for the Pokémon summary screen: the game now has the natures, met locations, Pokédex numbers, move descriptions and contest details the screen will show. The summary screen looks the same for now.
 
 ## [0.0.136.0] - 2026-11-20
 
