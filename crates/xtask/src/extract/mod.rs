@@ -56,6 +56,9 @@
 //!   `gContestEffectDescriptionPointers`); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
+//! - the party menu's background (cut to its first 62 tiles, with all 176 palette
+//!   colours and its screen), Poké Ball and held-item sheets with their palettes, the
+//!   five slot tilemaps, and the confirm and cancel button tilemaps;
 //! - the battle-animation catalog (`data/battle_anim_scripts.s`);
 //! - the sheet and palette of every battle-effect sprite a catalog program loads; and
 //! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
@@ -75,7 +78,7 @@
 //! - `layout/<name>/{map,border}`
 //! - `font/<name>/glyphs` and `font/keypad_icons`
 //! - `text-window/{image,palette}/<stem>`
-//! - `interface/image/down_arrow` and `interface/palette/main_menu_bg`
+//! - `interface/image/{down_arrow,down_arrow_alt}` and `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `evolution-scene/{image,palette,raw}/<name>`
@@ -94,6 +97,7 @@
 //! - `field-message/table`
 //! - `summary-move/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
+//! - `party-menu/{image,palette,raw}/<name>`
 //! - `battle-anim/catalog`
 //! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
@@ -127,6 +131,7 @@ mod naming_screen;
 mod opening_scene;
 #[cfg(test)]
 mod owned_fixture;
+mod party_menu;
 pub mod png;
 pub(crate) mod poke_ball;
 mod pokedex;
@@ -237,6 +242,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
+    party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
 
     let entry_count = writer.len();

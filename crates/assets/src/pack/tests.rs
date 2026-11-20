@@ -15,6 +15,8 @@ mod field_message;
 mod layout;
 mod naming_screen;
 mod opening_scene;
+mod party_menu;
+mod pc_wallpaper;
 mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;

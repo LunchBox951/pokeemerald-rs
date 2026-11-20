@@ -14,18 +14,26 @@ mod announcement;
 mod attract;
 #[path = "turn_engine/bad_poison.rs"]
 mod bad_poison;
+#[path = "turn_engine/badge_boosts.rs"]
+mod badge_boosts;
 #[path = "turn_engine/burn.rs"]
 mod burn;
+#[path = "turn_engine/color_change.rs"]
+mod color_change;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
 #[path = "turn_engine/confusion_explosion.rs"]
 mod confusion_explosion;
+#[path = "turn_engine/cute_charm_contact/mod.rs"]
+mod cute_charm_contact;
 #[path = "turn_engine/effect_spore_contact/mod.rs"]
 mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
 mod first_battle;
+#[path = "turn_engine/flinch.rs"]
+mod flinch;
 #[path = "turn_engine/freeze.rs"]
 mod freeze;
 #[path = "turn_engine/leech_seed/mod.rs"]
@@ -36,6 +44,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/obedience.rs"]
+mod obedience;
 #[path = "turn_engine/oran_berry.rs"]
 mod oran_berry;
 #[path = "turn_engine/paralysis.rs"]
@@ -68,6 +78,8 @@ mod rough_skin_contact;
 mod shed_skin;
 #[path = "turn_engine/sleep.rs"]
 mod sleep;
+#[path = "turn_engine/speed_boost.rs"]
+mod speed_boost;
 #[path = "turn_engine/speed_down_hit.rs"]
 mod speed_down_hit;
 #[path = "turn_engine/stat_changes.rs"]
@@ -78,6 +90,8 @@ mod static_contact;
 mod status_ability_matrix;
 #[path = "turn_engine/thaw_hit.rs"]
 mod thaw_hit;
+#[path = "turn_engine/trace.rs"]
+mod trace;
 #[path = "turn_engine/traded_recipient_exp.rs"]
 mod traded_recipient_exp;
 #[path = "turn_engine/trainer_battle.rs"]
@@ -86,3 +100,5 @@ mod trainer_battle;
 mod truant;
 #[path = "turn_engine/turn_order.rs"]
 mod turn_order;
+#[path = "turn_engine/yawn.rs"]
+mod yawn;

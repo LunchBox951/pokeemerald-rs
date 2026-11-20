@@ -220,10 +220,11 @@ impl From<TitleSceneError> for AppError {
 /// call whose movement triggered it (before any turn has run), so that
 /// landing frame already reports [`AppState::WildBattle`] /
 /// [`AppState::FirstBattle`] / [`AppState::TrainerBattle`] -- and the step
-/// that plays the battle's final turn also clears the battle slot as it
-/// resolves, so the concluding frame reports [`AppState::Overworld`]
-/// again. Assert battle states on the triggering frame, not on the frame
-/// the fight finishes.
+/// that finishes the battle clears the battle slot, so the concluding frame
+/// reports [`AppState::Overworld`] again. A wild or first battle that plays
+/// its text finishes only once its last message is answered and its hold has
+/// elapsed; a trainer battle resolves a turn per frame. Assert battle states
+/// on the triggering frame, not on the frame the fight finishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].

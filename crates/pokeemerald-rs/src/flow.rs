@@ -78,6 +78,9 @@ pub(crate) use title_init::TitleInit;
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+/// The live battle sequencer (S-6): a battle's turns and results
+/// wait on the narration gates of the text before them.
+mod battle_sequence;
 #[cfg(test)]
 mod boot_setup_frames_tests;
 /// I-3 (issue #1329) front-end palette fade-wait states and the four

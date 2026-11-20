@@ -647,15 +647,6 @@ mod tests {
             (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::NINJASK, SLOT_0, assets::AbilityId::SPEED_BOOST),
-            (SpeciesId::YANMA, SLOT_0, assets::AbilityId::SPEED_BOOST),
-            (SpeciesId::KECLEON, SLOT_0, assets::AbilityId::COLOR_CHANGE),
-            (SpeciesId::KECLEON, SLOT_1, assets::AbilityId::COLOR_CHANGE),
-            (SpeciesId::PORYGON, SLOT_0, assets::AbilityId::TRACE),
-            (SpeciesId::PORYGON2, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::RALTS, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::KIRLIA, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::GARDEVOIR, SLOT_1, assets::AbilityId::TRACE),
             (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
             (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
             (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
@@ -692,12 +683,48 @@ mod tests {
     }
 
     #[test]
+    fn the_pre_flight_admits_a_color_change_holder_in_either_party_position() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        for personality in [SLOT_0, SLOT_1] {
+            let kecleon = TrainerPartyMon {
+                species: SpeciesId::KECLEON,
+                level: 20,
+                moves: &moves,
+                personality,
+                held_item: ItemId::NONE,
+            };
+            let ok = TrainerPartyMon {
+                species: SpeciesId::MUDKIP,
+                level: 20,
+                moves: &moves,
+                personality: SLOT_0,
+                held_item: ItemId::NONE,
+            };
+            for party in [[kecleon, ok], [ok, kecleon]] {
+                assert_eq!(
+                    ensure_trainer_party_startable(
+                        &dex,
+                        &lead(SpeciesId::MUDKIP),
+                        MAY_ROUTE_103_MUDKIP,
+                        &party,
+                    ),
+                    Ok(()),
+                    "personality {personality:#x}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_pre_flight_admits_a_mixed_pool_species_whose_selected_slot_is_supported() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality) in [
             (SpeciesId::EKANS, SLOT_1),
             (SpeciesId::MAWILE, SLOT_0),
+            (SpeciesId::NINJASK, SLOT_0),
+            (SpeciesId::YANMA, SLOT_0),
             (SpeciesId::YANMA, SLOT_1),
             (SpeciesId::RALTS, SLOT_0),
             (SpeciesId::KIRLIA, SLOT_0),
@@ -708,6 +735,13 @@ mod tests {
             (SpeciesId::BRELOOM, SLOT_1),
             (SpeciesId::SLAKOTH, SLOT_0),
             (SpeciesId::SLAKING, SLOT_1),
+            // Miguel's Skitty carries Cute Charm in both slots, which the
+            // turn engine now models (`ABILITY_CUTE_CHARM`,
+            // `battle_util.c:2851`-`:2870`).
+            (SpeciesId::SKITTY, SLOT_0),
+            (SpeciesId::SKITTY, SLOT_1),
+            (SpeciesId::DELCATTY, SLOT_0),
+            (SpeciesId::CLEFAIRY, SLOT_0),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,

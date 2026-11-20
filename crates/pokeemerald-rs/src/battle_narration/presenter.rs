@@ -22,14 +22,16 @@ use std::fmt;
 
 use assets::fonts::{FontId, GlyphSource, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, BattleMessageTable, PackError};
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::Token;
 use rendering::{Framebuffer, RenderError};
 
-use super::message_box::{BattleTextbox, CONTENT_HEIGHT_PX, PRINTER_ORIGIN};
+use super::message_box::{
+    BattleTextbox, CONTENT_HEIGHT_PX, CONTENT_SIZE_PX, PRINTER_ORIGIN, TEXT_COLORS,
+};
 use super::queue::{GateError, Head, HeadKind, NarrationQueue};
 use super::{expand, GateStatus, NarrationError, NarrationGate, NarrationNames, NarrationRequest};
-use crate::textbox::WindowOp;
+use crate::textbox::{self, WindowOp};
 
 /// Why the layer could not be built or accept a batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +113,9 @@ pub struct BattleMessageLayer<S> {
     printer: Printer<S>,
     textbox: BattleTextbox,
     ops: Vec<WindowOp>,
+    /// The colours the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     printing: bool,
 }
 
@@ -159,12 +164,14 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             speed,
             PRINTER_ORIGIN,
         )
-        .with_ab_speed_up_print();
+        .with_ab_speed_up_print()
+        .with_text_colors(TEXT_COLORS);
         Self {
             queue: NarrationQueue::default(),
             printer,
             textbox,
             ops: Vec::new(),
+            window_fill: None,
             printing: false,
         }
     }
@@ -251,6 +258,7 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         match self.queue.take_head() {
             Head::Message(tokens) => {
                 self.ops.clear();
+                self.window_fill = None;
                 self.printer.restart(tokens);
                 self.printing = true;
                 self.tick_printer(input)
@@ -284,17 +292,10 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         }
     }
 
-    /// Retains `op` with the rows below the window removed.
-    ///
-    /// Upstream draws into the window bitmap, which clips at its bottom edge
-    /// (`CopyGlyphToWindow`, `src/text.c`); `ScrollWindow` later moves only
-    /// pixels already in that bitmap, so a row clipped at reveal never comes
-    /// back into view. The retained ops are replayed after every scroll shift,
-    /// so the clip is applied once here, at reveal time.
+    /// Retains `op` with the rows below the window removed, once, at reveal
+    /// time; see [`WindowOp::clipped_below`].
     fn push_clipped(&mut self, op: WindowOp) {
-        if let Some(op) = clip_below_window(op) {
-            self.ops.push(op);
-        }
+        textbox::push_clipped(&mut self.ops, op, CONTENT_HEIGHT_PX);
     }
 
     fn tick_printer(&mut self, input: PrinterInput) -> NarrationTick {
@@ -303,13 +304,19 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         // `FILL_WINDOW` survives the clear (`Printer::cleared_window`).
         if self.printer.cleared_window() {
             self.ops.clear();
+            self.window_fill = self.printer.cleared_window_colors();
         }
         match &event {
             TickEvent::Glyph(glyph) => self.push_clipped(WindowOp::Glyph(glyph.clone())),
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
             TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
+                textbox::scroll_window_ops(
+                    &mut self.ops,
+                    *dy,
+                    self.printer.colors(),
+                    CONTENT_SIZE_PX,
+                );
             }
             _ => {}
         }
@@ -336,88 +343,7 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
     /// Draws the battle textbox and the current message over `framebuffer`.
     /// The last message stays visible until the next one starts.
     pub fn draw(&self, framebuffer: &mut Framebuffer) {
-        self.textbox.compose(framebuffer, &self.ops);
-    }
-}
-
-/// `op` without its rows at or below the window's bottom edge, or `None` when
-/// nothing of it lies inside. Rows above the top edge need no clip: a scroll
-/// only moves content up, so they never return.
-fn clip_below_window(op: WindowOp) -> Option<WindowOp> {
-    match op {
-        WindowOp::Glyph(mut revealed) => {
-            let visible_rows = CONTENT_HEIGHT_PX.saturating_sub(revealed.y);
-            if visible_rows <= 0 {
-                return None;
-            }
-            let visible_rows = usize::try_from(visible_rows).unwrap_or(usize::MAX);
-            let width = assets::fonts::GLYPH_SIZE as usize;
-            if let Some(hidden) = revealed
-                .glyph
-                .pixels
-                .get_mut(visible_rows.saturating_mul(width)..)
-            {
-                hidden.fill(0);
-            }
-            Some(WindowOp::Glyph(revealed))
-        }
-        WindowOp::ClearSpan(mut span) => {
-            span.height = span.height.min(CONTENT_HEIGHT_PX.saturating_sub(span.y));
-            (span.height > 0).then_some(WindowOp::ClearSpan(span))
-        }
-        WindowOp::KeypadIcon(mut icon) => {
-            let visible_rows = CONTENT_HEIGHT_PX.saturating_sub(icon.y);
-            if visible_rows <= 0 {
-                return None;
-            }
-            icon.height = icon
-                .height
-                .min(u8::try_from(visible_rows).unwrap_or(u8::MAX));
-            Some(WindowOp::KeypadIcon(icon))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use engine::text::render::{ClearedSpan, KeypadIconPlacement};
-
-    use super::*;
-
-    fn icon_at(y: i32) -> WindowOp {
-        WindowOp::KeypadIcon(KeypadIconPlacement {
-            x: 0,
-            y,
-            id: 0,
-            width: 8,
-            height: 12,
-        })
-    }
-
-    #[test]
-    fn a_keypad_icon_keeps_only_the_rows_inside_the_window() {
-        assert_eq!(clip_below_window(icon_at(20)), Some(icon_at(20)));
-        let Some(WindowOp::KeypadIcon(partial)) = clip_below_window(icon_at(28)) else {
-            panic!("an icon straddling the edge keeps its top rows");
-        };
-        assert_eq!(partial.height, 4);
-        assert_eq!(clip_below_window(icon_at(CONTENT_HEIGHT_PX)), None);
-    }
-
-    #[test]
-    fn a_cleared_span_is_cut_at_the_window_bottom() {
-        let span = |y| {
-            WindowOp::ClearSpan(ClearedSpan {
-                x: 0,
-                y,
-                width: 8,
-                height: 16,
-            })
-        };
-        let Some(WindowOp::ClearSpan(partial)) = clip_below_window(span(24)) else {
-            panic!("a span straddling the edge keeps its top rows");
-        };
-        assert_eq!(partial.height, 8);
-        assert_eq!(clip_below_window(span(CONTENT_HEIGHT_PX)), None);
+        self.textbox
+            .compose(framebuffer, &self.ops, self.window_fill);
     }
 }
