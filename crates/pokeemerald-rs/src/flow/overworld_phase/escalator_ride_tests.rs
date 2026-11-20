@@ -262,3 +262,42 @@ fn stepping_onto_an_escalator_locks_the_field_and_a_failed_warp_hands_it_back() 
     assert_ne!(phase.player.facing(), Direction::West);
     let _ = std::fs::remove_file(path);
 }
+
+/// The escalator arrival's east step is held movement
+/// (`field_effect.c:1813-1818`), so `runningState` stays `NOT_MOVING` and
+/// `tookStep` never fires for it (`field_control_avatar.c:118-119`): the
+/// walk-off is not counted in `GAME_STAT_STEPS`, while the next ordinary
+/// step is.
+#[test]
+fn the_escalator_arrival_walk_off_does_not_increment_game_stat_steps() {
+    fn steps(phase: &OverworldPhase) -> u32 {
+        phase.save1.game_stats.get(engine::save::GameStat::Steps)
+    }
+    let (mut phase, path) = arrival_ride(MB_UP_ESCALATOR, false, "steps");
+    // Frame 73 starts the walk-off and frame 88 drains it; the frames after
+    // are the landing calls a counted step would have been recorded on.
+    for _ in 1..=92 {
+        phase.step(ButtonState::new());
+    }
+    let walked_off = (ARRIVAL_TILE.0 + 1, ARRIVAL_TILE.1);
+    assert_eq!(
+        phase.player.position(),
+        walked_off,
+        "fixture precondition: the arrival walked the player one tile east"
+    );
+    assert!(!phase.player.in_transit());
+    assert_eq!(steps(&phase), 0, "the held walk-off is not a took-step");
+
+    // Control: an ordinary keypad step from the same tile counts.
+    let next = (walked_off.0 + 1, walked_off.1);
+    for _ in 0..40 {
+        phase.step(held(Buttons::RIGHT));
+        if phase.player.position() == next && !phase.player.in_transit() {
+            break;
+        }
+    }
+    phase.step(ButtonState::new());
+    assert_eq!(phase.player.position(), next);
+    assert_eq!(steps(&phase), 1, "an ordinary step is counted");
+    let _ = std::fs::remove_file(path);
+}

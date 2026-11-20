@@ -865,6 +865,51 @@ fn a_terminal_fade_during_a_suspended_tick_still_completes_it() {
     );
 }
 
+/// Every sample of the frame that mixes `burst_then_second_note`'s completed
+/// tick.
+const SECOND_NOTE_SAMPLE: f32 = 0.304_687_5;
+
+/// Upstream mixes the completed tick (`m4a_1.s:51`-`:62`) before the next
+/// `MPlayMain`'s `FadeOutBody` can pause it, so a terminal step that waited
+/// on a suspended tick must not silence that tick's first mix.
+#[test]
+fn a_waiting_terminal_fade_follows_the_completed_ticks_mix() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false, 1)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, None);
+    assert!(seq.suspended_tick.is_some(), "tick yielded");
+    seq.render_frame_with_fade(&mut out, Some(0));
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    assert!(
+        out.iter().all(|&s| s == SECOND_NOTE_SAMPLE),
+        "the completed tick sounds"
+    );
+    assert!(seq.is_paused(), "the terminal step pauses after the mix");
+    seq.render_frame_with_fade(&mut out, None);
+    assert!(out.iter().all(|&s| s == 0.0), "the pause stopped the voice");
+}
+
+/// The same ordering through plain `render_frame`, which completes a tick
+/// whose terminal step arrived while it was still suspended.
+#[test]
+fn a_waiting_terminal_fade_follows_the_completed_ticks_mix_through_render_frame() {
+    let mut seq = Sequencer::new(test_song(vec![burst_then_second_note(false, 2)], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame_with_fade(&mut out, None);
+    seq.render_frame_with_fade(&mut out, Some(0));
+    assert!(seq.suspended_tick.is_some(), "tick still suspended");
+    assert!(!seq.is_paused(), "the step waits for the tick");
+    seq.render_frame(&mut out);
+    assert!(seq.suspended_tick.is_none(), "tick completed");
+    assert!(
+        out.iter().all(|&s| s == SECOND_NOTE_SAMPLE),
+        "the completed tick sounds"
+    );
+    assert!(seq.is_paused(), "the terminal step pauses after the mix");
+    seq.render_frame(&mut out);
+    assert!(out.iter().all(|&s| s == 0.0), "the pause stopped the voice");
+}
+
 /// A fade cancelled while its latest step waits on a suspended tick takes
 /// that step with it: the completed tick plays at full volume and unpaused.
 #[test]

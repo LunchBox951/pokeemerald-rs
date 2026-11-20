@@ -149,6 +149,12 @@ const fn counter_is_ahead(baseline: u32, candidate: u32) -> bool {
     candidate != baseline && candidate.wrapping_sub(baseline) < SERIAL_COUNTER_HALF_RANGE
 }
 
+/// Whether two different counters are exactly half the range apart, where
+/// serial-number arithmetic gives neither an order.
+const fn counters_are_antipodal(a: u32, b: u32) -> bool {
+    a != b && !counter_is_ahead(a, b) && !counter_is_ahead(b, a)
+}
+
 /// What a continued session does with a reload's base before writing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BaseReconcile {
@@ -166,7 +172,15 @@ enum BaseReconcile {
 /// Equal counters over a different base restore only on `donor_lost`
 /// ([`donor_was_lost`]); anything else is refused, because equal counters
 /// prove neither common lineage nor equal contents, and a restore would put
-/// this session's storage into both slots within two saves.
+/// this session's storage into both slots within two saves. Exactly antipodal
+/// counters ([`counters_are_antipodal`]) are unordered, and upstream's slot
+/// choice (`pokeemerald/src/save.c:586-602`) always orders two different
+/// counters, so such a counter proves no lineage: it keeps an identical base
+/// and is otherwise refused, even on `donor_lost`, which describes the
+/// session's own legacy head and so needs equal counters. The one exception
+/// is `damage_fallback`: there the reload has no intact slot and resolves to
+/// counter zero, which is antipodal to a session at `2^31`, so there is no
+/// save to protect and the session's cached base is restored.
 ///
 /// A disk the session is ahead of is no different: a lower counter proves
 /// damage no more than an equal one proves lineage. It restores over an
@@ -184,6 +198,14 @@ const fn reconcile_base(
 ) -> BaseReconcile {
     if counter_is_ahead(disk, session) {
         if same_base || donor_lost || damage_fallback {
+            BaseReconcile::Restore
+        } else {
+            BaseReconcile::Refuse
+        }
+    } else if counters_are_antipodal(disk, session) {
+        if same_base {
+            BaseReconcile::Keep
+        } else if damage_fallback {
             BaseReconcile::Restore
         } else {
             BaseReconcile::Refuse
@@ -470,10 +492,13 @@ impl SaveSlot {
                 // The reload above fell back past a generation damaged since
                 // the session read it (tests::healing_a_damaged_newest_slot_*),
                 // or kept the same legacy head but lost the donor that
-                // supplied its storage (tests::equal_counter_donor_loss_*);
-                // any other equal- or lower-counter mismatch is refused
+                // supplied its storage (tests::equal_counter_donor_loss_*),
+                // or found no intact slot at all, even at the half-range
+                // counter (tests::a_session_at_the_half_range_counter_*);
+                // any other equal-, lower- or antipodal-counter mismatch is refused
                 // (tests::an_equal_counter_replacement_is_refused_*,
-                // tests::an_older_counter_unrelated_replacement_is_refused_*).
+                // tests::an_older_counter_unrelated_replacement_is_refused_*,
+                // tests::an_antipodal_counter_unrelated_replacement_is_refused_*).
                 let same_base = store.base_matches(session_base);
                 let donor_lost = !same_base
                     && donor_was_lost(

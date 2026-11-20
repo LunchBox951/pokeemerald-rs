@@ -53,7 +53,8 @@ struct Shared {
     occupied: AtomicUsize,
     underruns: AtomicU64,
     /// Samples ever accepted by [`Producer::push`], wrapping. Written only
-    /// while `head` is held, so it and the write index advance together;
+    /// while `head` is held, after the samples it counts are published in
+    /// `occupied`, so it never runs ahead of what the consumer can see;
     /// [`Producer::pushed`] reads it without the lock.
     pushed: AtomicU64,
     /// Samples ever taken off the queue, read or discarded, wrapping.
@@ -152,18 +153,24 @@ impl Producer {
         }
         if n > 0 {
             *head = (*head + n) % self.shared.capacity;
-            // Counted before `occupied` publishes the samples, so a consumer
-            // that sees them queued also sees them counted. Otherwise
-            // relaxed: only ever written while `head` is held, and a reader
-            // without it needs only some value this counter has held.
+            // Publish before counting: a mark read from `pushed` then covers
+            // only samples already visible in `occupied`, so a `stop` that
+            // marks inside this call can never claim a push the consumer's
+            // queue count has not yet seen. Release on `occupied`: publishes
+            // the slot stores to the consumer's `Acquire` load of it.
+            self.shared.occupied.fetch_add(n, Ordering::Release);
+            #[cfg(test)]
+            tests::between_push_publish_steps();
+            // Release: a reader whose `Acquire` load in [`Self::pushed`] sees
+            // this count also sees the `occupied` publish above, and a
+            // consumer synchronized with that reader (the first-read discard
+            // claims the mark with an `AcqRel` swap) sees it too. Only ever
+            // written while `head` is held.
             let pushed = self.shared.pushed.load(Ordering::Relaxed);
             self.shared.pushed.store(
                 pushed.wrapping_add(u64::try_from(n).unwrap_or(u64::MAX)),
-                Ordering::Relaxed,
+                Ordering::Release,
             );
-            // Release: publishes the slot stores and the count above to the
-            // consumer's `Acquire` load of `occupied`.
-            self.shared.occupied.fetch_add(n, Ordering::Release);
         }
         n
     }
@@ -176,9 +183,13 @@ impl Producer {
     ///
     /// Never takes the producer lock, so a `stop` cannot wait behind another
     /// producer's push. A push still in progress may or may not be counted;
-    /// either way the mark falls between whole pushes.
+    /// either way the mark falls between whole pushes, and every sample it
+    /// counts is already published in `occupied` (see [`Self::push`]).
     pub(crate) fn pushed(&self) -> u64 {
-        self.shared.pushed.load(Ordering::Relaxed)
+        // Acquire: pairs with the `Release` store in `push`, so the samples
+        // this count covers are visible to whoever this thread then
+        // synchronizes with.
+        self.shared.pushed.load(Ordering::Acquire)
     }
 
     /// Narrow a pending [`Consumer::discard_queued_at_first_read`] to the
@@ -395,6 +406,8 @@ impl Consumer {
         // lowers `occupied`, so these slots stay queued until the
         // `fetch_sub` below frees them.
         let claimed = self.shared.occupied.load(Ordering::Acquire);
+        #[cfg(test)]
+        tests::before_discard_claim();
         let pending = self
             .shared
             .pending_discard
@@ -405,14 +418,12 @@ impl Consumer {
             NO_DISCARD => return,
             DISCARD_ALL => claimed,
             mark => {
-                // Narrowed before the claim: the queued samples pushed
-                // before the mark. Both counts are fixed from this side,
-                // the mark by the producer's `stop` and `consumed` by this
-                // consumer, so a push landing meanwhile changes neither;
-                // `claimed` bounds it only against a mark past the queue.
+                // The mark may postdate `claimed`, so count the queue afresh:
+                // `mark - consumed` bounds it, and only this side lowers it.
+                let queued = self.shared.occupied.load(Ordering::Acquire);
                 #[cfg(test)]
                 tests::between_bounded_discard_loads();
-                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), claimed)
+                stale_before(mark, self.shared.consumed.load(Ordering::Relaxed), queued)
             }
         };
         if queued == 0 {

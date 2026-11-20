@@ -85,7 +85,7 @@ impl OverworldPhase {
                 *fb = dialog.compose_over(std::mem::take(fb));
             });
         }
-        if self.is_first_battle_active() {
+        if self.is_first_battle_active() || self.is_wild_battle_active() {
             stage_overlay(&mut composed, palette.bg, |fb| self.draw_battle_text(fb));
         }
         let composed = match self.start_menu() {

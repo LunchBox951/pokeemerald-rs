@@ -148,7 +148,8 @@ impl DacCorrection {
 
 #[derive(Clone, Copy, Debug)]
 struct VoiceIdentity {
-    track: usize,
+    /// The owning track, or `None` once `detach_track` has run.
+    track: Option<usize>,
     played_key: u8,
     pitch_key: u8,
     note_on_ordinal: u64,
@@ -158,7 +159,7 @@ struct VoiceIdentity {
 impl VoiceIdentity {
     fn new(track: usize, played_key: u8) -> Self {
         Self {
-            track,
+            track: Some(track),
             played_key,
             pitch_key: played_key,
             note_on_ordinal: 0,
@@ -169,6 +170,11 @@ impl VoiceIdentity {
 
 /// A live CGB PSG voice.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag mirrors an independent hardware channel bit: pending retrigger, \
+              hardware mute, sweep hold, and length stop"
+)]
 pub struct CgbVoice {
     channel: CgbChannelNumber,
     oscillator: Oscillator,
@@ -183,9 +189,13 @@ pub struct CgbVoice {
     /// The track's latest `(note_key, fine_pitch)`; a retiring frame discards it
     /// (`m4a.c:1053-1056,1194-1203`).
     pending_pitch: Option<(u8, u8)>,
-    /// Sweep overflow silenced the channel; a later safe trigger revives it
+    /// A failed sweep check stopped the channel; a later safe trigger revives it
     /// (`mgba/src/gb/audio.c:180-186,667-672`).
     hardware_muted: bool,
+    /// A sweep tick overflowed this playing square: the channel stops running
+    /// but keeps mixing the level it last rendered until the next trigger or
+    /// register-write catch-up (`mgba/src/gb/audio.c:667-672,745-754`).
+    sweep_held: bool,
     hardware_envelope_volume: HardwareEnvelopeVolume,
     /// The instrument's raw `ToneData::length`; nonzero sets `NRx4` bit 6.
     length_register: u8,
@@ -454,7 +464,7 @@ impl CgbVoice {
     ) -> Self {
         let routing = StereoRouting::new(vol_mr, vol_ml, velocity, rhythm_pan);
         let envelope = CgbEnvelope::new(adsr, routing.envelope_goal(), echo_volume, echo_length);
-        let hardware_envelope_volume = HardwareEnvelopeVolume::at_note_on();
+        let hardware_envelope_volume = HardwareEnvelopeVolume::default();
         Self {
             channel,
             oscillator,
@@ -468,6 +478,7 @@ impl CgbVoice {
             initial_trigger: InitialTrigger::Pending,
             pending_pitch: None,
             hardware_muted: false,
+            sweep_held: false,
             hardware_envelope_volume,
             length_register: 0,
             length: match channel {
@@ -512,10 +523,17 @@ impl CgbVoice {
         self.channel
     }
 
-    /// Return the owning track index.
+    /// Return the owning track index, or `None` once `detach_track` has run.
     #[must_use]
-    pub fn track(&self) -> usize {
+    pub fn track(&self) -> Option<usize> {
         self.identity.track
+    }
+
+    /// Clear allocation ownership so no later track-keyed operation reaches
+    /// this voice's release tail (`RealClearChain`, `m4a_1.s:744-745`, which
+    /// clears the track of CGB channels as well as DirectSound ones).
+    pub(crate) fn detach_track(&mut self) {
+        self.identity.track = None;
     }
 
     /// Return the played MIDI key used for tie matching.
@@ -561,6 +579,7 @@ impl CgbVoice {
     pub(crate) fn apply_hardware_off_write(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.apply_hardware_off_write();
+        self.sweep_held = false;
         self.off_write_length();
         if self.oscillator.noise_mut().is_some() {
             self.hardware_envelope_volume.write_off();
@@ -573,6 +592,19 @@ impl CgbVoice {
             Oscillator::Noise(noise) => noise.has_unsettled_output(),
             _ => false,
         }
+    }
+
+    /// Whether the idle slot is a wave channel whose held sample is nonzero
+    /// and still routed to an output side, so every idle frame keeps mixing it
+    /// (`render_idle_hardware`'s doc). Unlike a noise latch, nothing the idle
+    /// slot does ever settles it: only a retrigger or a route write ends it
+    /// (`mgba/src/gb/audio.c:246-253,399-403,768-774`).
+    pub(crate) fn holds_wave_output(&self) -> bool {
+        self.routing.is_routed()
+            && self
+                .oscillator
+                .held_wave_contribution()
+                .is_some_and(|contribution| contribution != 0)
     }
 
     /// Account one idle frame of a vacated slot: a noise channel keeps clocking
@@ -642,6 +674,7 @@ impl CgbVoice {
     fn apply_retrigger(&mut self) {
         self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.retrigger();
+        self.sweep_held = false;
         self.trigger_length();
     }
 
@@ -706,14 +739,15 @@ impl CgbVoice {
             .step_frame(extra_envelope_iteration, live_goal);
         // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
         // The level a pitch write's `NR14` catch-up latches into a stopped
-        // square, before the high-byte store (`mgba/src/gb/audio.c:219-224`).
+        // square (length-expired or sweep-overflowed), before the high-byte
+        // store (`mgba/src/gb/audio.c:162-169,219-224`).
         let mut stopped_write_latch = None;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
                 let latched = self
                     .oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
-                if self.length_stopped {
+                if self.is_stopped_square() {
                     stopped_write_latch = latched;
                 }
             }
@@ -767,32 +801,17 @@ impl CgbVoice {
                 noise.set_clocking(runs);
             }
         }
-        // A stopped channel's envelope timer is not clocked
-        // (`mgba/src/gb/audio.c:711-732`), though a store still latches.
-        let stepped = if self.length_stopped && !(hardware_write || initial_trigger) {
-            false
-        } else {
-            self.hardware_envelope_volume.end_frame(
-                1 + u8::from(extra_envelope_iteration),
-                hardware_write,
-                software_volume,
-                self.envelope.hardware_envelope_pacing(),
-            )
-        };
-        if stepped {
-            let volume = self.hardware_envelope_volume.volume();
-            if let Some(noise) = self.oscillator.noise_mut() {
-                noise.apply_envelope_step(volume);
-            }
+        // A store latches the level and restarts the channel's countdown; only
+        // the shared sequencer's phase-7 events ever step it, in `render_clocked`.
+        if hardware_write || initial_trigger {
+            self.hardware_envelope_volume
+                .write(software_volume, self.envelope.hardware_envelope_pacing());
         }
-        let envelope_gain = self
-            .oscillator
-            .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
-        self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
+        self.refresh_frame_gain();
         // A write's catch-up re-latches a stopped square at the duty position
         // it ran to before the high-byte store; nothing runs the stopped
         // channel after it (`mgba/src/gb/audio.c:162-171,219-224,493-501,916-918`).
-        if let Some(level) = stopped_write_latch.filter(|_| self.length_stopped) {
+        if let Some(level) = stopped_write_latch.filter(|_| self.is_stopped_square()) {
             if let Some(held) = self
                 .oscillator
                 .relatched_square_contribution(level, self.frame_gain)
@@ -802,10 +821,46 @@ impl CgbVoice {
         }
     }
 
+    /// Recomputes the gain a square renders at from the hardware nibble.
+    fn refresh_frame_gain(&mut self) {
+        let gain = self.oscillator.envelope_gain_256(
+            self.envelope.volume(),
+            self.hardware_envelope_volume.volume(),
+        );
+        self.frame_gain = i32::try_from(gain).unwrap_or(i32::MAX);
+    }
+
+    /// Counts one phase-7 event on the hardware envelope timer. A stopped or
+    /// muted channel is not playing, so its timer is not clocked
+    /// (`mgba/src/gb/audio.c:711-732`); a step re-resolves a noise latch.
+    fn clock_hardware_envelope(&mut self) {
+        if matches!(self.channel, CgbChannelNumber::Wave)
+            || self.length_stopped
+            || self.hardware_muted
+        {
+            return;
+        }
+        let pacing = self.envelope.hardware_envelope_pacing();
+        if !self.hardware_envelope_volume.tick(pacing) {
+            return;
+        }
+        if let Some(noise) = self.oscillator.noise_mut() {
+            noise.apply_envelope_step(self.hardware_envelope_volume.volume());
+        }
+        self.refresh_frame_gain();
+    }
+
+    /// Whether the length counter or a sweep overflow stopped the channel, so
+    /// that only a register write's catch-up runs it again.
+    fn is_stopped_square(&self) -> bool {
+        self.length_stopped || self.sweep_held
+    }
+
     /// A square held at hardware level 0 skips its duty catch-up
     /// (`mgba/src/gb/audio.c:493-503,948-954`).
     fn is_dead_at_zero(&self) -> bool {
         matches!(self.oscillator, Oscillator::Square(_))
+            && !self.sweep_held
             && self.envelope.is_active()
             && self.frame_gain == 0
             && self.hardware_envelope_volume.volume() == 0
@@ -816,19 +871,23 @@ impl CgbVoice {
     }
 
     /// Accumulate this voice into one frame after [`Self::begin_frame`], with
-    /// the sweep clocks alone: no length clock reaches it.
+    /// the sweep clocks alone: no length or envelope clock reaches it, so the
+    /// hardware envelope holds the level its last register write latched.
     /// `sweep_ticks` holds ascending sample offsets of the 128 Hz sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
-        self.render_clocked(acc, sweep_ticks, &[]);
+        self.render_clocked(acc, sweep_ticks, &[], &[]);
     }
 
     /// Accumulate this voice into one frame after [`Self::begin_frame`];
-    /// `length_ticks` holds ascending sample offsets of the 256 Hz length clock.
+    /// `length_ticks` holds ascending sample offsets of the 256 Hz length clock
+    /// and `envelope_ticks` those of the 64 Hz envelope clock; a hardware
+    /// envelope step takes effect from the sample at its offset.
     pub fn render_clocked(
         &mut self,
         acc: &mut [StereoAcc],
         sweep_ticks: &[usize],
         length_ticks: &[usize],
+        envelope_ticks: &[usize],
     ) {
         if !self.length_stopped {
             if self.is_dead_at_zero() {
@@ -839,7 +898,11 @@ impl CgbVoice {
             }
             if self.hardware_muted {
                 self.oscillator.advance_silently(acc.len());
-                self.last_contribution = 0;
+                if self.sweep_held {
+                    self.accumulate_held_level(acc);
+                } else {
+                    self.last_contribution = 0;
+                }
                 self.clock_length_silently(length_ticks.iter().copied());
                 return;
             }
@@ -847,18 +910,44 @@ impl CgbVoice {
         let frame_len = acc.len();
         let mut ticks = sweep_ticks.iter().copied().peekable();
         let mut lengths = length_ticks.iter().copied().peekable();
+        let mut envelopes = envelope_ticks.iter().copied().peekable();
+        let mut held_from = None;
         for (sample_offset, output) in acc.iter_mut().enumerate() {
             if !self.envelope.is_active() {
                 break;
             }
+            // The frame event runs a playing square to its timestamp before the
+            // sweep and length clocks, so a length expiry latches the duty level
+            // as it stood ahead of a coincident sweep retune
+            // (`mgba/src/gb/audio.c:657-691`).
+            let expiry_latch = self.expiry_square_latch(lengths.peek() == Some(&sample_offset));
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
+                // mGBA runs the channel up to the sequencer step before the
+                // sweep can clear `playingCh1`, so an overflow holds the duty
+                // level at this tick, read before the sweep's write-back
+                // retunes it (`mgba/src/gb/audio.c:657,667-672`).
+                // A length-stopped square keeps its catch-up deferred for the next
+                // register write, so only a running channel is read here.
+                let level_at_tick = (!self.hardware_muted && !self.length_stopped)
+                    .then(|| match &mut self.oscillator {
+                        Oscillator::Square(square) => Some(square.held_level()),
+                        Oscillator::Wave { .. } | Oscillator::Noise(_) => None,
+                    })
+                    .flatten();
                 if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
                     self.hardware_muted = true;
                     if !self.length_stopped {
+                        self.sweep_held = true;
+                        if let Some(held) = level_at_tick.and_then(|level| {
+                            self.oscillator
+                                .relatched_square_contribution(level, self.frame_gain)
+                        }) {
+                            self.last_contribution = held;
+                        }
                         self.oscillator.advance_silently(frame_len - sample_offset);
-                        self.last_contribution = 0;
                         self.clock_length_silently(lengths);
+                        held_from = Some(sample_offset);
                         break;
                     }
                 }
@@ -867,6 +956,26 @@ impl CgbVoice {
                 lengths.next();
                 self.clock_length();
             }
+            let mut envelope_clocked = false;
+            while envelopes.peek() == Some(&sample_offset) {
+                envelopes.next();
+                self.clock_hardware_envelope();
+                envelope_clocked = true;
+            }
+            if envelope_clocked && !self.length_stopped && self.is_dead_at_zero() {
+                // An event that silences a square leaves the rest of the buffer
+                // dead, as a buffer that began dead is.
+                self.oscillator
+                    .defer_idle_samples(frame_len - sample_offset);
+                self.last_contribution = 0;
+                for _ in ticks.by_ref() {
+                    if !self.hardware_muted && !self.oscillator.step_sweep_tick() {
+                        self.hardware_muted = true;
+                    }
+                }
+                self.clock_length_silently(lengths);
+                break;
+            }
             if self.length_stopped {
                 // The duty index does not step, but the time passes: the
                 // next register write catches it up (`mgba/src/gb/audio.c:162-171,493-510`).
@@ -874,7 +983,7 @@ impl CgbVoice {
                 // (`mgba/src/gb/audio.c:768-774`), which its one-sample-late
                 // output has not reached yet.
                 self.oscillator.defer_idle_samples(1);
-                if let Some(held) = self.oscillator.held_wave_contribution() {
+                if let Some(held) = self.oscillator.held_wave_contribution().or(expiry_latch) {
                     self.last_contribution = held;
                 }
             } else {
@@ -884,6 +993,16 @@ impl CgbVoice {
                     self.envelope.volume(),
                 );
             }
+            self.routing.accumulate(self.last_contribution, output);
+        }
+        if let Some(sample_offset) = held_from {
+            self.accumulate_held_level(&mut acc[sample_offset..]);
+        }
+    }
+
+    /// Mix the level the channel last rendered into each sample of `acc`.
+    fn accumulate_held_level(&self, acc: &mut [StereoAcc]) {
+        for output in acc {
             self.routing.accumulate(self.last_contribution, output);
         }
     }
@@ -920,7 +1039,7 @@ impl CgbVoice {
         }
     }
 
-    fn hardware_volume(&self) -> u8 {
+    pub(crate) fn hardware_volume(&self) -> u8 {
         self.hardware_envelope_volume.volume()
     }
 
@@ -962,6 +1081,10 @@ mod wave_tests;
 #[cfg(test)]
 #[path = "cgb_voice_envelope.rs"]
 mod envelope_tests;
+
+#[cfg(test)]
+#[path = "cgb_voice_envelope_clock.rs"]
+mod envelope_clock_tests;
 
 #[cfg(test)]
 #[path = "cgb_voice_sweep.rs"]
