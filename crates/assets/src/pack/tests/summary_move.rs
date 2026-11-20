@@ -407,6 +407,38 @@ fn header_and_record_faults_are_refused() {
     assert_eq!(decode_err(&bad), SummaryMoveError::TrailingBytes);
 }
 
+#[test]
+fn swapped_records_are_refused_as_out_of_order() {
+    let good = canonical();
+    let descriptions = HEADER;
+    let moves = descriptions
+        + (0..MOVE_DESCRIPTION_COUNT)
+            .map(|slot| 6 + description(slot).len())
+            .sum::<usize>();
+    let effects = moves + 4 * CONTEST_MOVE_COUNT;
+    for (section, at, len) in [
+        (
+            SummaryMoveSection::Description,
+            descriptions,
+            6 + description(0).len(),
+        ),
+        (SummaryMoveSection::ContestMove, moves, 4),
+        (
+            SummaryMoveSection::ContestEffect,
+            effects,
+            9 + effect_description(0).len(),
+        ),
+    ] {
+        let mut bad = good.clone();
+        bad[at..at + 2 * len].rotate_left(len);
+        assert_eq!(
+            decode_err(&bad),
+            SummaryMoveError::OutOfOrder { section, id: 0 },
+            "{section:?}"
+        );
+    }
+}
+
 fn pack_with(kind_tag: u8, payload: Vec<u8>) -> Vec<u8> {
     pack_bytes(vec![Entry {
         id: TABLE_PACK_ID,

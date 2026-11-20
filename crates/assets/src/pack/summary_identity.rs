@@ -165,6 +165,13 @@ pub enum SummaryIdentityError {
         /// Offending ID.
         id: u16,
     },
+    /// A decoded table's records are not in ascending ID order.
+    OutOfOrder {
+        /// The table.
+        section: SummaryIdentitySection,
+        /// The first ID lower than its predecessor.
+        id: u16,
+    },
     /// A table slot has no record.
     MissingId {
         /// The table.
@@ -204,6 +211,7 @@ impl fmt::Display for SummaryIdentityError {
             Self::TrailingBytes => write!(f, "bytes follow the last record"),
             Self::IdOutOfRange { section, id } => write!(f, "{section} id {id} is out of range"),
             Self::DuplicateId { section, id } => write!(f, "{section} id {id} is duplicated"),
+            Self::OutOfOrder { section, id } => write!(f, "{section} id {id} is out of order"),
             Self::MissingId { section, id } => write!(f, "{section} id {id} is missing"),
             Self::MalformedString {
                 section,
@@ -362,8 +370,8 @@ impl<'a> SummaryIdentityTable<'a> {
                 });
             }
         }
-        let natures = reader.named_records(NATURE_COUNT)?;
-        let sections = reader.named_records(REGION_MAP_SECTION_COUNT)?;
+        let natures = reader.named_records(SummaryIdentitySection::Nature)?;
+        let sections = reader.named_records(SummaryIdentitySection::RegionSection)?;
         let specials = SpecialLocationNames {
             ferry: reader.stream()?,
             secret_base: reader.stream()?,
@@ -373,6 +381,10 @@ impl<'a> SummaryIdentityTable<'a> {
         for _ in 0..SPECIES_TO_NATIONAL_COUNT {
             conversions.push((reader.u16()?, reader.u16()?));
         }
+        ascending(
+            SummaryIdentitySection::SpeciesConversion,
+            conversions.iter().map(|&(species, _)| species),
+        )?;
         if reader.pos != bytes.len() {
             return Err(SummaryIdentityError::TrailingBytes);
         }
@@ -550,16 +562,33 @@ impl<'a> Reader<'a> {
         self.take(len)
     }
 
-    /// `count` records of `id: u16` then a stream.
+    /// The section's records, each `id: u16` then a stream, in ascending ID order.
     fn named_records(
         &mut self,
-        count: usize,
+        section: SummaryIdentitySection,
     ) -> Result<Vec<(u16, &'a [u8])>, SummaryIdentityError> {
-        let mut records = Vec::with_capacity(count);
-        for _ in 0..count {
+        let mut records = Vec::with_capacity(section.count());
+        for _ in 0..section.count() {
             let id = self.u16()?;
             records.push((id, self.stream()?));
         }
+        ascending(section, records.iter().map(|&(id, _)| id))?;
         Ok(records)
     }
+}
+
+/// Refuse a decoded section whose wire IDs ever step down. Equal neighbours
+/// are left for [`SummaryIdentityTable::from_entries`] to report as duplicates.
+fn ascending(
+    section: SummaryIdentitySection,
+    ids: impl IntoIterator<Item = u16>,
+) -> Result<(), SummaryIdentityError> {
+    let mut previous: Option<u16> = None;
+    for id in ids {
+        if previous.is_some_and(|previous| id < previous) {
+            return Err(SummaryIdentityError::OutOfOrder { section, id });
+        }
+        previous = Some(id);
+    }
+    Ok(())
 }

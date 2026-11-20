@@ -377,10 +377,49 @@ fn text_records_are_walked_by_token() {
 #[test]
 fn every_truncated_prefix_is_refused() {
     let good = canonical();
-    for len in (0..good.len()).step_by(7).chain([good.len() - 1]) {
-        assert!(
-            SummaryIdentityTable::decode(&good[..len]).is_err(),
+    for len in 0..good.len() {
+        assert_eq!(
+            SummaryIdentityTable::decode(&good[..len]),
+            Err(SummaryIdentityError::Truncated),
             "prefix of {len} bytes"
+        );
+    }
+}
+
+#[test]
+fn swapped_records_are_refused_as_out_of_order() {
+    let good = canonical();
+    let natures = HEADER;
+    let sections = natures + NATURE_COUNT * (6 + nature(0).len());
+    let conversions = sections
+        + (0..REGION_MAP_SECTION_COUNT)
+            .map(|id| 6 + section(id).len())
+            .sum::<usize>()
+        + [FERRY, SECRET_BASE, HIDEOUT]
+            .iter()
+            .map(|stream| 4 + stream.len())
+            .sum::<usize>();
+    for (place, at, len, id) in [
+        (
+            SummaryIdentitySection::Nature,
+            natures,
+            6 + nature(0).len(),
+            0,
+        ),
+        (
+            SummaryIdentitySection::RegionSection,
+            sections,
+            6 + section(0).len(),
+            0,
+        ),
+        (SummaryIdentitySection::SpeciesConversion, conversions, 4, 1),
+    ] {
+        let mut bad = good.clone();
+        bad[at..at + 2 * len].rotate_left(len);
+        assert_eq!(
+            SummaryIdentityTable::decode(&bad),
+            Err(SummaryIdentityError::OutOfOrder { section: place, id }),
+            "{place:?}"
         );
     }
 }

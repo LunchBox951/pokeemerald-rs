@@ -283,6 +283,13 @@ pub enum SummaryMoveError {
         /// Offending ID.
         id: u16,
     },
+    /// A decoded table's records are not in ascending ID order.
+    OutOfOrder {
+        /// The table.
+        section: SummaryMoveSection,
+        /// The first ID lower than its predecessor.
+        id: u16,
+    },
     /// A table slot has no record.
     MissingId {
         /// The table.
@@ -336,6 +343,7 @@ impl fmt::Display for SummaryMoveError {
             Self::TrailingBytes => write!(f, "bytes follow the last record"),
             Self::IdOutOfRange { section, id } => write!(f, "{section} id {id} is out of range"),
             Self::DuplicateId { section, id } => write!(f, "{section} id {id} is duplicated"),
+            Self::OutOfOrder { section, id } => write!(f, "{section} id {id} is out of order"),
             Self::MissingId { section, id } => write!(f, "{section} id {id} is missing"),
             Self::MalformedString {
                 section,
@@ -356,6 +364,22 @@ impl fmt::Display for SummaryMoveError {
 }
 
 impl std::error::Error for SummaryMoveError {}
+
+/// Refuse a decoded section whose wire IDs ever step down. Equal neighbours
+/// are left for [`SummaryMoveTable::from_entries`] to report as duplicates.
+fn ascending(
+    section: SummaryMoveSection,
+    ids: impl IntoIterator<Item = u16>,
+) -> Result<(), SummaryMoveError> {
+    let mut previous: Option<u16> = None;
+    for id in ids {
+        if previous.is_some_and(|previous| id < previous) {
+            return Err(SummaryMoveError::OutOfOrder { section, id });
+        }
+        previous = Some(id);
+    }
+    Ok(())
+}
 
 /// Validated summary-screen move and contest records borrowing the pack.
 ///
@@ -536,6 +560,18 @@ impl<'a> SummaryMoveTable<'a> {
                 description: reader.stream()?,
             });
         }
+        ascending(
+            SummaryMoveSection::Description,
+            descriptions.iter().map(|&(slot, _)| slot),
+        )?;
+        ascending(
+            SummaryMoveSection::ContestMove,
+            moves.iter().map(|record| record.move_id),
+        )?;
+        ascending(
+            SummaryMoveSection::ContestEffect,
+            effects.iter().map(|record| record.id),
+        )?;
         if reader.pos != bytes.len() {
             return Err(SummaryMoveError::TrailingBytes);
         }
