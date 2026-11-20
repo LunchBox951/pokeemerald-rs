@@ -193,13 +193,8 @@ fn a_holder_switched_out_and_back_reloads_its_native_ability_and_copies_again() 
 
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
 
-/// #3455: the player's chance move is screened at selection
-/// (`validate_player_action`) and again against the incoming defender, but
-/// never against a later ability change of its own attacker. The sequence
-/// that would need that re-screen (a Trace holder copying Serene Grace
-/// *after* selection) cannot be built from the engine's own transitions: the
-/// holder copies the lead's ability at battle start, settles, and a settled
-/// holder never copies again, so the enemy's switch-in leaves it alone.
+/// A settled holder never copies again, so no ability change can reach the
+/// player's attacker after its move was screened at selection.
 #[test]
 fn a_settled_player_trace_holder_keeps_its_copy_when_the_enemy_switches_to_serene_grace() {
     let dex = Dex::new();
@@ -244,12 +239,8 @@ fn a_settled_player_trace_holder_keeps_its_copy_when_the_enemy_switches_to_seren
     rng.assert_exhausted();
 }
 
-/// A queued Trace holder stays queued while its opponent has no ability to
-/// copy or is fainted, and the drain itself is deferred by a finished battle
-/// or a pending move-learn prompt (`trace.rs`, `resolve_trace_queue` and
-/// `settle_next_trace`). Each deferral ends before the next turn's actions,
-/// and no battleable species is ability-less, so a player Trace holder is
-/// never still queued when the enemy switches mid-turn.
+/// A queued holder waits only on an opponent with no ability to copy, so
+/// this keeps a player holder from still being queued at an enemy switch.
 #[test]
 fn every_battleable_species_has_an_ability_for_trace_to_copy() {
     let dex = Dex::new();
