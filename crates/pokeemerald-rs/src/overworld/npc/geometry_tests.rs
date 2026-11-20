@@ -258,6 +258,10 @@ fn single_sprites_are_16x32_and_effect_cells_16x16() {
     );
     let player = DepthSprite::single(entry, 3);
     assert_eq!((player.width(), player.height()), (16, 32));
+    // The live player goes through the displaced constructor, which keeps the same frame.
+    let displaced = DepthSprite::single_displaced(entry, entry, 3);
+    assert_eq!((displaced.width(), displaced.height()), (16, 32));
+    assert_eq!(displaced.subpriority, player.subpriority);
     let effect = DepthSprite::with_subpriority(entry, 135);
     assert_eq!((effect.width(), effect.height()), (16, 16));
 }

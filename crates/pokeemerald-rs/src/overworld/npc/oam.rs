@@ -153,14 +153,17 @@ impl DepthSprite {
         shown: SheetSprite,
         elevation: u8,
     ) -> Self {
-        Self::with_subpriority(
-            shown,
-            subpriority_from_bottom(
-                i32::from(base.y()) + 32,
-                elevation,
-                OBJECT_EVENT_SUBPRIORITY,
-            ),
-        )
+        Self {
+            height: 32,
+            ..Self::with_subpriority(
+                shown,
+                subpriority_from_bottom(
+                    i32::from(base.y()) + 32,
+                    elevation,
+                    OBJECT_EVENT_SUBPRIORITY,
+                ),
+            )
+        }
     }
 
     /// A single-OBJ 16x16 sprite whose subpriority is already known, such as a
