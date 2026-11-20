@@ -72,12 +72,16 @@ pub(super) use hooks::{
 #[cfg(all(test, target_os = "linux"))]
 pub(super) use occupied::SetHeldMode;
 use occupied::{list_level, ModeLeft};
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) use quarantine::unguessable_hex;
 use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 use report::{level_location, standing, warn_if_moved_away, warn_left_standing, Standing};
 #[cfg(test)]
 pub(super) use report::{located_beside, verified_location};
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) use restore::rename_without_replacing;
 #[cfg(test)]
 pub(super) use restore::restore_capture;
 use restore::{

@@ -8,6 +8,8 @@ use super::super::tests::{
 };
 use super::*;
 
+#[cfg(unix)]
+mod acquisition;
 mod creation;
 #[cfg(unix)]
 mod durability;
