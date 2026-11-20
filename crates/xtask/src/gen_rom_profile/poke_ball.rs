@@ -8,14 +8,14 @@
 //! The walk:
 //!
 //! 1. The sheets are found by their decompressed tiles ([`super::images`]) and
-//!    the palette by its decompressed colours, which can match more than one
-//!    stream.
+//!    the palette by its decompressed colours; the closed sheet and the
+//!    palette can each match more than one stream.
 //! 2. `gBallSpriteSheets` and `gBallSpritePalettes` are found through the
 //!    pointers to that art: biased back by `BALL_POKE`'s row, which is the
 //!    first, they name candidate table bases, and exactly one base must hold
 //!    the size and tag upstream writes.
-//! 3. The palette's address is the pointer its table row holds, which settles
-//!    a bank the ROM stores more than once.
+//! 3. The closed sheet's and the palette's addresses are the pointers their
+//!    table rows hold, which settles art the ROM stores more than once.
 //!
 //! The opened-ball sheet has no table row; its tiles alone locate it.
 
@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
-use super::images::{locate_images, ImageQuery};
+use super::images::{locate_image_copies, locate_images, ImageQuery};
 use super::inventory;
 use super::locate::{only_one_matching, to_addr, u16_at_addr, u32_at_addr};
 use super::plan::{PalettePlan, PokeBallPlan, ReportLine, Resolution};
@@ -83,17 +83,29 @@ pub fn locate(
 ) -> Result<PokeBallPlan, GenRomProfileError> {
     inventory::require_poke_ball(ctx.pack)?;
 
-    let mut sheets = locate_images(
-        ctx,
-        &[ImageQuery::lz77(SHEET_ID), ImageQuery::lz77(OPEN_SHEET_ID)],
-        report,
-    )?
-    .into_iter();
-    let (Some(sheet), Some(open_sheet)) = (sheets.next(), sheets.next()) else {
+    // The closed sheet's table row decides which copy it is; only the
+    // open sheet, with no row, takes an arbitrary copy.
+    let mut sheet_copies = locate_image_copies(ctx, &[ImageQuery::lz77(SHEET_ID)])?.into_iter();
+    let Some(sheet_copies) = sheet_copies.next() else {
+        unreachable!("one set of copies comes back per query");
+    };
+    let mut open = locate_images(ctx, &[ImageQuery::lz77(OPEN_SHEET_ID)], report)?.into_iter();
+    let Some(open_sheet) = open.next() else {
         unreachable!("one plan comes back per query");
     };
     let palette_candidates = palette_candidates(ctx)?;
-    let sheet_table = find_table(ctx, "gBallSpriteSheets", &[sheet.addr], Row::Sheet, report)?;
+    let sheet_table = find_table(
+        ctx,
+        "gBallSpriteSheets",
+        &sheet_copies.addrs(),
+        Row::Sheet,
+        report,
+    )?;
+    let sheet_addr =
+        u32_at_addr(ctx.rom, sheet_table).ok_or_else(|| GenRomProfileError::NotFound {
+            id: SHEET_ID.to_owned(),
+        })?;
+    let sheet = sheet_copies.plan_at(ctx, sheet_addr, report)?;
     let palette_table = find_table(
         ctx,
         "gBallSpritePalettes",
