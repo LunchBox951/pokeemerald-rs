@@ -405,8 +405,16 @@ pub(crate) const DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow";
 /// (`sDownArrowTiles`, `src/text.c:71`).
 pub(crate) const DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow.png";
 
+/// The pack id of the dark page-prompt arrow sheet, the one windows with
+/// `gTextFlags.useAlternateDownArrow` blit (`src/text.c:808-817`).
+pub(crate) const DARK_DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow_alt";
+
+/// The checkout path of that sheet, relative to the checkout root
+/// (`sDarkDownArrowTiles`, `src/text.c:72`).
+pub(crate) const DARK_DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow_alt.png";
+
 /// Every interface image pack id extraction writes and the generator requires.
-pub(crate) const INTERFACE_IMAGE_IDS: [&str; 1] = [DOWN_ARROW_IMAGE_ID];
+pub(crate) const INTERFACE_IMAGE_IDS: [&str; 2] = [DOWN_ARROW_IMAGE_ID, DARK_DOWN_ARROW_IMAGE_ID];
 
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {

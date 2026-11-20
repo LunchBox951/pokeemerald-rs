@@ -31,7 +31,7 @@ use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
 use super::search::MATCH_LIMIT;
 use super::Context;
-use crate::extract::scope::DOWN_ARROW_IMAGE_ID;
+use crate::extract::scope::{DARK_DOWN_ARROW_IMAGE_ID, DOWN_ARROW_IMAGE_ID};
 
 /// One image to locate.
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ struct Variant {
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
 /// `list_menu.c:290`, `text_window.c:10-28`, `naming_screen.c:185-186`, `text.c:117`,
-/// `evolution_scene.c:71`, `evolution_graphics.c:42`, `text.c:71`.
+/// `evolution_scene.c:71`, `evolution_graphics.c:42`, `text.c:71-72`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         return super::text_window::is_static_frame(stem)
@@ -100,6 +100,7 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
         "evolution-scene/image/evo_sparkle" => Some("sEvoSparkle_Gfx".to_owned()),
         "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
         DOWN_ARROW_IMAGE_ID => Some("sDownArrowTiles".to_owned()),
+        DARK_DOWN_ARROW_IMAGE_ID => Some("sDarkDownArrowTiles".to_owned()),
         _ => None,
     }
 }
