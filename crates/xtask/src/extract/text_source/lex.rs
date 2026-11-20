@@ -17,6 +17,9 @@ pub(in crate::extract) enum Tok {
 pub(in crate::extract) struct Token {
     pub(in crate::extract) tok: Tok,
     pub(in crate::extract) line: usize,
+    /// Character offset of the token's first character, so readers can tell
+    /// adjacent punctuation (the digits of one literal) from separated tokens.
+    pub(in crate::extract) start: usize,
 }
 
 pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
@@ -70,11 +73,12 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
                 line_start = false;
                 let start = line;
                 let (body, next) = string_body(&c, i + 1, start)?;
-                i = next;
                 out.push(Token {
                     tok: Tok::Str(body),
                     line: start,
+                    start: i,
                 });
+                i = next;
             }
             '\'' => {
                 line_start = false;
@@ -99,6 +103,7 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
                 out.push(Token {
                     tok: Tok::Ident(c[start..i].iter().collect()),
                     line,
+                    start,
                 });
             }
             _ => {
@@ -106,6 +111,7 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
                 out.push(Token {
                     tok: Tok::Punct(ch),
                     line,
+                    start: i,
                 });
                 i += 1;
             }

@@ -446,6 +446,36 @@ pub struct FieldMessagePlan {
     pub messages: Vec<FieldMessageRootPlan>,
 }
 
+/// The summary screen's move and contest roots, owned.
+#[derive(Debug, Clone)]
+pub struct SummaryMovePlan {
+    /// `gMoveDescriptionPointers`.
+    pub descriptions: u32,
+    /// `gContestMoves`.
+    pub contest_moves: u32,
+    /// `gContestEffects`.
+    pub contest_effects: u32,
+    /// `gContestEffectDescriptionPointers`.
+    pub effect_descriptions: u32,
+}
+
+/// The summary screen's identity and met-location roots, owned.
+#[derive(Debug, Clone)]
+pub struct SummaryIdentityPlan {
+    /// `gNatureNamePointers`.
+    pub natures: u32,
+    /// `gRegionMapEntries`.
+    pub region_map_entries: u32,
+    /// `gText_Ferry`.
+    pub ferry: u32,
+    /// `gText_SecretBase`.
+    pub secret_base: u32,
+    /// `gText_Hideout`.
+    pub hideout: u32,
+    /// `sSpeciesToNationalPokedexNum`.
+    pub species_to_national: u32,
+}
+
 /// One battle-animation program's root, owned.
 #[derive(Debug, Clone)]
 pub struct AnimProgramPlan {
@@ -680,6 +710,10 @@ pub struct ProfilePlan {
     pub battle_messages: BattleMessagePlan,
     /// The field-message token table.
     pub field_messages: FieldMessagePlan,
+    /// The summary screen's move descriptions and contest records.
+    pub summary_moves: SummaryMovePlan,
+    /// The summary screen's nature names, region-map section names and species conversion.
+    pub summary_identity: SummaryIdentityPlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.

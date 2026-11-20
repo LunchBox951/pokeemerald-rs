@@ -49,6 +49,8 @@ mod poke_ball;
 mod search;
 mod sprites;
 mod starter_chooser;
+mod summary_identity;
+mod summary_moves;
 mod text_window;
 mod tilesets;
 mod title;
@@ -180,6 +182,8 @@ fn locate_profile(
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
         field_messages: field_messages::locate(ctx, lines)?,
+        summary_moves: summary_moves::locate(ctx, lines)?,
+        summary_identity: summary_identity::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
@@ -543,5 +547,9 @@ mod battle_message_tests;
 mod field_message_tests;
 #[cfg(test)]
 mod inventory_tests;
+#[cfg(test)]
+mod summary_identity_tests;
+#[cfg(test)]
+mod summary_move_tests;
 #[cfg(test)]
 mod tests;

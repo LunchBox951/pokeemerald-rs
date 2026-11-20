@@ -88,6 +88,16 @@ pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileErro
     pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the summary-move table is present.
+pub fn require_summary_moves(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::SUMMARY_MOVE_PACK_ID).map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the summary-identity table is present.
+pub fn require_summary_identity(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::SUMMARY_IDENTITY_PACK_ID).map(|_| ())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
 pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
@@ -354,6 +364,8 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_field_messages(pack)?;
+    require_summary_moves(pack)?;
+    require_summary_identity(pack)?;
     require_interface_images(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;

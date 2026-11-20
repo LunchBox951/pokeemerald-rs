@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
 mod poke_ball;
+mod summary_identity;
+mod summary_moves;
 
 use rom_import::Encoding;
 
@@ -75,10 +77,7 @@ use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
-    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots, PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, SummaryIdentityRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -137,6 +136,8 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
+    summary_moves::summary_move_roots(&mut out, &plan.summary_moves);
+    summary_identity::summary_identity_roots(&mut out, &plan.summary_identity);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -926,7 +927,8 @@ mod bag_field_tests {
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
+        StarterChooserPlan, SummaryIdentityPlan, SummaryMovePlan, TextWindowPlan, TitleScreenPlan,
+        TrainerBattlerPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1352,6 +1354,45 @@ mod bag_field_tests {
         assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
     }
 
+    fn summary_moves_plan(base: u32) -> SummaryMovePlan {
+        SummaryMovePlan {
+            descriptions: base,
+            contest_moves: base,
+            contest_effects: base,
+            effect_descriptions: base,
+        }
+    }
+
+    fn summary_identity_plan(base: u32) -> SummaryIdentityPlan {
+        SummaryIdentityPlan {
+            natures: base,
+            region_map_entries: base,
+            ferry: base,
+            secret_base: base,
+            hideout: base,
+            species_to_national: base,
+        }
+    }
+
+    fn assert_bag_roots(module: &str) {
+        assert!(module.contains("    bag: BagRoots {"), "{module}");
+        assert!(
+            module.contains("ImageRoot { id: \"bag/image/hm\""),
+            "{module}"
+        );
+        assert!(
+            module.contains(
+                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
+            ),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
+            "{module}"
+        );
+        assert!(!module.contains("BagRoots::NONE"), "{module}");
+    }
+
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -1387,6 +1428,8 @@ mod bag_field_tests {
                 specials: vec![],
             },
             field_messages: FieldMessagePlan { messages: vec![] },
+            summary_moves: summary_moves_plan(base),
+            summary_identity: summary_identity_plan(base),
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],
@@ -1438,22 +1481,7 @@ mod bag_field_tests {
         assert_down_arrow_root(&module);
         assert_naming_roots(&module);
         assert_party_menu_roots(&module);
-        assert!(module.contains("    bag: BagRoots {"), "{module}");
-        assert!(
-            module.contains("ImageRoot { id: \"bag/image/hm\""),
-            "{module}"
-        );
-        assert!(
-            module.contains(
-                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
-            ),
-            "{module}"
-        );
-        assert!(
-            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
-            "{module}"
-        );
-        assert!(!module.contains("BagRoots::NONE"), "{module}");
+        assert_bag_roots(&module);
     }
 
     #[test]

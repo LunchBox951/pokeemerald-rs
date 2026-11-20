@@ -103,3 +103,65 @@ pub(in crate::extract) fn parse_definitions(
     }
     Ok(out)
 }
+
+/// `#define NAME value` lines: value text and line number.
+pub(in crate::extract) fn parse_defines(text: &str) -> HashMap<String, (String, usize)> {
+    let mut defines = HashMap::new();
+    for (index, raw) in text.lines().enumerate() {
+        let Some(rest) = raw.trim_start().strip_prefix("#define") else {
+            continue;
+        };
+        let rest = rest.split("//").next().unwrap_or("");
+        let rest = rest.split("/*").next().unwrap_or("");
+        let mut words = rest.split_whitespace();
+        if let Some(name) = words.next() {
+            // Keep every value token so an expression such as `381 + 1` is never read as `381`.
+            let value = words.collect::<Vec<_>>().join(" ");
+            if !value.is_empty() {
+                defines.insert(name.to_owned(), (value, index + 1));
+            }
+        }
+    }
+    defines
+}
+
+pub(in crate::extract) fn resolve(
+    defines: &HashMap<String, (String, usize)>,
+    name: &str,
+) -> Result<u32, Fault> {
+    let mut current = name;
+    for _ in 0..8 {
+        let (value, line) = defines
+            .get(current)
+            .ok_or_else(|| Fault::new(0, format!("`{current}` is not defined")))?;
+        if let Ok(n) = value.parse::<u32>() {
+            return Ok(n);
+        }
+        if !value.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+            return Err(Fault::new(*line, format!("`{name}` is not an integer")));
+        }
+        current = value;
+    }
+    Err(Fault::new(0, format!("`{name}` aliases too deeply")))
+}
+
+/// Index just past the `{` of the one `NAME[...] = {` initializer.
+pub(in crate::extract) fn initializer_start(tokens: &[Token], name: &str) -> Result<usize, Fault> {
+    let mut found = None;
+    for (i, token) in tokens.iter().enumerate() {
+        if token.tok != Tok::Ident(name.to_owned()) {
+            continue;
+        }
+        let j = skip_brackets(tokens, i + 1);
+        if j > i + 1 && is_punct(tokens, j, '=') && is_punct(tokens, j + 1, '{') {
+            if found.is_some() {
+                return Err(Fault::new(
+                    token.line,
+                    format!("`{name}` is initialized twice"),
+                ));
+            }
+            found = Some(j + 2);
+        }
+    }
+    found.ok_or_else(|| Fault::new(0, format!("no initializer for `{name}`")))
+}

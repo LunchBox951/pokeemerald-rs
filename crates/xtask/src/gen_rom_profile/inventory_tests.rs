@@ -9,7 +9,8 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, poke_ball, sprites, starter_chooser, summary_identity,
+    summary_moves, text_window, tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
@@ -49,6 +50,8 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
             rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
+            rom_import::SUMMARY_MOVE_PACK_ID.to_owned(),
+            rom_import::SUMMARY_IDENTITY_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
@@ -117,6 +120,10 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else if domain == "field_messages" {
             field_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "summary_moves" {
+            summary_moves::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "summary_identity" {
+            summary_identity::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -315,6 +322,23 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
 fn a_pack_missing_the_field_message_table_is_refused() {
     let id = rom_import::FIELD_MESSAGE_PACK_ID;
     assert_refused("no-field-message-table", without(id), id, "field_messages");
+}
+
+#[test]
+fn a_pack_missing_the_summary_move_table_is_refused() {
+    let id = rom_import::SUMMARY_MOVE_PACK_ID;
+    assert_refused("no-summary-move-table", without(id), id, "summary_moves");
+}
+
+#[test]
+fn a_pack_missing_the_summary_identity_table_is_refused() {
+    let id = rom_import::SUMMARY_IDENTITY_PACK_ID;
+    assert_refused(
+        "no-summary-identity-table",
+        without(id),
+        id,
+        "summary_identity",
+    );
 }
 
 #[test]
