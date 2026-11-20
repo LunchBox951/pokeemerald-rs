@@ -135,6 +135,7 @@ mod publish;
 pub(crate) mod scope;
 mod sprites;
 mod starter_chooser;
+mod summary_identity;
 mod summary_move;
 mod text_source;
 mod text_window;
@@ -231,6 +232,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
     summary_move::extract_summary_move(&upstream, &mut writer)?;
+    summary_identity::extract_summary_identity(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;

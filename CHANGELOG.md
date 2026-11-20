@@ -6,6 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.114.0] - 2026-11-07
 
+- The summary screen's nature names, region-map section names and species-to-National-Dex conversion are now packed from both the source checkout and the supported ROM, ready for the summary memo. Nothing on screen changes yet.
 - The asset pack now carries the summary screen's move descriptions, each move's contest effect and category, and the contest effect table with its descriptions, extracted from both the source checkout and the supported ROM. Nothing on screen changes yet; this is the data the summary screen's move pages will read.
 
 ## [0.0.113.0] - 2026-11-06

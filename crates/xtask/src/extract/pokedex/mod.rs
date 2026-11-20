@@ -22,5 +22,6 @@ mod parser;
 
 #[expect(unused_imports, reason = "re-exported for the extraction stage")]
 pub use error::{PokedexSource, PokedexSourceError};
+pub use parser::national_dex_numbers;
 #[expect(unused_imports, reason = "re-exported for the extraction stage")]
 pub use parser::{parse, PokedexSources};

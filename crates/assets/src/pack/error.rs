@@ -10,6 +10,7 @@ use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
 use super::field_message::FieldMessageError;
+use super::summary_identity::SummaryIdentityError;
 use super::summary_move::SummaryMoveError;
 use crate::battle_anim::BattleAnimationError;
 use crate::TrainerPicId;
@@ -210,6 +211,13 @@ pub enum PackError {
         /// Underlying schema error.
         source: SummaryMoveError,
     },
+    /// The summary-screen identity table failed its schema's structural decode.
+    SummaryIdentityDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: SummaryIdentityError,
+    },
     /// The `battle-anim/catalog` entry failed its schema's decode.
     BattleAnimationDecode {
         /// Catalog asset id.
@@ -402,6 +410,12 @@ impl fmt::Display for PackError {
                     "asset pack: summary-move entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::SummaryIdentityDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: summary-identity entry `{id}` failed to decode: {source}"
+                )
+            }
             Self::BattleAnimationDecode { id, source } => {
                 write!(
                     f,
@@ -437,6 +451,7 @@ impl std::error::Error for PackError {
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::FieldMessageDecode { source, .. } => Some(source),
             Self::SummaryMoveDecode { source, .. } => Some(source),
+            Self::SummaryIdentityDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
             Self::EventScriptDecode { source, .. } | Self::EventScriptResolve { source, .. } => {
                 Some(source)

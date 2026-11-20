@@ -121,6 +121,10 @@ pub use domains::battle_messages::{
 };
 pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
 pub use domains::song::decode_song_payload;
+pub use domains::summary_identity::{
+    decode_summary_identity_payload, PACK_ID as SUMMARY_IDENTITY_PACK_ID, REGION_NAME_OFFSET,
+    REGION_ROW_BYTES,
+};
 pub use domains::summary_moves::{
     decode_summary_move_payload, CONTEST_EFFECT_BYTES, CONTEST_MOVE_BYTES,
     PACK_ID as SUMMARY_MOVE_PACK_ID,
@@ -140,8 +144,8 @@ pub use roots::{
     Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
     PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot, TilesetRoot,
-    TitleScreenRoots, VoicegroupRoot,
+    StarterChooserRoots, SummaryIdentityRoots, SummaryMoveRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};

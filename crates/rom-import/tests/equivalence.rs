@@ -84,6 +84,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "poke-ball/",
     "naming-screen/",
     "summary-move/",
+    "summary-identity/",
 ];
 
 /// The text printer's page-prompt arrow, by id: `interface/` is a complete
@@ -279,6 +280,10 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
 /// fails when both drop or rename the entry together.
 const SUMMARY_MOVE_IDS: [&str; 1] = ["summary-move/table"];
 
+/// The summary screen's identity and met-location table, by literal id, for the
+/// same reason as [`SUMMARY_MOVE_IDS`].
+const SUMMARY_IDENTITY_IDS: [&str; 1] = ["summary-identity/table"];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -395,6 +400,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .chain(SUMMARY_MOVE_IDS.into_iter().map(str::to_owned))
+        .chain(SUMMARY_IDENTITY_IDS.into_iter().map(str::to_owned))
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -440,6 +446,7 @@ fn charmap_text(text: &str) -> Vec<u8> {
             '-' => 0xAE,
             ',' => 0xB8,
             '\n' => 0xFE,
+            '0'..='9' => 0xA1 + (c as u8 - b'0'),
             'A'..='Z' => 0xBB + (c as u8 - b'A'),
             'a'..='z' => 0xD5 + (c as u8 - b'a'),
             other => panic!("unmapped {other:?}"),
@@ -569,6 +576,152 @@ fn the_summary_move_table_is_equal_through_both_backends() {
         pin_summary_move_table(table);
     }
     eprintln!("summary-move table equal through both backends");
+}
+
+#[test]
+fn the_summary_identity_table_is_claimed_and_pinned_by_a_literal_id() {
+    assert!(is_claimed_complete("summary-identity/table"));
+    assert_eq!(SUMMARY_IDENTITY_IDS, ["summary-identity/table"]);
+    // An entry both backends drop is reported once per backend.
+    let none = BTreeMap::new();
+    let ids: Vec<String> = SUMMARY_IDENTITY_IDS
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(missing_from_either(&ids, &none, &none).len(), 2);
+}
+
+/// The sampled records of the identity table, from upstream's own text and
+/// tables, which either backend's table must hold.
+fn pin_summary_identity_table(table: &assets::pack::SummaryIdentityTable<'_>) {
+    use assets::pack::{NatureId, MAPSEC_AQUA_HIDEOUT_OLD, MAPSEC_DYNAMIC, MAPSEC_SECRET_BASE};
+    use assets::SpeciesId;
+
+    // `gNatureNamePointers[NUM_NATURES]`, `gRegionMapEntries` up to `MAPSEC_NONE`
+    // (213), and `sSpeciesToNationalPokedexNum[NUM_SPECIES - 1]`.
+    assert_eq!(table.nature_names().count(), 25);
+    assert_eq!(table.region_section_names().count(), 213);
+    assert_eq!(table.species_conversions().count(), 411);
+
+    for (nature, name) in [
+        (0, "HARDY"),
+        (3, "ADAMANT"),
+        (18, "BASHFUL"),
+        (24, "QUIRKY"),
+    ] {
+        assert_eq!(
+            table.nature_name(NatureId::new(nature).unwrap()),
+            charmap_text(name),
+            "nature {nature}"
+        );
+    }
+
+    // `region_map_sections.json`, numbered in list order.
+    for (section, name) in [
+        (0, "LITTLEROOT TOWN"),
+        (16, "ROUTE 101"),
+        (86, "SECRET BASE"),
+        (197, "AQUA HIDEOUT"),
+        (212, "TRAINER HILL"),
+    ] {
+        assert_eq!(
+            table.region_section_name(section),
+            Some(charmap_text(name).as_slice()),
+            "section {section}"
+        );
+    }
+    // The Aqua Hideout rule: `MAPSEC_AQUA_HIDEOUT_OLD` is `{AQUA} HIDEOUT` (the
+    // AQUA placeholder is `FD 08`) in the table and a plain `HIDEOUT` in the memo.
+    let mut old_hideout = vec![0xFD, 0x08, 0x00];
+    old_hideout.extend(charmap_text("HIDEOUT"));
+    assert_eq!(
+        table.region_section_name(MAPSEC_AQUA_HIDEOUT_OLD),
+        Some(old_hideout.as_slice())
+    );
+    assert_eq!(
+        table.met_location_name(MAPSEC_AQUA_HIDEOUT_OLD),
+        Some(charmap_text("HIDEOUT").as_slice())
+    );
+    // `MAPSEC_DYNAMIC` has no name of its own; `GetMapNameGeneric` says FERRY.
+    assert_eq!(
+        table.region_section_name(MAPSEC_DYNAMIC),
+        Some([0xFF].as_slice())
+    );
+    assert_eq!(
+        table.map_name_generic(MAPSEC_DYNAMIC),
+        Some(charmap_text("FERRY").as_slice())
+    );
+    assert_eq!(
+        table.met_location_name(MAPSEC_SECRET_BASE),
+        Some(charmap_text("SECRET BASE").as_slice())
+    );
+    assert_eq!(table.met_location_name(213), None);
+
+    // `SpeciesToNationalPokedexNum`: species 0 has no slot, the old-Unown
+    // species 252..=276 take the numbers above Deoxys, and Treecko (277) is 252.
+    let dex = |species: u16| {
+        table
+            .species_to_national(SpeciesId(species))
+            .map(assets::pokedex::NationalDexNo::get)
+    };
+    assert_eq!(dex(0), Some(0));
+    assert_eq!((dex(1), dex(251)), (Some(1), Some(251)));
+    assert_eq!((dex(252), dex(276)), (Some(387), Some(411)));
+    assert_eq!(
+        (dex(277), dex(410), dex(411)),
+        (Some(252), Some(386), Some(358))
+    );
+    assert_eq!(dex(412), None);
+}
+
+/// The summary identity and met-location records, read through the typed
+/// reader from both packs: the lengths and sampled records are pinned from
+/// upstream's own sources, and the two tables must be equal.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_summary_identity_table_is_equal_through_both_backends() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing {} failed: {err}", rom_path.display()));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-summary-identity-equivalence-{}.pack",
+        std::process::id()
+    ));
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&imported_path)
+            .unwrap_or_else(|err| panic!("creating {} failed: {err}", imported_path.display()));
+        file.write_all(&rom_bytes)
+            .expect("writing the imported pack");
+    }
+    let imported = AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+
+    let ours = imported.summary_identity().expect("the imported table");
+    let theirs = checkout.summary_identity().expect("the checkout table");
+    assert_eq!(ours, theirs);
+    assert_eq!(ours.encode(), theirs.encode());
+
+    for table in [&ours, &theirs] {
+        pin_summary_identity_table(table);
+    }
+    eprintln!("summary-identity table equal through both backends");
 }
 
 #[test]
