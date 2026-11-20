@@ -53,22 +53,10 @@ const FIRST_BATTLE_TEXT_PERIOD_FRAMES: usize = 16;
 /// `Random()` stream, which the walk's object events advance, so this count is
 /// measured against that stream and moves with it.
 ///
-/// The stream reaches the trigger with nine object-event draws behind it, all
-/// on the walk's own timeline (the walk never waits on an NPC: the intro
-/// handoff is script frame 4095, and its 25 walked tiles and two earlier
-/// landing frames put the trigger landing on frame 4498):
-///
-/// - eight in Littleroot Town, from the two `MOVEMENT_TYPE_WANDER_AROUND` NPCs
-///   in view of the walk (local 3 and local 1): each draws a medium delay
-///   (`Random() % 4`) and then a direction (`Random() & 3`), and each step it
-///   takes ends in a fresh delay draw
-///   (`MovementType_WanderAround_Step2`/`Step4`,
-///   `pokeemerald/src/event_object_movement.c:2580-2612`);
-/// - one on Route 101, from the Birch's bag's `MOVEMENT_TYPE_LOOK_AROUND`.
-///
-/// With those nine draws the fight ends on script frame 5319: the first frame
-/// the battle slot is empty, `5319 - 4498 - 1 = 820` text frames after the
-/// landing.
+/// Nine object-event draws precede the trigger landing on script frame 4498:
+/// eight from Littleroot Town's two wanderers and one from the Birch's bag on
+/// Route 101. The battle slot first empties on frame 5319, so
+/// `5319 - 4498 - 1 = 820`.
 const FIRST_BATTLE_TEXT_FRAMES: usize = 820;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
 const FINAL_RELEASE_FRAMES: usize = 1;
