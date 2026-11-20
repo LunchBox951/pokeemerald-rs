@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.136.0] - 2026-11-20
 
-- General improvements in preparation for faithful Game Boy sound: a note that slides past the highest pitch the moment it starts now keeps sounding at a steady level instead of dropping out, matching the original hardware.
+- General improvements in preparation for faithful Game Boy sound: a note that slides past the highest pitch the moment it starts is now cut off the way the original hardware cuts it off.
 - When two trainers can see you at once, the one that challenges you is now picked in the same order as the original game.
 
 ## [0.0.135.0] - 2026-11-16
