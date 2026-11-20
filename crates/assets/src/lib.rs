@@ -15,8 +15,9 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), and the
-//! Pokénav city-map selector entries (see [`pokenav_city_maps`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
+//! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
+//! normal-ribbon description lines (see [`ribbon_descriptions`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -67,6 +68,7 @@ pub mod pickup;
 pub mod pokeblock_flavors;
 pub mod pokedex;
 pub mod pokenav_city_maps;
+pub mod ribbon_descriptions;
 pub mod script_refs;
 pub mod species;
 pub mod species_names;
@@ -149,6 +151,9 @@ pub use pack::{
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
     NATIONAL_DEX_COUNT, NATIONAL_DEX_LAST, NATIONAL_DEX_OLD_UNOWN_COUNT,
+};
+pub use ribbon_descriptions::{
+    NormalRibbonId, RibbonDescription, RibbonDescriptionTable, RibbonError, NORMAL_RIBBON_COUNT,
 };
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
