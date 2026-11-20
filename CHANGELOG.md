@@ -4,6 +4,14 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.135.0] - 2026-11-16
+
+- Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
+
+## [0.0.134.0] - 2026-11-16
+
+- Pokémon with the Color Change ability, such as Kecleon, are now supported in battle: after surviving a damaging move they change to that move's type, with a message, as in the original game.
+
 ## [0.0.133.0] - 2026-11-15
 
 - Page prompts in dialogue now show the bobbing down arrow while they wait for A or B, in field messages and in Professor Birch's opening speech, as in the original game.
@@ -597,7 +605,9 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.133.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee...dev
+[0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...dev
+[0.0.134.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9...1f45ccd281cb57bec4574de8de41951f795ba93a
+[0.0.133.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee...473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9
 [0.0.132.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/24594ecbe4716bc05f0c10ea5bf7715160d5b34d...cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee
 [0.0.131.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/a642ed4922f3fa4dfa33a3d66cab3a1da0ba9504...24594ecbe4716bc05f0c10ea5bf7715160d5b34d
 [0.0.130.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/6c733d974ef75a1c3d382566984ff3280d90ed4b...a642ed4922f3fa4dfa33a3d66cab3a1da0ba9504

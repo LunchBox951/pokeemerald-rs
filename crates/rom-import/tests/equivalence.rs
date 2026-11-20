@@ -87,9 +87,13 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "party-menu/",
 ];
 
-/// The text printer's page-prompt arrow, by id: `interface/` is a complete
-/// prefix, but a sheet both backends drop together would pass it.
-const DOWN_ARROW_IDS: [&str; 1] = ["interface/image/down_arrow"];
+/// The text printer's page-prompt arrows (light, then dark), by id:
+/// `interface/` is a complete prefix, but a sheet both backends drop together
+/// would pass it.
+const DOWN_ARROW_IDS: [&str; 2] = [
+    "interface/image/down_arrow",
+    "interface/image/down_arrow_alt",
+];
 
 /// The species whose static battler art both backends must carry: the
 /// starters, then the checkpoint's other eleven Pokémon.
@@ -643,8 +647,8 @@ fn the_party_menu_handle_is_equal_from_the_rom_and_the_checkout() {
     eprintln!("party-menu record equal through both backends");
 }
 
-/// The down arrow resolves through the typed accessor from both packs, and
-/// all four frames are equal. The accessor validates the sheet's shape, so a
+/// Both down arrows resolve through their typed accessors from both packs,
+/// and all four frames of each are equal. The accessor validates the sheet's shape, so a
 /// ROM import that wrote the wrong raster fails here as well as in the byte
 /// comparison.
 #[test]
@@ -672,26 +676,40 @@ fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
 
     let imported = AssetPack::load(&imported_path).expect("the imported pack loads");
     let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
-    let from_rom = imported
-        .text_printer_down_arrow()
-        .expect("the imported pack's down arrow");
-    let from_checkout = checkout
-        .text_printer_down_arrow()
-        .expect("the checkout pack's down arrow");
+    let arrows = [
+        (
+            "light",
+            imported.text_printer_down_arrow(),
+            checkout.text_printer_down_arrow(),
+        ),
+        (
+            "dark",
+            imported.text_printer_dark_down_arrow(),
+            checkout.text_printer_dark_down_arrow(),
+        ),
+    ];
     let _ = std::fs::remove_file(imported_path);
 
-    for index in 0..4 {
-        let (rom_frame, checkout_frame) = (from_rom.frame(index), from_checkout.frame(index));
-        assert_eq!(
-            (rom_frame.width, rom_frame.height),
-            (8, 16),
-            "frame {index}"
-        );
-        assert!(
-            rom_frame.pixels.iter().any(|&pixel| pixel != 0),
-            "frame {index} is blank"
-        );
-        assert_eq!(rom_frame.pixels, checkout_frame.pixels, "frame {index}");
+    for (name, from_rom, from_checkout) in arrows {
+        let from_rom = from_rom.unwrap_or_else(|err| panic!("the imported {name} arrow: {err}"));
+        let from_checkout =
+            from_checkout.unwrap_or_else(|err| panic!("the checkout {name} arrow: {err}"));
+        for index in 0..4 {
+            let (rom_frame, checkout_frame) = (from_rom.frame(index), from_checkout.frame(index));
+            assert_eq!(
+                (rom_frame.width, rom_frame.height),
+                (8, 16),
+                "{name} frame {index}"
+            );
+            assert!(
+                rom_frame.pixels.iter().any(|&pixel| pixel != 0),
+                "{name} frame {index} is blank"
+            );
+            assert_eq!(
+                rom_frame.pixels, checkout_frame.pixels,
+                "{name} frame {index}"
+            );
+        }
     }
 }
 

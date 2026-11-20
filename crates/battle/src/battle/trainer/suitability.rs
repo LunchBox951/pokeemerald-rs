@@ -101,7 +101,7 @@ impl TrainerContext {
 /// `player` (`pokeemerald/src/battle_ai_switch_items.c:709`-`:710`). Unlike
 /// [`apply_dual_type_effectiveness`], no minimum-one floor applies (`:605`-`:623`).
 fn typing_suitability_score(player: &BattlePokemon, candidate: &BattlePokemon) -> u32 {
-    let candidate_types = candidate.types();
+    let candidate_types = candidate.species_types();
     let player_types = player.types();
     let score = apply_raw_type_multiplier(NEUTRAL_TYPE_SCORE, player_types[0], candidate_types);
     apply_raw_type_multiplier(score, player_types[1], candidate_types)

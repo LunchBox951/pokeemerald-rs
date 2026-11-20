@@ -647,8 +647,6 @@ mod tests {
             (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::KECLEON, SLOT_0, assets::AbilityId::COLOR_CHANGE),
-            (SpeciesId::KECLEON, SLOT_1, assets::AbilityId::COLOR_CHANGE),
             (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
             (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
             (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
@@ -679,6 +677,40 @@ mod tests {
                         ability
                     )),
                     "{species:?} with personality {personality:#x}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_pre_flight_admits_a_color_change_holder_in_either_party_position() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        for personality in [SLOT_0, SLOT_1] {
+            let kecleon = TrainerPartyMon {
+                species: SpeciesId::KECLEON,
+                level: 20,
+                moves: &moves,
+                personality,
+                held_item: ItemId::NONE,
+            };
+            let ok = TrainerPartyMon {
+                species: SpeciesId::MUDKIP,
+                level: 20,
+                moves: &moves,
+                personality: SLOT_0,
+                held_item: ItemId::NONE,
+            };
+            for party in [[kecleon, ok], [ok, kecleon]] {
+                assert_eq!(
+                    ensure_trainer_party_startable(
+                        &dex,
+                        &lead(SpeciesId::MUDKIP),
+                        MAY_ROUTE_103_MUDKIP,
+                        &party,
+                    ),
+                    Ok(()),
+                    "personality {personality:#x}",
                 );
             }
         }
