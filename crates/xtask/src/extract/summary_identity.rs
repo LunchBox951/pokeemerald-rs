@@ -257,21 +257,35 @@ struct Section {
     name: String,
 }
 
-/// A section object being read: where it opened, its fields so far, and the
-/// keys already seen.
+/// A section object being read: where it opened, its fields so far, the keys
+/// already seen, and the last field's line and whether a comma followed it.
 struct Pending<'a> {
     start: usize,
     id: Option<String>,
     name: Option<String>,
     seen: Vec<&'a str>,
+    last_field: Option<(usize, bool)>,
+}
+
+/// Where [`section_list`] is in the file's fixed shape.
+enum Place<'a> {
+    /// Inside the `map_sections` array, between section objects.
+    List,
+    /// Inside a section object.
+    Object(Pending<'a>),
+    /// Past the array's `]`, before the outer object's `}`.
+    AfterList,
+    /// Past the outer object's `}`.
+    Done,
 }
 
 /// The sections of `region_map_sections.json` in list order.
 ///
 /// Only the file's fixed shape is accepted: `{ "map_sections": [` then one
-/// object per section with one `"key": value` field per line. A field of an
-/// unknown key, a repeated key, an escape in a string, or an object with no
-/// `id` is refused rather than skipped.
+/// object per section with one `"key": value` field per line, then `] }` and
+/// nothing after. Commas must separate fields and objects, with none after the
+/// last of either. A field of an unknown key, a repeated key, an escape in a
+/// string, or an object with no `id` is refused rather than skipped.
 fn section_list(text: &str) -> Result<Vec<Section>, Fault> {
     let mut lines = text
         .lines()
@@ -286,24 +300,38 @@ fn section_list(text: &str) -> Result<Vec<Section>, Fault> {
     expect("{")?;
     expect("\"map_sections\": [")?;
     let mut sections = Vec::with_capacity(REGION_MAP_SECTION_COUNT);
-    let mut open: Option<Pending<'_>> = None;
-    let mut closed = false;
-    for (n, line) in lines {
-        let line = line.strip_suffix(',').unwrap_or(line);
-        match (&mut open, line) {
-            (None, "{") => {
-                open = Some(Pending {
+    let mut place = Place::List;
+    // The last closed section object's line and whether a comma followed it.
+    let mut last_object: Option<(usize, bool)> = None;
+    for (n, raw) in lines {
+        let (line, comma) = match raw.strip_suffix(',') {
+            Some(line) => (line, true),
+            None => (raw, false),
+        };
+        place = match (place, line) {
+            (Place::List, "{") if !comma => {
+                if let Some((at, false)) = last_object {
+                    return Err(Fault::new(at, "section object is not followed by a comma"));
+                }
+                Place::Object(Pending {
                     start: n,
                     id: None,
                     name: None,
                     seen: Vec::new(),
-                });
+                    last_field: None,
+                })
             }
-            (None, "]") => closed = true,
-            (None, "}") if closed => {}
-            (None, _) => return Err(Fault::new(n, "expected a section object")),
-            (Some(_), "}") => {
-                let done = open.take().expect("matched Some");
+            (Place::List, "]") if !comma => {
+                if let Some((at, true)) = last_object {
+                    return Err(Fault::new(at, "a comma follows the last section object"));
+                }
+                Place::AfterList
+            }
+            (Place::List, _) => return Err(Fault::new(n, "expected a section object")),
+            (Place::Object(done), "}") => {
+                if let Some((at, true)) = done.last_field {
+                    return Err(Fault::new(at, "a comma follows the object's last field"));
+                }
                 let symbol = done
                     .id
                     .ok_or_else(|| Fault::new(done.start, "section object has no `id`"))?;
@@ -311,8 +339,13 @@ fn section_list(text: &str) -> Result<Vec<Section>, Fault> {
                     symbol,
                     name: done.name.unwrap_or_default(),
                 });
+                last_object = Some((n, comma));
+                Place::List
             }
-            (Some(pending), field) => {
+            (Place::Object(mut pending), field) => {
+                if let Some((at, false)) = pending.last_field {
+                    return Err(Fault::new(at, "field is not followed by a comma"));
+                }
                 let (key, value) = field
                     .split_once(": ")
                     .and_then(|(key, value)| {
@@ -338,10 +371,19 @@ fn section_list(text: &str) -> Result<Vec<Section>, Fault> {
                     "x" | "y" | "width" | "height" if value.parse::<u32>().is_ok() => {}
                     _ => return Err(Fault::new(n, format!("unsupported field `{key}`"))),
                 }
+                pending.last_field = Some((n, comma));
+                Place::Object(pending)
             }
-        }
+            (Place::AfterList, "}") if !comma => Place::Done,
+            (Place::AfterList, _) => {
+                return Err(Fault::new(n, "expected the `}` that closes the file"))
+            }
+            (Place::Done, _) => {
+                return Err(Fault::new(n, "content follows the file's closing `}`"))
+            }
+        };
     }
-    if open.is_some() || !closed {
+    if !matches!(place, Place::Done) {
         return Err(Fault::new(0, "the section list is not closed"));
     }
     Ok(sections)
@@ -406,24 +448,101 @@ fn special_names(src: &Sources<'_>, charmap: &Charmap) -> Located<[Vec<u8>; 3]> 
     ])
 }
 
+/// Require exactly one active `#define` of the conversion macro, equal to
+/// [`CONVERSION_MACRO_BODY`] once whitespace is normalized. Comments are
+/// skipped, so a commented-out copy neither satisfies nor confuses the check.
+fn check_conversion_macro(pokemon: &str) -> Result<(), Fault> {
+    let active = without_comments(pokemon);
+    let definitions: Vec<(usize, String)> = active
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            (
+                index + 1,
+                line.split_whitespace().collect::<Vec<_>>().join(" "),
+            )
+        })
+        .filter(|(_, line)| defines_conversion_macro(line))
+        .collect();
+    match definitions.as_slice() {
+        [(_, only)] if only == CONVERSION_MACRO_BODY => Ok(()),
+        [_, (line, _), ..] => Err(Fault::new(
+            *line,
+            format!("`{CONVERSION_MACRO}` is defined more than once"),
+        )),
+        [(line, _)] => Err(Fault::new(
+            *line,
+            format!("`{CONVERSION_MACRO}` is not defined as `{CONVERSION_MACRO_BODY}`"),
+        )),
+        [] => Err(Fault::new(
+            0,
+            format!("`{CONVERSION_MACRO}` is not defined as `{CONVERSION_MACRO_BODY}`"),
+        )),
+    }
+}
+
+/// Whether a whitespace-normalized line is a `#define` of the conversion macro.
+fn defines_conversion_macro(line: &str) -> bool {
+    line.strip_prefix('#')
+        .map(str::trim_start)
+        .and_then(|rest| rest.strip_prefix("define "))
+        .and_then(|rest| rest.strip_prefix(CONVERSION_MACRO))
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// C source with every comment blanked to spaces, newlines kept so line
+/// numbers still match. String and character literals are copied through, so
+/// a `/*` or `//` inside one opens no comment.
+fn without_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|&next| next != '\n') {
+                    chars.next();
+                }
+                out.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = ' ';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    if next == '\n' {
+                        out.push('\n');
+                    }
+                    previous = next;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                out.push(c);
+                while let Some(next) = chars.next() {
+                    out.push(next);
+                    if next == '\\' {
+                        if let Some(escaped) = chars.next() {
+                            out.push(escaped);
+                        }
+                    } else if next == c || next == '\n' {
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// `sSpeciesToNationalPokedexNum` as `(species, National Dex number)` rows.
 ///
 /// `pokemon.c` is too large and too varied to tokenize whole, so the one
 /// initializer is cut out between its declaration and the closing `};`.
 fn conversions(src: &Sources<'_>) -> Located<Vec<(u16, u16)>> {
-    let macro_ok = src
-        .pokemon
-        .lines()
-        .any(|line| line.split_whitespace().collect::<Vec<_>>().join(" ") == CONVERSION_MACRO_BODY);
-    if !macro_ok {
-        return Err((
-            File::Pokemon,
-            Fault::new(
-                0,
-                format!("`{CONVERSION_MACRO}` is not defined as `{CONVERSION_MACRO_BODY}`"),
-            ),
-        ));
-    }
+    check_conversion_macro(src.pokemon).map_err(at(File::Pokemon))?;
     let declaration = format!("static const u16 {CONVERSION_TABLE}[");
     let start = src.pokemon.find(&declaration).ok_or_else(|| {
         (
@@ -445,7 +564,12 @@ fn conversions(src: &Sources<'_>) -> Located<Vec<(u16, u16)>> {
             Fault::new(first_line + 1, "the initializer is not closed"),
         )
     })?;
-    let mut tokens = tokenize(&rest[..cut + 2]).map_err(at(File::Pokemon))?;
+    let mut tokens = tokenize(&rest[..cut + 2]).map_err(|mut fault| {
+        if fault.line != 0 {
+            fault.line += first_line;
+        }
+        (File::Pokemon, fault)
+    })?;
     for token in &mut tokens {
         token.line += first_line;
     }

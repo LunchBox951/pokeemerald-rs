@@ -344,6 +344,48 @@ fn section_list_faults_are_refused() {
         ("no id", "      \"id\": \"MAPSEC_C\",\n", "", "has no `id`"),
         ("unterminated", "  ]\n}\n", "", "is not closed"),
         (
+            "missing comma between objects",
+            "\"y\": 11\n    },\n    {\n      \"id\": \"MAPSEC_B\"",
+            "\"y\": 11\n    }\n    {\n      \"id\": \"MAPSEC_B\"",
+            "section object is not followed by a comma",
+        ),
+        (
+            "missing comma between fields",
+            "\"id\": \"MAPSEC_A\",\n",
+            "\"id\": \"MAPSEC_A\"\n",
+            "field is not followed by a comma",
+        ),
+        (
+            "comma after the last field",
+            "\"y\": 11\n    },",
+            "\"y\": 11,\n    },",
+            "a comma follows the object's last field",
+        ),
+        (
+            "comma after the last object",
+            "    }\n  ]\n}\n",
+            "    },\n  ]\n}\n",
+            "a comma follows the last section object",
+        ),
+        (
+            "outer object left open",
+            "  ]\n}\n",
+            "  ]\n",
+            "is not closed",
+        ),
+        (
+            "object after the list",
+            "  ]\n}\n",
+            "  ]\n    {\n      \"id\": \"MAPSEC_EXTRA\"\n    }\n}\n",
+            "expected the `}` that closes the file",
+        ),
+        (
+            "content after the file",
+            "  ]\n}\n",
+            "  ]\n}\n}\n",
+            "content follows the file's closing `}`",
+        ),
+        (
             "wrong header",
             "\"map_sections\": [",
             "\"sections\": [",
@@ -376,6 +418,39 @@ fn conversion_faults_are_refused() {
         .pokemon
         .replace("[SPECIES_##name - 1]", "[SPECIES_##name]");
     refuse(&f, POKEMON_PATH, "is not defined as");
+
+    // A commented-out copy of the expected definition does not vouch for the
+    // active one, whether that differs or is absent.
+    let active = "#define SPECIES_TO_NATIONAL(name)   [SPECIES_##name - 1] = NATIONAL_DEX_##name\n";
+    let mut f = fixture();
+    assert!(f.pokemon.contains(active));
+    f.pokemon = f.pokemon.replace(
+        active,
+        &format!("/*\n{active}*/\n#define SPECIES_TO_NATIONAL(name) [SPECIES_##name] = NATIONAL_DEX_##name\n"),
+    );
+    refuse(&f, POKEMON_PATH, "is not defined as");
+    let mut f = fixture();
+    f.pokemon = f.pokemon.replace(active, &format!("// {active}"));
+    refuse(&f, POKEMON_PATH, "is not defined as");
+    let mut f = fixture();
+    f.pokemon = f.pokemon.replace(active, &format!("{active}{active}"));
+    refuse(&f, POKEMON_PATH, "is defined more than once");
+    // A commented copy beside the one active definition is harmless.
+    let mut f = fixture();
+    f.pokemon = f
+        .pokemon
+        .replace(active, &format!("/* {active} */\n{active}"));
+    assert_eq!(f.build().unwrap(), fixture().build().unwrap());
+
+    // A tokenizer fault inside the cut-out initializer names its `pokemon.c` line.
+    let mut f = fixture();
+    f.pokemon = f.pokemon.replace(
+        "SPECIES_TO_NATIONAL(MON_1),",
+        "SPECIES_TO_NATIONAL(MON_1), 'x",
+    );
+    let line = f.pokemon.lines().position(|l| l.contains("'x")).unwrap() + 1;
+    let fault = refuse(&f, POKEMON_PATH, "unterminated character literal");
+    assert_eq!(fault.line, line);
 
     let mut f = fixture();
     f.pokemon = f.pokemon.replace(
