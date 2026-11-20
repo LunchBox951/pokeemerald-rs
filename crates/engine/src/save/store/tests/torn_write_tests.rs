@@ -413,3 +413,266 @@ fn a_sixth_sector_torn_before_its_footer_still_reads_error() {
     store.corrupt_byte(1, 5, 0);
     assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
 }
+
+/// A sixth sector torn after its erase reads Error, as upstream does
+/// (`pokeemerald/src/save.c:529-546`).
+#[test]
+fn a_sixth_sector_torn_after_its_erase_still_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 5, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}
+
+/// An erased tail sector spends the one-outlier budget exactly as a
+/// checksum-failing one does, wherever it falls in the tail.
+#[test]
+fn a_torn_rotation_zero_write_stays_refused_with_one_erased_tail_sector() {
+    for predecessor_rotation in 1..NUM_SECTORS_PER_SLOT {
+        for written in 5..NUM_SECTORS_PER_SLOT_U16 {
+            for position in usize::from(SECTOR_ID_PKMN_STORAGE_START)..NUM_SECTORS_PER_SLOT {
+                let mut store = SaveStore::new();
+                write_full_slot_rotated(&mut store, 1, predecessor_rotation, 12);
+                tear_rotation_zero_write(&mut store, 1, written, 14);
+                store.write_physical(1, position, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+                let must_refuse = written >= 6 || predecessor_rotation == 12;
+                if must_refuse {
+                    assert_eq!(
+                        store.scan_slot(1).integrity,
+                        SlotIntegrity::Error,
+                        "predecessor {predecessor_rotation}, torn after {written}, \
+                         position {position} erased"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A pure five-sector slot has a blank tail, which is no torn write: with no
+/// signed tail sector to tear against, it stays intact.
+#[test]
+fn a_blank_tail_with_no_signed_tail_sector_stays_a_legacy_head() {
+    let mut store = SaveStore::new();
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    let scan = store.scan_slot(1);
+    assert_eq!(scan.integrity, SlotIntegrity::Ok);
+    assert!(scan.legacy);
+}
+
+/// An identity legacy head (counter 14) over a strictly older rotation-0
+/// tail (counter 12) with two tail positions erased. A torn write blanks only
+/// the one sector in flight, so two blanks are no torn write, and the seven
+/// signed tail sectors still form a coherent older tail behind the head.
+#[test]
+fn a_legacy_head_over_a_partially_erased_stale_tail_stays_legacy() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 0, 12);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 12, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    store.write_physical(1, 13, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    let scan = store.scan_slot(1);
+    assert_eq!(scan.integrity, SlotIntegrity::Ok);
+    assert!(scan.legacy);
+}
+
+/// The same two erased positions leave a legacy head intact over every tail
+/// pair of blanks whose signed remainder is a coherent older generation.
+#[test]
+fn a_legacy_head_over_a_stale_tail_with_any_two_blanks_stays_legacy() {
+    for first in usize::from(SECTOR_ID_PKMN_STORAGE_START)..NUM_SECTORS_PER_SLOT {
+        for second in first + 1..NUM_SECTORS_PER_SLOT {
+            let mut store = SaveStore::new();
+            write_full_slot_rotated(&mut store, 1, 0, 12);
+            tear_rotation_zero_write(&mut store, 1, 5, 14);
+            for position in [first, second] {
+                store.write_physical(1, position, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+            }
+            let scan = store.scan_slot(1);
+            assert_eq!(
+                scan.integrity,
+                SlotIntegrity::Ok,
+                "positions {first} and {second} erased"
+            );
+            assert!(scan.legacy, "positions {first} and {second} erased");
+        }
+    }
+}
+
+/// A partially erased tail whose signed remainder is not one coherent older
+/// generation is no stale tail: the slot reads Error, as it does with the
+/// same remainder and no blank.
+#[test]
+fn a_legacy_head_over_a_partially_erased_incoherent_tail_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 0, 12);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 12, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    store.write_physical(1, 13, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    // Two further tail sectors carry another generation's counter.
+    for position in [6, 7] {
+        let sector = store.read_physical(1, position);
+        let id = sector.id();
+        let len = sector_payload_len(id).unwrap();
+        store.write_physical(1, position, &Sector::write(id, &sector.data()[..len], 20));
+    }
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}
+
+/// A single blank beside a checksum-failing tail sector is two unusable
+/// positions, which spend more than the outlier budget.
+#[test]
+fn a_blank_beside_a_checksum_failure_in_the_tail_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 0, 12);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 13, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    store.corrupt_byte(1, 9, 0);
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}
+
+/// A rotation-`rotation` generation at counter 12 whose tail already has a
+/// blank at `blank`, then a rotation-zero counter-14 write torn after erasing
+/// position 5: slot 1 holds ids 0-4 over that tail. Slot 0 is an intact
+/// full generation at counter 13, the one a rejected slot 1 rolls back to.
+fn torn_sixth_sector_over_a_tail_with_a_blank(rotation: usize, blank: usize) -> SaveStore {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 0, 0, 13);
+    write_full_slot_rotated(&mut store, 1, rotation, 12);
+    store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 5, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    store
+}
+
+/// The torn position is the one the head's write reaches next, so it counts
+/// whether or not the tail already held another blank: a write torn after
+/// erasing position 5 is an interrupted generation, not a legacy head, and
+/// `load` must fall back to the intact sibling slot.
+#[test]
+fn a_torn_sixth_sector_over_a_tail_with_another_blank_reads_error() {
+    for rotation in 1..NUM_SECTORS_PER_SLOT {
+        for blank in 6..NUM_SECTORS_PER_SLOT {
+            let mut store = torn_sixth_sector_over_a_tail_with_a_blank(rotation, blank);
+            let label = format!("rotation {rotation}, tail already blank at {blank}");
+            let scan = store.scan_slot(1);
+            assert_eq!(scan.integrity, SlotIntegrity::Error, "{label}");
+            assert!(!scan.legacy, "{label}");
+            let outcome = store.load();
+            assert_eq!(outcome.status, SaveStatus::Error, "{label}");
+            assert_eq!(store.save_counter(), 13, "{label}");
+        }
+    }
+}
+
+/// The same two blanks with the head's write nowhere near position 5, so no
+/// position is the one it reaches next: the signed remainder is a coherent
+/// older tail and the legacy head stays intact.
+#[test]
+fn two_blanks_away_from_the_heads_next_position_stay_legacy() {
+    for blank in 7..NUM_SECTORS_PER_SLOT {
+        let mut store = SaveStore::new();
+        write_full_slot_rotated(&mut store, 0, 0, 13);
+        write_full_slot_rotated(&mut store, 1, 1, 12);
+        store.write_physical(1, 6, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+        store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+        tear_rotation_zero_write(&mut store, 1, 5, 14);
+        let scan = store.scan_slot(1);
+        assert_eq!(scan.integrity, SlotIntegrity::Ok, "blanks at 6 and {blank}");
+        assert!(scan.legacy, "blanks at 6 and {blank}");
+    }
+}
+
+/// A blank at the head's next position over a rotation-zero tail is no torn
+/// write's sixth sector: a rotation-zero tail was never that write's
+/// predecessor, so with another blank beside it the signed remainder is a
+/// coherent older tail and the legacy head stays intact, as before.
+#[test]
+fn a_blank_at_the_next_position_over_a_rotation_zero_tail_stays_legacy() {
+    for blank in 6..NUM_SECTORS_PER_SLOT {
+        let mut store = SaveStore::new();
+        write_full_slot_rotated(&mut store, 1, 0, 12);
+        tear_rotation_zero_write(&mut store, 1, 5, 14);
+        for position in [5, blank] {
+            store.write_physical(1, position, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+        }
+        let scan = store.scan_slot(1);
+        assert_eq!(scan.integrity, SlotIntegrity::Ok, "blanks at 5 and {blank}");
+        assert!(scan.legacy, "blanks at 5 and {blank}");
+    }
+}
+
+/// Slot 1: a rotation-1 counter-12 generation whose tail position 9 carries
+/// the head's counter 14, under a five-sector head written at
+/// `head_rotation` (counter 14), with `blanks` erased. Slot 0 is an intact
+/// full generation at counter 13, the one a rejected slot 1 rolls back to.
+fn rotated_legacy_head_over_a_tail_sharing_its_counter(
+    head_rotation: u16,
+    blanks: &[usize],
+) -> SaveStore {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 0, 0, 13);
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    let shared = store.read_physical(1, 9);
+    let len = sector_payload_len(shared.id()).unwrap();
+    store.write_physical(1, 9, &Sector::write(shared.id(), &shared.data()[..len], 14));
+    write_legacy_slot_rotated(
+        &mut store,
+        1,
+        &sample_block1(),
+        &sample_block2(),
+        14,
+        head_rotation,
+    );
+    for &blank in blanks {
+        store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+    }
+    store
+}
+
+/// A rotated five-sector head is no 14-sector write, so a blank at position 5
+/// is not its torn sixth sector: with one blank or several beside a tail
+/// footer sharing its counter, it stays an intact legacy head and `load`
+/// keeps its newer counter instead of rolling back to the older sibling.
+#[test]
+fn a_rotated_legacy_head_over_a_blank_tail_position_stays_legacy() {
+    for head_rotation in 1..5 {
+        for blanks in [&[5][..], &[5, 11], &[11], &[6, 11]] {
+            let mut store =
+                rotated_legacy_head_over_a_tail_sharing_its_counter(head_rotation, blanks);
+            let label = format!("head rotation {head_rotation}, blanks {blanks:?}");
+            let scan = store.scan_slot(1);
+            assert_eq!(scan.integrity, SlotIntegrity::Ok, "{label}");
+            assert!(scan.legacy, "{label}");
+            let outcome = store.load();
+            assert_eq!(outcome.status, SaveStatus::Ok, "{label}");
+            assert_eq!(store.save_counter(), 14, "{label}");
+        }
+    }
+}
+
+/// The identity head over the same tail is a rotation-zero write torn after
+/// its fifth sector, so a blank at position 5 still refuses it, alone or
+/// beside another blank, and `load` rolls back to the intact sibling.
+#[test]
+fn an_identity_head_over_a_blank_first_tail_position_still_reads_error() {
+    for blanks in [&[5][..], &[5, 11]] {
+        let mut store = SaveStore::new();
+        write_full_slot_rotated(&mut store, 0, 0, 13);
+        write_full_slot_rotated(&mut store, 1, 1, 12);
+        let shared = store.read_physical(1, 9);
+        let len = sector_payload_len(shared.id()).unwrap();
+        store.write_physical(1, 9, &Sector::write(shared.id(), &shared.data()[..len], 14));
+        tear_rotation_zero_write(&mut store, 1, 5, 14);
+        for &blank in blanks {
+            store.write_physical(1, blank, &Sector::from_bytes([0xFF; SECTOR_SIZE]));
+        }
+        let label = format!("blanks {blanks:?}");
+        let scan = store.scan_slot(1);
+        assert_eq!(scan.integrity, SlotIntegrity::Error, "{label}");
+        assert!(!scan.legacy, "{label}");
+        assert_eq!(store.load().status, SaveStatus::Error, "{label}");
+        assert_eq!(store.save_counter(), 13, "{label}");
+    }
+}

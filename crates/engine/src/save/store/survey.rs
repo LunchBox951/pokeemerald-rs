@@ -100,8 +100,16 @@ pub(super) struct SlotSurvey {
     head_valid_ids: u32,
     head_is_identity: bool,
     tail_signature_seen: bool,
-    tail_unusable_count: usize,
-    tail_unusable_at_first_tail_position: bool,
+    /// Tail positions holding a signed sector that fails its checksum or
+    /// carries an unknown id, and whether the last one is the first tail
+    /// position.
+    tail_failed_count: usize,
+    tail_failed_at_first_tail_position: bool,
+    /// Tail positions holding no `SECTOR_SIGNATURE` (erased or never
+    /// written), and whether the first tail position is one of them. See
+    /// [`Self::tail_unusable_count`] for when these count as unusable.
+    tail_unsigned_count: usize,
+    tail_unsigned_at_first_tail_position: bool,
     /// The footer counter of each checksum-valid tail sector, in position
     /// order; only the first `tail_valid_count` entries are meaningful.
     tail_counters: [u32; PKMN_STORAGE_CHUNKS],
@@ -136,8 +144,10 @@ impl SlotSurvey {
             head_valid_ids: 0,
             head_is_identity: true,
             tail_signature_seen: false,
-            tail_unusable_count: 0,
-            tail_unusable_at_first_tail_position: false,
+            tail_failed_count: 0,
+            tail_failed_at_first_tail_position: false,
+            tail_unsigned_count: 0,
+            tail_unsigned_at_first_tail_position: false,
             tail_counters: [0; PKMN_STORAGE_CHUNKS],
             tail_valid_count: 0,
             tail_rotations: [0; PKMN_STORAGE_CHUNKS],
@@ -156,10 +166,17 @@ impl SlotSurvey {
 
     /// Folds the sector at physical position `i` into the survey.
     pub(super) fn observe(&mut self, i: usize, sector: &Sector) {
+        let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
         if sector.signature() != SECTOR_SIGNATURE {
+            // Upstream skips an unsigned sector, leaving its id missing
+            // (`pokeemerald/src/save.c:529-546`).
+            if in_tail {
+                self.tail_unsigned_count += 1;
+                self.tail_unsigned_at_first_tail_position |=
+                    i == usize::from(SECTOR_ID_PKMN_STORAGE_START);
+            }
             return;
         }
-        let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
         if in_tail {
             self.tail_signature_seen = true;
         }
@@ -167,8 +184,8 @@ impl SlotSurvey {
         let id = sector.id();
         let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
         if in_tail && !is_valid_sector {
-            self.tail_unusable_count += 1;
-            self.tail_unusable_at_first_tail_position =
+            self.tail_failed_count += 1;
+            self.tail_failed_at_first_tail_position =
                 i == usize::from(SECTOR_ID_PKMN_STORAGE_START);
         }
         if !is_valid_sector {
@@ -272,14 +289,59 @@ impl SlotSurvey {
             .fold(0u32, |ids, (_, &id)| ids | 1 << id)
     }
 
+    /// The number of unusable tail positions.
+    ///
+    /// A signed tail sector failing its checksum is always unusable. An
+    /// unsigned one (erased, as flash holds it when a write stops after the
+    /// erase) is unusable here only when it is the slot's one unsigned tail
+    /// position: a torn write blanks just the sector in flight, so a lone
+    /// blank can be that sector (`pokeemerald/src/save.c:529-546`). Two or
+    /// more blanks are not counted, so the signed remainder is judged alone
+    /// and a legacy head over a coherent older tail keeps reading intact.
+    /// The one exception is the first tail position, see
+    /// [`Self::first_tail_position_is_unusable`].
+    ///
+    /// Blanks count only against an identity head, the one shape a torn
+    /// rotation-zero write leaves. A head with its ids permuted among
+    /// positions 0-4 is a five-sector write at a nonzero rotation: a
+    /// 14-sector write lays ids 0-4 within positions 0-4 only at rotation
+    /// zero (`pokeemerald/src/save.c:176-184`), so no blank in the tail is
+    /// such a head's torn sector and none is held against it.
+    fn tail_unusable_count(&self) -> usize {
+        self.tail_failed_count + usize::from(self.blank_tail_position_may_be_torn())
+    }
+
+    /// Whether a lone blank tail position may be a torn write's sector in
+    /// flight: only when the head is an identity head (see
+    /// [`Self::tail_unusable_count`]) and the tail holds exactly one blank.
+    fn blank_tail_position_may_be_torn(&self) -> bool {
+        self.head_is_identity && self.tail_unsigned_count == 1
+    }
+
+    /// Whether the first tail position (5) is unusable, blank or failing.
+    ///
+    /// Upstream writes ids 0-13 in order at `(id + rotation) % 14`
+    /// (`pokeemerald/src/save.c:138-173,176-184`), so a rotation-zero write
+    /// that has laid the five head sectors reaches position 5 next. A blank
+    /// there is that write's sixth sector, torn after its erase, whatever
+    /// else the older tail holds; blanks elsewhere lie in the older tail's
+    /// own rotation, which the head's write never reached. A nonidentity
+    /// head is no rotation-zero write, so a blank at 5 is not its sixth
+    /// sector and only a failing signed sector there is held against it.
+    fn first_tail_position_is_unusable(&self) -> bool {
+        (self.head_is_identity && self.tail_unsigned_at_first_tail_position)
+            || (self.tail_failed_count == 1 && self.tail_failed_at_first_tail_position)
+    }
+
     /// The rotation and counter of the stale tail behind a legacy head, if one
     /// is identifiable; upstream has no such tail (`pokeemerald/src/save.c:514-585`).
     fn tail_generation(&self) -> Option<(usize, u32)> {
-        if self.tail_unusable_count > 1 {
+        let unusable_count = self.tail_unusable_count();
+        if unusable_count > 1 {
             return None;
         }
         // One unusable sector spends the whole outlier budget.
-        if self.tail_unusable_count == 1 && self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1 {
+        if unusable_count == 1 && self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1 {
             return None;
         }
         let counters = &self.tail_counters[..self.tail_valid_count];
@@ -290,10 +352,7 @@ impl SlotSurvey {
         // the head's, over a predecessor it rotated away from. A rotated tail
         // behind that damage is refused by layout; a rotation-0 tail there
         // was never that write's predecessor and can only be a legacy head's.
-        if self.tail_unusable_count == 1
-            && self.tail_unusable_at_first_tail_position
-            && rotation != 0
-        {
+        if self.first_tail_position_is_unusable() && rotation != 0 {
             return None;
         }
         let mut outliers = rotations
@@ -301,7 +360,7 @@ impl SlotSurvey {
             .zip(counters)
             .filter(|&(&r, &c)| r != rotation || c != counter);
         let outlier = outliers.next();
-        if outliers.next().is_some() || (outlier.is_some() && self.tail_unusable_count == 1) {
+        if outliers.next().is_some() || (outlier.is_some() && unusable_count == 1) {
             return None;
         }
         let rotation_outlier_is_the_heads_generation =
