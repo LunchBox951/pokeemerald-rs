@@ -1,4 +1,7 @@
 use super::*;
+use crate::extract::owned_fixture::{
+    assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+};
 use assets::pack::AssetPack;
 
 const CHARMAP: &str = "\
@@ -86,36 +89,44 @@ fn refuses_missing_duplicate_and_unmappable_definitions() {
     assert!(build(CHARMAP, "const u8 x[] = _(\"open").is_err());
 }
 
+fn scratch_dir(name: &str) -> OwnedDir {
+    OwnedDir::create(&format!("pokeemerald-rs-fmsg-{name}")).unwrap()
+}
+
+/// A fresh directory the test owns, and the pack path inside it.
+fn scratch_pack(name: &str) -> (OwnedDir, std::path::PathBuf) {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+    let path = owned.path().join(format!("{name}.pack"));
+    (owned, path)
+}
+
 #[test]
 fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
-    let dir = std::env::temp_dir().join(format!("pokeemerald-rs-fmsg-{}", std::process::id()));
+    let owned = scratch_dir("extractor");
+    let dir = owned.path();
     for (path, text) in [(CHARMAP_PATH, CHARMAP), (STRINGS_PATH, STRINGS)] {
         let target = dir.join(path);
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, text).unwrap();
     }
     let mut writer = PackWriter::new();
-    extract_field_message(&dir, &mut writer).unwrap();
+    extract_field_message(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), 1);
 
     std::fs::write(dir.join(STRINGS_PATH), "").unwrap();
     let mut writer = PackWriter::new();
     assert!(matches!(
-        extract_field_message(&dir, &mut writer),
+        extract_field_message(dir, &mut writer),
         Err(ExtractError::FieldMessageSource { line: 0, .. })
     ));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn field_message_is_extracted_from_the_real_checkout() {
     assert!(super::super::upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-field-message-{}.pack",
-        std::process::id()
-    ));
+    let (_owned, path) = scratch_pack("field-message");
     super::super::extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     // `{STR_VAR_1}` ` ` `fainted` `…` `\p` `\n` EOS, spelled by `charmap.txt`.
@@ -125,5 +136,15 @@ fn field_message_is_extracted_from_the_real_checkout() {
             .string(FieldMessage::PkmnFaintedFldPsn),
         [0xFD, 0x02, 0x00, 0xDA, 0xD5, 0xDD, 0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF]
     );
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn fixture_directories_never_reuse_an_occupied_name() {
+    assert_pack_path_spares_occupied_file(
+        "pokeemerald-rs-extract-test-field-message-pack-ownership-probe",
+        || scratch_pack("field-message-pack-ownership-probe"),
+    );
+    assert_claim_spares_occupied_names("pokeemerald-rs-fmsg-ownership-probe", || {
+        scratch_dir("ownership-probe")
+    });
 }
