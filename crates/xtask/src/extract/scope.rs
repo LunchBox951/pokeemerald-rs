@@ -357,6 +357,15 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
         .collect()
 }
 
+/// The tall-grass picture: five 16x16 frames
+/// (`gFieldEffectObjectPic_TallGrass`, `sPicTable_TallGrass`).
+pub(crate) const TALL_GRASS_IMAGE_ID: &str = "field-effect/image/tall_grass";
+
+/// `gFieldEffectObjectPalette1`, which `FLDEFF_PAL_TAG_GENERAL_1` names and the
+/// tall-grass template binds (`field_effect_objects.h:2,96`). It is outside
+/// `sObjectEventSpritePalettes`, so it is not in [`sprite_palette_ids`].
+pub(crate) const GENERAL_1_PALETTE_ID: &str = "field-effect/palette/general_1";
+
 /// Title sheets built from a PNG, as `title/image/<stem>`.
 pub(crate) const TITLE_SCREEN_IMAGES: [&str; 6] = [
     "clouds",
@@ -396,8 +405,16 @@ pub(crate) const DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow";
 /// (`sDownArrowTiles`, `src/text.c:71`).
 pub(crate) const DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow.png";
 
+/// The pack id of the dark page-prompt arrow sheet, the one windows with
+/// `gTextFlags.useAlternateDownArrow` blit (`src/text.c:808-817`).
+pub(crate) const DARK_DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow_alt";
+
+/// The checkout path of that sheet, relative to the checkout root
+/// (`sDarkDownArrowTiles`, `src/text.c:72`).
+pub(crate) const DARK_DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow_alt.png";
+
 /// Every interface image pack id extraction writes and the generator requires.
-pub(crate) const INTERFACE_IMAGE_IDS: [&str; 1] = [DOWN_ARROW_IMAGE_ID];
+pub(crate) const INTERFACE_IMAGE_IDS: [&str; 2] = [DOWN_ARROW_IMAGE_ID, DARK_DOWN_ARROW_IMAGE_ID];
 
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {

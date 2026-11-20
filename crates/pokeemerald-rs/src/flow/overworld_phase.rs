@@ -290,11 +290,11 @@ pub(crate) struct OverworldPhase {
     /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
     /// same shape [`Self::dialog`] uses -- while
     /// [`Self::advance_active_battle_frame`] drives whichever variant's own
-    /// driver one turn per frame.
+    /// driver: a turn per frame, or the battle's text ([`Self::battle_sequence`]).
     pub(super) active_battle: Option<ActiveBattle>,
     /// The text sequencer of the battle in [`Self::active_battle`], when the
-    /// battle plays its text ([`live_battle_text`]). A battle without one
-    /// resolves a whole turn per frame.
+    /// battle plays its text ([`live_battle_text`]): the Route 101 first battle
+    /// and wild battles. A battle without one resolves a whole turn per frame.
     battle_sequence: Option<crate::flow::battle_sequence::BattleSequence>,
     /// Test-only: whether battles play their text; see [`live_battle_text::BattleText`].
     #[cfg(test)]
@@ -387,6 +387,10 @@ pub(crate) struct OverworldPhase {
 /// reads.
 const OBEDIENCE_BADGE_FLAGS: [u16; 4] = [0x868, 0x86A, 0x86C, 0x86E];
 
+/// `FLAG_BADGE01/03/05/07_GET` (`SYSTEM_FLAGS + 0x7/0x9/0xB/0xD`,
+/// `include/constants/flags.h:1359`-`:1365`): the stat badges.
+const STAT_BADGE_FLAGS: [u16; 4] = [0x867, 0x869, 0x86B, 0x86D];
+
 /// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
 /// answers every header, event, and collision query the phase makes, so a
 /// scene from another room would silently run `map`'s scripts over the wrong
@@ -409,14 +413,26 @@ impl OverworldPhase {
     /// that hand party members into `battle::Battle`, so traded Pokémon hit
     /// the pre-PP obedience gate (`IsMonDisobedient`,
     /// `src/battle_util.c:3923`-`:4038`).
+    ///
+    /// It also carries the stat badges; an unreadable flag counts as unearned.
     pub(super) fn player_obedience(&self) -> battle::PlayerObedience {
-        let badges =
-            OBEDIENCE_BADGE_FLAGS.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false));
         battle::PlayerObedience::new(
             u32::from_le_bytes(self.save2.player_trainer_id),
             self.save2.player_name,
-            badges,
+            self.read_badge_flags(OBEDIENCE_BADGE_FLAGS),
         )
+        .with_stat_badges(self.stat_badges())
+    }
+
+    /// The earned stat badges, stamped on the lead and reserves before the
+    /// battle is built so the opening Speed comparison sees badge 3
+    /// (`src/battle_main.c:3852`-`:3861`, `:4639`-`:4645`).
+    pub(super) fn stat_badges(&self) -> battle::BadgeBoosts {
+        battle::BadgeBoosts::from_badges(self.read_badge_flags(STAT_BADGE_FLAGS))
+    }
+
+    fn read_badge_flags(&self, flags: [u16; 4]) -> [bool; 4] {
+        flags.map(|flag| self.save1.event_data.flag_get(flag).unwrap_or(false))
     }
 
     /// Start a new overworld run from `source`, with `options` carrying the
@@ -716,6 +732,11 @@ impl OverworldPhase {
         // which poll the on-frame map script like any other frame, so this
         // runs here too rather than only on a map transition.
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut phase.save1.event_data);
+        connections::admit_object_events_at_map_load(
+            &mut phase.object_events,
+            &phase.player,
+            &phase.save1.event_data,
+        );
         phase
     }
 
@@ -800,7 +821,12 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene);
+        let mut object_events = connections::seed_object_events(&scene);
+        connections::admit_object_events_at_map_load(
+            &mut object_events,
+            &player,
+            &save1.event_data,
+        );
         Self {
             scene,
             player,
@@ -984,7 +1010,7 @@ impl OverworldPhase {
         // (`battle_setup.c:365-372,930-943`); every battle's frames pass here.
         self.clear_poison_step_counter();
         self.active_battle = match active {
-            ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
+            ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle, buttons),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
             ActiveBattle::Rival { battle, trainer_id } => {
                 self.advance_route103_rival_battle_frame(battle, trainer_id)
@@ -1080,6 +1106,8 @@ mod forced_movement_encounter_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod game_stat_steps_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod interaction_tests;
@@ -1093,6 +1121,10 @@ mod lead_owner_tests;
 /// overtake the text before it.
 #[cfg(test)]
 mod live_first_battle_tests;
+/// Random and party wild battles against the real battle text: their result
+/// and the party's return wait on the last message.
+#[cfg(test)]
+mod live_wild_battle_tests;
 #[cfg(test)]
 mod mat_field_input_gate_tests;
 #[cfg(test)]
@@ -1121,6 +1153,8 @@ mod route103_rival_tests;
 mod running_tests;
 #[cfg(test)]
 mod sight_trainer_tests;
+#[cfg(test)]
+mod stat_badge_tests;
 #[cfg(test)]
 mod step_tests;
 #[cfg(test)]

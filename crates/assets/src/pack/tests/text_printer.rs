@@ -5,6 +5,7 @@ use super::shared::{
 };
 
 const ID: &str = "interface/image/down_arrow";
+const DARK_ID: &str = "interface/image/down_arrow_alt";
 const WIDTH: u32 = 8;
 const HEIGHT: u32 = 48;
 
@@ -122,4 +123,117 @@ fn a_sheet_that_differs_from_upstream_is_rejected_on_lookup() {
         sheet((WIDTH, HEIGHT), TEXT_WINDOW_BIT_DEPTH, at_the_limit),
     )
     .expect("index 15 is a valid 4bpp index");
+}
+
+fn dark_sheet(size: (u32, u32), depth: u8, pixels: Vec<u8>) -> Entry {
+    Entry {
+        id: DARK_ID,
+        ..sheet(size, depth, pixels)
+    }
+}
+
+/// A pack holding only the dark sheet: the dark accessor must read its own
+/// entry, not borrow the light one.
+#[test]
+fn the_dark_arrow_reads_its_own_sheet_with_the_same_four_frames() {
+    let path = write_pack(
+        "dark-down-arrow-frames",
+        &pack_bytes(vec![dark_sheet(
+            (WIDTH, HEIGHT),
+            TEXT_WINDOW_BIT_DEPTH,
+            sheet_pixels(),
+        )]),
+    );
+    let pack = AssetPack::load(&path).unwrap();
+    let arrow = pack.text_printer_dark_down_arrow().unwrap();
+    let pixels = sheet_pixels();
+
+    for (index, row) in [0u8, 1, 2, 1].into_iter().enumerate() {
+        let frame = arrow.frame(u8::try_from(index).unwrap());
+        assert_eq!((frame.width, frame.height, frame.bit_depth), (8, 16, 4));
+        let start = usize::from(row) * 8;
+        assert_eq!(
+            frame.pixels,
+            &pixels[start..start + 8 * 16],
+            "frame {index}"
+        );
+    }
+    assert_eq!(arrow.frame(5).pixels, arrow.frame(1).pixels);
+    assert!(matches!(
+        pack.text_printer_down_arrow(),
+        Err(PackError::UnknownAsset(_))
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn the_two_arrows_are_distinct_sheets() {
+    let light = sheet_pixels();
+    let dark: Vec<u8> = light.iter().map(|pixel| (pixel + 1) % 16).collect();
+    let path = write_pack(
+        "both-down-arrows",
+        &pack_bytes(vec![
+            sheet((WIDTH, HEIGHT), TEXT_WINDOW_BIT_DEPTH, light),
+            dark_sheet((WIDTH, HEIGHT), TEXT_WINDOW_BIT_DEPTH, dark),
+        ]),
+    );
+    let pack = AssetPack::load(&path).unwrap();
+    let light = pack.text_printer_down_arrow().unwrap();
+    let dark = pack.text_printer_dark_down_arrow().unwrap();
+    for index in 0..4 {
+        assert_ne!(light.frame(index).pixels, dark.frame(index).pixels);
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_dark_sheet_that_differs_from_upstream_is_rejected_naming_its_id() {
+    let mut out_of_range = sheet_pixels();
+    out_of_range[0] = 16;
+    let cases = [
+        (
+            "size",
+            dark_sheet((8, 16), TEXT_WINDOW_BIT_DEPTH, vec![0; 8 * 16]),
+        ),
+        ("depth", dark_sheet((WIDTH, HEIGHT), 2, sheet_pixels())),
+        (
+            "index",
+            dark_sheet((WIDTH, HEIGHT), TEXT_WINDOW_BIT_DEPTH, out_of_range),
+        ),
+    ];
+    for (name, entry) in cases {
+        let path = write_pack(&format!("dark-down-arrow-{name}"), &pack_bytes(vec![entry]));
+        let pack = AssetPack::load(&path).unwrap();
+        let err = pack.text_printer_dark_down_arrow().map(|_| ()).unwrap_err();
+        assert!(
+            matches!(&err, PackError::MalformedTextPrinterAsset { id, .. } if id == DARK_ID),
+            "{name}: {err}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn a_missing_or_wrong_kind_dark_sheet_is_rejected_on_lookup() {
+    let path = write_pack("dark-down-arrow-missing", &pack_bytes(vec![good_sheet()]));
+    let pack = AssetPack::load(&path).unwrap();
+    assert!(matches!(
+        pack.text_printer_dark_down_arrow(),
+        Err(PackError::UnknownAsset(_))
+    ));
+    let _ = std::fs::remove_file(path);
+
+    let palette = Entry {
+        id: DARK_ID,
+        kind_tag: PALETTE_KIND_TAG,
+        meta: 16u16.to_le_bytes().to_vec(),
+        payload: vec![0; 32],
+    };
+    let path = write_pack("dark-down-arrow-wrong-kind", &pack_bytes(vec![palette]));
+    let pack = AssetPack::load(&path).unwrap();
+    assert!(matches!(
+        pack.text_printer_dark_down_arrow(),
+        Err(PackError::WrongKind { .. })
+    ));
+    let _ = std::fs::remove_file(path);
 }

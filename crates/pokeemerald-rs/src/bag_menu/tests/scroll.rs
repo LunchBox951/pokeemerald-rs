@@ -35,7 +35,7 @@ fn stacks_of(item: ItemId, count: usize) -> Vec<ItemSlot> {
 
 /// A bag whose Items pocket holds `count` stacks. `add_item` would merge
 /// repeats, so the slots are written directly.
-fn items_bag(count: usize) -> Bag {
+pub(super) fn items_bag(count: usize) -> Bag {
     let mut bag = Bag::default();
     bag.items[..count].copy_from_slice(&stacks_of(ItemId::POTION, count));
     bag

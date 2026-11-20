@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate, Speed Boost,
-//! Color Change, Trace, Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
+//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate,
+//! Flame Body, Drizzle, Drought, Sand Stream), before any RNG draw.
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,27 +20,13 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 26] {
+fn refused() -> [(BattlePokemon, AbilityId); 18] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
         (
             mon(SpeciesId::MAWILE, 1, Status1::Healthy),
             AbilityId::INTIMIDATE,
-        ),
-        (healthy(SpeciesId::NINJASK), AbilityId::SPEED_BOOST),
-        (healthy(SpeciesId::YANMA), AbilityId::SPEED_BOOST),
-        (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
-        (healthy(SpeciesId::PORYGON), AbilityId::TRACE),
-        (healthy(SpeciesId::PORYGON2), AbilityId::TRACE),
-        (mon(SpeciesId::RALTS, 1, Status1::Healthy), AbilityId::TRACE),
-        (
-            mon(SpeciesId::KIRLIA, 1, Status1::Healthy),
-            AbilityId::TRACE,
-        ),
-        (
-            mon(SpeciesId::GARDEVOIR, 1, Status1::Healthy),
-            AbilityId::TRACE,
         ),
         (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
         (
@@ -458,9 +444,6 @@ fn confusion_is_refused_only_for_own_tempo() {
 fn an_always_refused_ability_is_refused_whatever_the_status() {
     for (species, ability) in [
         (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
-        (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
-        (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
-        (SpeciesId::PORYGON, AbilityId::TRACE),
         (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
         (SpeciesId::KYOGRE, AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, AbilityId::DROUGHT),
@@ -518,4 +501,101 @@ fn the_selected_ability_slot_decides_not_the_species_pool() {
     let mut rng = SequenceRng::new(admission_script(false));
     wild(snorlax, vec![], enemy, false, &mut rng).unwrap();
     rng.assert_exhausted();
+}
+
+/// Speed Boost is modelled: its end-turn stage and first-turn counter live in
+/// `Battle`, so every side and bench slot admits it while unrelated refusals stay.
+#[test]
+fn speed_boost_holders_are_admitted_on_every_side_and_slot() {
+    let tie_script = |player: &BattlePokemon, enemy: &BattlePokemon| {
+        SequenceRng::new(admission_script(
+            player.speed_for_turn_order() == enemy.speed_for_turn_order(),
+        ))
+    };
+    for species in [SpeciesId::NINJASK, SpeciesId::YANMA] {
+        let holder = || healthy(species);
+        assert_eq!(holder().ability(), AbilityId::SPEED_BOOST);
+        let foe = || healthy(SpeciesId::ZIGZAGOON);
+
+        let mut rng = tie_script(&holder(), &foe());
+        wild(holder(), vec![], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        wild(foe(), vec![], holder(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        wild(foe(), vec![holder()], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        // The trainer AI cannot score against a two-ability player (Yanma) it
+        // cannot tell apart, an unrelated refusal that stays.
+        if species == SpeciesId::NINJASK {
+            let mut rng = tie_script(&foe(), &foe());
+            trainer(foe(), vec![holder()], vec![foe()], &mut rng).unwrap();
+            rng.assert_exhausted();
+        }
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![], vec![foe(), holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        trainer(foe(), vec![], vec![holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+    }
+}
+
+#[test]
+fn a_speed_boost_holder_does_not_excuse_an_unrelated_refusal() {
+    let holder = || healthy(SpeciesId::NINJASK);
+    let mut rng = SequenceRng::new([]);
+    let result = wild(
+        holder(),
+        vec![healthy(SpeciesId::MIGHTYENA)],
+        healthy(SpeciesId::ZIGZAGOON),
+        false,
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
+    let mut rng = SequenceRng::new([]);
+    let result = trainer(
+        healthy(SpeciesId::ZIGZAGOON),
+        vec![],
+        vec![holder(), healthy(SpeciesId::MAGMAR)],
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, AbilityId::FLAME_BODY, &rng);
+}
+
+/// Color Change is modelled: its type change lives in the on-damage seam and the
+/// battle-only typing, so every side and bench slot admits it, whatever the
+/// holder's status, while unrelated refusals stay.
+#[test]
+fn color_change_holders_are_admitted_on_every_side_and_slot() {
+    let tie_script = |player: &BattlePokemon, enemy: &BattlePokemon| {
+        SequenceRng::new(admission_script(
+            player.speed_for_turn_order() == enemy.speed_for_turn_order(),
+        ))
+    };
+    for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+        let holder = || mon(SpeciesId::KECLEON, 0, status);
+        assert_eq!(holder().ability(), AbilityId::COLOR_CHANGE);
+        let foe = || healthy(SpeciesId::ZIGZAGOON);
+
+        let mut rng = tie_script(&holder(), &foe());
+        wild(holder(), vec![], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        wild(foe(), vec![], holder(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        wild(foe(), vec![holder()], foe(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![holder()], vec![foe()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &foe());
+        trainer(foe(), vec![], vec![foe(), holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+        let mut rng = tie_script(&foe(), &holder());
+        trainer(foe(), vec![], vec![holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+    }
 }
