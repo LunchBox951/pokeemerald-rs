@@ -52,6 +52,10 @@ struct Shared {
     /// and consumer sides share. Always in `[0, capacity]`.
     occupied: AtomicUsize,
     underruns: AtomicU64,
+    /// Queued samples ever dropped unplayed by a discard (see
+    /// [`Producer::discarded`]). Raised before the slots are freed, so a
+    /// caller that sees them free also sees the count.
+    discarded: AtomicU64,
     /// Samples ever accepted by [`Producer::push`], wrapping. Written only
     /// while `head` is held, so it and the write index advance together;
     /// [`Producer::pushed`] reads it without the lock.
@@ -104,6 +108,7 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         head: Mutex::new(0),
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
+        discarded: AtomicU64::new(0),
         pushed: AtomicU64::new(0),
         consumed: AtomicU64::new(0),
         consumer_alive: AtomicBool::new(true),
@@ -225,6 +230,18 @@ impl Producer {
     #[must_use]
     pub fn underruns(&self) -> u64 {
         self.shared.underruns.load(Ordering::Relaxed)
+    }
+
+    /// Total queued samples dropped unplayed so far by a discard: the
+    /// transport throwing away history when a replacement stream attaches.
+    /// Not an underrun, and not counted by it. A drain check that sees the
+    /// ring empty reads this afterwards to learn whether the samples were
+    /// played or discarded.
+    #[must_use]
+    pub fn discarded(&self) -> u64 {
+        // Acquire pairs with the Release that frees the slots after the
+        // count is raised, so a reader that saw them freed sees the count.
+        self.shared.discarded.load(Ordering::Acquire)
     }
 
     /// Claim a replacement [`Consumer`] once the previous one has been
@@ -419,11 +436,15 @@ impl Consumer {
             return;
         }
         self.tail = (self.tail + queued) % self.shared.capacity;
+        let queued_count = u64::try_from(queued).unwrap_or(u64::MAX);
         self.shared
             .consumed
-            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
-        // Release: publishes the freed slots to the producer's `Acquire`
-        // load of `occupied`.
+            .fetch_add(queued_count, Ordering::Relaxed);
+        self.shared
+            .discarded
+            .fetch_add(queued_count, Ordering::Relaxed);
+        // Release: publishes the freed slots, and the discard count raised
+        // before them, to the producer's `Acquire` load of `occupied`.
         self.shared.occupied.fetch_sub(queued, Ordering::Release);
     }
 
@@ -473,13 +494,19 @@ pub(crate) struct HeldQueue<'a> {
 }
 
 impl HeldQueue<'_> {
-    /// Drop every queued sample, without counting an underrun.
+    /// Drop every queued sample, without counting an underrun. The samples
+    /// are counted in [`Producer::discarded`].
     pub(crate) fn discard_all(&mut self) {
         *self.tail = *self.head;
         let queued = self.shared.occupied.load(Ordering::Acquire);
+        let queued_count = u64::try_from(queued).unwrap_or(u64::MAX);
         self.shared
             .consumed
-            .fetch_add(u64::try_from(queued).unwrap_or(u64::MAX), Ordering::Relaxed);
+            .fetch_add(queued_count, Ordering::Relaxed);
+        self.shared
+            .discarded
+            .fetch_add(queued_count, Ordering::Relaxed);
+        // Release: publishes the count raised above with the emptied ring.
         self.shared.occupied.store(0, Ordering::Release);
     }
 
@@ -496,11 +523,15 @@ impl HeldQueue<'_> {
             return;
         }
         *self.tail = (*self.tail + stale) % self.shared.capacity;
+        let stale_count = u64::try_from(stale).unwrap_or(u64::MAX);
         self.shared
             .consumed
-            .fetch_add(u64::try_from(stale).unwrap_or(u64::MAX), Ordering::Relaxed);
-        // Release: publishes the freed slots to the producer's `Acquire`
-        // load of `occupied`.
+            .fetch_add(stale_count, Ordering::Relaxed);
+        self.shared
+            .discarded
+            .fetch_add(stale_count, Ordering::Relaxed);
+        // Release: publishes the freed slots, and the discard count raised
+        // before them, to the producer's `Acquire` load of `occupied`.
         self.shared.occupied.fetch_sub(stale, Ordering::Release);
     }
 }

@@ -3,14 +3,14 @@
 use super::*;
 
 /// A fake clock: `now` reads it, `sleep` advances it and logs the sleep.
-struct FakeClock {
+pub(super) struct FakeClock {
     origin: Instant,
     now: Rc<RefCell<Instant>>,
     slept: Rc<RefCell<Vec<std::time::Duration>>>,
 }
 
 impl FakeClock {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let origin = Instant::now();
         Self {
             origin,
@@ -19,7 +19,7 @@ impl FakeClock {
         }
     }
 
-    fn now(&self) -> impl FnMut() -> Instant {
+    pub(super) fn now(&self) -> impl FnMut() -> Instant {
         let now = Rc::clone(&self.now);
         move || *now.borrow()
     }
@@ -29,7 +29,7 @@ impl FakeClock {
     }
 
     /// [`Self::sleep`] that also runs `after` at the end of every sleep.
-    fn sleep_then(&self, after: impl Fn()) -> impl FnMut(std::time::Duration) {
+    pub(super) fn sleep_then(&self, after: impl Fn()) -> impl FnMut(std::time::Duration) {
         let now = Rc::clone(&self.now);
         let slept = Rc::clone(&self.slept);
         move |d| {

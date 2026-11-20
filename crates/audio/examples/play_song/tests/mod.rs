@@ -20,6 +20,7 @@ use std::time::Instant;
 
 mod cadence;
 mod device_tail;
+mod discards;
 mod fallback;
 mod measured_wait;
 mod retry;

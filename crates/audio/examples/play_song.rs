@@ -16,9 +16,12 @@ use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData,
 use platform::audio::{PlaybackProgress, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
+#[path = "play_song/discards.rs"]
+mod discards;
 #[path = "play_song/transport_wait.rs"]
 mod transport_wait;
 
+use discards::{finish_playback, queue_intact, DiscardBaseline};
 use transport_wait::settle_transport;
 
 const RING_CAPACITY_FRAMES: usize = 4096;
@@ -79,6 +82,9 @@ fn main() -> ExitCode {
     // `stream_errors` counts every stream the transport has built; only an
     // error during this playback fails the run.
     let errors = ErrorBaseline::of(&output);
+    // Likewise for samples the transport discards unplayed: a replacement
+    // stream drops the queue it attaches over, which raises no stream error.
+    let discards = DiscardBaseline::of(&output);
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     // Pace at the real game-frame period, the same cadence the output's
@@ -125,6 +131,10 @@ fn main() -> ExitCode {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }
+        if let Err(err) = queue_intact(discards.since(&output)) {
+            eprintln!("audio playback stopped: {}", err.describe());
+            return ExitCode::FAILURE;
+        }
         wait_for_frame_deadline(
             &mut next_deadline,
             frame_period,
@@ -132,41 +142,20 @@ fn main() -> ExitCode {
             std::thread::sleep,
         );
     }
-    if let Err(err) = wait_for_drain(
+    let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
+    if let Err(err) = finish_playback(
         ring_capacity_samples,
+        derived_tail,
+        output.device_sample_rate(),
+        output.playback_settle_margin_frames(),
         &policy,
         || producer.available_space(),
+        || output.playback_progress(),
         || errors.since(&output),
+        || discards.since(&output),
         Instant::now,
         std::thread::sleep,
     ) {
-        eprintln!("audio playback stopped: {}", err.describe());
-        return ExitCode::FAILURE;
-    }
-    // Prefer the device's own measured playback position when it has one
-    // (see `platform::AudioOutput::playback_progress`); the derived
-    // `device_tail_wait` bound below is only the fallback for a host that
-    // never reports a usable timestamp. The target is widened by the
-    // resampler's own settle margin (`playback_settle_margin_frames`), or a
-    // resampled device's buffered interpolation tail could still be sounding
-    // real audio after the wait already ended -- see `measured_drain_target`.
-    let settle_margin_frames = output.playback_settle_margin_frames();
-    let submitted_target = output
-        .playback_progress()
-        .map(|progress| measured_drain_target(progress.submitted_frames, settle_margin_frames));
-    let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
-    let tail_result = wait_for_device_tail_or_measured(
-        submitted_target,
-        derived_tail,
-        output.device_sample_rate(),
-        settle_margin_frames,
-        &policy,
-        || output.playback_progress(),
-        || errors.since(&output),
-        Instant::now,
-        std::thread::sleep,
-    );
-    if let Err(err) = tail_result {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
@@ -366,6 +355,11 @@ enum DrainError {
     /// position still short of the submitted target and no stream error
     /// reported.
     MeasuredTailTimedOut { sounded: u64, target: u64 },
+    /// The output transport dropped `samples` queued samples unplayed (see
+    /// `AudioOutput::discarded_samples`), as a replacement stream does when
+    /// the default output changes. The ring reads empty and no stream error
+    /// is counted, yet that audio was never heard.
+    QueueDiscarded { samples: u64 },
 }
 
 impl DrainError {
@@ -383,6 +377,10 @@ impl DrainError {
                 "no drain progress before the {:.1}s retry deadline; {remaining} sample(s) were \
                  still queued and unplayed",
                 RETRY_MAX_WAIT.as_secs_f64()
+            ),
+            DrainError::QueueDiscarded { samples } => format!(
+                "the output transport discarded {samples} queued sample(s) unplayed, as when the \
+                 default output changes; that audio was never heard"
             ),
             DrainError::MeasuredTailTimedOut { sounded, target } => format!(
                 "the device had sounded {sounded} of {target} submitted frame(s) at the {:.1}s \

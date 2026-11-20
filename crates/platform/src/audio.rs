@@ -48,7 +48,10 @@
 //!   after a stream failure or a default-output change, with bounded
 //!   retries. Producers keep the same ring and handle throughout; samples
 //!   queued while playback was started but nothing was draining are discarded
-//!   when a stream re-attaches, and a queue left while stopped is kept. Distinct [`TransportState`] transitions are
+//!   when a stream re-attaches, and a queue left while stopped is kept. Those
+//!   discarded samples are counted in [`AudioOutput::discarded_samples`]: an
+//!   emptied ring alone does not show they were played. Distinct
+//!   [`TransportState`] transitions are
 //!   available from [`AudioOutput::poll_transport_state`]; neither the device
 //!   callbacks nor the game loop connect, wait, or log.
 //! - **Playback position**: a real device's callback captures
@@ -474,6 +477,19 @@ impl AudioOutput {
     #[must_use]
     pub fn underruns(&self) -> u64 {
         self.producer.underruns()
+    }
+
+    /// Total queued samples the transport has dropped unplayed so far: the
+    /// history a replacement stream discards when it attaches while playback
+    /// was meant to advance (after a default-output change or a lost stream).
+    /// Neither an underrun nor a stream error, so [`Self::underruns`] and
+    /// [`Self::stream_errors`] stay flat when the song's queued tail is
+    /// thrown away this way; compare with a value read when an operation
+    /// began, and read it after observing the ring empty to learn that the
+    /// samples left it by being played. Always zero for the null backend.
+    #[must_use]
+    pub fn discarded_samples(&self) -> u64 {
+        self.producer.discarded()
     }
 
     /// Count of asynchronous `cpal` stream errors (device disconnect, driver

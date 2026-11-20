@@ -316,6 +316,8 @@ fn null_backend_reports_the_m4a_mixer_rate() {
     assert!(!output.is_running());
     // The null backend owns no cpal stream, so it never records errors.
     assert_eq!(output.stream_errors(), 0);
+    // Nor a transport that could discard queued samples.
+    assert_eq!(output.discarded_samples(), 0);
 }
 
 #[test]

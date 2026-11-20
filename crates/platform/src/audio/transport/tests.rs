@@ -563,3 +563,59 @@ fn startup_prefill_survives_start_before_the_first_attach() {
     assert_eq!(rig.events().last(), Some(&TransportState::Ready));
     assert_eq!(rig.producer.available_space(), 2);
 }
+
+/// A running transport on "a" with a stream attached, as `play_song` sees it
+/// once playback has started.
+fn attached_and_playing(w: &SharedWorld) -> Rig {
+    let mut rig = rig(w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+    rig
+}
+
+/// A drain check reads ring emptiness and the `stream_errors` delta. A
+/// default-output change raises no stream error and empties the ring by
+/// discarding it, so those two read clean; the discard count must not.
+#[test]
+fn a_default_change_discarding_queued_playback_is_counted() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = attached_and_playing(&w);
+    let errors_before = rig.shared.stream_errors.load(Ordering::Relaxed);
+    let discarded_before = rig.producer.discarded();
+
+    // The song's last samples are queued, unplayed.
+    assert_eq!(rig.producer.push(&[0.5; 8]), 8);
+    // The healthy stream raises no error; only rediscovery sees the change.
+    with(&w).default = Some("b".into());
+    rig.transport.step(MS(1_000));
+    let events = rig.events();
+    assert!(events.contains(&TransportState::Unavailable(
+        TransportFailure::DefaultChanged
+    )));
+
+    assert_eq!(rig.producer.available_space(), rig.producer.capacity());
+    assert_eq!(
+        rig.shared.stream_errors.load(Ordering::Relaxed),
+        errors_before
+    );
+    assert_eq!(rig.producer.discarded() - discarded_before, 8);
+}
+
+/// The symmetric case: a default change after the ring was fully played
+/// loses nothing, so the count stays flat.
+#[test]
+fn a_default_change_with_an_empty_ring_discards_nothing() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = attached_and_playing(&w);
+    let discarded_before = rig.producer.discarded();
+
+    with(&w).default = Some("b".into());
+    rig.transport.step(MS(1_000));
+    assert!(rig.events().contains(&TransportState::Unavailable(
+        TransportFailure::DefaultChanged
+    )));
+
+    assert_eq!(rig.producer.discarded(), discarded_before);
+}
