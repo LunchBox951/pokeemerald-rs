@@ -260,13 +260,16 @@ fn designator(tokens: &[Token], k: usize, defines: &Defines) -> Result<(u32, usi
     Ok((value, line, next + 2))
 }
 
-/// A decimal literal from consecutive digit tokens on one line; the shared
-/// tokenizer emits each digit on its own.
+/// A decimal literal from adjacent digit tokens; the shared tokenizer emits
+/// each digit on its own. Digits separated by anything are separate tokens,
+/// not one literal.
 fn number(tokens: &[Token], mut k: usize) -> Option<(u32, usize)> {
-    let line = tokens.get(k)?.line;
-    let mut value: u32 = 0;
     let start = k;
-    while let Some(token) = tokens.get(k).filter(|t| t.line == line) {
+    let mut value: u32 = 0;
+    while let Some(token) = tokens
+        .get(k)
+        .filter(|t| k == start || t.start == tokens[k - 1].start + 1)
+    {
         let Tok::Punct(c) = token.tok else {
             break;
         };
@@ -274,12 +277,14 @@ fn number(tokens: &[Token], mut k: usize) -> Option<(u32, usize)> {
         value = value.checked_mul(10)?.checked_add(digit)?;
         k += 1;
     }
+    // C reads a leading `0` as octal: refuse it rather than misread it as decimal.
+    let octal = k - start > 1 && is_punct(tokens, start, '0');
     // A hex or suffixed literal leaves letters behind; refuse it rather than misread it.
-    let glued = tokens
-        .get(k)
-        .filter(|t| t.line == line)
-        .is_some_and(|t| matches!(t.tok, Tok::Ident(_)));
-    (k > start && !glued).then_some((value, k))
+    let glued = k > start
+        && tokens
+            .get(k)
+            .is_some_and(|t| t.start == tokens[k - 1].start + 1 && matches!(t.tok, Tok::Ident(_)));
+    (k > start && !octal && !glued).then_some((value, k))
 }
 
 fn id16(value: u32, line: usize, what: &str) -> Result<u16, Fault> {
@@ -636,6 +641,10 @@ fn parse_labels<'a>(
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
         let trimmed = raw.trim();
+        // A full-line comment is skipped first: one ending in `:` is not a label.
+        if trimmed.is_empty() || trimmed.starts_with('@') {
+            continue;
+        }
         if let Some(label) = trimmed
             .strip_suffix("::")
             .or_else(|| trimmed.strip_suffix(':'))
@@ -649,9 +658,6 @@ fn parse_labels<'a>(
             continue;
         }
         let Some(label) = current else { continue };
-        if trimmed.is_empty() || trimmed.starts_with('@') {
-            continue;
-        }
         let body = trimmed
             .strip_prefix(".string")
             .and_then(|rest| rest.trim().strip_prefix('"'))

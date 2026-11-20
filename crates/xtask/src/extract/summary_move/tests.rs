@@ -200,7 +200,10 @@ fn tables() -> (String, String, String, String) {
     let mut contest_strings = String::from("@ Contest move effect descriptions\n\n");
     for n in 0..48 {
         if n == 0 {
-            contest_strings.push_str("gText_E0::\n\t.string \"a\\n\"\n\t.string \"b.$\"\n\n");
+            // A comment ending in `:` between the pieces is not a label.
+            contest_strings.push_str(
+                "gText_E0::\n\t.string \"a\\n\"\n\t@ continuation:\n\t.string \"b.$\"\n\n",
+            );
         } else if n % 2 == 0 {
             writeln!(
                 contest_strings,
@@ -438,6 +441,20 @@ fn contest_effect_rows_are_read_in_full() {
         .contest_moves
         .replacen(".appeal = 15,", ".appeal = 256,", 1);
     refuse(&f, CONTEST_MOVES_PATH, "appeal 256 does not fit");
+
+    // A leading-zero literal is octal in C; it is refused, not read as decimal 10.
+    let mut f = fixture();
+    f.contest_moves = f
+        .contest_moves
+        .replacen(".appeal = 15,", ".appeal = 010,", 1);
+    refuse(&f, CONTEST_MOVES_PATH, "unsupported value");
+
+    // Separated digits are two tokens, not the literal 15.
+    let mut f = fixture();
+    f.contest_moves = f
+        .contest_moves
+        .replacen(".appeal = 15,", ".appeal = 1 5,", 1);
+    refuse(&f, CONTEST_MOVES_PATH, "not comma-separated");
 
     // A hex literal is refused rather than read as its leading `0`.
     let mut f = fixture();
