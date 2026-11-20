@@ -61,6 +61,8 @@ pub mod move_names;
 pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
+pub mod pickup;
+pub mod pokeblock_flavors;
 pub mod pokedex;
 pub mod pokenav_city_maps;
 pub mod script_refs;

@@ -30,7 +30,7 @@
 //! Andrew's, Rhett's, Marcos's and Pete's real parties do construct, and
 //! `real_parties` drives each from its own cone to its conclusion. The
 //! `trigger` tests that need a refusal use the id of a party that stops at
-//! Taillow's Headbutt in place of Rhett's at Rhett's cone through
+//! Zangoose's Pursuit in place of Rhett's at Rhett's cone through
 //! `synthetic_sight_trainer`, so the geometry stays Rhett's while the refused
 //! party is real.
 //!

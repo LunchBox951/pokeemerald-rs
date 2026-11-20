@@ -26,7 +26,7 @@ use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
 use crate::new_game::{NewGameIdentity, NewGameOptions};
-use crate::textbox::{self, FrameAssets, WindowOp};
+use crate::textbox::{self, ArrowWindow, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 pub use speech::NUM_PAGES;
 
@@ -186,6 +186,8 @@ const fn normalized_text_speed(raw: u8) -> u8 {
 pub struct IntroScene {
     frame: FrameAssets,
     icons: KeypadIconSheet,
+    down_arrow: DownArrowSheet,
+    prompt_arrow: PromptArrow,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
@@ -217,6 +219,7 @@ impl IntroScene {
         sources: OwnedGlyphSources,
         frame: FrameAssets,
         icons: KeypadIconSheet,
+        down_arrow: DownArrowSheet,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
@@ -233,6 +236,8 @@ impl IntroScene {
         Self {
             frame,
             icons,
+            down_arrow,
+            prompt_arrow: PromptArrow::default(),
             pages,
             page_index: 0,
             printer,
@@ -303,12 +308,13 @@ impl IntroScene {
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
         let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
+        let down_arrow = DownArrowSheet::new(&pack.text_printer_down_arrow()?);
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sources, frame, icons, speed, options))
+        Ok(Self::new(sources, frame, icons, down_arrow, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -355,6 +361,21 @@ impl IntroScene {
         if self.printer.cleared_window() {
             self.ops.clear();
             self.window_fill = self.printer.cleared_window_colors();
+        }
+        // The speech's genuine `\p` and `\l` prompts wait on the same arrow a
+        // field message does (`PromptArrow::tick`); a page whose `{P}` only
+        // stands in for a wait upstream draws none (`speech::pages`' table).
+        if speech::page_draws_down_arrow(self.page_index) {
+            self.prompt_arrow.tick(
+                &event,
+                ArrowWindow {
+                    cursor: self.printer.cursor(),
+                    colors: self.printer.colors(),
+                    content_height: textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
+                },
+                &self.down_arrow,
+                &mut self.ops,
+            );
         }
         match event {
             TickEvent::Glyph(g) => self.push_clipped(WindowOp::Glyph(g)),
@@ -508,6 +529,7 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         sources,
         frame,
         textbox::test_keypad_icons(&[]),
+        textbox::test_blank_down_arrow(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
