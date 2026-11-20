@@ -905,6 +905,23 @@ fn a_full_hp_water_absorb_activation_says_the_move_was_made_useless() {
 }
 
 #[test]
+fn a_color_change_type_change_names_the_holder_its_ability_and_the_new_type() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("KECLEON", Some(AbilityId::COLOR_CHANGE));
+    let mut narrator = Narrator::new(scene);
+    let changed = BattleEvent::TypeChanged {
+        by_player: true,
+        move_id: MoveId::WATER_GUN,
+        new_type: assets::Type::Water,
+    };
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[changed])),
+        ["Wild KECLEON's COLOR CHANGE\nmade it the WATER type!"]
+    );
+}
+
+#[test]
 fn an_unstaged_send_out_still_names_the_absorbing_ability() {
     let mut narrator = narrator(BattleKind::Trainer);
     let sent_out = BattleEvent::TrainerSentOut {

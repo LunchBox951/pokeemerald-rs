@@ -367,7 +367,6 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
         (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
         (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
-        (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
         (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
         (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
         (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),
@@ -382,6 +381,19 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         ensure_wild_startable(&dex, SpeciesId::TAUROS, 0),
         Err(BattleError::InvalidLevel(0)),
     );
+}
+
+/// Color Change is modelled, so its holder is no longer refused by the ability
+/// screen: Kecleon's level-1 moveset stops at Lick instead, and a level whose
+/// moves are all executable starts.
+#[test]
+fn ensure_wild_startable_admits_a_color_change_species_by_its_moves() {
+    let dex = Dex::new();
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId::KECLEON, 1),
+        Err(BattleError::UnsupportedMoveEffect(assets::MoveId::LICK)),
+    );
+    assert_eq!(ensure_wild_startable(&dex, SpeciesId::KECLEON, 31), Ok(()));
 }
 
 #[test]

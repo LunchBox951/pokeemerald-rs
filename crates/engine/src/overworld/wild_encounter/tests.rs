@@ -6,8 +6,9 @@ use assets::{
 use super::{
     allow_wild_check_on_new_metatile, choose_land_mon_index, choose_wild_mon_level,
     encounter_odds_check, land_slot_for_roll, level_for_roll, standard_wild_encounter,
-    try_generate_wild_mon_land, wild_encounter_check, WildEncounterState, LAND_SLOT_CHANCES,
-    LAND_SLOT_TOTAL, MAX_ENCOUNTER_RATE, WILD_ENCOUNTER_IMMUNITY_STEPS,
+    standard_wild_encounter_with_rate_modifiers, try_generate_wild_mon_land, wild_encounter_check,
+    wild_encounter_check_with_rate_modifiers, EncounterRateModifiers, WildEncounterState,
+    LAND_SLOT_CHANCES, LAND_SLOT_TOTAL, MAX_ENCOUNTER_RATE, WILD_ENCOUNTER_IMMUNITY_STEPS,
 };
 use crate::overworld::metatile_behavior::{MB_CAVE, MB_NORMAL, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
 use crate::rng::{RandomSource, Rng};
@@ -164,6 +165,185 @@ fn encounter_rates_scale_by_sixteen_and_clamp() {
     let mut maximum_rng = ScriptedRng::new([2879, 0]);
     assert!(wild_encounter_check(180, &mut maximum_rng));
     assert!(wild_encounter_check(180, &mut maximum_rng));
+}
+
+const UP: EncounterRateModifiers = EncounterRateModifiers {
+    encounter_up_flute: true,
+    encounter_down_flute: false,
+    slot_zero_holds_cleanse_tag: false,
+};
+const DOWN: EncounterRateModifiers = EncounterRateModifiers {
+    encounter_up_flute: false,
+    encounter_down_flute: true,
+    slot_zero_holds_cleanse_tag: false,
+};
+const TAG: EncounterRateModifiers = EncounterRateModifiers {
+    encounter_up_flute: false,
+    encounter_down_flute: false,
+    slot_zero_holds_cleanse_tag: true,
+};
+const UP_AND_TAG: EncounterRateModifiers = EncounterRateModifiers {
+    slot_zero_holds_cleanse_tag: true,
+    ..UP
+};
+const DOWN_AND_TAG: EncounterRateModifiers = EncounterRateModifiers {
+    slot_zero_holds_cleanse_tag: true,
+    ..DOWN
+};
+const BOTH_FLUTES: EncounterRateModifiers = EncounterRateModifiers {
+    encounter_up_flute: true,
+    encounter_down_flute: true,
+    slot_zero_holds_cleanse_tag: false,
+};
+
+/// `ApplyFluteEncounterRateMod` and `ApplyCleanseTagEncounterRateMod`
+/// (`src/wild_encounter.c:507-508`, `:946-967`) for a table rate of 10.
+#[test]
+fn the_flute_flags_and_cleanse_tag_scale_a_table_rate_of_ten() {
+    let rate = |modifiers: EncounterRateModifiers| modifiers.apply(10 * 16);
+    assert_eq!(rate(EncounterRateModifiers::default()), 160);
+    assert_eq!(rate(UP), 240);
+    assert_eq!(rate(DOWN), 80);
+    assert_eq!(rate(TAG), 106, "160 * 2 / 3 truncates");
+    assert_eq!(rate(UP_AND_TAG), 160, "240 * 2 / 3");
+    assert_eq!(rate(DOWN_AND_TAG), 53, "80 * 2 / 3 truncates");
+    assert_eq!(
+        rate(BOTH_FLUTES),
+        240,
+        "the up flute wins when both are set"
+    );
+    assert_eq!(
+        rate(EncounterRateModifiers {
+            slot_zero_holds_cleanse_tag: true,
+            ..BOTH_FLUTES
+        }),
+        160
+    );
+}
+
+#[test]
+fn the_up_flute_adds_half_the_current_rate_with_integer_division() {
+    // 16 * 1 = 16 -> 16 + 8; 16 * 3 = 48 -> 72; an odd product cannot occur
+    // from a multiple of 16, so also pin the arithmetic directly.
+    assert_eq!(UP.apply(16), 24);
+    assert_eq!(UP.apply(48), 72);
+    assert_eq!(UP.apply(5), 7, "5 + 5 / 2");
+    assert_eq!(DOWN.apply(5), 2);
+    assert_eq!(TAG.apply(5), 3, "5 * 2 / 3");
+}
+
+#[test]
+fn modifiers_apply_before_the_clamp_and_the_final_clamp_is_2880() {
+    // 255 * 16 = 4080; the Tag makes it 2720 *before* the clamp (clamping
+    // first would give 2880 * 2 / 3 = 1920).
+    assert!(wild_encounter_check_with_rate_modifiers(
+        255,
+        TAG,
+        &mut ScriptedRng::new([2719])
+    ));
+    let mut rejected = ScriptedRng::new([2720]);
+    assert!(!wild_encounter_check_with_rate_modifiers(
+        255,
+        TAG,
+        &mut rejected
+    ));
+    assert_eq!(rejected.draws(), 1);
+
+    // Up with the Tag: 4080 + 2040 = 6120 * 2 / 3 = 4080, clamped to 2880.
+    let mut clamped = ScriptedRng::new([2879, 2880 + 2879]);
+    assert!(wild_encounter_check_with_rate_modifiers(
+        255,
+        UP_AND_TAG,
+        &mut clamped
+    ));
+    assert!(wild_encounter_check_with_rate_modifiers(
+        255,
+        UP_AND_TAG,
+        &mut clamped
+    ));
+    // The down flute then Tag: 4080 / 2 = 2040 * 2 / 3 = 1360.
+    assert!(wild_encounter_check_with_rate_modifiers(
+        255,
+        DOWN_AND_TAG,
+        &mut ScriptedRng::new([1359])
+    ));
+    assert!(!wild_encounter_check_with_rate_modifiers(
+        255,
+        DOWN_AND_TAG,
+        &mut ScriptedRng::new([1360])
+    ));
+}
+
+#[test]
+fn the_tag_threshold_for_a_table_rate_of_ten_is_a_draw_of_106() {
+    for (draw, accepted) in [(105, true), (106, false), (0, true), (2880 + 105, true)] {
+        let mut rng = ScriptedRng::new([draw]);
+        assert_eq!(
+            wild_encounter_check_with_rate_modifiers(10, TAG, &mut rng),
+            accepted,
+            "draw {draw}"
+        );
+        assert_eq!(rng.draws(), 1);
+    }
+}
+
+#[test]
+fn every_modifier_combination_draws_exactly_once() {
+    for modifiers in [
+        EncounterRateModifiers::default(),
+        UP,
+        DOWN,
+        TAG,
+        UP_AND_TAG,
+        DOWN_AND_TAG,
+        BOTH_FLUTES,
+    ] {
+        let mut rng = ScriptedRng::new([0, 0]);
+        wild_encounter_check_with_rate_modifiers(10, modifiers, &mut rng);
+        assert_eq!(rng.draws(), 1, "{modifiers:?}");
+    }
+}
+
+#[test]
+fn the_unmodified_check_is_the_default_modifier_check() {
+    for draw in [0, 159, 160, 2879] {
+        assert_eq!(
+            wild_encounter_check(10, &mut ScriptedRng::new([draw])),
+            wild_encounter_check_with_rate_modifiers(
+                10,
+                EncounterRateModifiers::default(),
+                &mut ScriptedRng::new([draw])
+            ),
+            "draw {draw}"
+        );
+    }
+}
+
+#[test]
+fn the_standard_roll_applies_the_modifiers_to_the_routes_table_rate() {
+    let header = WildEncounterTable::new()
+        .get_by_map(MapId("MAP_ROUTE101"))
+        .expect("Route 101 header");
+    // Route 101's rate of 20 scales to 320; the Tag makes it 213.
+    for (draw, encounters) in [(212, true), (213, false)] {
+        let mut rng = ScriptedRng::new([draw, 20, 0]);
+        let encounter = standard_wild_encounter_with_rate_modifiers(
+            Some(header),
+            MB_TALL_GRASS,
+            MB_TALL_GRASS,
+            None,
+            TAG,
+            &mut rng,
+        );
+        assert_eq!(encounter.is_some(), encounters, "draw {draw}");
+        assert_eq!(rng.draws(), if encounters { 3 } else { 1 });
+    }
+    // The same draw of 213 encounters without the Tag (213 < 320).
+    let mut rng = ScriptedRng::new([213, 20, 0]);
+    assert!(
+        standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, None, &mut rng)
+            .is_some()
+    );
 }
 
 #[test]
