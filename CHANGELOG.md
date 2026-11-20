@@ -7,6 +7,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 ## [0.0.136.0] - 2026-11-20
 
 - The Oldale Pokémon Center escalators now lock your controls and play the ride with its fade-out and fade-in, then walk you off east on the other floor with the original game's timing. The escalator sound and the floor's music are not played yet.
+- When two trainers can see you at once, the one that challenges you is now picked in the same order as the original game.
+
 ## [0.0.135.0] - 2026-11-16
 
 - Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
