@@ -9,19 +9,23 @@ use super::super::{extract_to, repo_root, upstream_present};
 use super::{
     extract_opening_scene, pack_ids, PaletteFile, IMAGES, PALETTES, SCREEN_TILEMAP_BYTES, TILEMAPS,
 };
+use crate::extract::owned_fixture::{
+    assert_claim_spares_occupied_names, assert_pack_path_spares_occupied_file, OwnedDir,
+};
 use crate::extract::ExtractError;
 use pack_format::PackWriter;
 
 const MANIFEST_ENTRY_COUNT: usize = 16;
 
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-opening-scene-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch_dir(name: &str) -> OwnedDir {
+    OwnedDir::create(&format!("pokeemerald-rs-opening-scene-{name}")).unwrap()
+}
+
+/// A fresh directory the test owns, and the pack path inside it.
+fn scratch_path(name: &str) -> (OwnedDir, PathBuf) {
+    let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+    let path = owned.path().join(format!("{name}.pack"));
+    (owned, path)
 }
 
 fn palette_text(colors: usize, first: u8) -> String {
@@ -120,10 +124,11 @@ fn manifest_names_every_sheet_palette_and_tilemap_with_unique_ids() {
 
 #[test]
 fn a_complete_checkout_extracts_every_entry_and_resolves_through_the_typed_handles() {
-    let dir = scratch_dir("complete");
-    write_checkout(&dir);
+    let owned = scratch_dir("complete");
+    let dir = owned.path();
+    write_checkout(dir);
     let mut writer = PackWriter::new();
-    extract_opening_scene(&dir, &mut writer).unwrap();
+    extract_opening_scene(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), MANIFEST_ENTRY_COUNT);
     let pack_path = dir.join("t.pack");
     std::fs::write(&pack_path, writer.finish().unwrap()).unwrap();
@@ -148,17 +153,16 @@ fn a_complete_checkout_extracts_every_entry_and_resolves_through_the_typed_handl
         clock.female_palette.colors().collect::<Vec<_>>()
     );
     assert_ne!(clock.start_tilemap, clock.view_tilemap);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn missing_sources_fail_instead_of_being_skipped() {
-    let dir = scratch_dir("missing");
+    let owned = scratch_dir("missing");
+    let dir = owned.path();
     let mut writer = PackWriter::new();
-    let err = extract_opening_scene(&dir, &mut writer).unwrap_err();
-    assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(&dir)));
+    let err = extract_opening_scene(dir, &mut writer).unwrap_err();
+    assert!(matches!(err, ExtractError::ReadFailed(path, _) if path.starts_with(dir)));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -208,42 +212,39 @@ fn sources_of_the_wrong_shape_are_rejected_without_queuing_anything() {
         ),
     ];
     for (name, corrupt, file) in cases {
-        let dir = scratch_dir(name);
-        write_checkout(&dir);
-        corrupt(&dir);
+        let owned = scratch_dir(name);
+        let dir = owned.path();
+        write_checkout(dir);
+        corrupt(dir);
         let mut writer = PackWriter::new();
-        let err = extract_opening_scene(&dir, &mut writer).unwrap_err();
+        let err = extract_opening_scene(dir, &mut writer).unwrap_err();
         assert!(
             matches!(&err, ExtractError::OpeningSceneAssetMismatch { path, .. }
-                if *path == graphics(&dir).join(file)),
+                if *path == graphics(dir).join(file)),
             "{name}: {err:?}"
         );
         assert_eq!(writer.len(), 0, "{name}");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
 #[test]
 fn sources_that_are_not_png_are_rejected() {
-    let dir = scratch_dir("bad-png");
-    write_checkout(&dir);
-    let path = graphics(&dir).join("birch_speech/shadow.png");
+    let owned = scratch_dir("bad-png");
+    let dir = owned.path();
+    write_checkout(dir);
+    let path = graphics(dir).join("birch_speech/shadow.png");
     std::fs::write(&path, b"not a png").unwrap();
     let mut writer = PackWriter::new();
-    let err = extract_opening_scene(&dir, &mut writer).unwrap_err();
+    let err = extract_opening_scene(dir, &mut writer).unwrap_err();
     assert!(matches!(err, ExtractError::Png(p, _) if p == path));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles() {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-opening-scene-{}.pack",
-        std::process::id()
-    ));
+    let (_owned, path) = scratch_path("opening-scene");
     extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let graphics = repo_root().join("pokeemerald/graphics");
@@ -279,5 +280,15 @@ fn opening_scene_assets_are_extracted_and_resolve_through_the_typed_handles() {
         pack.palette("opening-scene/palette/missing"),
         Err(PackError::UnknownAsset(_))
     ));
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn fixture_directories_never_reuse_an_occupied_name() {
+    assert_claim_spares_occupied_names("pokeemerald-rs-opening-scene-ownership-probe", || {
+        scratch_dir("ownership-probe")
+    });
+    assert_pack_path_spares_occupied_file(
+        "pokeemerald-rs-extract-test-opening-scene-pack-ownership-probe",
+        || scratch_path("opening-scene-pack-ownership-probe"),
+    );
 }

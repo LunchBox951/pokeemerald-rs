@@ -171,6 +171,7 @@ mod tests {
         encode_direct_sound, encode_programmable_wave, read_file, wav, ExtractError, WavSample,
         DIRECT_SOUND_SAMPLES, PROGRAMMABLE_WAVE_SAMPLES, PROGRAMMABLE_WAVE_SIZE,
     };
+    use crate::extract::owned_fixture::{assert_pack_path_spares_occupied_file, OwnedDir};
     use assets::{AudioError, DirectSoundSample, ProgrammableWave, Sample};
 
     fn wav_sample(
@@ -195,11 +196,11 @@ mod tests {
         0x10,
     ];
 
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-test-{name}-{}.pack",
-            std::process::id()
-        ))
+    /// A fresh directory the test owns, and the pack path inside it.
+    fn scratch_path(name: &str) -> (OwnedDir, std::path::PathBuf) {
+        let owned = OwnedDir::create(&format!("pokeemerald-rs-extract-test-{name}")).unwrap();
+        let path = owned.path().join(format!("{name}.pack"));
+        (owned, path)
     }
 
     fn assert_pack_contains(bytes: &[u8], expected: &[u8], description: &str) {
@@ -217,7 +218,7 @@ mod tests {
         use super::super::{extract_to, repo_root, upstream_present};
 
         assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("audio-samples");
+        let (_owned, path) = scratch_path("audio-samples");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let pack = std::fs::read(&report.output_path).unwrap();
 
@@ -259,8 +260,6 @@ mod tests {
             &wave_payload,
             "programmable-wave 01's encoded payload",
         );
-
-        let _ = std::fs::remove_file(report.output_path);
     }
 
     #[test]
@@ -409,5 +408,13 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("demo.wav"), "{message}");
         assert!(message.contains("schema rejected"), "{message}");
+    }
+
+    #[test]
+    fn pack_path_never_reuses_an_occupied_name() {
+        assert_pack_path_spares_occupied_file(
+            "pokeemerald-rs-extract-test-audio-samples-pack-ownership-probe",
+            || scratch_path("audio-samples-pack-ownership-probe"),
+        );
     }
 }
