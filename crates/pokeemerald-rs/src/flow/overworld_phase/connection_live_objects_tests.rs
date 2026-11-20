@@ -382,19 +382,29 @@ fn a_carried_npc_whose_sheet_the_entered_map_lacks_is_still_drawn() {
         &phase.object_events,
         rendering::PaletteStage::default(),
     );
-    let mut hidden_data = phase.save1.event_data.clone();
-    hidden_data
-        .flag_set(assets::object_event_flags::resolve(templates[0].flag).unwrap())
-        .unwrap();
-    let hidden = phase.scene.compose_live(
+    // The hide flag is read at admission, not at draw time, so the frame without the NPC is the
+    // one drawn with it walked out of the view; every other object stays where it is.
+    let carried_from = entry.carried_from();
+    let mut elsewhere = phase.object_events.clone();
+    let moved = elsewhere
+        .find_mut(carried_from, templates[0].local_id)
+        .expect("the carried entry");
+    for _ in 0..32 {
+        moved.state_mut().walk(Direction::East);
+    }
+    assert!(!tile_is_in_view(
+        moved.state().position(),
+        phase.player.position()
+    ));
+    let absent = phase.scene.compose_live(
         &phase.player,
-        &hidden_data,
+        &phase.save1.event_data,
         phase.tick,
-        &phase.object_events,
+        &elsewhere,
         rendering::PaletteStage::default(),
     );
     assert!(
-        shown.pixels() != hidden.pixels(),
+        shown.pixels() != absent.pixels(),
         "the carried NPC contributes pixels to the frame"
     );
     assert!(
@@ -495,6 +505,34 @@ fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() 
     assert_eq!(after, (1, Some(0)));
 }
 
+/// The same crossing when the collection was admitted as it was seeded, the way a warp or a
+/// continue admits it (`connections::admit_object_events_at_map_load`): the step no longer does
+/// the admission, and the NPC still gets its spawn-time pass before the input ends the visit.
+#[test]
+fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_load() {
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
+        20,
+        20,
+        &[((13, 4), MB_TALL_GRASS, GROUND)],
+    )
+    .in_room_for_test(ROUTE_101);
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 4)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    super::connections::admit_object_events_at_map_load(
+        &mut phase.object_events,
+        &phase.player,
+        &phase.save1.event_data,
+    );
+    assert!(entry_of(&phase, &templates[0]).is_active());
+    cross_north(&mut phase);
+    idle(&mut phase, 3);
+    let after = effects(&phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(after, (1, Some(0)));
+}
+
 /// `UpdateTallGrassFieldEffect` follows the camera for any owner, not only the player
 /// (`field_effect_helpers.c:324-337`): an NPC that has just stepped onto grass crosses with its
 /// rustle, which goes on from the image it had reached.
@@ -525,4 +563,22 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
         later.1 >= Some(2),
         "the animation continues rather than restarts"
     );
+}
+
+/// `DoesObjectCollideWithObjectAt` scans active objects whatever map they came from
+/// (`event_object_movement.c:4724-4741`): an in-view NPC standing where the player would
+/// land after the shift holds that tile, so the crossing is refused and nothing is rebound.
+#[test]
+fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
+    // One tile past Route 101's north edge, which the shift carries onto the landing tile.
+    let (mut phase, templates, path) = route_101_with_live_npcs(vec![npc(9, 13, -1)]);
+    phase.step(held(Buttons::UP));
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(
+        phase.map_id, ROUTE_101,
+        "the crossing never rebound the scene"
+    );
+    assert_eq!(phase.player.position(), (LANDING_X, 0));
+    assert!(entry_of(&phase, &templates[0]).is_active());
+    assert_eq!(entry_of(&phase, &templates[0]).carried_from(), None);
 }

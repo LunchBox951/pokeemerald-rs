@@ -57,12 +57,45 @@ fn a_pending_volume_write_on_the_retiring_frame_keeps_the_idle_latch_on_both_sid
     );
 }
 
+/// The off-write leaves the slot a dead envelope (`NR42 = 8`), so the
+/// sequencer's phase-7 events pass over the held latch until a real LFSR clock
+/// settles it (`mgba/src/gb/audio.c:727-732,948-950`).
+#[test]
+fn envelope_events_leave_a_vacated_noise_slots_latch_alone() {
+    let mut voice = releasing_latched_noise_voice();
+    voice.note_off();
+    let mut mixer = crate::mixer::Mixer::default();
+    assert!(mixer.add_cgb_voice(voice));
+    let mut out = vec![0.0f32; crate::SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    assert!(
+        mixer.cgb_voices().iter().all(Option::is_none),
+        "sanity: the voice retired on this frame"
+    );
+    mixer.mix_frame(&mut out);
+    let latch = out[0];
+    assert!(latch > 0.0, "sanity: the idle latch plays: {latch}");
+    // Frames 2..=5 hold events at 235, 444, 653, 862 and 1071 of the shared
+    // clock; the slow key's first real clock is far later.
+    for frame in 2..6 {
+        mixer.mix_frame(&mut out);
+        assert!(
+            out.chunks_exact(2)
+                .all(|pair| pair[0].to_bits() == latch.to_bits()),
+            "frame {frame}: an envelope event moved the idle latch"
+        );
+    }
+}
+
+/// A zero release retires the voice on its first pass after note-off, with
+/// the hardware envelope's dead release store holding the latch raised; a paced
+/// release would run the hardware timer down to a cleared latch first.
 fn releasing_latched_noise_voice() -> CgbVoice {
     let releasing = CgbAdsr {
         attack: 0,
         decay: 0,
         sustain: 1,
-        release: 1,
+        release: 0,
     };
     noise_voice_latched(releasing, SLOW_NOISE_KEY, WIDE_NOISE)
 }
