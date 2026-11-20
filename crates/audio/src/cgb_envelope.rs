@@ -87,10 +87,13 @@ pub struct CgbEnvelope {
     echo_length: u8,
 }
 
+/// The sustain goal `CgbModVol` stores into its `u8` field (`m4a.c:921`). A
+/// full-byte `xSUST` operand can push the rounded-up product past 255, and the
+/// store keeps only the low byte instead of saturating.
 fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
     let scaled = u32::from(goal) * u32::from(sustain);
     let rounded_up = scaled.div_ceil(CGB_ENVELOPE_LEVELS);
-    u8::try_from(rounded_up.min(u32::from(u8::MAX))).unwrap_or(u8::MAX)
+    rounded_up.to_le_bytes()[0]
 }
 
 fn transition_frame_delay(period: u8) -> u16 {
@@ -311,15 +314,17 @@ impl CgbEnvelope {
             return (false, false);
         }
         self.latch_goal(live_goal);
-        if self.volume > self.sustain_goal {
-            self.volume -= 1;
-        }
-        let transitioned = if self.volume <= self.sustain_goal {
-            self.enter_sustain_start()
-        } else {
-            self.frames_until_step = u16::from(self.adsr.decay);
-            false
-        };
+        // `m4a.c:1119-1123`: decrement the byte first, then compare both
+        // operands as signed bytes, so a goal of 128 or more is negative and
+        // the volume wraps through zero before it can reach it.
+        self.volume = self.volume.wrapping_sub(1);
+        let transitioned =
+            if i8::from_ne_bytes([self.volume]) <= i8::from_ne_bytes([self.sustain_goal]) {
+                self.enter_sustain_start()
+            } else {
+                self.frames_until_step = u16::from(self.adsr.decay);
+                false
+            };
         (transitioned, true)
     }
 
@@ -494,6 +499,44 @@ mod tests {
         let mut env = plain_envelope(adsr(0, 1, 8, 0), 10);
 
         assert_eq!(step_volumes::<7>(&mut env), [10, 9, 8, 7, 6, 5, 5]);
+    }
+
+    #[test]
+    fn full_byte_sustain_keeps_decaying_under_upstream_signed_compare() {
+        // m4a.c:921 -> sustainGoal = (15*255+15)>>4 = 240 (s8 -16);
+        // m4a.c:1120-1123 decrements then compares (s8)vol <= -16, so the
+        // volume byte decays through zero and wraps up to 240 before sustain.
+        let mut env = plain_envelope(adsr(0, 1, 255, 0), 15);
+
+        let volumes = step_volumes::<34>(&mut env);
+
+        assert_eq!(volumes[..4], [15, 14, 13, 12]);
+        assert_eq!(volumes[15..18], [0, 255, 254]);
+        assert_eq!(volumes[30..], [241, 240, 240, 240]);
+    }
+
+    #[test]
+    fn sustain_goal_keeps_only_its_low_byte() {
+        // m4a.c:921 stores (31*255+15)>>4 = 495 into a u8: 495 - 256 = 239,
+        // which compares as s8 -17.
+        let mut immediate = plain_envelope(adsr(0, 0, 255, 0), 31);
+        immediate.step();
+        assert_eq!(immediate.volume(), 239);
+
+        let mut decaying = plain_envelope(adsr(0, 1, 255, 0), 31);
+        assert_eq!(step_volumes::<4>(&mut decaying), [31, 30, 29, 28]);
+    }
+
+    #[test]
+    fn sustain_goal_wraps_exactly_at_the_byte_boundary() {
+        // (16*255+15)>>4 = 255 fits, (17*255+15)>>4 = 271 -> 15.
+        let mut fits = plain_envelope(adsr(0, 0, 255, 0), 16);
+        fits.step();
+        assert_eq!(fits.volume(), 255);
+
+        let mut wraps = plain_envelope(adsr(0, 0, 255, 0), 17);
+        wraps.step();
+        assert_eq!(wraps.volume(), 15);
     }
 
     #[test]

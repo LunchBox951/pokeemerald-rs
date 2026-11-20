@@ -1,9 +1,10 @@
 //! Locating the interface images and palettes.
 //!
-//! The one image is the text printer's down-arrow sheet, `sDownArrowTiles`
-//! (`src/text.c:71`): raw 4bpp tiles, searched for through [`super::images`]
-//! and accepted only at a single address, since a second copy would be
-//! evidence the search is wrong rather than a twin to pair. The palettes are
+//! The images are the text printer's two down-arrow sheets, `sDownArrowTiles`
+//! and `sDarkDownArrowTiles` (`src/text.c:71-72`): raw 4bpp tiles, searched
+//! for through [`super::images`] and accepted only at a single address, since
+//! a second copy would be evidence the search is wrong rather than a twin to
+//! pair. The palettes are
 //! located by [`super::locate_interface_palettes`].
 
 use super::error::GenRomProfileError;
