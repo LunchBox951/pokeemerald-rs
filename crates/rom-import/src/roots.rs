@@ -732,6 +732,10 @@ pub struct Roots {
     pub field_messages: &'static [FieldMessageRoot],
     /// The trainer defeat-speech table.
     pub trainer_defeat_speeches: &'static [TrainerDefeatSpeechRoot],
+    /// Where `gTrainerClassNames` starts: 66 fixed-width rows of 13 bytes, each
+    /// a charmap name, `EOS`, and zero padding. `None` when the profile
+    /// records no class-name table.
+    pub trainer_class_names: Option<GbaPtr>,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -799,6 +803,7 @@ impl Roots {
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
         trainer_defeat_speeches: &[],
+        trainer_class_names: None,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,

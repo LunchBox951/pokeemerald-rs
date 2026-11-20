@@ -10,6 +10,7 @@ use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
 use super::field_message::FieldMessageError;
+use super::trainer_class_names::TrainerClassNameError;
 use super::trainer_defeat_speech::TrainerDefeatSpeechError;
 use crate::battle_anim::BattleAnimationError;
 use crate::TrainerPicId;
@@ -210,6 +211,13 @@ pub enum PackError {
         /// Underlying schema error.
         source: FieldMessageError,
     },
+    /// The trainer class-name table failed its schema's structural decode.
+    TrainerClassNameDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: TrainerClassNameError,
+    },
     /// The trainer defeat-speech table failed its schema's structural decode.
     TrainerDefeatSpeechDecode {
         /// Table asset id.
@@ -406,6 +414,12 @@ impl fmt::Display for PackError {
                     "asset pack: field-message entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::TrainerClassNameDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: trainer class-name entry `{id}` failed to decode: {source}"
+                )
+            }
             Self::TrainerDefeatSpeechDecode { id, source } => {
                 write!(
                     f,
@@ -446,6 +460,7 @@ impl std::error::Error for PackError {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::FieldMessageDecode { source, .. } => Some(source),
+            Self::TrainerClassNameDecode { source, .. } => Some(source),
             Self::TrainerDefeatSpeechDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
             Self::EventScriptDecode { source, .. } | Self::EventScriptResolve { source, .. } => {

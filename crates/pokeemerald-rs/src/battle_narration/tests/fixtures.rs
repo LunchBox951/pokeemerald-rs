@@ -136,6 +136,27 @@ impl Fixture {
     }
 }
 
+/// The tokens of ordinary text, terminator removed, as a trainer class or name
+/// arrives from the class-name table.
+pub(super) fn text_tokens(source: &str) -> Vec<Token> {
+    let mut tokens = text::decode(&template(source)).unwrap();
+    tokens.pop();
+    tokens
+}
+
+/// The rival's class name as `gTrainerClassNames` stores it: the `PK` and `MN`
+/// glyph bytes, then ` TRAINER` (`src/data/text/trainer_class_names.h:52`).
+pub(super) const RIVAL_CLASS: [u8; 11] = [
+    0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+];
+
+/// The rival's class name decoded to tokens, terminator removed.
+pub(super) fn rival_class() -> Vec<Token> {
+    let mut tokens = text::decode(&RIVAL_CLASS).unwrap();
+    tokens.pop();
+    tokens
+}
+
 /// The text `tokens` print, with controls spelled as `decode_to_string` does.
 pub(super) fn render(tokens: &[Token]) -> String {
     text::decode_to_string(&text::encode(tokens).unwrap()).unwrap()
@@ -161,7 +182,7 @@ pub(super) fn scene(kind: BattleKind) -> Scene {
             let mut lose_text = text::decode(&template("Good battle!")).unwrap();
             lose_text.pop();
             Trainer {
-                class: "YOUNGSTER".to_owned(),
+                class: text_tokens("YOUNGSTER"),
                 name: "BEN".to_owned(),
                 lose_text,
             }

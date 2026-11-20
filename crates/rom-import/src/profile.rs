@@ -147,6 +147,13 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_the_trainer_class_name_table() {
+        let table = EMERALD_US_REV0.roots.trainer_class_names;
+        let table = table.expect("the shipped profile locates gTrainerClassNames");
+        assert_ne!(table, crate::reader::GbaPtr::AT_BASE);
+    }
+
+    #[test]
     fn a_hash_that_matches_nothing_is_unsupported() {
         // The fixture is a synthetic image, so it can never match a shipped
         // profile however convincing its header is.

@@ -279,6 +279,15 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A trainer class-name source does not parse as the pinned upstream shape.
+    TrainerClassNameSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A cry table or cry sample source does not parse as the pinned upstream shape.
     CrySource {
         /// Source path.
@@ -544,6 +553,9 @@ impl fmt::Display for ExtractError {
             }
             Self::TrainerDefeatSpeechSource { path, line, detail } => {
                 write!(f, "trainer defeat-speech source `{}` line {line}: {detail}", path.display())
+            }
+            Self::TrainerClassNameSource { path, line, detail } => {
+                write!(f, "trainer class-name source `{}` line {line}: {detail}", path.display())
             }
             Self::CrySource { path, line, detail } => {
                 write!(f, "cry source `{}` line {line}: {detail}", path.display())
