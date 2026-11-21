@@ -148,5 +148,6 @@ mod tests {
     mod presentation;
     mod presentation_support;
     mod production_flows;
+    mod prompt_arrow;
     mod real_pack;
 }
