@@ -8,7 +8,8 @@
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
-//! [`enemy_elevation`]), the species/move/ability display text
+//! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
+//! [`arena_mind_ratings`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
 //! Chat vocabulary group (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
@@ -18,8 +19,10 @@
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
 //! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
-//! normal-ribbon description lines (see [`ribbon_descriptions`]), and the
-//! Battle Pike wild Pokémon rosters (see [`battle_pike_wild_mons`]); more
+//! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
+//! Factory move-style lists and required counts (see
+//! [`battle_factory_styles`]), and the Battle Pike wild Pokémon rosters (see
+//! [`battle_pike_wild_mons`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -42,8 +45,10 @@
 //! see that module's docs).
 
 pub mod abilities;
+pub mod arena_mind_ratings;
 pub mod audio;
 pub mod battle_anim;
+pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_pike_wild_mons;
 pub mod bundled_overworld;
@@ -85,12 +90,16 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // `audio::VoiceGroupId`/`audio::SampleId` are re-exported here alongside the
 // three schema types they identify; `audio`'s own internal cross-references
 // between them stay reachable through the `audio` module path too.
+pub use arena_mind_ratings::{
+    arena_mind_rating, MIND_PENALISED_MOVE_COUNT, MIND_REWARDED_MOVE_COUNT,
+};
 pub use audio::{
     cry_id, AudioError, CryId, CryMode, CrySettings, CryTable, DirectSoundMode, DirectSoundSample,
     DirectSoundVoice, Envelope, KeySplitVoice, MusicPlayerId, NoiseVoice, ProgrammableWave,
     ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice,
     Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
+pub use battle_factory_styles::{FactoryStyle, FACTORY_LISTED_STYLE_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
