@@ -164,6 +164,9 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
         BattleEvent::PoisonedByEffectSpore { by_player, move_id },
         BattleEvent::ParalyzedByEffectSpore { by_player, move_id },
         BattleEvent::PoisonedByPoisonPoint { by_player, move_id },
+        BattleEvent::BurnedByFlameBody { by_player, move_id },
+        BattleEvent::BurnedByAttackerSynchronize { by_player, move_id },
+        BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, move_id },
         BattleEvent::PoisonedByAttackerSynchronize { by_player, move_id },
         BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, move_id },
         BattleEvent::SynchronizeImmunityProtected { by_player, move_id },
@@ -262,7 +265,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 94;
+const VARIANTS: usize = 97;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -363,6 +366,9 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::TracedAbility { .. } => 91,
         BattleEvent::Flinched { .. } => 92,
         BattleEvent::TypeChanged { .. } => 93,
+        BattleEvent::BurnedByFlameBody { .. } => 94,
+        BattleEvent::BurnedByAttackerSynchronize { .. } => 95,
+        BattleEvent::AttackerSynchronizeFireTypeProtected { .. } => 96,
     }
 }
 
