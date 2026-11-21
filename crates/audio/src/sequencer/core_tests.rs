@@ -2,7 +2,7 @@
 
 use super::test_support::*;
 use super::*;
-use crate::sequence::decode_track;
+use crate::sequence::{decode_track, MAX_TEMPO_BPM};
 
 #[test]
 fn new_uses_emerald_init_defaults() {
@@ -332,24 +332,26 @@ fn advance_frame_ticks_only_on_the_frame_that_crosses_tempo_unit() {
 }
 
 #[test]
-fn tempo_event_is_clamped_before_it_can_overflow_the_accumulator() {
-    // `tempo_c += tempo_i` (`advance_frame`) is unguarded, so a
-    // malformed asset pack's out-of-domain `Event::Tempo` must never
-    // reach `tempo_i` un-clamped.
+fn tempo_event_is_clamped_to_the_command_bound() {
+    // A malformed asset pack's out-of-domain `Event::Tempo` must never
+    // reach the base tempo un-clamped.
     let mut seq = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
     apply_test_event(&mut seq, 0, &Event::Tempo(u16::MAX));
     assert_eq!(
-        seq.tempo_i, MAX_TEMPO_BPM,
+        seq.base_tempo(),
+        MAX_TEMPO_BPM,
         "an out-of-domain Tempo event must clamp to the TEMPO command's real bound"
     );
+    assert_eq!(seq.effective_tempo(), MAX_TEMPO_BPM);
 
     // Drive tempo_c to the highest value `advance_frame`'s drain loop
-    // ever leaves behind and take one more frame: an unclamped
-    // `tempo_i` of `u16::MAX` would overflow this addition, but the
-    // clamp above keeps the sum far under `u16::MAX`.
-    seq.tempo_c = TEMPO_UNIT - 1;
+    // ever leaves behind and take one more frame.
+    seq.tempo_c = u32::from(TEMPO_UNIT) - 1;
     seq.advance_frame();
-    assert_eq!(seq.tempo_c, (TEMPO_UNIT - 1 + MAX_TEMPO_BPM) % TEMPO_UNIT);
+    assert_eq!(
+        seq.tempo_c,
+        (u32::from(TEMPO_UNIT) - 1 + u32::from(MAX_TEMPO_BPM)) % u32::from(TEMPO_UNIT)
+    );
 }
 
 /// [`Event::Pan`]'s range minimum.

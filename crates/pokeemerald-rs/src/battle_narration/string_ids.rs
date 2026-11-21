@@ -24,6 +24,7 @@ pub(super) const PKMNPOISONEDBY: u16 = 41;
 pub(super) const PKMNHURTBYPOISON: u16 = 42;
 pub(super) const PKMNENERGYDRAINED: u16 = 45;
 pub(super) const PKMNWASBURNED: u16 = 46;
+pub(super) const PKMNBURNEDBY: u16 = 47;
 pub(super) const PKMNHURTBYBURN: u16 = 48;
 pub(super) const PKMNISFROZEN: u16 = 51;
 pub(super) const PKMNWASDEFROSTED: u16 = 52;

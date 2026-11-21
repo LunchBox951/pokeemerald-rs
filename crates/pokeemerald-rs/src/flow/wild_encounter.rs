@@ -44,17 +44,20 @@ use battle::{
     Battle, BattleError, BattleEvent, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
     TurnError,
 };
+use engine::event_data::{EventData, VAR_REPEL_STEP_COUNT};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{
-    EncounterRateModifiers, WildEncounter, WildEncounterState,
+    EncounterRateModifiers, RepelGate, WildEncounter, WildEncounterState,
 };
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
+use engine::save::{Pokemon, SaveBlock1};
 
 use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
+use crate::party::{first_repel_qualifying_level, LoadedLead};
 
 /// Marks `lead` traded when its OT id differs from the save owner's -- the
 /// id half of `IsOtherTrainer` (`pokemon.c:6611-6620`); a lead the save
@@ -82,6 +85,50 @@ impl BattleRng for SharedRng<'_> {
     }
 }
 
+/// The saved and live state one step's encounter roll reads besides the map.
+pub(super) struct StepEncounterInputs<'a> {
+    pub(super) rate_modifiers: EncounterRateModifiers,
+    /// Source of the saved `VAR_REPEL_STEP_COUNT`.
+    pub(super) event_data: &'a EventData,
+    /// All six saved party records, whatever the saved party count.
+    pub(super) party: &'a [Pokemon],
+    /// The owned lead, whose live HP and level override its saved slot.
+    pub(super) lead: Option<&'a LoadedLead>,
+}
+
+impl<'a> StepEncounterInputs<'a> {
+    /// The inputs for a step on `save1`'s party, with the owned `lead` over its saved slot.
+    pub(super) fn new(
+        rate_modifiers: EncounterRateModifiers,
+        save1: &'a SaveBlock1,
+        lead: Option<&'a LoadedLead>,
+    ) -> Self {
+        Self {
+            rate_modifiers,
+            event_data: &save1.event_data,
+            party: &save1.player_party,
+            lead,
+        }
+    }
+}
+
+impl StepEncounterInputs<'_> {
+    /// `IsWildLevelAllowedByRepel`'s input (`src/wild_encounter.c:874-895`): a zero saved
+    /// counter reads no party, otherwise the first usable member's level is looked up.
+    fn repel_gate(&self) -> RepelGate {
+        let steps = self
+            .event_data
+            .var_get(VAR_REPEL_STEP_COUNT)
+            .expect("VAR_REPEL_STEP_COUNT is an ordinary variable id");
+        if steps == 0 {
+            return RepelGate::Inactive;
+        }
+        RepelGate::Active {
+            first_qualifying_level: first_repel_qualifying_level(self.party, self.lead),
+        }
+    }
+}
+
 pub(super) fn roll_for_step(
     state: &mut WildEncounterState,
     rng: &mut Rng,
@@ -89,16 +136,17 @@ pub(super) fn roll_for_step(
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
     slot_zero_ability: Option<assets::AbilityId>,
-    rate_modifiers: EncounterRateModifiers,
+    inputs: &StepEncounterInputs<'_>,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter_with_rate_modifiers(
+    state.check_standard_wild_encounter_with_repel(
         metatile_behavior,
         encounter_header,
         slot_zero_ability,
-        rate_modifiers,
+        inputs.rate_modifiers,
+        inputs.repel_gate(),
         rng,
     )
 }
@@ -310,6 +358,8 @@ mod encounter_roll_tests;
 mod first_battle_recovery_tests;
 #[cfg(test)]
 mod full_party_tests;
+#[cfg(test)]
+mod repel_tests;
 #[cfg(test)]
 mod slot_zero_level_bias_tests;
 #[cfg(test)]
