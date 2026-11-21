@@ -367,10 +367,10 @@ impl LiveObjectEvent {
             MovementType::WanderAround => {
                 self.wander_step(&wandering::WANDER_AROUND, context, rng, occupants)
             }
-            MovementType::WanderUpAndDown | MovementType::WanderDownAndUp => {
+            MovementType::WanderUpAndDown => {
                 self.wander_step(&wandering::WANDER_UP_AND_DOWN, context, rng, occupants)
             }
-            MovementType::WanderLeftAndRight | MovementType::WanderRightAndLeft => {
+            MovementType::WanderLeftAndRight => {
                 self.wander_step(&wandering::WANDER_LEFT_AND_RIGHT, context, rng, occupants)
             }
             MovementType::WalkUpAndDown

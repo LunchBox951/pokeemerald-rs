@@ -4,9 +4,9 @@
 //! and forth along its initial facing (the patrols).
 //!
 //! The wanderers run the seven-step table of `event_object_movement.c:2566-2629,2897-3029` and
-//! the patrols the four-step one of `:3764-3822`; the callback table aliases
-//! `WanderDownAndUp` to `WanderUpAndDown`, `WanderRightAndLeft` to `WanderLeftAndRight` and all
-//! four `Walk*And*` types to `WalkBackAndForth` (`:226-230,249-252`).
+//! the patrols the four-step one of `:3764-3822`; the callback table aliases all four `Walk*And*`
+//! types to `WalkBackAndForth` (`:249-252`). The aliased `WanderDownAndUp` and
+//! `WanderRightAndLeft` are not scheduled.
 //!
 //! A step that queues a movement action returns `TRUE` and the executing step runs in the same
 //! callback, so the action's first frame is the frame it was queued (`begin_normal_walk`); the
@@ -41,12 +41,12 @@ pub(super) static WANDER_AROUND: Wander = Wander {
     ],
 };
 
-/// `MovementType_WanderUpAndDown` (`:2897-2960`), which `WanderDownAndUp` shares.
+/// `MovementType_WanderUpAndDown` (`:2897-2960`).
 pub(super) static WANDER_UP_AND_DOWN: Wander = Wander {
     directions: &[Direction::South, Direction::North],
 };
 
-/// `MovementType_WanderLeftAndRight` (`:2965-3028`), which `WanderRightAndLeft` shares.
+/// `MovementType_WanderLeftAndRight` (`:2965-3028`).
 pub(super) static WANDER_LEFT_AND_RIGHT: Wander = Wander {
     directions: &[Direction::West, Direction::East],
 };

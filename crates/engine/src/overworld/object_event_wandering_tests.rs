@@ -178,12 +178,10 @@ fn each_wanderer_maps_its_direction_draw_through_its_own_table() {
         (4, South),
         (65535, East),
     ];
-    let cases: [(MovementType, &[(u16, Direction)]); 5] = [
+    let cases: [(MovementType, &[(u16, Direction)]); 3] = [
         (MovementType::WanderAround, &around),
         (MovementType::WanderUpAndDown, &up_down),
-        (MovementType::WanderDownAndUp, &up_down),
         (MovementType::WanderLeftAndRight, &left_right),
-        (MovementType::WanderRightAndLeft, &left_right),
     ];
     for (movement_type, table) in cases {
         for &(draw, direction) in table {
@@ -270,6 +268,34 @@ fn a_wanderer_stays_inside_its_range_and_may_walk_back_in() {
     assert_eq!(rig.rng.draws(), 6);
     assert_eq!(position(&rig, 1), ORIGIN);
     assert_eq!(facing(&rig, 1), Direction::West);
+}
+
+#[test]
+fn each_wander_axis_refuses_a_step_beyond_its_range_on_both_sides() {
+    use Direction::{East, North, South, West};
+    // Draw 0 and 1 pick the first and second entry of each two-entry table.
+    let cases = [
+        (MovementType::WanderUpAndDown, 0, South),
+        (MovementType::WanderUpAndDown, 1, North),
+        (MovementType::WanderLeftAndRight, 0, West),
+        (MovementType::WanderLeftAndRight, 1, East),
+    ];
+    for (movement_type, draw, direction) in cases {
+        let (dx, dy) = direction.delta();
+        let edge = (ORIGIN.0 + dx, ORIGIN.1 + dy);
+        let mut rig = rig_of(movement_type, (1, 1), &[0, draw, 0, draw, 0]);
+        let mut ran = 0;
+
+        tick_to(&mut rig, &mut ran, 47);
+        assert_eq!(position(&rig, 1), edge, "{movement_type:?} {direction:?}");
+
+        // Frame 79: the same step is outside the range, so it turns in place and draws a delay.
+        tick_to(&mut rig, &mut ran, 79);
+        assert_eq!(rig.rng.draws(), 5, "{movement_type:?} {direction:?}");
+        assert_eq!(position(&rig, 1), edge, "{movement_type:?} {direction:?}");
+        assert_eq!(facing(&rig, 1), direction);
+        assert_eq!((phase(&rig, 1), delay(&rig, 1)), (3, 31));
+    }
 }
 
 #[test]
@@ -427,6 +453,31 @@ fn an_earlier_sprite_slot_releases_its_old_tile_to_a_later_one_in_the_same_frame
 }
 
 #[test]
+fn a_later_sprite_slot_is_refused_the_tile_an_earlier_one_still_holds_mid_step() {
+    // B takes the first sprite slot and A the second. A's walk from (20, 20) to (19, 20)
+    // completes on frame 32 in A's callback, after B's, so B's North step that frame finds A's
+    // source tile still held.
+    let events = vec![
+        mover(1, (20, 21), MovementType::WanderAround, (2, 2)),
+        mover(2, (21, 20), MovementType::WalkLeftAndRight, (2, 2)),
+    ];
+    let mut rig = Rig::new(events, (25, 25));
+    rig.rng = ScriptedRng::new([0, 1, 0]);
+
+    rig.tick(32);
+
+    assert_eq!(position(&rig, 2), (19, 20), "A's walk has completed");
+    assert_eq!(
+        position(&rig, 1),
+        (20, 21),
+        "North onto A's source tile is refused"
+    );
+    assert_eq!(facing(&rig, 1), Direction::North);
+    assert_eq!(rig.rng.draws(), 3, "the refusal draws a fresh delay");
+    assert_eq!(delay(&rig, 1), 31);
+}
+
+#[test]
 fn two_wanderers_draw_in_sprite_slot_order_and_see_each_others_moves() {
     let events = vec![
         mover(1, (20, 20), MovementType::WanderAround, (1, 1)),
@@ -485,6 +536,11 @@ fn a_frozen_frame_neither_draws_nor_advances_a_walk() {
     let mut rig = rig_of(MovementType::WanderAround, (2, 2), &[0, 3]);
     rig.tick(40);
     let before = (position(&rig, 1), step(&rig, 1), rig.rng.draws());
+    assert_eq!(
+        before,
+        ((21, 20), Some((StepKind::Walk, 9)), 2),
+        "the wanderer is nine frames into its first step"
+    );
 
     rig.frozen = true;
     rig.tick(30);

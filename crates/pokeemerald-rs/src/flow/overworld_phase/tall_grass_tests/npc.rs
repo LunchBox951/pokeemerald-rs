@@ -216,8 +216,9 @@ fn the_players_and_an_npcs_effects_coexist_and_each_follows_its_own_owner() {
 
 #[test]
 fn an_npc_whose_step_begins_onto_tall_grass_starts_a_rustling_effect_and_leaves_it_behind() {
-    // The scheduler moves no wanderer yet, so the boy's step is committed to
-    // the live collection by hand, as `walk` does when a movement type steps.
+    // The boy is a fixed-facing type that takes no step of its own, so his step is
+    // committed to the live collection by hand, as `walk` does when a movement
+    // type steps.
     let scene = synthetic_scene_with_tall_grass_sprites_and_events(
         20,
         30,
