@@ -41,17 +41,10 @@ impl Battle {
     }
 
     /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_FLAME_BODY`
-    /// (`battle_util.c:2836`-`:2850`).
-    ///
-    /// The `Random() % 3` roll needs only a living attacker and a damaging
-    /// contact hit, so a target that fainted to the hit still rolls, and the
-    /// roll precedes every burn guard. A zero roll re-enters `SetMoveEffect`
-    /// on the attacker with `HITMARKER_STATUS_ABILITY_EFFECT`, so Shield Dust
-    /// and Safeguard do not stop it, while a Fire type, Water Veil and an
-    /// existing primary status leave the attacker unchanged (see
-    /// [`flame_body_can_land`]). A burn that lands arms the attacker's
-    /// Synchronize, which reflects it onto a surviving holder at
-    /// `MOVEEND_SYNCHRONIZE_ATTACKER` (`battle_util.c:2987`-`:3001`).
+    /// (`battle_util.c:2836`-`:2850`). The roll precedes every burn guard and
+    /// a holder that fainted to the hit still rolls. The ability marker
+    /// bypasses Shield Dust and Safeguard, so [`flame_body_can_land`] stands
+    /// in for the ordinary secondary-burn predicate.
     ///
     /// # Errors
     ///
