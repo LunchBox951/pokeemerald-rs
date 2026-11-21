@@ -335,6 +335,70 @@ fn a_sheet_the_rom_lacks_is_not_found() {
     );
 }
 
+/// A pack whose table is `records`, with every sheet still present.
+fn pack_with_table(records: Vec<assets::DoorAnimationRecord>) -> Vec<PackEntry> {
+    let mut pack: Vec<PackEntry> = entries()
+        .into_iter()
+        .filter(|e| e.id != "door-animation/table")
+        .collect();
+    pack.push(raw_entry(
+        "door-animation/table".to_owned(),
+        DoorAnimationTable::new(records).unwrap().encode(),
+    ));
+    pack
+}
+
+#[test]
+fn a_table_naming_only_a_suffix_of_the_rows_is_refused() {
+    // The ROM's last row followed by its terminator is a valid one-row table,
+    // so only the pack's own table can reject it.
+    let rom = fixture().finish();
+    let last = records().last().cloned().unwrap();
+    with_context(
+        "door-animation-suffix-table",
+        &rom,
+        pack_with_table(vec![last]),
+        |ctx| {
+            let result = locate(ctx, &mut Vec::new());
+            if let Ok(plan) = &result {
+                panic!(
+                    "a one-row suffix table was accepted: table {:#x}, {} rows, {} images",
+                    plan.table,
+                    plan.rows.len(),
+                    plan.images.len()
+                );
+            }
+            assert!(
+                matches!(&result, Err(GenRomProfileError::StructMismatch { id, .. }) if id == "door-animation/table"),
+                "{result:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_table_missing_any_one_row_is_refused() {
+    let rom = fixture().finish();
+    // Dropping a middle row, or the second of the three Battle Tent rows,
+    // keeps every sheet named; the table is still not the checkout's.
+    for dropped in [0, 7, 40, 52] {
+        let mut rows = records();
+        rows.remove(dropped);
+        with_context(
+            "door-animation-dropped-row",
+            &rom,
+            pack_with_table(rows),
+            |ctx| {
+                let result = locate(ctx, &mut Vec::new());
+                assert!(
+                    matches!(&result, Err(GenRomProfileError::StructMismatch { id, .. }) if id == "door-animation/table"),
+                    "row {dropped}: {result:?}"
+                );
+            },
+        );
+    }
+}
+
 #[test]
 fn a_pack_with_a_missing_or_surplus_door_entry_is_refused() {
     let rom = fixture().finish();

@@ -7,6 +7,10 @@
 //! Battle Tower multi-corridor sheet, which upstream builds with
 //! `-mwidth 2 -mheight 4` (`src/field_door.c:120`).
 //!
+//! The pack's table must be exactly the checkout's, so that every required
+//! sheet is named by a row and no row is missing; that is checked before any
+//! search.
+//!
 //! The walk:
 //!
 //! 1. Each sheet is searched in its own packing, uncapped, so the sheets that
@@ -37,7 +41,7 @@ use super::locate::{only_one_matching, to_addr, u16_at_addr, u32_at_addr};
 use super::pack_source::image_tiles;
 use super::plan::{DoorAnimationPlan, DoorRowPlan, ImagePlan, ReportLine, Resolution};
 use super::Context;
-use crate::extract::door_animation::TABLE_ID;
+use crate::extract::door_animation::{records, TABLE_ID};
 
 const TILE_BYTES: u32 = 32;
 /// A `DoorGraphics` row, in bytes.
@@ -94,6 +98,15 @@ pub fn locate(
             reason: format!("is not a door table: {error}"),
         }
     })?;
+    // The profile must describe every door and every sheet the inventory
+    // requires: a table that names fewer would leave required sheets out of
+    // the profile, and the ROM's one-row suffix would still match it.
+    if table.records() != records().as_slice() {
+        return Err(GenRomProfileError::StructMismatch {
+            id: TABLE_ID.to_owned(),
+            reason: "does not hold exactly the rows of the checkout's door table".to_owned(),
+        });
+    }
     let sheets = find_sheets(ctx, table.records())?;
     let base = find_table(ctx, table.records(), &sheets)?;
 

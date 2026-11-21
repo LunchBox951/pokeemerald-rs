@@ -262,6 +262,27 @@ fn a_row_that_disagrees_with_the_profile_is_a_struct_mismatch() {
 }
 
 #[test]
+fn a_sheet_no_row_names_is_refused() {
+    static EXTRA: [ImageRoot; 4] = [
+        IMAGES[0],
+        IMAGES[1],
+        IMAGES[2],
+        image("door-animation/image/general", at(STRAY_SHEET), 16, (1, 1)),
+    ];
+    let mut roots = roots();
+    roots.door_animation.images = &EXTRA;
+    match pack_of(&rom_of(fixture()), &roots) {
+        Err(ImportError::StructMismatch { root, field }) => {
+            assert_eq!(
+                (root, field),
+                ("door-animation/image/general", "DoorGraphics.tiles")
+            );
+        }
+        other => panic!("expected a mismatch, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_bank_past_the_tilesets_sixteen_is_refused() {
     assert_mismatch(
         fixture().write(idx(LITTLEROOT_BANKS), &[10, 10, 6, 6, 6, 6, 6, 16]),

@@ -51,6 +51,18 @@ pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result
         records.push(read_row(&reader, family, index, row)?);
     }
     corroborate_terminator(&reader, family)?;
+    // A sheet no row names would be published with nothing to reach it.
+    if let Some(unnamed) = family.images.iter().find(|image| {
+        !family
+            .rows
+            .iter()
+            .any(|row| image.id.strip_prefix(IMAGE_PREFIX) == Some(row.sheet))
+    }) {
+        return Err(ImportError::StructMismatch {
+            root: unnamed.id,
+            field: "DoorGraphics.tiles",
+        });
+    }
     let table = DoorAnimationTable::new(records).map_err(|_| ImportError::StructMismatch {
         root: TABLE_ID,
         field: "DoorGraphics.metatileNum",
