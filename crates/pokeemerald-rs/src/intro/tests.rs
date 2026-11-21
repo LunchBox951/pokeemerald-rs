@@ -1413,3 +1413,141 @@ fn only_pages_with_genuine_prompts_draw_the_down_arrow() {
         assert_eq!(scene.page_index, page, "page {page} still waits");
     }
 }
+
+// -- Auto-scroll waits draw no arrow (`text.c:865-884`) ------------------------
+
+/// `EXT_CTRL_CODE_SKIP` and `EXT_CTRL_CODE_PAUSE_UNTIL_PRESS`.
+const SKIP: u8 = 0x12;
+const PAUSE_UNTIL_PRESS: u8 = 0x09;
+/// Waiting calls after the arming frame that leave an auto-scroll prompt
+/// waiting; the next one releases it (`TextPrinterWaitAutoMode`,
+/// `text.c:850-863`).
+const AUTO_WAITING_CALLS: usize = 49;
+
+/// Page 0 draws an arrow at its genuine prompts (`speech::page_draws_down_arrow`),
+/// so a stream restarted there would show one if suppression failed.
+fn arrow_scene_with_stream(pixels: &[u8], tokens: Vec<Token>, auto: bool) -> IntroScene {
+    let mut scene = synthetic_scene(pixels, TextSpeed::Instant);
+    scene.down_arrow = crate::textbox::test_down_arrow(SHADOW_GLYPH_PALETTE_INDEX);
+    if auto {
+        scene = IntroScene {
+            printer: scene.printer.with_auto_scroll(),
+            ..scene
+        };
+    }
+    scene.printer.restart(tokens);
+    scene
+}
+
+#[test]
+fn an_auto_scroll_wait_draws_no_arrow_on_any_of_its_fifty_frames() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let stream = |wait| vec![Token::Char('A'), wait, Token::Char('B'), Token::End];
+    let waits = [
+        ("clear", Token::PromptClear),
+        ("scroll", Token::PromptScroll),
+        (
+            "pause until press",
+            Token::ExtCtrl {
+                sub: PAUSE_UNTIL_PRESS,
+                args: vec![],
+            },
+        ),
+    ];
+    for (name, wait) in waits {
+        for input in [NO_INPUT, PRESS_A, PRESS_B] {
+            let mut scene = arrow_scene_with_stream(&pixels, stream(wait.clone()), true);
+            for _ in 0..2 {
+                assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+                assert!(!scene_has_down_arrow(&scene), "{name}: arrow before wait");
+            }
+            let waiting_cursor = scene.printer.cursor();
+            for call in 1..=AUTO_WAITING_CALLS {
+                assert_eq!(scene.tick(input), IntroStatus::Continue);
+                assert!(!scene_has_down_arrow(&scene), "{name}: waiting call {call}");
+                assert_eq!(scene.printer.cursor(), waiting_cursor, "{name}: cursor");
+                assert_eq!(scene.page_index, 0, "{name}: page up");
+            }
+            assert_eq!(scene.tick(input), IntroStatus::Continue);
+            assert!(!scene_has_down_arrow(&scene), "{name}: releasing call");
+            let released = (scene.ops.len(), scene.printer.cursor());
+
+            // Manual mode confirmed on its first waiting frame leaves the same
+            // state, and both then print 'B', end the page, and start page 1
+            // (the restart keeps the printer's mode).
+            let mut manual = arrow_scene_with_stream(&pixels, stream(wait.clone()), false);
+            for _ in 0..2 {
+                let _ = manual.tick(NO_INPUT);
+            }
+            let _ = manual.tick(PRESS_A);
+            assert_eq!(
+                (manual.ops.len(), manual.printer.cursor()),
+                released,
+                "{name}: the page advances as in manual mode"
+            );
+            for scene in [&mut scene, &mut manual] {
+                let mut frames = 0;
+                while scene.page_index == 0 {
+                    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+                    assert!(!scene_has_down_arrow(scene), "{name}: after release");
+                    frames += 1;
+                    assert!(frames <= 8, "{name}: the page never ended");
+                }
+                assert_eq!(scene.page_index, 1, "{name}: next page");
+            }
+            assert!(scene.printer.is_auto_scroll(), "{name}: mode kept");
+        }
+    }
+}
+
+/// A scroll prompt's release fills the 8x16 rectangle at the cursor even when
+/// no arrow was drawn (`TextPrinterClearDownArrow`, `text.c:1180-1188`).
+#[test]
+fn an_auto_scroll_release_erases_the_cursor_rectangle_as_manual_mode_does() {
+    const CURSOR_X: i32 = 2;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let stream = || {
+        vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP,
+                args: vec![2],
+            },
+            Token::PromptScroll,
+            Token::Char('B'),
+            Token::End,
+        ]
+    };
+    let pixel = |scene: &IntroScene, x: i32| {
+        let (px, py) = box_pixel((x, STANDARD_PRINTER_ORIGIN.1));
+        scene.compose().pixel(px, py)
+    };
+
+    let mut auto = arrow_scene_with_stream(&pixels, stream(), true);
+    for _ in 0..2 {
+        let _ = auto.tick(NO_INPUT);
+    }
+    assert_eq!(auto.printer.cursor().0, CURSOR_X);
+    for _ in 0..AUTO_WAITING_CALLS {
+        let _ = auto.tick(NO_INPUT);
+        assert_eq!(pixel(&auto, CURSOR_X + 1), Some(DARK_GREY_GLYPH_COLOR));
+    }
+    let _ = auto.tick(NO_INPUT);
+
+    let mut manual = arrow_scene_with_stream(&pixels, stream(), false);
+    for _ in 0..2 {
+        let _ = manual.tick(NO_INPUT);
+    }
+    let _ = manual.tick(PRESS_A);
+
+    for scene in [&auto, &manual] {
+        assert_eq!(pixel(scene, CURSOR_X - 1), Some(DARK_GREY_GLYPH_COLOR));
+        assert_eq!(pixel(scene, CURSOR_X + 1), Some(Rgb888::BLACK));
+    }
+    let (auto_fb, manual_fb) = (auto.compose(), manual.compose());
+    for y in 0..FRAMEBUFFER_HEIGHT {
+        for x in 0..FRAMEBUFFER_WIDTH {
+            assert_eq!(auto_fb.pixel(x, y), manual_fb.pixel(x, y), "({x}, {y})");
+        }
+    }
+}
