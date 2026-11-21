@@ -10,11 +10,14 @@
 //! `0`, in the order the pointer tables and record lists give.
 //!
 //! `levelDelta` is a decrement, never a level. `TryGenerateBattlePikeWildMon`
-//! (`src/battle_pike.c:1105-1151`) subtracts it from the facility level: from
-//! `FRONTIER_MAX_LEVEL_50` in Level 50 mode, and from the highest level in
-//! the player's party in Open Level mode (floored at
-//! `FRONTIER_MIN_LEVEL_OPEN`). It is therefore a [`PikeLevelDecrement`]
-//! with no conversion to a level, and no accessor named for one.
+//! (`src/battle_pike.c:1105-1151`) subtracts it from the facility level. In
+//! Level 50 mode that is `FRONTIER_MAX_LEVEL_50`. In Open Level mode it is
+//! the highest level in the player's party, and the wild level never falls
+//! below `FRONTIER_MIN_LEVEL_OPEN`: a party below that floor meets the floor
+//! with nothing subtracted, and any other result is raised to the floor after
+//! the subtraction (`:1116-1128`). A highest level of 60 with a decrement of
+//! 4 therefore gives 60, not 56. It is a [`PikeLevelDecrement`] with no
+//! conversion to a level, and no accessor named for one.
 //!
 //! Data only: wild-Pokémon generation, its RNG draws, the level arithmetic,
 //! experience and ability assignment, the Keen Eye and Intimidate encounter
