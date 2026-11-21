@@ -725,6 +725,13 @@ fn score_bad_move_prologue(
     Ok(false)
 }
 
+/// Saturated stats can already yield `u32::MAX` damage, so the product with the
+/// percentage needs the `u64` width `apply_damage_roll` uses.
+fn scale_by_simulated_percent(damage: u32, simulated_damage_percent: u32) -> u32 {
+    let scaled = u64::from(damage) * u64::from(simulated_damage_percent) / u64::from(PERCENT_SCALE);
+    u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -778,7 +785,7 @@ fn estimated_damage(
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
-        return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
+        return Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE));
     }
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
     let damage = if defender_levitate_blocked(move_type, defender.ability()) {
@@ -786,7 +793,7 @@ fn estimated_damage(
     } else {
         fold_ai_type_effectiveness(damage, move_type, defender.types())
     };
-    Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
+    Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2315,6 +2322,39 @@ mod tests {
         let control =
             estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &plusle, PERCENT_SCALE).unwrap();
         assert!(boosted > control, "{boosted} vs {control}");
+    }
+
+    #[test]
+    fn a_saturated_estimate_does_not_overflow_the_percentage() {
+        let dex = Dex::new();
+        let planted = |species, moves, stat| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                100,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .unwrap()
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: stat,
+                    defense: stat,
+                    speed: stat,
+                    sp_attack: stat,
+                    sp_defense: stat,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(TREECKO, vec![POUND, MoveId::STRUGGLE], u32::MAX);
+        let player = planted(TORCHIC, vec![SCRATCH], 1);
+        for move_id in [POUND, MoveId::STRUGGLE] {
+            let estimate = estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+            assert_eq!(estimate, Ok(u32::MAX), "{move_id:?}");
+        }
     }
 
     #[test]
