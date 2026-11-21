@@ -1196,6 +1196,39 @@ mod tests {
     }
 
     #[test]
+    fn metatile_layers_rebases_secondary_ids_into_the_secondary_table() {
+        let (primary, primary_attrs) = synthetic_metatiles_and_attrs();
+        let primary_attrs = MetatileAttributeTable::new(&primary_attrs);
+        let mut secondary = Vec::new();
+        push_plain_screen_entries(&mut secondary, 7, 8);
+        push_plain_screen_entries(&mut secondary, 9, 8);
+        let mut secondary_attrs = Vec::new();
+        secondary_attrs.extend_from_slice(&encoded_layer_type(MetatileLayerType::Covered));
+        secondary_attrs.extend_from_slice(&encoded_layer_type(MetatileLayerType::Split));
+        let secondary_attrs = MetatileAttributeTable::new(&secondary_attrs);
+        let (entries, layer_type) = metatile_layers(
+            NUM_METATILES_IN_PRIMARY + 1,
+            &primary,
+            &secondary,
+            &primary_attrs,
+            &secondary_attrs,
+        )
+        .unwrap();
+        assert_eq!(layer_type, MetatileLayerType::Split);
+        assert_eq!(entries[0].tile_index(), 9);
+        let (entries, layer_type) = metatile_layers(
+            NUM_METATILES_IN_PRIMARY,
+            &primary,
+            &secondary,
+            &primary_attrs,
+            &secondary_attrs,
+        )
+        .unwrap();
+        assert_eq!(layer_type, MetatileLayerType::Covered);
+        assert_eq!(entries[7].tile_index(), 7);
+    }
+
+    #[test]
     fn metatile_layers_is_none_when_the_table_does_not_cover_the_id() {
         let (metatiles, attrs) = synthetic_metatiles_and_attrs();
         let attrs = MetatileAttributeTable::new(&attrs);
