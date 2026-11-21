@@ -938,3 +938,5 @@ fn a_pulled_land_encounter_draws_rate_coin_pick_then_level() {
     );
     assert_eq!(rng.draws(), 4);
 }
+
+mod repel_tests;

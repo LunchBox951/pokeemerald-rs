@@ -27,7 +27,7 @@ use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
-use crate::flow::wild_encounter;
+use crate::flow::wild_encounter::{self, StepEncounterInputs};
 use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
@@ -505,7 +505,7 @@ impl OverworldPhase {
             &runtime,
             rolled_landing,
             slot_zero_ability,
-            rate_modifiers,
+            &StepEncounterInputs::new(rate_modifiers, &self.save1, self.lead.as_ref()),
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp
