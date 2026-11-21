@@ -85,6 +85,21 @@ fn tick_to(rig: &mut Rig, ran: &mut usize, frame: usize) {
 }
 
 #[test]
+fn the_aliased_wander_types_stay_inert() {
+    // Issue #3412 schedules the seven checkpoint types only; upstream aliases these two to the
+    // up-and-down and left-and-right callbacks, and no upstream map uses either.
+    for movement_type in [
+        MovementType::WanderDownAndUp,
+        MovementType::WanderRightAndLeft,
+    ] {
+        let mut rig = rig_of(movement_type, (2, 2), &[0, 0, 0, 0, 0]);
+        rig.tick(100);
+        assert_eq!(position(&rig, 1), ORIGIN, "{movement_type:?}");
+        assert_eq!(rig.rng.draws(), 0, "{movement_type:?}");
+    }
+}
+
+#[test]
 fn a_wanderer_draws_delay_direction_then_delay_on_upstreams_frames() {
     // Draws: delay 32 (frame 1), East (frame 32), delay 32 (frame 48), North (frame 79),
     // delay 32 (frame 95).
