@@ -12,8 +12,8 @@ use super::OverworldPhase;
 use crate::overworld::oldale_town_npc_reposition as oldale;
 
 /// A grid roomy enough for every checkpoint placement plus the player's offset from it.
-const GRID: u16 = 100;
-const FLOOR_ELEVATION: u8 = 3;
+pub(super) const GRID: u16 = 100;
+pub(super) const FLOOR_ELEVATION: u8 = 3;
 
 const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
 
@@ -76,7 +76,7 @@ const fn authored_facing(movement_type: MovementType) -> Direction {
 /// A phase over an open synthetic room whose live collection is seeded from `events`, as
 /// `connections::seed_object_events` seeds it from the scene's own events, without the sprite
 /// sheets binding the scene to those events would need.
-fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase {
+pub(super) fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase {
     let mut phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(GRID, GRID),
         map,
@@ -93,7 +93,7 @@ fn phase_over(map: MapId, events: &'static assets::MapEvents) -> OverworldPhase 
     phase
 }
 
-fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
+pub(super) fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
     for _ in 0..frames {
         phase.step(ButtonState::new());
     }
@@ -101,7 +101,7 @@ fn idle_frames(phase: &mut OverworldPhase, frames: usize) {
 
 /// Stands the player where `local_id` is in the spawn window but on neither its row nor its
 /// column, so no sight cone or interaction can reach.
-fn stand_near(phase: &mut OverworldPhase, local_id: u8) {
+pub(super) fn stand_near(phase: &mut OverworldPhase, local_id: u8) {
     let template = phase.object_events.get(local_id).unwrap().template();
     phase.player = PlayerState::new(
         (i32::from(template.x) + 3, i32::from(template.y) + 2),
@@ -116,6 +116,11 @@ fn assert_holds_authored_facing(
     movement_type: MovementType,
     what: &str,
 ) {
+    // Only this placement runs, on the phase's own stream: the map's other placements include
+    // random-facing ones, which legitimately draw from it.
+    let whole_map = phase.object_events.clone();
+    let template = whole_map.get(local_id).unwrap().template();
+    phase.object_events = ObjectEventCollection::from_templates(std::slice::from_ref(template));
     stand_near(phase, local_id);
     let rng_before = phase.rng.state();
     idle_frames(phase, 4);
@@ -145,6 +150,7 @@ fn assert_holds_authored_facing(
         phase.dialog.is_none() && phase.sight_approach.is_none() && !phase.in_battle(),
         "{what}: the loop under test was not preempted"
     );
+    phase.object_events = whole_map;
 }
 
 #[test]
@@ -281,7 +287,11 @@ fn an_open_start_menu_freezes_the_first_callback_until_it_closes() {
 }
 
 #[test]
-fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_scheduled() {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pack and two sibling transitions; splitting would re-set-up the pack"
+)]
+fn a_warp_reseeds_and_admits_only_objects_in_view_and_a_crossing_keeps_the_live_visit() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -318,9 +328,16 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
         assert_eq!(phase.map_id, OLDALE_TOWN, "{what} completed");
         for template in phase.scene.map_events().object_events {
             let entry = phase.object_events.get(template.local_id).unwrap();
-            assert!(
-                !entry.is_active(),
-                "{what}: local {} is unscheduled",
+            // Map load's admission pass spawns the unhidden objects inside the spawn window of
+            // the arrival tile (`TrySpawnObjectEvents`, `overworld.c:2163`), and no others.
+            assert_eq!(
+                entry.is_active(),
+                engine::overworld::object_event_is_in_view(template, phase.player.position())
+                    && engine::overworld::object_event_is_visible(
+                        template,
+                        &phase.save1.event_data
+                    ),
+                "{what}: local {} is admitted exactly when it is in view and unhidden",
                 template.local_id
             );
             assert_eq!(
@@ -363,10 +380,56 @@ fn a_map_transition_reseeds_unadmitted_authored_facing_and_the_new_visit_is_sche
     phase.warp_to(OLDALE_TOWN, 0);
     assert_reseeded(&mut phase, "the warp");
 
+    // A crossing is not a map load: upstream leaves the active objects in place
+    // (`LoadMapFromCameraTransition`, `src/overworld.c:784-825`), so with nothing to shift the
+    // live visit is exactly what it was, turned facings and admissions included.
     let mut phase = build();
     turn_everyone_south_and_run(&mut phase);
-    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
-    assert_reseeded(&mut phase, "the connection crossing");
+    let live_visit = |phase: &OverworldPhase| -> Vec<_> {
+        phase
+            .object_events
+            .iter()
+            .map(|entry| {
+                (
+                    entry.template().local_id,
+                    entry.is_active(),
+                    entry.state().facing(),
+                )
+            })
+            .collect()
+    };
+    let before = live_visit(&phase);
+    assert!(
+        before.iter().any(|&(_, active, _)| active),
+        "setup: some entries are admitted"
+    );
+    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5), (0, 0)));
+    assert_eq!(
+        phase.map_id, OLDALE_TOWN,
+        "the connection crossing completed"
+    );
+    let after = live_visit(&phase);
+    for template in events.object_events {
+        let (id, was_active, was_facing) = *before
+            .iter()
+            .find(|&&(id, ..)| id == template.local_id)
+            .unwrap();
+        let (_, now_active, now_facing) = *after.iter().find(|&&(i, ..)| i == id).unwrap();
+        assert_eq!(
+            now_active, was_active,
+            "local {id}: no admission by the crossing"
+        );
+        assert_eq!(
+            now_facing,
+            if was_active {
+                was_facing
+            } else {
+                authored_facing(template.movement_type)
+            },
+            "local {id}: an admitted entry stays live as it was; one never admitted has no \
+             object to carry and is seeded afresh"
+        );
+    }
 
     let _ = std::fs::remove_file(&path);
 }

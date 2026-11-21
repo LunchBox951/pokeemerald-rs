@@ -1,9 +1,14 @@
-use super::{CgbAdsr, CgbChannelNumber, CgbVoice};
-use crate::psg::WaveChannel;
+use super::{CgbAdsr, CgbChannelNumber, CgbVoice, StereoAcc};
+use crate::pitch::SAMPLES_PER_FRAME;
+use crate::psg::{FrameClocks, FrameSequencer, WaveChannel};
 use std::sync::Arc;
 
 pub(super) const TEST_KEY: u8 = 60;
 pub(super) const FULL_TRACK_VOLUME: u8 = u8::MAX;
+/// The largest track volume an unmodulated track reaches; two such sides centre
+/// to envelope level 15, the last `gCgb3Vol` entry. `FULL_TRACK_VOLUME` is an
+/// amplitude-modulated extreme that lifts a centred wave past the table.
+pub(super) const MAX_TRACK_VOLUME: u8 = 127;
 pub(super) const FULL_VELOCITY: u8 = 127;
 pub(super) const MAX_ADSR_LEVEL: u8 = 15;
 pub(super) const HALF_DUTY: u8 = 2;
@@ -28,6 +33,15 @@ pub(super) struct TestNote {
 }
 
 impl TestNote {
+    /// A centred note whose wave envelope stays inside `gCgb3Vol`.
+    pub(super) fn unmodulated() -> Self {
+        Self {
+            track_right: MAX_TRACK_VOLUME,
+            track_left: MAX_TRACK_VOLUME,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn at_key(key: u8) -> Self {
         Self {
             note_key: key,
@@ -160,4 +174,57 @@ pub(super) fn upward_sweep(period_ticks: u8, shift: u8) -> u8 {
 
 pub(super) fn full_swing_wave() -> [i8; 32] {
     WaveChannel::decode_wave_ram(&[FULL_SWING_WAVE_BYTE; 16])
+}
+
+/// The mixer's shared frame sequencer, kept across every note a test renders so
+/// that a voice's clocks fall where the hardware's would, wherever it began.
+pub(super) struct SharedClock {
+    sequencer: FrameSequencer,
+    clocks: FrameClocks,
+}
+
+impl SharedClock {
+    pub(super) fn new() -> Self {
+        Self {
+            sequencer: FrameSequencer::default(),
+            clocks: FrameClocks::with_capacity(4, 8, 4),
+        }
+    }
+
+    /// Settles one software frame the way `Mixer::mix_frame` does, then renders
+    /// `SAMPLES_PER_FRAME` samples.
+    pub(super) fn frame(&mut self, voice: &mut CgbVoice, extra_iteration: bool) -> Vec<StereoAcc> {
+        self.sequencer
+            .advance_clocks_into(SAMPLES_PER_FRAME, &mut self.clocks);
+        voice.set_sequencer_step(self.clocks.start_step);
+        voice.begin_frame(extra_iteration);
+        self.render_advanced(voice, SAMPLES_PER_FRAME)
+    }
+
+    /// Renders the next `samples` of an already-begun frame without any
+    /// software step, as a buffer boundary inside a frame would.
+    pub(super) fn chunk(&mut self, voice: &mut CgbVoice, samples: usize) -> Vec<StereoAcc> {
+        self.sequencer
+            .advance_clocks_into(samples, &mut self.clocks);
+        self.render_advanced(voice, samples)
+    }
+
+    fn render_advanced(&self, voice: &mut CgbVoice, samples: usize) -> Vec<StereoAcc> {
+        let mut acc = vec![(0, 0); samples];
+        voice.render_clocked(
+            &mut acc,
+            &self.clocks.sweep,
+            &self.clocks.length,
+            &self.clocks.envelope,
+        );
+        acc
+    }
+}
+
+/// The loudest sample's magnitude on either side.
+pub(super) fn peak_magnitude(acc: &[StereoAcc]) -> i32 {
+    acc.iter()
+        .map(|&(left, right)| left.abs().max(right.abs()))
+        .max()
+        .unwrap_or(0)
 }

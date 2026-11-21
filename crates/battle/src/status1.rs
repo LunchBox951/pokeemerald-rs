@@ -154,7 +154,8 @@ pub enum SleepTick {
     /// The battler was not asleep; nothing changed.
     NotAsleep,
     /// The battler stays asleep with the carried status and its chosen move
-    /// is cancelled (`BattleScript_MoveUsedIsAsleep`).
+    /// is cancelled (`BattleScript_MoveUsedIsAsleep`), unless it is Snore or
+    /// Sleep Talk (`src/battle_util.c:2038`).
     StillAsleep(Status1),
     /// The duration ran out: the battler is [`Status1::Healthy`] and its
     /// chosen move proceeds (`BattleScript_MoveUsedWokeUp`).
@@ -165,8 +166,10 @@ pub enum SleepTick {
 /// (`pokeemerald/src/battle_util.c:2029`-`:2043`). A remaining count below the
 /// decrement clears the sleep bits outright rather than underflowing.
 ///
-/// Draws nothing. Uproar's wake-up (`:2017`-`:2025`) and the Snore and Sleep
-/// Talk exemption (`:2038`) are not modelled.
+/// Draws nothing. Uproar's wake-up (`:2017`-`:2025`) is not modelled. The
+/// Snore and Sleep Talk exemption (`:2038`) leaves the decrement alone and
+/// only lifts the cancel, so the battle applies it after this returns
+/// [`SleepTick::StillAsleep`].
 #[must_use]
 pub const fn tick_sleep(status1: Status1, ability: AbilityId) -> SleepTick {
     let Status1::Asleep { turns } = status1.normalised() else {
