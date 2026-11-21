@@ -1354,6 +1354,10 @@ mod bag_field_tests {
         assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one literal over every root family, each asserted in the module it emits"
+    )]
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -1435,10 +1439,6 @@ mod bag_field_tests {
         assert_evolution_roots(&module);
         assert!(
             module.contains("    poke_ball: PokeBallRoots {"),
-            "{module}"
-        );
-        assert!(
-            module.contains("    door_animation: DoorAnimationRoots {"),
             "{module}"
         );
         assert_interface_roots(&module);

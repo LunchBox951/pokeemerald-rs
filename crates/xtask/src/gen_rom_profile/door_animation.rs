@@ -119,7 +119,7 @@ pub fn locate(
         ReportLine::unique(
             TABLE_ID,
             base,
-            (table.records().len() as u32 + 1) * ROW_BYTES,
+            row_addr(base, table.records().len() + 1) - base,
         )
         .with(Resolution::StructDerived)
         .local_symbol("sDoorAnimGraphicsTable")

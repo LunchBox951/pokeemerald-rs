@@ -193,6 +193,11 @@ impl DoorAnimationTable {
     }
 
     /// The schema bytes of the `door-animation/table` entry.
+    ///
+    /// # Panics
+    ///
+    /// Never for a table [`DoorAnimationTable::new`] built: it bounds the
+    /// record count and every sheet name to the widths the schema writes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -254,7 +259,7 @@ impl DoorAnimationTable {
 fn check_record(record: &DoorAnimationRecord) -> Result<(), DoorTableError> {
     let sheet = &record.sheet;
     let name_ok = !sheet.is_empty()
-        && sheet.len() <= usize::from(u8::MAX)
+        && u8::try_from(sheet.len()).is_ok()
         && sheet
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');

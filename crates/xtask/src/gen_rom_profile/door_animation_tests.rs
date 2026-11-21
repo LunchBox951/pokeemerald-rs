@@ -133,7 +133,7 @@ fn located(name: &str, rom: &[u8]) -> Result<DoorAnimationPlan, GenRomProfileErr
 fn assert_table_not_pinned(result: Result<DoorAnimationPlan, GenRomProfileError>) {
     match result {
         Err(GenRomProfileError::StructMismatch { id, .. }) => {
-            assert_eq!(id, "door-animation/table")
+            assert_eq!(id, "door-animation/table");
         }
         other => panic!("expected the table to be unpinned, got {other:?}"),
     }

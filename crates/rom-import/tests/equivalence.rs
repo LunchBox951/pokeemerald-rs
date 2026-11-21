@@ -719,7 +719,10 @@ fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
 /// door, with the sheet's size, the sound, size class and palette banks
 /// upstream's `sDoorAnimGraphicsTable` gives each (`src/field_door.c:175-176`,
 /// `:229-230`, `:273`, `:215`).
-const CHECKPOINT_DOORS: [(u16, (u32, u32), DoorSound, DoorSize, [u8; 8]); 3] = [
+/// A door metatile, its sheet's size, sound, size class and palette banks.
+type CheckpointDoor = (u16, (u32, u32), DoorSound, DoorSize, [u8; 8]);
+
+const CHECKPOINT_DOORS: [CheckpointDoor; 3] = [
     (
         0x248,
         (16, 96),
