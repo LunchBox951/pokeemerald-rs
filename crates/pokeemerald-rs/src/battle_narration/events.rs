@@ -114,6 +114,9 @@ pub(super) fn requests(
     if let Some(requests) = status_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = flame_body_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = end_turn_and_spore_results(narrator, event) {
         return Ok(requests);
     }
@@ -473,6 +476,32 @@ fn yawn_protection_results(
     Some(vec![table(id::PKMNSXMADEITINEFFECTIVE, context)])
 }
 
+/// Flame Body's contact burn and its Synchronize reflection
+/// (`gGotBurnedStringIds[B_MSG_STATUSED_BY_ABILITY]`, `src/battle_message.c:1090`-
+/// `:1094`), whose Fire-type protection shares the poison reflection's
+/// `STRINGID_PKMNSXHADNOEFFECTONY` arm in [`status_results`].
+fn flame_body_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let base = narrator.context();
+    let request = match *event {
+        BattleEvent::BurnedByFlameBody { by_player, .. } => reflected(
+            id::PKMNBURNEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::FLAME_BODY,
+            Holder::Target,
+        ),
+        BattleEvent::BurnedByAttackerSynchronize { by_player, .. } => reflected(
+            id::PKMNBURNEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::SYNCHRONIZE,
+            Holder::User,
+        ),
+        _ => return None,
+    };
+    Some(vec![request])
+}
+
 /// Status moves and the abilities that pass a status on.
 fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let base = narrator.context();
@@ -533,27 +562,6 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             AbilityId::POISON_POINT,
             Holder::Target,
         ),
-        BattleEvent::BurnedByFlameBody { by_player, .. } => reflected(
-            id::PKMNBURNEDBY,
-            base,
-            Side::user(by_player),
-            AbilityId::FLAME_BODY,
-            Holder::Target,
-        ),
-        BattleEvent::BurnedByAttackerSynchronize { by_player, .. } => reflected(
-            id::PKMNBURNEDBY,
-            base,
-            Side::user(by_player),
-            AbilityId::SYNCHRONIZE,
-            Holder::User,
-        ),
-        BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, .. } => reflected(
-            id::PKMNSXHADNOEFFECTONY,
-            base,
-            Side::user(by_player),
-            AbilityId::SYNCHRONIZE,
-            Holder::User,
-        ),
         BattleEvent::ParalyzedByAttackerSynchronize { by_player, .. } => reflected(
             id::PKMNWASPARALYZEDBY,
             base,
@@ -575,7 +583,8 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             AbilityId::SYNCHRONIZE,
             Holder::Target,
         ),
-        BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, .. } => reflected(
+        BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, .. }
+        | BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, .. } => reflected(
             id::PKMNSXHADNOEFFECTONY,
             base,
             Side::user(by_player),
