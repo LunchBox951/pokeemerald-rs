@@ -52,7 +52,7 @@ use engine::overworld::wild_encounter::{
 };
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
-use engine::save::Pokemon;
+use engine::save::{Pokemon, SaveBlock1};
 
 use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
@@ -94,6 +94,22 @@ pub(super) struct StepEncounterInputs<'a> {
     pub(super) party: &'a [Pokemon],
     /// The owned lead, whose live HP and level override its saved slot.
     pub(super) lead: Option<&'a LoadedLead>,
+}
+
+impl<'a> StepEncounterInputs<'a> {
+    /// The inputs for a step on `save1`'s party, with the owned `lead` over its saved slot.
+    pub(super) fn new(
+        rate_modifiers: EncounterRateModifiers,
+        save1: &'a SaveBlock1,
+        lead: Option<&'a LoadedLead>,
+    ) -> Self {
+        Self {
+            rate_modifiers,
+            event_data: &save1.event_data,
+            party: &save1.player_party,
+            lead,
+        }
+    }
 }
 
 impl StepEncounterInputs<'_> {

@@ -334,7 +334,7 @@ mod tests {
     fn repel_step_count_is_an_ordinary_variable_that_survives_temporary_clearing() {
         assert_eq!(VAR_REPEL_STEP_COUNT, 0x4021);
         assert!((VARS_START..=VARS_END).contains(&VAR_REPEL_STEP_COUNT));
-        assert!(VAR_REPEL_STEP_COUNT > TEMP_VARS_END);
+        const { assert!(VAR_REPEL_STEP_COUNT > TEMP_VARS_END) };
         let mut data = EventData::default();
         data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
         data.clear_temp_field_event_data();
