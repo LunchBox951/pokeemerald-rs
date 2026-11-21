@@ -202,29 +202,28 @@ pub fn allow_wild_check_on_new_metatile(rng: &mut impl RandomSource) -> bool {
     rng.next_u16() % NEW_METATILE_ROLL_RANGE < NEW_METATILE_CHECK_CHANCE
 }
 
-/// `TryGetRandomWildMonIndexByType`, `src/wild_encounter.c:914-934`.
+/// Picks one land slot whose species has the `wanted` type, each with equal odds.
+///
+/// Draws once, and only when some but not all slots match: with none there is
+/// nothing to pick, and with all twelve the pull would change nothing
+/// (`TryGetRandomWildMonIndexByType`, `src/wild_encounter.c:914-934`).
 fn try_random_land_slot_by_type(
     land: &LandEncounters,
     wanted: Type,
     rng: &mut impl RandomSource,
 ) -> Option<usize> {
     let species_table = SpeciesTable::new();
-    let mut matching_slots = [0usize; assets::LAND_SLOTS];
-    let mut matching_count = 0;
-    for (slot, mon) in land.mons.iter().enumerate() {
-        let has_type = species_table
-            .get(mon.species)
-            .is_some_and(|stats| stats.types.contains(&wanted));
-        if has_type {
-            matching_slots[matching_count] = slot;
-            matching_count += 1;
-        }
-    }
-    if matching_count == 0 || matching_count == assets::LAND_SLOTS {
+    let matching_slots = || {
+        land.mons.iter().enumerate().filter_map(|(slot, mon)| {
+            let stats = species_table.get(mon.species)?;
+            stats.types.contains(&wanted).then_some(slot)
+        })
+    };
+    let matching_count = matching_slots().count();
+    if matching_count == 0 || matching_count == land.mons.len() {
         return None;
     }
-    let pick = usize::from(rng.next_u16()) % matching_count;
-    Some(matching_slots[pick])
+    matching_slots().nth(usize::from(rng.next_u16()) % matching_count)
 }
 
 /// `TryGetAbilityInfluencedWildMonIndex`, `src/wild_encounter.c:936-953`; an egg lead is `None`.
