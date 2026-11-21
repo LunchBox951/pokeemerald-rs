@@ -136,10 +136,8 @@ fn the_real_pack_draws_every_icon_inside_its_rectangle() {
 #[test]
 fn a_huge_offset_leaves_the_sheet_instead_of_wrapping() {
     let sheet = sheet_with(&[(0, 0, 5)]);
-    // Icon 1 starts at sheet x 8; 8 + (u32::MAX - 7) wraps to 0 if unchecked.
     assert_eq!(sheet.pixel(1, u32::MAX - 7, 0), None);
     assert_eq!(sheet.pixel(10, 0, u32::MAX - 15), None);
-    // The largest offsets on either axis also leave the sheet.
     assert_eq!(sheet.pixel(1, u32::MAX, 0), None);
     assert_eq!(sheet.pixel(0, 0, u32::MAX), None);
 }

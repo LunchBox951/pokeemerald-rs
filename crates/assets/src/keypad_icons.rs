@@ -93,7 +93,6 @@ impl KeypadIconSheet {
         let tile = u32::from(*TILE_OFFSETS.get(usize::from(id))?);
         let sheet_x = (tile % SHEET_TILE_COLUMNS) * TILE_SIZE;
         let sheet_y = (tile / SHEET_TILE_COLUMNS) * TILE_SIZE;
-        // A caller offset can be any `u32`: an overflowing sum is off the sheet.
         let sheet_x = sheet_x.checked_add(x)?;
         let sheet_y = sheet_y.checked_add(y)?;
         if sheet_x >= SHEET_WIDTH || sheet_y >= SHEET_HEIGHT {
