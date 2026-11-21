@@ -22,8 +22,9 @@
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
-//! [`battle_pike_wild_mons`]), and the Battle Pyramid floor-item and Pickup
-//! distributions (see [`battle_pyramid_items`]); more
+//! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
+//! distributions (see [`battle_pyramid_items`]), and the Trainer Hill prize
+//! lists (see [`trainer_hill_prizes`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -84,6 +85,7 @@ pub mod script_refs;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
+pub mod trainer_hill_prizes;
 pub mod trainers;
 pub mod type_chart;
 pub mod wild_encounters;
@@ -189,6 +191,9 @@ pub use species::{
 };
 pub use species_names::SpeciesNames;
 pub use tmhm_learnsets::{is_hm_move, TmHmLearnsets, TmHmSlot};
+pub use trainer_hill_prizes::{
+    prize_item, prize_list, PrizeListError, PRIZE_LISTS_PER_SET, PRIZE_LIST_LEN, PRIZE_SET_COUNT,
+};
 pub use trainers::{
     AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
     TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,

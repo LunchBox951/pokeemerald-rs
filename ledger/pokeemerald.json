@@ -35493,6 +35493,26 @@
       "status": "pending"
     },
     "src/trainer_hill.c": {
+      "artifacts": {
+        "sPrizeListSets": {
+          "reason": "src/trainer_hill.c:194-198 sPrizeListSets, transcribed as the two-element set axis of the prize catalog (sPrizeLists1 then sPrizeLists2) behind prize_list/prize_item, which refuse a set not below 2. Pinned by unit tests. Data only: the set selection by challenge mode and the prize choice are NOT modelled.",
+          "rust_target": "crates/assets/src/trainer_hill_prizes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPrizeLists1": {
+          "reason": "src/trainer_hill.c:144-153 sPrizeListRareCandy1 through sPrizeListEarthQuake, with the sPrizeLists1 list table (:166-178), transcribed as the first set's 10 lists of 6 ItemId values (the Rare Candy, Luxury Ball, Max Revive, Max Ether and Elixir lists, then the Roar, Sludge Bomb, Toxic, Sunny Day and Earthquake TM lists), behind prize_list/prize_item, which refuse an out-of-range set, list or entry. Pinned list by list and entry by entry against raw ITEM_* values by unit tests. Data only: the prize choice from the clear time, the challenge modes and granting the reward are NOT modelled.",
+          "rust_target": "crates/assets/src/trainer_hill_prizes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPrizeLists2": {
+          "reason": "src/trainer_hill.c:155-164 sPrizeListRareCandy2 through sPrizeListAttract, with the sPrizeLists2 list table (:180-192), transcribed as the second set's 10 lists of 6 ItemId values (the same five headline items as the first set, then the Brick Break, Torment, Skill Swap, Giga Drain and Attract TM lists), behind prize_list/prize_item, which refuse an out-of-range set, list or entry. Pinned list by list and entry by entry against raw ITEM_* values by unit tests. Data only: the prize choice from the clear time, the challenge modes and granting the reward are NOT modelled.",
+          "rust_target": "crates/assets/src/trainer_hill_prizes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
