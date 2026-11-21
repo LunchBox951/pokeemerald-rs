@@ -2,6 +2,8 @@
 //! `pokeemerald/src/field_control_avatar.c:614-630`), split out of
 //! [`super::step`] beside [`super::field_poison`].
 
+use engine::overworld::{TilePos, WarpTrigger};
+
 use super::OverworldPhase;
 
 /// `VAR_FRIENDSHIP_STEP_COUNTER` (`pokeemerald/include/constants/vars.h:60`).
@@ -11,9 +13,8 @@ const VAR_FRIENDSHIP_STEP_COUNTER: u16 = 0x402A;
 const FRIENDSHIP_STEP_PERIOD: u16 = 128;
 
 impl OverworldPhase {
-    /// `UpdateFriendshipStepCounter` for one completed step the caller has
-    /// screened as reaching `TryStartStepCountScript`
-    /// (`field_control_avatar.c:536-545`): advances
+    /// `UpdateFriendshipStepCounter` for a completed step that reaches
+    /// `TryStartStepCountScript` (`field_control_avatar.c:536-545`): advances
     /// [`VAR_FRIENDSHIP_STEP_COUNTER`] modulo 128 and, on the wrap, runs the
     /// walking `AdjustFriendship` over all six party slots in order.
     ///
@@ -22,7 +23,16 @@ impl OverworldPhase {
     /// (`union_room.c:4307-4311`). The counter is a saved event var, so Save
     /// and Continue keep it mid-cycle. Each increment wraps as `u16`'s, like
     /// the C `(*ptr)++`.
-    pub(super) fn update_friendship_step_counter(&mut self) {
+    pub(super) fn update_friendship_step_counter(
+        &mut self,
+        landed: Option<TilePos>,
+        door_warp: Option<WarpTrigger>,
+    ) {
+        // A coord event (`landed` withheld) or a door-shaped warp claims the
+        // step before `TryStartStepCountScript` (`:483-490`).
+        if landed.is_none() || door_warp.is_some() {
+            return;
+        }
         if self.map_id == assets::MapId("MAP_UNION_ROOM") {
             return;
         }
