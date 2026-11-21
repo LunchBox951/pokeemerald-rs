@@ -47,6 +47,7 @@ mod animated_door;
 mod battle_start_stats;
 mod connections;
 mod escalator_arrival;
+mod field_friendship;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -1091,6 +1092,8 @@ mod door_sequencing_tests;
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
 mod fainted_lead_party_tests;
+#[cfg(test)]
+mod field_friendship_tests;
 #[cfg(test)]
 mod field_input_ordering_tests;
 #[cfg(test)]
