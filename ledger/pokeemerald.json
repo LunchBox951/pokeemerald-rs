@@ -28991,6 +28991,62 @@
       "status": "pending"
     },
     "src/battle_factory.c": {
+      "artifacts": {
+        "sMoveStyles": {
+          "reason": "sMoveStyles (src/battle_factory.c:113-122) re-expressed as FactoryStyle::LISTED, the seven listed styles in scan order (Preparation, Slow and Steady, Endurance, High Risk, Weakening, Unpredictable, Weather), with FACTORY_STYLE_NONE excluded. The lists overlap on MOVE_SNATCH (Preparation and Slow and Steady), so a first-match scan classifies it Preparation; membership is kept in both lists. GetMoveBattleStyle (:692-705) is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_DependsOnTheBattlesFlow": {
+          "reason": "sMoves_DependsOnTheBattlesFlow (src/battle_factory.c:106-110) re-expressed as the ordered move list FactoryStyle::Weather.moves() (5 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_Endurance": {
+          "reason": "sMoves_Endurance (src/battle_factory.c:88-95) re-expressed as the ordered move list FactoryStyle::Endurance.moves() (27 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_HighRiskHighReturn": {
+          "reason": "sMoves_HighRiskHighReturn (src/battle_factory.c:79-86) re-expressed as the ordered move list FactoryStyle::HighRisk.moves() (26 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_ImpossibleToPredict": {
+          "reason": "sMoves_ImpossibleToPredict (src/battle_factory.c:64-69) re-expressed as the ordered move list FactoryStyle::Unpredictable.moves() (14 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_SlowAndSteady": {
+          "reason": "sMoves_SlowAndSteady (src/battle_factory.c:97-104) re-expressed as the ordered move list FactoryStyle::SlowSteady.moves() (32 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_TotalPreparation": {
+          "reason": "sMoves_TotalPreparation (src/battle_factory.c:55-62) re-expressed as the ordered move list FactoryStyle::Preparation.moves() (27 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sMoves_WeakeningTheFoe": {
+          "reason": "sMoves_WeakeningTheFoe (src/battle_factory.c:71-77) re-expressed as the ordered move list FactoryStyle::Weakening.moves() (19 moves, MoveId values, MOVE_NONE terminator dropped and not a member). Data only: GetMoveBattleStyle's scan is not ported.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sRequiredMoveCounts": {
+          "reason": "sRequiredMoveCounts (src/battle_factory.c:45-53) re-expressed as FactoryStyle::required_move_count: 3 for Preparation, Slow and Steady and Endurance, 2 for High Risk, Weakening, Unpredictable and Weather; FACTORY_STYLE_NONE has no count (None). Data only: no opponent analysis consumes it yet.",
+          "rust_target": "crates/assets/src/battle_factory_styles.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

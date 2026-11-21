@@ -19,7 +19,9 @@
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
 //! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
-//! normal-ribbon description lines (see [`ribbon_descriptions`]); more
+//! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
+//! Factory move-style lists and required counts (see
+//! [`battle_factory_styles`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -45,6 +47,7 @@ pub mod abilities;
 pub mod arena_mind_ratings;
 pub mod audio;
 pub mod battle_anim;
+pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod bundled_overworld;
 pub mod decorations;
@@ -94,6 +97,7 @@ pub use audio::{
     ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice,
     Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
+pub use battle_factory_styles::{FactoryStyle, FACTORY_LISTED_STYLE_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
