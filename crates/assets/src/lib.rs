@@ -23,8 +23,9 @@
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
-//! distributions (see [`battle_pyramid_items`]), and the Trainer Hill prize
-//! lists (see [`trainer_hill_prizes`]); more
+//! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
+//! lists (see [`trainer_hill_prizes`]), and the slot-machine reel strips and
+//! starting positions (see [`slot_machine_reels`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -82,6 +83,7 @@ pub mod pokedex;
 pub mod pokenav_city_maps;
 pub mod ribbon_descriptions;
 pub mod script_refs;
+pub mod slot_machine_reels;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -184,6 +186,10 @@ pub use pokedex::{
 };
 pub use ribbon_descriptions::{
     NormalRibbonId, RibbonDescription, RibbonDescriptionTable, RibbonError, NORMAL_RIBBON_COUNT,
+};
+pub use slot_machine_reels::{
+    initial_position, reel_strip, symbol_at, Reel, ReelSymbol, SlotMachineError, StartKind,
+    REEL_COUNT, SYMBOLS_PER_REEL, SYMBOL_COUNT,
 };
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,

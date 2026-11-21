@@ -35032,6 +35032,20 @@
       "status": "pending"
     },
     "src/slot_machine.c": {
+      "artifacts": {
+        "sInitialReelPositions": {
+          "reason": "src/slot_machine.c:5304-5308 sInitialReelPositions, transcribed as the normal (0, 0, 0) and lucky (6, 10, 2) starting position of each reel, behind initial_position over the typed Reel and StartKind. Pinned for all six positions by unit tests and an ignored test that re-parses src/slot_machine.c. Data only: choosing a normal or lucky game and spinning from the position are NOT modelled.",
+          "rust_target": "crates/assets/src/slot_machine_reels.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sReelSymbols": {
+          "reason": "src/slot_machine.c:5225-5296 sReelSymbols, transcribed as the three 21-symbol strips (left, middle, right) of the seven SYMBOL_* values (src/slot_machine.c:76-84), behind reel_strip/symbol_at, which refuse an out-of-range position, and Reel::new/ReelSymbol::new, which refuse an unknown reel or symbol. Pinned symbol by symbol (63 values) by unit tests and an ignored test that re-parses src/slot_machine.c. Data only: sReelTimeSymbols, the odds, stop logic, payouts, graphics and coin changes are NOT modelled.",
+          "rust_target": "crates/assets/src/slot_machine_reels.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
