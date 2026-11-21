@@ -29132,6 +29132,26 @@
       "status": "pending"
     },
     "src/battle_pike.c": {
+      "artifacts": {
+        "PikeWildMon": {
+          "reason": "src/battle_pike.c:35-40 struct PikeWildMon, modelled as PikeWildMon: a SpeciesId, a PikeLevelDecrement (levelDelta, the amount TryGenerateBattlePikeWildMon subtracts from the facility level at src/battle_pike.c:1117-1133, never a level) and four ordered MoveIds. Only this record shape is modelled; the rest of the file (TryGenerateBattlePikeWildMon and its RNG, level arithmetic, ability draws, the Keen Eye/Intimidate encounter check, rooms and NPCs) stays pending under the parent row.",
+          "rust_target": "crates/assets/src/battle_pike_wild_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sLvl50Mons": {
+          "reason": "src/battle_pike.c:93-265 sLvl50_Mons1 to sLvl50_Mons4 and the sLvl50Mons pointer table, transcribed as the Level 50 roster: 4 headers of 3 records (12 in all), each record a species, a levelDelta and four ordered moves, behind pike_wild_mon/pike_header lookups that reject an out-of-range header or slot. Pinned record by record by unit tests and by an ignored test that re-parses src/battle_pike.c. NOT modelled: TryGenerateBattlePikeWildMon (src/battle_pike.c:1105-1151), its RNG, level arithmetic, ability draws and encounter checks.",
+          "rust_target": "crates/assets/src/battle_pike_wild_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sLvlOpenMons": {
+          "reason": "src/battle_pike.c:93-265 sLvlOpen_Mons1 to sLvlOpen_Mons4 and the sLvlOpenMons pointer table, transcribed as the Open Level roster: 4 headers of 3 records (12 in all), selected with the Level 50 roster by the sWildMons table (FRONTIER_LVL_50 and FRONTIER_LVL_OPEN). The species and levelDelta values match the Level 50 roster; the moves differ in ten records: Poison Fang replaces Body Slam on Seviper, Ice Beam replaces Surf on Milotic, Ice Beam replaces Shadow Punch on the Dusclops header, and Encore replaces Destiny Bond on the Wobbuffet header. Pinned record by record by unit tests and by an ignored test that re-parses src/battle_pike.c. NOT modelled: TryGenerateBattlePikeWildMon (src/battle_pike.c:1105-1151), its RNG, level arithmetic, ability draws and encounter checks.",
+          "rust_target": "crates/assets/src/battle_pike_wild_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
