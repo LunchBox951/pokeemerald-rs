@@ -1,7 +1,8 @@
 //! Selects ordinary land encounters while preserving the shared RNG stream.
 //!
 //! A same-behavior encounter draws for rate, slot, then level, plus one more
-//! coin when party slot 0 holds Hustle, Vital Spirit or Pressure. A metatile
+//! coin when party slot 0 holds Hustle, Vital Spirit or Pressure. A Magnet Pull
+//! or Static lead first draws a coin and may pick the slot itself. A metatile
 //! behavior change first draws whether an encounter check is allowed. Each
 //! failed eligibility check stops before later draws. The caller resolves the
 //! map header and slot 0's ability, and builds a battle participant from the
@@ -16,7 +17,9 @@
 //! does not select water, fishing, rock-smash, roamer, outbreak, or special-mode
 //! encounters.
 
-use assets::{AbilityId, LandEncounters, SpeciesId, WildEncounterHeader, WildPokemon};
+use assets::{
+    AbilityId, LandEncounters, SpeciesId, SpeciesTable, Type, WildEncounterHeader, WildPokemon,
+};
 
 use super::metatile_behavior::{is_land_wild_encounter, MB_NORMAL};
 use crate::rng::RandomSource;
@@ -199,14 +202,72 @@ pub fn allow_wild_check_on_new_metatile(rng: &mut impl RandomSource) -> bool {
     rng.next_u16() % NEW_METATILE_ROLL_RANGE < NEW_METATILE_CHECK_CHANCE
 }
 
+/// Picks one land slot whose species has the `wanted` type, each with equal odds.
+///
+/// Draws once, and only when some but not all slots match: with none there is
+/// nothing to pick, and with all twelve the pull would change nothing
+/// (`TryGetRandomWildMonIndexByType`, `src/wild_encounter.c:914-934`).
+fn try_random_land_slot_by_type(
+    land: &LandEncounters,
+    wanted: Type,
+    rng: &mut impl RandomSource,
+) -> Option<usize> {
+    let species_table = SpeciesTable::new();
+    let matching_slots = || {
+        land.mons.iter().enumerate().filter_map(|(slot, mon)| {
+            let stats = species_table.get(mon.species)?;
+            stats.types.contains(&wanted).then_some(slot)
+        })
+    };
+    let matching_count = matching_slots().count();
+    if matching_count == 0 || matching_count == land.mons.len() {
+        return None;
+    }
+    matching_slots().nth(usize::from(rng.next_u16()) % matching_count)
+}
+
+/// `TryGetAbilityInfluencedWildMonIndex`, `src/wild_encounter.c:936-953`; an egg lead is `None`.
+fn try_ability_influenced_land_slot(
+    land: &LandEncounters,
+    slot_zero_ability: Option<AbilityId>,
+    ability: AbilityId,
+    wanted: Type,
+    rng: &mut impl RandomSource,
+) -> Option<usize> {
+    if slot_zero_ability != Some(ability) || !rng.next_u16().is_multiple_of(2) {
+        return None;
+    }
+    try_random_land_slot_by_type(land, wanted, rng)
+}
+
 /// Draws a land encounter's slot and then its level for `slot_zero_ability`
 /// (see [`choose_wild_mon_level`]).
+///
+/// The slot phase tries Magnet Pull with Steel, then Static with Electric,
+/// before the ordinary draw (`TryGenerateWildMon`, `src/wild_encounter.c:430-436`).
+/// A pulled slot skips the ordinary draw; a failed pull still takes it.
 pub fn try_generate_wild_mon_land(
     land: &LandEncounters,
     slot_zero_ability: Option<AbilityId>,
     rng: &mut impl RandomSource,
 ) -> WildEncounter {
-    let slot = choose_land_mon_index(rng);
+    let slot = try_ability_influenced_land_slot(
+        land,
+        slot_zero_ability,
+        AbilityId::MAGNET_PULL,
+        Type::Steel,
+        rng,
+    )
+    .or_else(|| {
+        try_ability_influenced_land_slot(
+            land,
+            slot_zero_ability,
+            AbilityId::STATIC,
+            Type::Electric,
+            rng,
+        )
+    })
+    .unwrap_or_else(|| choose_land_mon_index(rng));
     let mon = land.mons[slot];
     let level = choose_wild_mon_level(&mon, slot_zero_ability, rng);
     WildEncounter {

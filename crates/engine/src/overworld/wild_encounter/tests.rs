@@ -738,4 +738,205 @@ fn a_rejected_roll_never_draws_the_level_bias_coin() {
     assert_eq!(permission_failure.draws(), 1);
 }
 
+const FILLER: SpeciesId = SpeciesId::RATTATA;
+
+/// A twelve-slot land table of [`FILLER`] with `species` placed at the given slots.
+fn land_with(placed: &[(usize, SpeciesId)]) -> LandEncounters {
+    let mut mons = [WildPokemon {
+        min_level: 10,
+        max_level: 10,
+        species: FILLER,
+    }; assets::LAND_SLOTS];
+    for &(slot, species) in placed {
+        mons[slot].species = species;
+    }
+    LandEncounters {
+        encounter_rate: 20,
+        mons,
+    }
+}
+
+/// Runs the slot phase and the level draw, returning the slot and every draw spent.
+fn generate(
+    land: &LandEncounters,
+    ability: Option<AbilityId>,
+    script: impl IntoIterator<Item = u16>,
+) -> (usize, usize) {
+    let mut rng = ScriptedRng::new(script);
+    let encounter = try_generate_wild_mon_land(land, ability, &mut rng);
+    (encounter.slot, rng.draws())
+}
+
+const STATIC_LEAD: Option<AbilityId> = Some(AbilityId::STATIC);
+const MAGNET_PULL_LEAD: Option<AbilityId> = Some(AbilityId::MAGNET_PULL);
+
+#[test]
+fn a_lead_without_either_ability_or_an_egg_draws_only_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::ELECTRIKE), (4, SpeciesId::SKARMORY)]);
+    // Roll 99 is slot 11; a pulling lead would have drawn a coin of 99 first.
+    for ability in [None, Some(AbilityId::HUSTLE), Some(AbilityId::PRESSURE)] {
+        let level_draws = usize::from(ability.is_some());
+        let script = [99, 0, 0];
+        assert_eq!(generate(&land, ability, script), (11, 2 + level_draws));
+    }
+}
+
+#[test]
+fn a_static_lead_with_a_nonzero_coin_draws_the_coin_then_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::ELECTRIKE)]);
+    // The coin, then the ordinary slot roll 99 (slot 11), then the level.
+    assert_eq!(generate(&land, STATIC_LEAD, [1, 99, 0]), (11, 3));
+    assert_eq!(generate(&land, STATIC_LEAD, [65535, 0, 0]), (0, 3));
+}
+
+#[test]
+fn a_static_lead_with_a_zero_coin_and_no_electric_slot_still_draws_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::SKARMORY)]);
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_static_lead_with_a_zero_coin_and_twelve_electric_slots_still_draws_the_ordinary_slot() {
+    let land = land_with(&[(0, SpeciesId::ELECTRIKE)]);
+    let all_electric = LandEncounters {
+        mons: land.mons.map(|mon| WildPokemon {
+            species: SpeciesId::ELECTRIKE,
+            ..mon
+        }),
+        ..land
+    };
+    // No pick draw: the ordinary roll of 99 is slot 11, not a pick modulo 12.
+    assert_eq!(generate(&all_electric, STATIC_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_static_lead_picks_the_kth_electric_slot_in_table_order() {
+    let land = land_with(&[
+        (2, SpeciesId::ELECTRIKE),
+        (5, SpeciesId::PLUSLE),
+        (9, SpeciesId::PIKACHU),
+    ]);
+    // Coin, pick modulo three, level: three draws.
+    for (pick, slot) in [(0, 2), (1, 5), (2, 9), (3, 2), (4, 5), (65535, 2)] {
+        assert_eq!(
+            generate(&land, STATIC_LEAD, [0, pick, 0]),
+            (slot, 3),
+            "pick {pick}"
+        );
+    }
+}
+
+#[test]
+fn a_single_matching_slot_is_always_picked() {
+    let land = land_with(&[(7, SpeciesId::ELECTRIKE)]);
+    for pick in [0, 1, 11, 12, 65535] {
+        assert_eq!(
+            generate(&land, STATIC_LEAD, [0, pick, 0]),
+            (7, 3),
+            "pick {pick}"
+        );
+    }
+    let eleven = land_with(&[]);
+    let eleven = LandEncounters {
+        mons: std::array::from_fn(|slot| WildPokemon {
+            species: if slot == 6 {
+                FILLER
+            } else {
+                SpeciesId::ELECTRIKE
+            },
+            ..eleven.mons[slot]
+        }),
+        ..eleven
+    };
+    // Eleven matches: the pick is modulo eleven over the matches in table order.
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 6, 0]), (7, 3));
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 5, 0]), (5, 3));
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 11, 0]), (0, 3));
+}
+
+#[test]
+fn a_magnet_pull_lead_picks_steel_slots_and_ignores_electric_ones() {
+    let land = land_with(&[
+        (1, SpeciesId::ELECTRIKE),
+        (4, SpeciesId::SKARMORY),
+        (8, SpeciesId::ARON),
+    ]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (4, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 1, 0]), (8, 3));
+    // A nonzero coin fails; Static is not tried for a Magnet Pull lead, so the
+    // ordinary slot is the second draw and no further coin is spent.
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [1, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_magnet_pull_lead_with_no_steel_slot_never_falls_back_to_electric() {
+    let land = land_with(&[(1, SpeciesId::ELECTRIKE)]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn either_species_type_counts_for_the_pulled_type() {
+    // Forretress is Bug/Steel (Steel second); Magneton is Electric/Steel.
+    let land = land_with(&[(2, SpeciesId::FORRETRESS), (6, SpeciesId::MAGNETON)]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (2, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 1, 0]), (6, 3));
+    // Only Magneton is Electric.
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 5, 0]), (6, 3));
+}
+
+#[test]
+fn static_and_magnet_pull_leads_draw_no_level_bias_coin() {
+    // Neither is a level-bias ability: one level draw, after coin and pick.
+    let land = land_with(&[(2, SpeciesId::ELECTRIKE), (3, SpeciesId::SKARMORY)]);
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 0, 0]), (2, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (3, 3));
+}
+
+#[test]
+fn route_110_offers_a_static_lead_its_six_electric_slots() {
+    let land = WildEncounterTable::new()
+        .get_by_map(MapId("MAP_ROUTE110"))
+        .and_then(|header| header.land.as_ref())
+        .expect("Route 110 has a land table");
+    let electric_slots = [1, 3, 4, 6, 10, 11];
+    for (pick, slot) in (0..).zip(electric_slots) {
+        assert_eq!(generate(land, STATIC_LEAD, [0, pick, 0]), (slot, 3));
+    }
+    // Magnet Pull finds no Steel on Route 110 and takes the ordinary slot.
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 0, 0]), (0, 3));
+}
+
+#[test]
+fn route_113_offers_a_magnet_pull_lead_its_two_steel_slots() {
+    let land = WildEncounterTable::new()
+        .get_by_map(MapId("MAP_ROUTE113"))
+        .and_then(|header| header.land.as_ref())
+        .expect("Route 113 has a land table");
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 0, 0]), (9, 3));
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 1, 0]), (11, 3));
+    assert_eq!(generate(land, STATIC_LEAD, [0, 0, 0]), (0, 3));
+}
+
+#[test]
+fn a_pulled_land_encounter_draws_rate_coin_pick_then_level() {
+    let header = WildEncounterHeader {
+        land: Some(land_with(&[(5, SpeciesId::ELECTRIKE)])),
+        ..biased_header()
+    };
+    let mut rng = ScriptedRng::new([0, 0, 0, 2]);
+    let encounter = standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_TALL_GRASS,
+        STATIC_LEAD,
+        &mut rng,
+    )
+    .expect("a rate roll of 0 always passes");
+    assert_eq!(
+        (encounter.slot, encounter.species),
+        (5, SpeciesId::ELECTRIKE)
+    );
+    assert_eq!(rng.draws(), 4);
+}
+
 mod repel_tests;
