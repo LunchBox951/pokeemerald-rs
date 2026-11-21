@@ -478,6 +478,12 @@ impl OverworldPhase {
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
         let poison_step = poison_step_map_type(&runtime, landed, door_warp);
+        // `UpdateFriendshipStepCounter` runs ahead of the forced-movement
+        // gate that guards the poison counter, so it takes every landing the
+        // step scripts reach, not just the poison-eligible ones.
+        if landed.is_some() && door_warp.is_none() {
+            self.update_friendship_step_counter();
+        }
         if poison_step.is_some_and(|map_type| self.update_poison_step_counter(map_type)) {
             self.sync_saved_position();
             return;
