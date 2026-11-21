@@ -22,6 +22,10 @@ use super::OverworldPhase;
 const VAR_FRIENDSHIP_STEP_COUNTER: u16 = 0x402A;
 const VAR_POISON_STEP_COUNTER: u16 = 0x402B;
 const GROWTH_FRIENDSHIP: usize = 9;
+const MISC_MET_LOCATION: usize = 1;
+/// `MAPSEC_LITTLEROOT_TOWN` (Brendan's house's section) and `METLOC_FATEFUL_ENCOUNTER`.
+const LITTLEROOT_TOWN: u8 = 0;
+const NOWHERE: u8 = 0xFF;
 const START_TILE: (i32, i32) = (3, 3);
 
 fn member(personality: u32, friendship: u8) -> Pokemon {
@@ -45,7 +49,14 @@ fn member(personality: u32, friendship: u8) -> Pokemon {
     .expect("Treecko and Slash are in the dex");
     let mut record = crate::party::to_save_pokemon(&dex, &mon);
     set_friendship(&mut record, friendship);
+    set_met_location(&mut record, NOWHERE);
     record
+}
+
+fn set_met_location(record: &mut Pokemon, location: u8) {
+    let mut substructures = record.box_data.substructures().unwrap();
+    substructures.misc[MISC_MET_LOCATION] = location;
+    record.box_data.set_substructures(&substructures);
 }
 
 fn set_friendship(record: &mut Pokemon, friendship: u8) {
@@ -353,4 +364,32 @@ fn the_counter_and_gain_survive_save_and_continue_beside_the_live_lead() {
         saved.block2,
     );
     assert_eq!(&friendships(&reloaded)[..2], &[71, 199]);
+}
+
+/// A mon met in the section the player walks in gains the extra point
+/// (`pokemon.c:5975-5976`): friendship 70 met in Littleroot Town, walked in
+/// Brendan's house 1F on an even draw, ends at 72, one draw only.
+#[test]
+fn a_mon_met_in_the_current_section_gains_two_at_the_wrap() {
+    let mut here = member(1, 70);
+    set_met_location(&mut here, LITTLEROOT_TOWN);
+    let mut elsewhere = member(2, 70);
+    set_met_location(&mut elsewhere, 16);
+    let mut phase = phase_with_party(&[here]);
+    let (start, reference) = rng_after_one_draw(1);
+    phase.rng = start;
+    set_counter(&mut phase, 127);
+
+    complete_step(&mut phase);
+
+    assert_eq!(friendship(&phase, 0), 72);
+    assert_eq!(phase.rng.state(), reference.state());
+
+    let mut phase = phase_with_party(&[elsewhere]);
+    phase.rng = rng_after_one_draw(1).0;
+    set_counter(&mut phase, 127);
+
+    complete_step(&mut phase);
+
+    assert_eq!(friendship(&phase, 0), 71);
 }

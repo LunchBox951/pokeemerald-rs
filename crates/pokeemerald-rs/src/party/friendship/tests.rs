@@ -4,11 +4,14 @@ use engine::rng::RandomSource;
 use engine::save::Pokemon;
 
 use super::{adjust_friendship_walking, has_valid_species};
-use crate::party::{GROWTH_FRIENDSHIP, MISC_MET_DATA, POKE_BALL_SHIFT};
+use crate::party::{GROWTH_FRIENDSHIP, MISC_MET_DATA, MISC_MET_LOCATION, POKE_BALL_SHIFT};
 
 const LUXURY_BALL: u16 = 11;
 const POKE_BALL: u16 = 4;
 const SPECIES_EGG: u16 = 412;
+/// `MAPSEC_ROUTE_101` and `MAPSEC_OLDALE_TOWN`.
+const ROUTE_101: u8 = 16;
+const OLDALE_TOWN: u8 = 1;
 
 /// Plays back fixed draws and records how many were taken.
 struct Scripted {
@@ -53,6 +56,7 @@ pub(crate) fn record(friendship: u8, ball: u16) -> Pokemon {
     let origins = u16::from_le_bytes(substructures.misc[MISC_MET_DATA].try_into().unwrap());
     let origins = (origins & !(0xF << POKE_BALL_SHIFT)) | (ball << POKE_BALL_SHIFT);
     substructures.misc[MISC_MET_DATA].copy_from_slice(&origins.to_le_bytes());
+    substructures.misc[MISC_MET_LOCATION] = ROUTE_101;
     record.box_data.set_substructures(&substructures);
     record
 }
@@ -61,9 +65,14 @@ pub(crate) fn friendship_of(record: &Pokemon) -> u8 {
     record.box_data.substructures().unwrap().growth[GROWTH_FRIENDSHIP]
 }
 
+/// Runs the walk with no current section, so no met location matches.
 fn walk(record: &mut Pokemon, draw: u16) -> usize {
+    walk_in(record, None, draw)
+}
+
+fn walk_in(record: &mut Pokemon, section: Option<u8>, draw: u16) -> usize {
     let mut rng = Scripted::new(&[draw]);
-    adjust_friendship_walking(record, &mut rng);
+    adjust_friendship_walking(record, section, &mut rng);
     rng.taken
 }
 
@@ -167,4 +176,42 @@ fn a_fainted_member_still_draws() {
     mon.hp = 0;
     assert_eq!(walk(&mut mon, 0), 1);
     assert_eq!(friendship_of(&mon), 71);
+}
+
+/// A met location equal to the current section adds a point beside the base
+/// gain (`pokemon.c:5975-5976`), alone and with a Luxury Ball.
+#[test]
+fn a_met_location_in_the_current_section_adds_a_point() {
+    let mut here = record(70, POKE_BALL);
+    assert_eq!(walk_in(&mut here, Some(ROUTE_101), 0), 1);
+    assert_eq!(friendship_of(&here), 72);
+
+    let mut both = record(70, LUXURY_BALL);
+    walk_in(&mut both, Some(ROUTE_101), 0);
+    assert_eq!(friendship_of(&both), 73);
+
+    let mut elsewhere = record(70, POKE_BALL);
+    walk_in(&mut elsewhere, Some(OLDALE_TOWN), 0);
+    assert_eq!(friendship_of(&elsewhere), 71);
+}
+
+/// The bonus rides the successful roll: an odd draw changes nothing, and
+/// neither bonus adds a draw.
+#[test]
+fn the_met_location_bonus_needs_an_even_draw_and_takes_no_draw() {
+    let mut mon = record(70, LUXURY_BALL);
+    let before = mon;
+    assert_eq!(walk_in(&mut mon, Some(ROUTE_101), 1), 1);
+    assert_eq!(mon, before);
+}
+
+/// The bonuses are added before the clamp to 255.
+#[test]
+fn the_met_location_bonus_clamps_at_255() {
+    let mut mon = record(254, LUXURY_BALL);
+    walk_in(&mut mon, Some(ROUTE_101), 0);
+    assert_eq!(friendship_of(&mon), 255);
+    let mut near = record(253, POKE_BALL);
+    walk_in(&mut near, Some(ROUTE_101), 0);
+    assert_eq!(friendship_of(&near), 255);
 }

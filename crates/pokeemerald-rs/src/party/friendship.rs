@@ -8,17 +8,15 @@
 //! valid saved species qualifies whatever its HP or moveset. Writes go
 //! through [`BoxPokemon::set_substructures`] so the secure checksum follows.
 //!
-//! Not modelled: the other friendship events, the battle-facility skip
-//! (`ShouldSkipFriendshipChange`), and the `+1` for a met location equal to
-//! the current region map section -- the saved byte is numeric and the
-//! current map's section is only a symbolic name in `assets`.
+//! Not modelled: the other friendship events and the battle-facility skip
+//! (`ShouldSkipFriendshipChange`), which the port's facilities cannot reach.
 
 use engine::rng::RandomSource;
 use engine::save::Pokemon;
 
 use super::{
     read_u16, read_u32, GROWTH_FRIENDSHIP, GROWTH_SPECIES, IS_EGG_BIT, MISC_IV_WORD, MISC_MET_DATA,
-    POKE_BALL_SHIFT,
+    MISC_MET_LOCATION, POKE_BALL_SHIFT,
 };
 
 /// `SPECIES_EGG` (`pokeemerald/include/constants/species.h`), the id
@@ -54,9 +52,15 @@ pub(crate) fn has_valid_species(record: &Pokemon) -> bool {
 ///
 /// An empty or egg slot returns without a draw (`:5938`). Otherwise one draw
 /// is taken and an odd one returns (`:5948-5953`); an even one adds
-/// [`WALKING_GAIN`], plus one for a Luxury Ball (`:5971-5974`), clamped to
-/// 255. The draw is taken even for a mon already at 255.
-pub(crate) fn adjust_friendship_walking(record: &mut Pokemon, rng: &mut impl RandomSource) {
+/// [`WALKING_GAIN`], plus one for a Luxury Ball and one when the met location
+/// is `current_section`, the current map's `MAPSEC_*` value
+/// (`:5971-5976`, `GetCurrentRegionMapSectionId`), clamped to 255. The draw is
+/// taken even for a mon already at 255.
+pub(crate) fn adjust_friendship_walking(
+    record: &mut Pokemon,
+    current_section: Option<u8>,
+    rng: &mut impl RandomSource,
+) {
     if !has_valid_species(record) {
         return;
     }
@@ -69,7 +73,8 @@ pub(crate) fn adjust_friendship_walking(record: &mut Pokemon, rng: &mut impl Ran
         .expect("has_valid_species checked the checksum");
     let origins = read_u16(&substructures.misc, MISC_MET_DATA);
     let luxury = (origins >> POKE_BALL_SHIFT) & POKE_BALL_MASK == BALL_LUXURY;
-    let gain = WALKING_GAIN + u8::from(luxury);
+    let met_here = current_section == Some(substructures.misc[MISC_MET_LOCATION]);
+    let gain = WALKING_GAIN + u8::from(luxury) + u8::from(met_here);
     let friendship = &mut substructures.growth[GROWTH_FRIENDSHIP];
     *friendship = friendship.saturating_add(gain);
     record.box_data.set_substructures(&substructures);

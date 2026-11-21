@@ -63,8 +63,13 @@ impl OverworldPhase {
         if has_lead {
             self.flush_lead_to_save();
         }
+        // `GetCurrentRegionMapSectionId` reads the current map's header
+        // (`overworld.c:1391-1394`).
+        let section = assets::MapHeaderTable::new()
+            .get(self.map_id)
+            .and_then(|header| header.region_map_section.id());
         for record in &mut self.save1.player_party {
-            crate::party::adjust_friendship_walking(record, &mut self.rng);
+            crate::party::adjust_friendship_walking(record, section, &mut self.rng);
         }
         if has_lead {
             self.load_lead_from_save();
