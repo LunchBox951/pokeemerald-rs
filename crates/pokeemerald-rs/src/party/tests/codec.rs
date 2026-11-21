@@ -1005,6 +1005,12 @@ fn a_color_change_override_does_not_reach_the_saved_party_bytes() {
     // only in the override.
     unchanged.apply_damage(40);
     unchanged.deduct_pp(0).unwrap();
+    assert_eq!(changed.types(), [Type::Dragon; 2]);
+    assert_eq!(
+        to_save_pokemon(&dex, &changed).to_bytes(),
+        to_save_pokemon(&dex, &unchanged).to_bytes(),
+        "an active override must not reach the bytes"
+    );
     changed.clear_battle_scratch();
     unchanged.clear_battle_scratch();
 
