@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.137.0] - 2026-11-21
+## [0.0.138.0] - 2026-11-21
 
 - Pokémon with the Flame Body ability, such as Magmar and Slugma, can now take part in battles: an attacker that makes contact with one may be burned, as in the original game.
+
+## [0.0.137.0] - 2026-11-21
+
+- General improvements in preparation for music that changes speed during play, as the Berry Blender's does in the original game.
 
 ## [0.0.136.0] - 2026-11-20
 

@@ -32878,6 +32878,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "m4aMPlayTempoControl": {
+          "reason": "m4aMPlayTempoControl (m4a.c:1234-1242) reimplemented as Sequencer::set_tempo_multiplier over sequencer::tempo::TempoControl: a player-local u16 multiplier (tempoU, default 0x100 as m4aMPlayStart seeds it, m4a.c:629-637) is kept apart from the base tempo (tempoD) and the effective tempo (tempoI) is recomputed as (base * multiplier) >> 8 over the full 32-bit product, truncated to the 16-bit tempoI field, so an effective tempo above the TEMPO command's 510 BPM bound is neither clamped nor overflowed. A later TEMPO command (ply_tempo, m4a_1.s:920-929) changes only the base, which Event::Tempo's handler still clamps to its own bound, and recomputes with the retained multiplier. MPlayMain's tempo accumulator (tempoC) is 32 bits wide so a 16-bit effective tempo cannot overflow it. A zero multiplier adds no tempo, so no new tick fires while the mixer keeps rendering existing voices, and restoring it resumes from the unchanged accumulator; ticks a frame already accrued stay owed, so a tick that frame suspended (Sequencer::suspended_tick) still finishes, with any whole tempo units left in the accumulator, on the next frame. The multiplier moves sequence ticks only: the frame sample count and a sounding note's pitch are untouched. The ID_NUMBER ident guard is not modelled (a Rust &mut Sequencer cannot be mid-update). The caller that varies the multiplier, the Berry Blender (berry_blender.c:2148, :2150, :2566), is not ported, and neither is a music-player registry.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "m4aSongNumStart": {
           "reason": "App::new/App::boot's title-screen path starts MUS_TITLE (m4aSongNumStart(MUS_TITLE), title_screen.c:661) via MusicPlayer::start_from_pack, frame-driven from App::step for as long as the title scene is active (issue #185, Discussion #227). Covers only that one call site: there is no general song-start API -- no song-number table, no gMPlayInfo_BGM/gMPlayInfo_SE player registry, and no MPlayStart/MPlayStop/MPlayContinue equivalent -- so every other m4aSongNumStart caller stays pending on src/m4a.c.",
           "rust_target": "crates/pokeemerald-rs/src/app.rs",
