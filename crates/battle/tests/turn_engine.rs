@@ -32,6 +32,8 @@ mod effect_spore_contact;
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
 mod first_battle;
+#[path = "turn_engine/flame_body_contact.rs"]
+mod flame_body_contact;
 #[path = "turn_engine/flinch.rs"]
 mod flinch;
 #[path = "turn_engine/freeze.rs"]
