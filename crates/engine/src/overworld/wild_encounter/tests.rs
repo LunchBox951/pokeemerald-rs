@@ -737,3 +737,5 @@ fn a_rejected_roll_never_draws_the_level_bias_coin() {
     .is_none());
     assert_eq!(permission_failure.draws(), 1);
 }
+
+mod repel_tests;
