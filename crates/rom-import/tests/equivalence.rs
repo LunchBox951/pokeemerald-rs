@@ -49,7 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
-use assets::{AssetPack, CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
+use assets::{AssetPack, CryTable, DoorSize, DoorSound, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 use rom_import::FIELD_MESSAGE_PACK_ID;
 
@@ -85,6 +85,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "naming-screen/",
     "field-effect/",
     "party-menu/",
+    "door-animation/",
 ];
 
 /// The text printer's page-prompt arrows (light, then dark), by id:
@@ -710,6 +711,170 @@ fn the_down_arrow_frames_are_equal_from_the_rom_and_the_checkout() {
                 "{name} frame {index}"
             );
         }
+    }
+}
+
+/// The door metatiles the typed accessor must resolve from both packs: the
+/// Littleroot house door, the Birch's Lab door, and the large multi-corridor
+/// door, with the sheet's size, the sound, size class and palette banks
+/// upstream's `sDoorAnimGraphicsTable` gives each (`src/field_door.c:175-176`,
+/// `:229-230`, `:273`, `:215`).
+const CHECKPOINT_DOORS: [(u16, (u32, u32), DoorSound, DoorSize, [u8; 8]); 3] = [
+    (
+        0x248,
+        (16, 96),
+        DoorSound::Normal,
+        DoorSize::OneTile,
+        [10, 10, 6, 6, 6, 6, 6, 6],
+    ),
+    (
+        0x249,
+        (16, 96),
+        DoorSound::Normal,
+        DoorSize::OneTile,
+        [8; 8],
+    ),
+    (0x2AD, (32, 96), DoorSound::Sliding, DoorSize::Large, [7; 8]),
+];
+
+/// Every door metatile resolves through the typed accessor from both packs and
+/// is equal: the same sheet raster, sound, size class and palette banks. The
+/// three checkpoint doors are also pinned to upstream's literal values for
+/// each pack, so two packs that agree on a wrong record still fail. A metatile
+/// that is not a door is a typed miss from both.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_door_animations_are_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-door-animation-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let _ = std::fs::remove_file(imported_path);
+
+    for (metatile, dimensions, sound, size, banks) in CHECKPOINT_DOORS {
+        for (name, pack) in [("imported", &imported), ("checkout", &checkout)] {
+            let door = pack
+                .door_animation(metatile)
+                .unwrap_or_else(|err| panic!("the {name} door {metatile:#x}: {err}"))
+                .unwrap_or_else(|| panic!("the {name} pack has no door {metatile:#x}"));
+            assert_eq!(
+                (door.sheet.width, door.sheet.height),
+                dimensions,
+                "{name} {metatile:#x}"
+            );
+            assert_eq!(door.sheet.bit_depth, 4, "{name} {metatile:#x}");
+            assert!(
+                door.sheet.pixels.iter().any(|&pixel| pixel != 0),
+                "{name} {metatile:#x} is blank"
+            );
+            assert_eq!(
+                (door.sound, door.size, door.palette_slots),
+                (sound, size, banks),
+                "{name} {metatile:#x}"
+            );
+        }
+    }
+
+    // Every row of the table, not only the checkpoints.
+    let mut doors = 0;
+    for metatile in 0..=u16::MAX {
+        let from_rom = imported
+            .door_animation(metatile)
+            .unwrap_or_else(|err| panic!("the imported door {metatile:#x}: {err}"));
+        let from_checkout = checkout
+            .door_animation(metatile)
+            .unwrap_or_else(|err| panic!("the checkout door {metatile:#x}: {err}"));
+        match (from_rom, from_checkout) {
+            (None, None) => {}
+            (Some(from_rom), Some(from_checkout)) => {
+                doors += 1;
+                assert_eq!(
+                    (from_rom.sound, from_rom.size, from_rom.palette_slots),
+                    (
+                        from_checkout.sound,
+                        from_checkout.size,
+                        from_checkout.palette_slots
+                    ),
+                    "{metatile:#x}"
+                );
+                assert_eq!(
+                    (from_rom.sheet.width, from_rom.sheet.height),
+                    (from_checkout.sheet.width, from_checkout.sheet.height),
+                    "{metatile:#x}"
+                );
+                assert_eq!(
+                    from_rom.sheet.pixels, from_checkout.sheet.pixels,
+                    "{metatile:#x}"
+                );
+            }
+            (rom_door, checkout_door) => panic!(
+                "door {metatile:#x}: the imported pack has {}, the checkout pack has {}",
+                rom_door.is_some(),
+                checkout_door.is_some()
+            ),
+        }
+    }
+    assert_eq!(doors, 53, "the table holds 53 doors");
+}
+
+/// The profile's door roots are the pinned table: 53 rows over 51 sheets, with
+/// the checkpoint doors' rows and the one large sheet's block packing. Literal,
+/// so a row dropped from the generator and the manifest together still fails.
+#[test]
+fn the_door_animation_profile_roots_are_pinned() {
+    let roots = &rom_import::EMERALD_US_REV0.roots.door_animation;
+    assert_eq!(roots.rows.len(), 53);
+    assert_eq!(roots.images.len(), 51);
+    let sheets: BTreeSet<_> = roots.rows.iter().map(|row| row.sheet).collect();
+    assert_eq!(sheets.len(), 51);
+    for image in roots.images {
+        let stem = image.id.strip_prefix("door-animation/image/").unwrap();
+        assert!(sheets.contains(stem), "{}", image.id);
+        let block = (image.metatile_width, image.metatile_height);
+        let expected = if stem == "battle_tower_multi_corridor" {
+            ((2, 4), 32)
+        } else {
+            ((1, 1), 16)
+        };
+        assert_eq!((block, image.width), expected, "{}", image.id);
+        assert_eq!(
+            (image.encoding, image.rom_bit_depth, image.pack_bit_depth),
+            (rom_import::Encoding::Raw, 4, 4),
+            "{}",
+            image.id
+        );
+    }
+    let sheet_of = |metatile: u16| {
+        roots
+            .rows
+            .iter()
+            .find(|row| row.metatile == metatile)
+            .map(|row| row.sheet)
+    };
+    assert_eq!(sheet_of(0x248), Some("littleroot"));
+    assert_eq!(sheet_of(0x249), Some("birchs_lab"));
+    assert_eq!(sheet_of(0x2AD), Some("battle_tower_multi_corridor"));
+    // The three Battle Tent doors share one sheet.
+    for metatile in [0x393, 0x3D4, 0x36C] {
+        assert_eq!(sheet_of(metatile), Some("battle_tent"), "{metatile:#x}");
     }
 }
 

@@ -10,8 +10,8 @@ use assets::bundled_overworld::{BUNDLED_LAYOUT_IDS, BUNDLED_TILESETS};
 use rom_import::profiles::bpee_rev0::EMERALD_US_REV0_ROOTS;
 
 use super::scope::{
-    sprite_palette_ids, sprite_sheet_ids, GENERAL_1_PALETTE_ID, INTERFACE_IMAGE_IDS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TALL_GRASS_IMAGE_ID, TILESETS,
+    door_animation_ids, sprite_palette_ids, sprite_sheet_ids, GENERAL_1_PALETTE_ID,
+    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, LAYOUTS, TALL_GRASS_IMAGE_ID, TILESETS,
 };
 
 fn set<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
@@ -109,4 +109,34 @@ fn the_text_printer_dark_down_arrow_is_pinned_in_the_manifest_and_the_profile() 
     assert!(EMERALD_US_REV0_ROOTS
         .images()
         .any(|image| image.id == "interface/image/down_arrow_alt"));
+}
+
+#[test]
+fn the_door_animations_are_pinned_in_the_manifest_and_the_profile() {
+    let manifest: BTreeSet<String> = door_animation_ids().into_iter().collect();
+    let doors = &EMERALD_US_REV0_ROOTS.door_animation;
+    let profiled: BTreeSet<String> = doors
+        .images
+        .iter()
+        .map(|image| image.id.to_owned())
+        .chain(["door-animation/table".to_owned()])
+        .collect();
+    assert_eq!(manifest, profiled, "door sheets and table");
+    // Literals, so dropping a door from the manifest and the profile together
+    // still fails here.
+    for id in [
+        "door-animation/image/littleroot",
+        "door-animation/image/birchs_lab",
+        "door-animation/image/battle_tower_multi_corridor",
+        "door-animation/table",
+    ] {
+        assert!(manifest.contains(id), "{id}");
+    }
+    let metatiles: BTreeSet<u16> = doors.rows.iter().map(|row| row.metatile).collect();
+    let records: BTreeSet<u16> = super::door_animation::records()
+        .iter()
+        .map(|record| record.metatile)
+        .collect();
+    assert_eq!(metatiles, records, "door metatiles");
+    assert_eq!(metatiles.len(), 53);
 }

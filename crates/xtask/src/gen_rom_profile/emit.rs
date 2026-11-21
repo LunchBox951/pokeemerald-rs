@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+mod door_animation;
 mod poke_ball;
 
 use rom_import::Encoding;
@@ -74,11 +75,11 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
-    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    DoorAnimationRoots, DoorAnimationRow, Encoding, EvolutionSceneRoots, FieldMessageRoot,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots,
+    OpeningSceneRoots, PaletteRoot, PartyMenuRoots, PokeBallRoot, PokeBallRoots, Roots, SampleRoot,
+    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -149,6 +150,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
+    door_animation::door_animation_roots(&mut out, &plan.door_animation);
 
     trainer_front_roots(&mut out, &plan.trainer_front);
 
@@ -1421,6 +1423,7 @@ mod bag_field_tests {
             opening_scene: scene_plan(),
             evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
+            door_animation: super::door_animation::tests::plan(),
             battle_interface: interface_plan(),
             naming_screen: naming_plan(),
             party_menu: party_menu_plan(),
@@ -1432,6 +1435,10 @@ mod bag_field_tests {
         assert_evolution_roots(&module);
         assert!(
             module.contains("    poke_ball: PokeBallRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("    door_animation: DoorAnimationRoots {"),
             "{module}"
         );
         assert_interface_roots(&module);

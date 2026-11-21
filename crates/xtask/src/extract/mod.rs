@@ -94,6 +94,7 @@
 //! - `field-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `party-menu/{image,palette,raw}/<name>`
+//! - `door-animation/image/<sheet>` and `door-animation/table`
 //! - `battle-anim/catalog`
 //! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
@@ -112,12 +113,14 @@ mod bundled_inventory_tests;
 #[cfg(test)]
 mod checkpoint_maps_tests;
 pub(crate) mod cry;
+pub(crate) mod door_animation;
 mod error;
 mod evolution_scene;
 mod field_effect;
 mod field_message;
 mod fonts;
 pub mod inflate;
+
 mod interface;
 pub mod jasc_pal;
 mod layouts;
@@ -236,6 +239,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    door_animation::extract_door_animation(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

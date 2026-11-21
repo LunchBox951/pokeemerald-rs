@@ -13,6 +13,7 @@ use super::battle_interface::healthbox_element_pack_ids;
 use super::battle_interface::healthbox_frame_pack_ids;
 use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
+use super::door_animation::pack_ids as door_animation_pack_ids;
 use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::party_menu::pack_ids as party_menu_pack_ids;
@@ -752,6 +753,12 @@ pub(crate) fn party_menu_ids() -> Vec<String> {
 /// palette, and the opened-ball sheet.
 pub(crate) fn poke_ball_ids() -> Vec<String> {
     poke_ball_pack_ids()
+}
+
+/// Every `door-animation/` pack id extraction emits: the 51 door sheets and
+/// the door table.
+pub(crate) fn door_animation_ids() -> Vec<String> {
+    door_animation_pack_ids()
 }
 
 /// Where the naming screen's sources live, relative to the checkout.

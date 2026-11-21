@@ -27,6 +27,7 @@ mod battle_anims;
 mod battle_interface;
 mod battle_messages;
 mod battlers;
+mod door_animation;
 mod emit;
 mod error;
 mod evolution_scene;
@@ -190,6 +191,7 @@ fn locate_profile(
         party_menu: party_menu::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
+        door_animation: door_animation::locate(ctx, lines)?,
         trainer_front,
         trainer_battlers,
     })
