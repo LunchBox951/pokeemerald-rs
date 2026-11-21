@@ -393,7 +393,10 @@ fn a_lower_identical_stray_does_not_displace_the_sheet_record_copy() {
             .iter()
             .find(|l| l.id == "starter-chooser/image/pokeball_selection")
             .expect("ball line");
-        eprintln!("chosen addr {:#x}, resolution {:?}", ball.addr, line.resolution);
+        eprintln!(
+            "chosen addr {:#x}, resolution {:?}",
+            ball.addr, line.resolution
+        );
         assert_eq!(ball.addr, 0x0811_0000, "the record names this copy");
         assert_ne!(line.resolution, Resolution::ArbitraryAmongIdentical);
     });
@@ -453,7 +456,10 @@ fn a_record_with_the_wrong_size_or_tag_names_nothing() {
         for (label, decoy) in [
             ("wrong size", sheet_record(addr, SHEET_SIZE + 0x20, tag)),
             ("wrong tag", sheet_record(addr, SHEET_SIZE, tag + 2)),
-            ("the other sheet's tag", sheet_record(addr, SHEET_SIZE, other_tag)),
+            (
+                "the other sheet's tag",
+                sheet_record(addr, SHEET_SIZE, other_tag),
+            ),
             ("no record", vec![0; 16]),
         ] {
             let (mut rom, entries) = fixture();
