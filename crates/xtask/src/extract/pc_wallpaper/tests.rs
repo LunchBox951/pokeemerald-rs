@@ -69,7 +69,8 @@ impl Style {
     /// The pixel value of kept tile `tile` of a half: never zero, and
     /// different for the two halves and for neighbouring tiles.
     fn pixel(&self, half: Half, tile: u32) -> u8 {
-        let seed = self.stem.len() as u32 + if half == Half::Frame { 0 } else { 7 };
+        let seed =
+            u32::try_from(self.stem.len()).unwrap() + if half == Half::Frame { 0 } else { 7 };
         u8::try_from((tile + seed) % 15 + 1).unwrap()
     }
 }
