@@ -44,6 +44,7 @@ use crate::start_menu::StartMenu;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
+mod battle_start_stats;
 mod connections;
 mod escalator_arrival;
 mod field_poison;
@@ -1070,6 +1071,8 @@ mod active_battle_dispatch_tests;
 mod animated_door_elevation_tests;
 #[cfg(test)]
 mod animation_tick_tests;
+#[cfg(test)]
+mod battle_start_stats_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
