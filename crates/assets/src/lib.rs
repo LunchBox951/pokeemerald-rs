@@ -18,7 +18,8 @@
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
 //! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
-//! normal-ribbon description lines (see [`ribbon_descriptions`]); more
+//! normal-ribbon description lines (see [`ribbon_descriptions`]), and the
+//! Battle Pike wild Pokémon rosters (see [`battle_pike_wild_mons`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -44,6 +45,7 @@ pub mod abilities;
 pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
+pub mod battle_pike_wild_mons;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
@@ -91,6 +93,10 @@ pub use audio::{
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
+pub use battle_pike_wild_mons::{
+    pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
+    PIKE_WILD_HEADERS, PIKE_WILD_MON_MOVES, PIKE_WILD_MON_SLOTS,
 };
 pub use easy_chat::{
     EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
