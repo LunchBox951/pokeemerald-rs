@@ -441,3 +441,30 @@ fn release_override_then_tie_then_end_of_tie_sustains_the_release_tail() {
         render_bits(vec![direct_tone(instant_release)], vec![cry(&[])])
     );
 }
+
+#[test]
+fn a_full_byte_xsust_keeps_decaying_through_the_sequencer() {
+    // m4a.c:921 wraps the goal-15 sustain goal to 240 (s8 -16) and
+    // m4a.c:1119-1123 decrements before a signed compare, so the note keeps
+    // decaying like a bank sustain of 0 until the gate releases at frame 30.
+    let full_byte = render_bits(
+        vec![square_tone(CGB_BASE)],
+        vec![note_track(&[xcmd(XCMD_SUST, 255)])],
+    );
+    let decays_to_zero = render_bits(
+        vec![square_tone(CgbAdsr {
+            sustain: 0,
+            ..CGB_BASE
+        })],
+        vec![note_track(&[])],
+    );
+    let first_divergent_frame = full_byte
+        .chunks(Sequencer::FRAME_SAMPLES)
+        .zip(decays_to_zero.chunks(Sequencer::FRAME_SAMPLES))
+        .position(|(a, b)| a != b);
+    assert_eq!(
+        first_divergent_frame,
+        Some(30),
+        "xSUST 255 must decay like sustain 0 until the gate releases"
+    );
+}
