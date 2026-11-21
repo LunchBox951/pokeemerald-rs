@@ -12,7 +12,9 @@
 //! while a `\p` or `\l` prompt waits for A or B, and `TextPrinterClearDownArrow`
 //! removes it (`pokeemerald/src/text.c:787-882`). [`PromptArrow`] holds that
 //! pacing and records the arrow in the same ordered [`WindowOp`] list as the
-//! glyphs, so a dialog and the intro scene share one path.
+//! glyphs, so a dialog, the intro scene and the battle message window share one
+//! path. The battle window draws the dark sheet (`useAlternateDownArrow`,
+//! `pokeemerald/src/battle_message.c:2997-3000`, `src/text.c:808-817`).
 
 use assets::fonts::GlyphSource;
 use assets::pack::{ImageRef, TextPrinterDownArrow};

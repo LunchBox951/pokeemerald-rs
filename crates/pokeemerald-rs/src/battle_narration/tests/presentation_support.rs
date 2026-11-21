@@ -11,6 +11,7 @@ use crate::battle_narration::{
     AssetNames, BattleKind, BattleMessageLayer, NarrationGate, NarrationRequest, NarrationTick,
     TemplateId,
 };
+use crate::textbox::{test_blank_down_arrow, DownArrowSheet};
 
 pub(super) const NONE: PrinterInput = PrinterInput::none();
 pub(super) const A_PRESS: PrinterInput = PrinterInput {
@@ -86,8 +87,17 @@ pub(super) fn layer_over(
     textbox: BattleTextbox,
     speed: TextSpeed,
 ) -> BattleMessageLayer<TestSheet> {
+    layer_with_arrow(textbox, test_blank_down_arrow(), speed)
+}
+
+/// [`layer_over`] drawing `dark_arrow` at a page prompt.
+pub(super) fn layer_with_arrow(
+    textbox: BattleTextbox,
+    dark_arrow: DownArrowSheet,
+    speed: TextSpeed,
+) -> BattleMessageLayer<TestSheet> {
     let sources = GlyphSources::new(FontId::ALL.map(TestSheet)).unwrap();
-    BattleMessageLayer::new(sources, textbox, speed)
+    BattleMessageLayer::new(sources, textbox, dark_arrow, speed)
 }
 
 pub(super) fn requests(ids: &[u16]) -> Vec<NarrationRequest> {

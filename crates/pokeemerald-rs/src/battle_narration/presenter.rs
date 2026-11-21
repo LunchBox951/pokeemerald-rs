@@ -31,7 +31,7 @@ use super::message_box::{
 };
 use super::queue::{GateError, Head, HeadKind, NarrationQueue};
 use super::{expand, GateStatus, NarrationError, NarrationGate, NarrationNames, NarrationRequest};
-use crate::textbox::{self, WindowOp};
+use crate::textbox::{self, DownArrowSheet, PromptArrow, WindowOp};
 
 /// Why the layer could not be built or accept a batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +116,11 @@ pub struct BattleMessageLayer<S> {
     /// The colours the latest whole-window clear erased with
     /// (`Printer::cleared_window_colors`); `None` before any.
     window_fill: Option<TextColors>,
+    /// The dark page-prompt arrow: `B_WIN_MSG` sets `useAlternateDownArrow`
+    /// (`src/battle_message.c:2997`-`:3000`), which selects the dark tiles
+    /// (`src/text.c:808`-`:817`).
+    dark_arrow: DownArrowSheet,
+    prompt_arrow: PromptArrow,
     printing: bool,
 }
 
@@ -135,9 +140,11 @@ impl BattleMessageLayer<OwnedFontGlyphSheet> {
             .map_err(PresentationError::KeypadIcons)?;
         let textbox = BattleTextbox::from_handle(pack.battle_interface()?.textbox, icons)
             .map_err(PresentationError::Graphics)?;
+        let dark_arrow = DownArrowSheet::new(&pack.text_printer_dark_down_arrow()?);
         Ok(Self::new(
             sources,
             textbox,
+            dark_arrow,
             TextSpeed::from_raw_option(raw_text_speed),
         ))
     }
@@ -156,7 +163,12 @@ impl From<PackError> for PresentationError {
 }
 
 impl<S: GlyphSource> BattleMessageLayer<S> {
-    pub(super) fn new(sources: GlyphSources<S>, textbox: BattleTextbox, speed: TextSpeed) -> Self {
+    pub(super) fn new(
+        sources: GlyphSources<S>,
+        textbox: BattleTextbox,
+        dark_arrow: DownArrowSheet,
+        speed: TextSpeed,
+    ) -> Self {
         let printer = Printer::with_sources(
             vec![Token::End],
             sources,
@@ -172,6 +184,8 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             textbox,
             ops: Vec::new(),
             window_fill: None,
+            dark_arrow,
+            prompt_arrow: PromptArrow::default(),
             printing: false,
         }
     }
@@ -259,6 +273,7 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             Head::Message(tokens) => {
                 self.ops.clear();
                 self.window_fill = None;
+                self.prompt_arrow = PromptArrow::default();
                 self.printer.restart(tokens);
                 self.printing = true;
                 self.tick_printer(input)
@@ -306,6 +321,15 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             self.ops.clear();
             self.window_fill = self.printer.cleared_window_colors();
         }
+        // A prompt wait owns its frame: no glyph, span, or icon competes with
+        // the arrow draw or erase it makes here (`PromptArrow::follow`).
+        self.prompt_arrow.follow(
+            &self.printer,
+            &event,
+            CONTENT_HEIGHT_PX,
+            &self.dark_arrow,
+            &mut self.ops,
+        );
         match &event {
             TickEvent::Glyph(glyph) => self.push_clipped(WindowOp::Glyph(glyph.clone())),
             // `ScrollWindow` fills the exposed rows with the background in
@@ -338,6 +362,12 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             printer_event: Some(event),
             completed,
         }
+    }
+
+    /// The retained window ops, for tests.
+    #[cfg(test)]
+    pub(super) fn window_ops(&self) -> &[WindowOp] {
+        &self.ops
     }
 
     /// Draws the battle textbox and the current message over `framebuffer`.
