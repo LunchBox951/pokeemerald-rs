@@ -146,11 +146,13 @@ impl ItemEffect {
     /// (`pokemon.c:5324-5434`).
     ///
     /// Argument bytes sit in flag order from [`ITEM_EFFECT_ARG_START`], one per
-    /// set flag that takes one. The scan tests overlapping bits rather than
+    /// flag the scan counts. The scan tests overlapping bits rather than
     /// looking up one flag's argument: once the item sets the queried bit, it
-    /// returns the first argument-taking flag at or below that bit. `PP_UP` is
-    /// dropped before the scan and `REVIVE` is cleared once `HEAL_HP` is
-    /// reached, so neither bit matches itself.
+    /// returns the first counted flag at or below that bit. Field 4 counts
+    /// `EV_HP`, `EV_ATK`, `HEAL_HP` and `HEAL_PP`; field 5 counts every flag
+    /// below `FRIENDSHIP_HIGH`, `PP_MAX` included. `PP_UP` is dropped before
+    /// the scan, so its own query never matches, and `REVIVE` is cleared once
+    /// `HEAL_HP` is reached.
     ///
     /// `ENERGY_POWDER` sets all three friendship flags (arguments at 7, 8, 9),
     /// so queries for low, middle and high friendship all return 7, the low
@@ -159,7 +161,7 @@ impl ItemEffect {
     /// The result is 0 for fields 0 to 3, or when the scan first reaches a set
     /// `ITEM4_EVO_STONE` or `ITEM5_FRIENDSHIP_HIGH` bit in the queried field,
     /// whether or not the queried bit is set. Otherwise a query that matches
-    /// nothing yields the offset past the last counted argument. A caller
+    /// nothing yields the offset past the last counted flag's byte. A caller
     /// cannot read the result as the queried flag's argument and must check the
     /// flag itself.
     #[must_use]
@@ -456,7 +458,7 @@ mod tests {
     use super::{
         neg, ItemEffect, ItemEffectSlot, ItemEffectTable, ITEM3_STATUS_ALL, ITEM4_EVO_STONE,
         ITEM4_HEAL_HP, ITEM4_REVIVE, ITEM5_EV_DEF, ITEM5_FRIENDSHIP_ALL, ITEM5_FRIENDSHIP_HIGH,
-        ITEM5_FRIENDSHIP_LOW, ITEM5_FRIENDSHIP_MID, ITEM_EFFECT_SLOTS,
+        ITEM5_FRIENDSHIP_LOW, ITEM5_FRIENDSHIP_MID, ITEM5_PP_MAX, ITEM_EFFECT_SLOTS,
     };
     use crate::error::AssetError;
     use crate::items::{ItemId, ItemTable};
@@ -623,6 +625,16 @@ mod tests {
         assert_eq!(high_only.param_offset(5, ITEM5_FRIENDSHIP_LOW), 0);
         let energy_powder = effect(ItemId::ENERGY_POWDER);
         assert_eq!(energy_powder.param_offset(5, ITEM5_EV_DEF), 0);
+    }
+
+    #[test]
+    fn pp_max_query_matches_the_counted_pp_max_flag() {
+        let pp_max = effect(ItemId::PP_MAX);
+        assert_eq!(pp_max.bytes()[4], 0);
+        assert_eq!(pp_max.bytes()[5], ITEM5_PP_MAX | ITEM5_FRIENDSHIP_ALL);
+        assert_eq!(pp_max.arguments(), [5, 3, 2]);
+        assert_eq!(pp_max.param_offset(5, ITEM5_PP_MAX), 6);
+        assert_eq!(pp_max.param_offset(5, ITEM5_FRIENDSHIP_LOW), 6);
     }
 
     #[test]
