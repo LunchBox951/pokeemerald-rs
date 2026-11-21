@@ -624,3 +624,56 @@ fn a_first_square_note_matches_an_explicitly_initialized_hardware_oracle() {
         }
     }
 }
+
+#[test]
+fn a_pre_trigger_retune_starts_the_duty_where_admitting_the_final_pitch_does() {
+    const TRACK: usize = 0;
+    // Upstream writes only the final frequency at the first pass
+    // (`pokeemerald/src/m4a.c:1197-1203`), so the admitted key a same-tick
+    // retune replaces must not leave a trace on the inherited duty phase.
+    let mut mismatches = Vec::new();
+    for predecessor_key in [36_u8, 60, 84] {
+        for idle_frames in 0..3 {
+            for initial_key in (24_u8..=108).step_by(6) {
+                for final_key in (24_u8..=108).step_by(6) {
+                    let run = |admitted_key: u8| {
+                        let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+                        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+                        assert!(mixer.add_cgb_voice(cgb_square_voice(
+                            CgbChannelNumber::Square2,
+                            TRACK,
+                            predecessor_key,
+                            None,
+                        )));
+                        for _ in 0..idle_frames {
+                            mixer.mix_frame(&mut out);
+                        }
+                        assert!(mixer.add_cgb_voice(cgb_square_voice(
+                            CgbChannelNumber::Square2,
+                            TRACK,
+                            admitted_key,
+                            None,
+                        )));
+                        mixer.set_track_pitch(
+                            TRACK,
+                            i32::from(final_key) - i32::from(admitted_key),
+                            0,
+                        );
+                        mixer.mix_frame(&mut out);
+                        out
+                    };
+                    if run(initial_key) != run(final_key) {
+                        mismatches.push((predecessor_key, idle_frames, initial_key, final_key));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} (predecessor, idle frames, admitted, final) cases differ from admitting \
+         the final pitch directly; first: {:?}",
+        mismatches.len(),
+        mismatches.first(),
+    );
+}
