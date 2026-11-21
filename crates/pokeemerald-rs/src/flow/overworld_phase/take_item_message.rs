@@ -7,32 +7,71 @@
 
 use assets::items::ItemId;
 use assets::ItemDisplayTable;
-use engine::text::{decode, Token};
+use std::fmt;
+
+use engine::text::{decode, TextError, Token};
 
 use crate::party::TakeHeldItem;
 
+/// Whether [`take_item_message`] prints the lead's nickname for `outcome`.
+pub(super) fn names_lead(outcome: Option<TakeHeldItem>) -> bool {
+    matches!(
+        outcome,
+        Some(TakeHeldItem::NotHolding | TakeHeldItem::HoldsMail(_) | TakeHeldItem::Took(_))
+    )
+}
+
+/// Why [`nickname_tokens`] could not name the lead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum NicknameError {
+    /// The nickname bytes do not decode: a control sequence cut off by the
+    /// field's end, or a byte with no Latin glyph.
+    Text(TextError),
+    /// The lead has no nickname and its species has no display name.
+    UnknownSpecies(assets::SpeciesId),
+}
+
+impl fmt::Display for NicknameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(error) => write!(f, "the lead's nickname does not decode: {error:?}"),
+            Self::UnknownSpecies(species) => {
+                write!(f, "no species name for species {}", species.0)
+            }
+        }
+    }
+}
+
 /// `GetMonNickname` (`pokeemerald/src/pokemon.c`): the record's nickname as
-/// message tokens, without its terminator. A nickname this port's text codec
-/// refuses (a control sequence cut off by the field's end, or a byte with no
-/// Latin glyph) is replaced by `species`'s display name, the nickname
-/// `CreateMon` gives a mon that was never renamed, so the message still names
-/// the lead; a species name that cannot be resolved leaves the name empty.
+/// message tokens, without its terminator.
+///
+/// Upstream prints the record's own name bytes and never substitutes another
+/// identity, and `CreateMon` gives a mon that was never renamed its species
+/// name as nickname. So an empty nickname is shown as `species`'s display
+/// name, and a nickname this port's text codec refuses is an error rather
+/// than the species name, as for battle text
+/// (`live_battle_text::nickname_or_species`).
+///
+/// # Errors
+///
+/// [`NicknameError::Text`] when the nickname does not decode;
+/// [`NicknameError::UnknownSpecies`] when it is empty and `species` has no
+/// name.
 pub(super) fn nickname_tokens(
     record: &engine::save::Pokemon,
     species: assets::SpeciesId,
-) -> Vec<Token> {
-    let mut tokens = decode(&record.box_data.nickname()).unwrap_or_else(|_| {
-        assets::SpeciesNames::new()
-            .name(species)
-            .ok()
-            .and_then(|name| engine::text::encode_str(name).ok())
-            .and_then(|encoded| decode(&encoded).ok())
-            .unwrap_or_default()
-    });
+) -> Result<Vec<Token>, NicknameError> {
+    let mut tokens = decode(&record.box_data.nickname()).map_err(NicknameError::Text)?;
     if tokens.last() == Some(&Token::End) {
         tokens.pop();
     }
-    tokens
+    if tokens.is_empty() {
+        let name = assets::SpeciesNames::new()
+            .name(species)
+            .map_err(|_| NicknameError::UnknownSpecies(species))?;
+        return Ok(plain(name));
+    }
+    Ok(tokens)
 }
 
 /// The text `CursorCb_TakeItem` shows for `outcome`, ending in [`Token::End`].
@@ -146,23 +185,72 @@ mod tests {
         field[..encoded.len()].copy_from_slice(&encoded);
         record.box_data.set_nickname(field);
         assert_eq!(
-            rendered(&nickname_tokens(&record, assets::SpeciesId::TREECKO)),
+            rendered(&nickname_tokens(&record, assets::SpeciesId::TREECKO).unwrap()),
             "MUDKIP"
         );
     }
 
-    #[test]
-    fn a_nickname_the_codec_refuses_falls_back_to_the_species_name() {
+    fn record_with_nickname(field: [u8; engine::save::BOX_NICKNAME_LEN]) -> engine::save::Pokemon {
         let mut record = engine::save::Pokemon::default();
+        record.box_data.set_nickname(field);
+        record
+    }
+
+    #[test]
+    fn only_the_messages_that_print_the_nickname_name_the_lead() {
+        assert!(names_lead(Some(TakeHeldItem::NotHolding)));
+        assert!(names_lead(Some(TakeHeldItem::HoldsMail(
+            ItemId::ORANGE_MAIL
+        ))));
+        assert!(names_lead(Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))));
+        assert!(!names_lead(Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))));
+        assert!(!names_lead(None));
+    }
+
+    #[test]
+    fn an_undecodable_nickname_is_reported_not_shown_as_the_species_name() {
+        const UNASSIGNED_CHARACTER: u8 = 0x60;
+        let mut field = [0xFFu8; engine::save::BOX_NICKNAME_LEN];
+        field[0] = UNASSIGNED_CHARACTER;
+        let record = record_with_nickname(field);
+        assert!(decode(&record.box_data.nickname()).is_err());
+        assert_eq!(
+            nickname_tokens(&record, assets::SpeciesId::TREECKO),
+            Err(NicknameError::Text(TextError::UnknownByte(
+                UNASSIGNED_CHARACTER
+            )))
+        );
+    }
+
+    #[test]
+    fn a_nickname_cut_off_inside_a_control_sequence_is_reported() {
         let mut field = [0u8; engine::save::BOX_NICKNAME_LEN];
         let encoded = engine::text::encode_str("MUDKIPABC").unwrap();
         field[..9].copy_from_slice(&encoded[..9]);
         field[9] = engine::text::PLACEHOLDER_BEGIN;
-        record.box_data.set_nickname(field);
-        assert!(engine::text::decode(&record.box_data.nickname()).is_err());
+        let record = record_with_nickname(field);
+        assert!(matches!(
+            nickname_tokens(&record, assets::SpeciesId::TREECKO),
+            Err(NicknameError::Text(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_nickname_shows_the_species_name() {
+        let record = record_with_nickname([0xFFu8; engine::save::BOX_NICKNAME_LEN]);
         assert_eq!(
-            rendered(&nickname_tokens(&record, assets::SpeciesId::TREECKO)),
+            rendered(&nickname_tokens(&record, assets::SpeciesId::TREECKO).unwrap()),
             "TREECKO"
+        );
+    }
+
+    #[test]
+    fn an_empty_nickname_of_an_unknown_species_is_reported() {
+        let record = record_with_nickname([0xFFu8; engine::save::BOX_NICKNAME_LEN]);
+        let species = assets::SpeciesId(u16::MAX);
+        assert_eq!(
+            nickname_tokens(&record, species),
+            Err(NicknameError::UnknownSpecies(species))
         );
     }
 }

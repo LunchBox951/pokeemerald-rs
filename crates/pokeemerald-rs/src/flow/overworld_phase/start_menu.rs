@@ -220,6 +220,13 @@ impl OverworldPhase {
     /// The texts and the cases without an upstream text are
     /// [`take_item_message`]'s.
     ///
+    /// A lead whose nickname does not decode ([`take_item_message::NicknameError`])
+    /// refuses a take whose message names the lead
+    /// ([`take_item_message::names_lead`]) before anything is committed: upstream
+    /// never names a mon by another identity. The failure is logged and the
+    /// field carries on, as for a box that cannot be built. A message that
+    /// does not name the lead (a full bag) is unaffected.
+    ///
     /// The message box opens before the take commits: a box that cannot be
     /// built (an unreadable pack) leaves the lead, the bag and the save as
     /// they were, so the player is never left with a transfer they were not
@@ -227,11 +234,22 @@ impl OverworldPhase {
     fn show_take_item_outcome(&mut self) {
         let staged = self.stage_take_lead_held_item();
         let outcome = staged.as_ref().map(|staged| staged.outcome);
-        let nickname = self
+        let nickname = match self
             .lead
             .as_ref()
-            .map(|lead| take_item_message::nickname_tokens(lead.record(), lead.battler().species()))
-            .unwrap_or_default();
+            .filter(|_| take_item_message::names_lead(outcome))
+        {
+            Some(lead) => {
+                match take_item_message::nickname_tokens(lead.record(), lead.battler().species()) {
+                    Ok(tokens) => tokens,
+                    Err(err) => {
+                        eprintln!("take item: {err} -- staying in the overworld");
+                        return;
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
         if !self.show_field_message(take_item_message::take_item_message(outcome, nickname)) {
             return;
         }

@@ -247,3 +247,73 @@ fn a_take_whose_message_cannot_be_built_leaves_the_item_on_the_lead() {
         "the saved slot still holds it"
     );
 }
+
+fn phase_leading_with_undecodable_nickname() -> OverworldPhase {
+    const UNASSIGNED_CHARACTER: u8 = 0x60;
+    let mut phase = new_game_phase();
+    settle(&mut phase);
+    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::SITRUS_BERRY);
+    let mut record = to_save_pokemon(&Dex::new(), &lead);
+    let mut field = [0xFFu8; engine::save::BOX_NICKNAME_LEN];
+    field[0] = UNASSIGNED_CHARACTER;
+    record.box_data.set_nickname(field);
+    phase.set_backed_lead_for_test(0, record, lead);
+    phase
+}
+
+/// A lead whose nickname does not decode cannot be named in the message, and
+/// the species name is not its name: the take is refused before the item moves.
+#[test]
+fn a_take_by_a_lead_with_an_undecodable_nickname_moves_nothing() {
+    let temp = TempSave::new("menu-take-item-bad-nickname");
+    let mut save_slot = temp.slot();
+    let mut phase = phase_leading_with_undecodable_nickname();
+
+    phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+    assert!(phase.start_menu().is_none(), "the menu is closed");
+    assert!(
+        phase.start_menu_may_open(pressed(Buttons::START), false),
+        "no message box opened, so the field is free"
+    );
+    assert_eq!(berry_total(&phase), 0, "the bag did not gain the item");
+    assert_eq!(
+        phase.lead_for_test().unwrap().held_item(),
+        ItemId::SITRUS_BERRY,
+        "the lead still holds it"
+    );
+    assert_eq!(
+        from_save_pokemon(&Dex::new(), &phase.save1().player_party[0])
+            .unwrap()
+            .held_item(),
+        ItemId::SITRUS_BERRY,
+        "the saved slot still holds it"
+    );
+}
+
+/// A full bag refuses the take with a message that does not name the lead, so
+/// the lead's undecodable nickname does not hide it.
+#[test]
+fn a_full_bag_is_still_reported_for_a_lead_with_an_undecodable_nickname() {
+    let temp = TempSave::new("menu-take-item-bag-full-bad-nickname");
+    let mut save_slot = temp.slot();
+    let mut phase = phase_leading_with_undecodable_nickname();
+    phase.save1.bag.berries[0].item_id = ItemId::SITRUS_BERRY.0;
+    phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
+
+    phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+
+    assert!(
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
+        "the full-bag message is on screen"
+    );
+    assert_eq!(
+        phase.lead_for_test().unwrap().held_item(),
+        ItemId::SITRUS_BERRY,
+        "the lead still holds it"
+    );
+}
