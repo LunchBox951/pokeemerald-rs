@@ -142,6 +142,13 @@ impl MosaicSize {
     /// Negative edges use Rust's truncating remainder, matching mGBA's
     /// `software-obj.c` condition rounding rather than Euclidean rounding
     /// `(behavioral-fidelity)`. [`MosaicSize::NONE`] leaves the edge unchanged.
+    ///
+    /// Total over every `i32`: when the next block boundary lies above
+    /// `i32::MAX`, the result saturates at `i32::MAX` instead of overflowing,
+    /// so the outcome never depends on the build's overflow-check setting.
+    /// Saturating keeps the edge at the farthest representable coordinate,
+    /// never wrapping it to a negative one. Edges in the sprite caller's
+    /// range are unaffected.
     #[must_use]
     pub const fn round_trailing_edge(&self, raw_end: i32) -> i32 {
         let horizontal_size = self.h as i32;
@@ -149,7 +156,7 @@ impl MosaicSize {
         if remainder == 0 {
             raw_end
         } else {
-            raw_end + (horizontal_size - remainder)
+            raw_end.saturating_add(horizontal_size - remainder)
         }
     }
 }
@@ -248,6 +255,30 @@ mod tests {
         assert_eq!(size.round_trailing_edge(4), 6);
         assert_eq!(size.round_trailing_edge(6), 6);
         assert_eq!(size.round_trailing_edge(0), 0);
+    }
+
+    #[test]
+    fn round_trailing_edge_saturates_at_i32_max_instead_of_overflowing() {
+        // Arithmetic must not depend on overflow-check settings: the edge
+        // saturates at `i32::MAX` rather than panicking (debug) or wrapping
+        // to a negative edge (release).
+        let size = MosaicSize::new(2, 1);
+        assert_eq!(size.round_trailing_edge(i32::MAX), i32::MAX);
+        assert_eq!(size.round_trailing_edge(i32::MAX - 1), i32::MAX - 1);
+        let wide = MosaicSize::new(16, 1);
+        assert_eq!(wide.round_trailing_edge(i32::MAX), i32::MAX);
+        // `2^31 - 15` rounds to `2^31`, which does not fit.
+        assert_eq!(wide.round_trailing_edge(i32::MAX - 14), i32::MAX);
+        // `i32::MAX - 15` is `2^31 - 16`, already a multiple of 16; the next
+        // edge below it rounds up to it without saturating.
+        assert_eq!(wide.round_trailing_edge(i32::MAX - 16), i32::MAX - 15);
+    }
+
+    #[test]
+    fn round_trailing_edge_handles_i32_min() {
+        let size = MosaicSize::new(16, 1);
+        assert_eq!(size.round_trailing_edge(i32::MIN), i32::MIN);
+        assert_eq!(size.round_trailing_edge(i32::MIN + 1), i32::MIN + 32);
     }
 
     #[test]
