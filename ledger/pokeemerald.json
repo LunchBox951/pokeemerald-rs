@@ -29137,6 +29137,38 @@
       "status": "pending"
     },
     "src/battle_pyramid.c": {
+      "artifacts": {
+        "sPickupItemOffsets": {
+          "reason": "src/battle_pyramid.c:411 sPickupItemOffsets, transcribed as the first row of each of the 7 floors in the floor-row list (0, 9, 18, 27, 36, 45, 54), behind floor_item_row_offset, which refuses an out-of-range floor. Pinned by unit tests and an ignored test that re-parses src/battle_pyramid.c.",
+          "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPickupItemSlots": {
+          "reason": "src/battle_pyramid.c:337-409 sPickupItemSlots, transcribed as the floor rows: 7 floors of 9 {threshold, column} rows, stored back to back, behind floor_item_rows, which refuses an out-of-range floor. Every floor ends at threshold 100. Pinned row by row by unit tests, a compile-time shape check and an ignored test that re-parses src/battle_pyramid.c. NOT modelled: the floor-item consumer (src/battle_pyramid.c:993-1002), its RNG draws and item placement.",
+          "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPickupItemsLvl50": {
+          "reason": "src/battle_pyramid.c:289-311 sPickupItemsLvl50, transcribed as the Level 50 item matrix: 20 rounds of 10 ItemId values, behind pyramid_round_items/pyramid_item lookups that refuse an out-of-range round or column. Pinned record by record by unit tests and by an ignored test that re-parses src/battle_pyramid.c. Data only: the round clamp from the win streak, the floor-item and Pickup RNG draws, and Pickup eligibility are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPickupItemsLvlOpen": {
+          "reason": "src/battle_pyramid.c:313-335 sPickupItemsLvlOpen, transcribed as the Open Level item matrix: 20 rounds of 10 ItemId values (held apart from the Level 50 matrix, though upstream's two currently hold equal values), behind the same checked lookups. Pinned record by record by unit tests and by an ignored test that re-parses src/battle_pyramid.c. Data only: no RNG draw, round clamp or Pickup eligibility is modelled.",
+          "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPickupPercentages": {
+          "reason": "src/battle_pyramid.c:832 sPickupPercentages, transcribed as the ten Pickup thresholds (30, 40, 50, 60, 70, 80, 85, 90, 95, 100), behind pickup_thresholds/pickup_threshold, which refuse an out-of-range index. Pinned, including the final 100, by unit tests and an ignored test that re-parses src/battle_pyramid.c. NOT modelled: GetBattlePyramidPickupItemId (src/battle_pyramid.c:1958-1983), its RNG draw and Pickup eligibility.",
+          "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

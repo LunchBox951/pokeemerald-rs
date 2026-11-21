@@ -18,7 +18,9 @@
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
 //! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
-//! normal-ribbon description lines (see [`ribbon_descriptions`]); more
+//! normal-ribbon description lines (see [`ribbon_descriptions`]), and the
+//! Battle Pyramid floor-item and Pickup distributions (see
+//! [`battle_pyramid_items`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -44,6 +46,7 @@ pub mod abilities;
 pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
+pub mod battle_pyramid_items;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
@@ -91,6 +94,12 @@ pub use audio::{
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
+pub use battle_pyramid_items::{
+    floor_item_row_offset, floor_item_rows, pickup_threshold, pickup_thresholds, pyramid_item,
+    pyramid_round_items, FloorItemRow, PyramidItemError, PyramidItemMode,
+    FLOOR_ITEM_ROWS_PER_FLOOR, FLOOR_ITEM_ROW_COUNT, PICKUP_ITEMS_PER_ROUND, PYRAMID_FLOORS,
+    PYRAMID_ROUNDS,
 };
 pub use easy_chat::{
     EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
