@@ -533,6 +533,27 @@ fn status_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrat
             AbilityId::POISON_POINT,
             Holder::Target,
         ),
+        BattleEvent::BurnedByFlameBody { by_player, .. } => reflected(
+            id::PKMNBURNEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::FLAME_BODY,
+            Holder::Target,
+        ),
+        BattleEvent::BurnedByAttackerSynchronize { by_player, .. } => reflected(
+            id::PKMNBURNEDBY,
+            base,
+            Side::user(by_player),
+            AbilityId::SYNCHRONIZE,
+            Holder::User,
+        ),
+        BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, .. } => reflected(
+            id::PKMNSXHADNOEFFECTONY,
+            base,
+            Side::user(by_player),
+            AbilityId::SYNCHRONIZE,
+            Holder::User,
+        ),
         BattleEvent::ParalyzedByAttackerSynchronize { by_player, .. } => reflected(
             id::PKMNWASPARALYZEDBY,
             base,

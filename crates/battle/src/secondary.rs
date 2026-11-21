@@ -312,6 +312,57 @@ pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
         && attacker.ability() != AbilityId::IMMUNITY
 }
 
+/// Whether Flame Body's `MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_BURN` can burn
+/// `attacker`.
+///
+/// The ability re-enters `SetMoveEffect` through `BattleScript_ApplySecondaryEffect`
+/// with `primary == FALSE` and no certain flag, so the Water Veil and Fire-type
+/// prevention branches stay silent and fall through to the plain guards: a
+/// Fire type, Water Veil and an existing primary status leave the attacker
+/// unchanged (`battle_util.c:2836`-`:2850`, `battle_script_commands.c:2341`-
+/// `:2379`). Shield Dust and Safeguard are skipped because the ability marker
+/// `HITMARKER_STATUS_ABILITY_EFFECT` is set (`:2253`-`:2259`), so unlike
+/// [`burn_can_land`] neither is read here.
+#[must_use]
+pub(crate) fn flame_body_can_land(attacker: &BattlePokemon) -> bool {
+    attacker.status1().is_healthy()
+        && !attacker.types().contains(&Type::Fire)
+        && attacker.ability() != AbilityId::WATER_VEIL
+}
+
+/// The result of reflecting a Synchronize attacker's burn back onto the
+/// Flame Body holder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SynchronizeBurnReflectionOutcome {
+    /// The holder's Fire typing protected it.
+    TypeProtected,
+    /// The holder already carries a primary status, so the reflection writes
+    /// nothing.
+    AlreadyStatused,
+    /// The holder must be burned.
+    Applied,
+}
+
+/// Resolves a Synchronize burn reflection against `holder`, the Flame Body
+/// holder a contact burn just reflected onto: `SetMoveEffect`'s `STATUS1_BURN`
+/// case reached through `seteffectprimary` with `HITMARKER_STATUS_ABILITY_EFFECT`
+/// set, so a Fire-typed holder earns the prevention message ahead of the
+/// existing-status no-op (`battle_util.c:2987`-`:3001`,
+/// `battle_script_commands.c:2341`-`:2379`). A Water Veil holder would be
+/// protected the same way, but a Flame Body holder cannot carry it.
+#[must_use]
+pub(crate) fn resolve_synchronize_burn_reflection(
+    holder: &BattlePokemon,
+) -> SynchronizeBurnReflectionOutcome {
+    if holder.types().contains(&Type::Fire) {
+        return SynchronizeBurnReflectionOutcome::TypeProtected;
+    }
+    if !holder.status1().is_healthy() {
+        return SynchronizeBurnReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizeBurnReflectionOutcome::Applied
+}
+
 /// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
 /// chance branch passes. That branch still spends its `Random() % 100` draw,
 /// and both this value and Serene Grace's doubled 200 clear the same

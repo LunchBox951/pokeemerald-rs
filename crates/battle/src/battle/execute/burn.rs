@@ -1,8 +1,13 @@
-//! The burn secondary and the Fire move's target defrost.
+//! The burn secondary, Flame Body's contact burn and the Fire move's target
+//! defrost.
 
-use assets::{MoveId, Type};
+use assets::{AbilityId, MoveId, Type};
 
+use crate::damage::BattleRng;
 use crate::error::BattleError;
+use crate::secondary::{
+    flame_body_can_land, resolve_synchronize_burn_reflection, SynchronizeBurnReflectionOutcome,
+};
 use crate::status1::Status1;
 
 use super::{Battle, BattleEvent};
@@ -33,6 +38,82 @@ impl Battle {
             by_player: attacker_is_player,
             move_id,
         });
+    }
+
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_FLAME_BODY`
+    /// (`battle_util.c:2836`-`:2850`).
+    ///
+    /// The `Random() % 3` roll needs only a living attacker and a damaging
+    /// contact hit, so a target that fainted to the hit still rolls, and the
+    /// roll precedes every burn guard. A zero roll re-enters `SetMoveEffect`
+    /// on the attacker with `HITMARKER_STATUS_ABILITY_EFFECT`, so Shield Dust
+    /// and Safeguard do not stop it, while a Fire type, Water Veil and an
+    /// existing primary status leave the attacker unchanged (see
+    /// [`flame_body_can_land`]). A burn that lands arms the attacker's
+    /// Synchronize, which reflects it onto a surviving holder at
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` (`battle_util.c:2987`-`:3001`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnknownMove`] for a move outside the table.
+    pub(super) fn apply_flame_body_contact(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let makes_contact = self.dex.move_data(move_id)?.flags.makes_contact();
+        let (attacker, defender) = self.battlers(attacker_is_player);
+        if defender.ability() != AbilityId::FLAME_BODY || attacker.is_fainted() || !makes_contact {
+            return Ok(());
+        }
+        if !rng.next_u16().is_multiple_of(3) || !flame_body_can_land(attacker) {
+            return Ok(());
+        }
+        let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
+        self.battler_mut(attacker_is_player)
+            .set_status1(Status1::Burned);
+        events.push(BattleEvent::BurnedByFlameBody {
+            by_player: attacker_is_player,
+            move_id,
+        });
+        if attacker_synchronizes {
+            self.reflect_contact_burn(attacker_is_player, move_id, events);
+        }
+        Ok(())
+    }
+
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` for a burn Flame Body just put on the
+    /// attacker (`battle_util.c:2987`-`:3001`): a surviving holder is burned
+    /// without a draw, and the reflection is `primary`, so a Fire-typed holder
+    /// earns its own prevention event (`battle_script_commands.c:2361`-`:2370`).
+    fn reflect_contact_burn(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let holder = self.battler_mut(!attacker_is_player);
+        if holder.is_fainted() {
+            return;
+        }
+        match resolve_synchronize_burn_reflection(holder) {
+            SynchronizeBurnReflectionOutcome::Applied => {
+                holder.set_status1(Status1::Burned);
+                events.push(BattleEvent::BurnedByAttackerSynchronize {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizeBurnReflectionOutcome::TypeProtected => {
+                events.push(BattleEvent::AttackerSynchronizeFireTypeProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizeBurnReflectionOutcome::AlreadyStatused => {}
+        }
     }
 
     /// `MOVEEND_DEFROST` (`battle_script_commands.c:4257`-`:4272`): a Fire
@@ -66,3 +147,7 @@ impl Battle {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "burn/tests.rs"]
+mod tests;
