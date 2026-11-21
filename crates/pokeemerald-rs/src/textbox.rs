@@ -14,10 +14,11 @@
 //! pacing and records the arrow in the same ordered [`WindowOp`] list as the
 //! glyphs, so a dialog and the intro scene share one path.
 
+use assets::fonts::GlyphSource;
 use assets::pack::{ImageRef, TextPrinterDownArrow};
 use assets::KeypadIconSheet;
 use engine::text::render::{
-    ClearedSpan, KeypadIconPlacement, RevealedGlyph, TextColors, TickEvent,
+    ClearedSpan, KeypadIconPlacement, Printer, RevealedGlyph, TextColors, TickEvent,
 };
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
@@ -227,8 +228,14 @@ pub(crate) fn blit_glyphs_colored_tracked<'a>(
     let colors = colors.into();
     let (content_width, content_height) = content_size;
     for revealed in glyphs {
+        // `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); the cell's right-hand padding is
+        // not drawn. The rows were already clipped to the font's
+        // `gCurGlyph.height` when the printer produced the glyph
+        // (`Glyph::clipped_to_height`).
+        let copied_width = GLYPH_SIZE.min(usize::from(revealed.glyph.advance_width));
         for pixel_y in 0..GLYPH_SIZE {
-            for pixel_x in 0..GLYPH_SIZE {
+            for pixel_x in 0..copied_width {
                 let value = revealed.glyph.pixels[pixel_y * GLYPH_SIZE + pixel_x];
                 let Some(color) = colors.resolve(revealed, value, pixel_x, pixel_y) else {
                     continue;
@@ -568,30 +575,70 @@ struct ArrowWait {
     frame: u8,
 }
 
+impl ArrowWait {
+    /// A wait that has not drawn yet (`TextPrinterInitDownArrowCounters`).
+    const fn at(cursor: (i32, i32)) -> Self {
+        Self {
+            x: cursor.0,
+            y: cursor.1,
+            delay: 0,
+            frame: 0,
+        }
+    }
+}
+
 /// The pacing of `TextPrinterWaitWithDownArrow` for one printer
 /// (`pokeemerald/src/text.c:787-882`).
 ///
-/// Feed it every [`TickEvent`] together with the printer's [`ArrowWindow`]
-/// and the owner's op list. The tick that reaches a `\p` or `\l` only arms the wait, as
+/// Feed [`Self::follow`] every [`TickEvent`] of the printer, with the owner's
+/// op list. The tick that reaches a `\p` or `\l` only arms the wait, as
 /// upstream's `RENDER_UPDATE` does; the arrow first draws one frame later and
 /// then redraws every ninth. Confirming a scroll erases the arrow
 /// (`TextPrinterClearDownArrow`) with a [`WindowOp::ScrollFill`], since
 /// `FillWindowPixelRect` writes a transparent background too
 /// (`pokeemerald/src/text.c:838-849`); confirming a page clear empties the
-/// window, so the owner's own clear removes it. The auto-scroll mode and the
-/// select sound effect of `TextPrinterWaitWithDownArrow` are not modelled.
+/// window, so the owner's own clear removes it.
+///
+/// An auto-scroll printer never gets an arrow, but still gets that erase. The
+/// select sound effect of `TextPrinterWaitWithDownArrow` is not modelled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct PromptArrow {
     wait: Option<ArrowWait>,
 }
 
 impl PromptArrow {
+    /// Records the arrow effect of one frame of `printer`, which just
+    /// returned `event`, into `ops`: the one entry point for its owners.
+    pub(crate) fn follow<S: GlyphSource>(
+        &mut self,
+        printer: &Printer<S>,
+        event: &TickEvent,
+        content_height: i32,
+        sheet: &DownArrowSheet,
+        ops: &mut Vec<WindowOp>,
+    ) {
+        let window = ArrowWindow {
+            cursor: printer.cursor(),
+            colors: printer.colors(),
+            content_height,
+        };
+        let waiting = matches!(event, TickEvent::AwaitingScroll | TickEvent::AwaitingClear);
+        if printer.is_auto_scroll() && waiting {
+            // `TextPrinterWaitWithDownArrow` never draws in auto mode, but a
+            // scroll prompt's release still erases the arrow's rectangle at
+            // the cursor (`text.c:865-871`, `:1180-1183`): keep that spot.
+            self.wait.get_or_insert(ArrowWait::at(window.cursor));
+        } else {
+            self.tick(event, window, sheet, ops);
+        }
+    }
+
     /// Records the arrow effect of one printer frame into `ops`.
     ///
     /// `window.cursor` is the printer's cursor *after* the tick; a waiting
     /// printer does not move it until its confirm tick, which this reads from
     /// the wait it armed instead.
-    pub(crate) fn tick(
+    fn tick(
         &mut self,
         event: &TickEvent,
         window: ArrowWindow,
@@ -605,14 +652,7 @@ impl PromptArrow {
         } = window;
         match event {
             TickEvent::AwaitingScroll | TickEvent::AwaitingClear => match &mut self.wait {
-                None => {
-                    self.wait = Some(ArrowWait {
-                        x: cursor.0,
-                        y: cursor.1,
-                        delay: 0,
-                        frame: 0,
-                    });
-                }
+                None => self.wait = Some(ArrowWait::at(cursor)),
                 Some(wait) if wait.delay != 0 => wait.delay -= 1,
                 Some(wait) => {
                     Self::drop_trailing_arrow(ops);
@@ -1008,7 +1048,9 @@ mod tests {
             x,
             y,
             glyph: Glyph {
-                advance_width: u8::try_from(msgwin::TILE_SIZE).unwrap(),
+                // The whole 16x16 cell is in-width, so the clip tests below
+                // see the window clip alone.
+                advance_width: u8::try_from(GLYPH_SIZE).unwrap(),
                 pixels: [OPAQUE_GLYPH_PALETTE_INDEX; GLYPH_PIXELS],
             },
             colors: TextColors::default(),
@@ -1123,6 +1165,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn blit_glyphs_clips_cell_padding_past_the_glyph_advance_width() {
+        // Upstream `CopyGlyphToWindow` copies only `gCurGlyph.width` columns
+        // (`pokeemerald/src/text.c:608-609`); latin_narrow.png glyph 0xCD
+        // (width 5) carries stroke pixels at local x=8..11.
+        let mut fb = Framebuffer::new();
+        let origin = (10, 10);
+        let mut pixels = [0u8; GLYPH_PIXELS];
+        pixels[3 * 16 + 8] = OPAQUE_GLYPH_PALETTE_INDEX;
+        pixels[3 * 16 + 4] = OPAQUE_GLYPH_PALETTE_INDEX;
+        let glyph = RevealedGlyph {
+            x: 0,
+            y: 0,
+            glyph: Glyph {
+                advance_width: 5,
+                pixels,
+            },
+            colors: TextColors::default(),
+            raster_height: 15,
+            paint_background: false,
+        };
+
+        blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 4, origin.1 + 3)),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the last in-width column stays painted"
+        );
+        assert_eq!(
+            pixel_at(&fb, (origin.0 + 8, origin.1 + 3)),
+            Some(Rgb888::BLACK)
+        );
+    }
+
+    #[test]
+    fn blit_glyphs_draws_nothing_for_a_zero_width_glyph() {
+        let mut fb = Framebuffer::new();
+        let mut glyph = opaque_glyph_at(0, 0);
+        glyph.glyph.advance_width = 0;
+
+        blit_glyphs_colored(&mut fb, &[glyph], (10, 10), (200, 100), &TEST_GLYPH_COLORS);
+
+        assert_eq!(pixel_at(&fb, (10, 10)), Some(Rgb888::BLACK));
     }
 
     #[test]

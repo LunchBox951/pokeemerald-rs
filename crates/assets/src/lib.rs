@@ -7,14 +7,18 @@
 //! [`items`]), the per-species evolution table (see [`evolution`]), the
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
-//! egg-move lists (see [`egg_moves`]), the species/move/ability display text
-//! (see [`species_names`], [`move_names`], [`abilities`]), the experience
+//! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
+//! [`enemy_elevation`]), the species/move/ability display text
+//! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
+//! Chat vocabulary group (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), the per-map object/warp/coord/
 //! bg events (see [`map_events`]), and the fresh-save object-hide flag set
-//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]), the
+//! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
+//! normal-ribbon description lines (see [`ribbon_descriptions`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -42,7 +46,9 @@ pub mod battle_anim;
 pub mod battle_moves;
 pub mod bundled_overworld;
 pub mod decorations;
+pub mod easy_chat;
 pub mod egg_moves;
+pub mod enemy_elevation;
 pub mod error;
 pub mod event_scripts;
 pub mod evolution;
@@ -60,8 +66,11 @@ pub mod move_names;
 pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
+pub mod pickup;
 pub mod pokeblock_flavors;
 pub mod pokedex;
+pub mod pokenav_city_maps;
+pub mod ribbon_descriptions;
 pub mod script_refs;
 pub mod species;
 pub mod species_names;
@@ -83,10 +92,14 @@ pub use audio::{
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
+pub use easy_chat::{
+    EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
+};
 pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
     EGG_MOVE_SPECIES_COUNT,
 };
+pub use enemy_elevation::{enemy_elevation, ENEMY_ELEVATED_SPECIES_COUNT};
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
@@ -116,6 +129,7 @@ pub use new_game_flags::{
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
+pub use pokenav_city_maps::{CityMapCatalog, CityMapEntry, CityMapId, CITY_MAP_COUNT};
 pub use script_refs::{MapScriptTableRef, ScriptRef};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
@@ -142,6 +156,9 @@ pub use pack::{
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
     NATIONAL_DEX_COUNT, NATIONAL_DEX_LAST, NATIONAL_DEX_OLD_UNOWN_COUNT,
+};
+pub use ribbon_descriptions::{
+    NormalRibbonId, RibbonDescription, RibbonDescriptionTable, RibbonError, NORMAL_RIBBON_COUNT,
 };
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,

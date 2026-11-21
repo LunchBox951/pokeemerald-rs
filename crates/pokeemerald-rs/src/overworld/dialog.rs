@@ -32,7 +32,7 @@ use engine::text::Token;
 use platform::{ButtonState, Buttons};
 use rendering::Framebuffer;
 
-use crate::textbox::{self, ArrowWindow, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
+use crate::textbox::{self, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 /// Maps A/B button edges and holds to the shared printer input shape.
 ///
@@ -227,14 +227,11 @@ impl NpcDialog {
             self.window_fill = self.printer.cleared_window_colors();
         }
         // A prompt wait owns its frame: no glyph, span, or icon competes with
-        // the arrow draw or erase it makes here (`PromptArrow::tick`).
-        self.prompt_arrow.tick(
+        // the arrow draw or erase it makes here (`PromptArrow::follow`).
+        self.prompt_arrow.follow(
+            &self.printer,
             &event,
-            ArrowWindow {
-                cursor: self.printer.cursor(),
-                colors: self.printer.colors(),
-                content_height: textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
-            },
+            textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
             &self.down_arrow,
             &mut self.ops,
         );
@@ -892,10 +889,12 @@ mod tests {
 
     #[test]
     fn clear_paints_the_erased_span_with_the_windows_background() {
+        const CLEARED_WIDTH: u8 = 4;
         // `0x0D`/`0x11` are `EXT_CTRL_CODE_SHIFT_RIGHT`/`EXT_CTRL_CODE_CLEAR`
         // (`pokeemerald/src/text.c:1063-1072`), one argument byte each per
         // `charmap.txt`. `SHIFT_RIGHT 0` moves the cursor back over the `A`
-        // just printed, so `CLEAR` erases exactly that glyph's width.
+        // just printed, so `CLEAR` erases `CLEARED_WIDTH` columns, fewer than the glyph's
+        // advance width, leaving its right-hand columns visible.
         let mut dialog = opaque_synthetic_dialog(vec![
             Token::Char('A'),
             Token::ExtCtrl {
@@ -904,7 +903,7 @@ mod tests {
             },
             Token::ExtCtrl {
                 sub: 0x11,
-                args: vec![u8::try_from(NORMAL_A_ADVANCE_WIDTH).unwrap()],
+                args: vec![CLEARED_WIDTH],
             },
             Token::End,
         ]);
@@ -933,7 +932,7 @@ mod tests {
         );
 
         let (still_glyph_x, still_glyph_y) = box_pixel((
-            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
             textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
         ));
         assert_eq!(
@@ -949,7 +948,6 @@ mod tests {
         // `:1077-1090`); the argument is an origin-relative column, so this
         // erases fewer pixels than the glyph's full advance width.
         const CLEAR_TO_COLUMN: u8 = 4;
-        let cleared_width = i32::from(CLEAR_TO_COLUMN);
 
         let mut dialog = opaque_synthetic_dialog(vec![
             Token::Char('A'),
@@ -988,7 +986,7 @@ mod tests {
         );
 
         let (still_glyph_x, still_glyph_y) = box_pixel((
-            textbox::STANDARD_PRINTER_ORIGIN.0 + cleared_width + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
             textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
         ));
         assert_eq!(
@@ -1045,10 +1043,85 @@ mod tests {
             Some(FRAME_INTERIOR_COLOR),
             "the gap up to the minimum is erased after the glyph draws"
         );
+        // The glyph's cell holds nothing past its advance width on screen
+        // (`CopyGlyphToWindow` copies `gCurGlyph.width` columns,
+        // `text.c:608-609`), so the gap's far end is the frame interior whether
+        // or not the clear reached it; the last copied glyph column is what
+        // stays observable.
+        assert_eq!(
+            probe(NORMAL_A_ADVANCE_WIDTH - 1),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the glyph's last copied column stays"
+        );
         assert_eq!(
             probe(i32::from(MINIMUM) + 1),
+            Some(FRAME_INTERIOR_COLOR),
+            "nothing is drawn past the glyph's width or the minimum"
+        );
+    }
+
+    #[test]
+    fn min_letter_spacing_gap_clear_erases_an_earlier_glyph_inside_the_gap() {
+        // An earlier opaque 'A' at column 8 is overlapped by the gap that a
+        // later 'A' at column 0 clears up to the minimum of 12
+        // (`text.c:1146-1156`), so only the gap's replay of the pre-glyph
+        // background can erase the seeded pixels; column 13 lies past the gap
+        // and keeps the seeded glyph.
+        const SKIP_TO_COLUMN: u8 = 0x12;
+        const MINIMUM: u8 = 12;
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![8],
+            },
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![0],
+            },
+            Token::ExtCtrl {
+                sub: 0x14,
+                args: vec![MINIMUM],
+            },
+            Token::Char('A'),
+            Token::End,
+        ]);
+
+        for _ in 0..8 {
+            if dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_)))
+            {
+                break;
+            }
+            dialog.tick(NO_INPUT);
+        }
+        assert!(
+            dialog
+                .ops
+                .iter()
+                .any(|op| matches!(op, WindowOp::ClearSpan(_))),
+            "the second glyph queues its gap span"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+        let probe = |x: i32| {
+            let (x, y) = box_pixel((
+                textbox::STANDARD_PRINTER_ORIGIN.0 + x,
+                textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+            ));
+            fb.pixel(x, y)
+        };
+        assert_eq!(
+            probe(13),
             Some(OPAQUE_GLYPH_COLOR),
-            "pixels past the minimum are untouched"
+            "the seeded glyph past the gap stays"
+        );
+        assert_eq!(
+            probe(9),
+            Some(FRAME_INTERIOR_COLOR),
+            "the seeded glyph inside the gap is erased"
         );
     }
 
@@ -1713,5 +1786,159 @@ mod tests {
             };
             assert_eq!(pixels, expected, "after scroll row {row}");
         }
+    }
+
+    // -- Auto-scroll waits draw no arrow (`text.c:865-884`) -------------------
+
+    /// `EXT_CTRL_CODE_SKIP` and `EXT_CTRL_CODE_PAUSE_UNTIL_PRESS`
+    /// (`pokeemerald/include/characters.h`; one argument byte and none).
+    const SKIP: u8 = 0x12;
+    const PAUSE_UNTIL_PRESS: u8 = 0x09;
+    /// Waiting calls after the arming frame that leave an auto-scroll prompt
+    /// waiting; the next one releases it (`TextPrinterWaitAutoMode`,
+    /// `text.c:850-863`).
+    const AUTO_WAITING_CALLS: usize = 49;
+
+    /// [`arrow_dialog`] whose printer waits in auto-scroll mode.
+    fn auto_arrow_dialog(tokens: Vec<Token>) -> NpcDialog {
+        let dialog = arrow_dialog(tokens);
+        NpcDialog {
+            printer: dialog.printer.with_auto_scroll(),
+            ..dialog
+        }
+    }
+
+    /// A glyph, a wait, a second glyph: one stream per wait the printer has.
+    fn wait_streams() -> [(&'static str, Vec<Token>); 3] {
+        let stream = |wait| vec![Token::Char('A'), wait, Token::Char('B'), Token::End];
+        [
+            ("clear", stream(Token::PromptClear)),
+            ("scroll", stream(Token::PromptScroll)),
+            (
+                "pause until press",
+                stream(Token::ExtCtrl {
+                    sub: PAUSE_UNTIL_PRESS,
+                    args: vec![],
+                }),
+            ),
+        ]
+    }
+
+    /// Ticks until the message closes, asserting no arrow on the way, and
+    /// returns how many frames that took.
+    fn frames_to_close_without_arrow(dialog: &mut NpcDialog) -> usize {
+        for frame in 1..=ONE_GLYPH_PRINT_FRAME_LIMIT * 2 {
+            let outcome = dialog.tick(NO_INPUT);
+            assert!(!has_arrow_op(dialog), "an arrow after the release");
+            if outcome == DialogOutcome::Closed {
+                return frame;
+            }
+        }
+        panic!("the message never closed");
+    }
+
+    #[test]
+    fn an_auto_scroll_wait_draws_no_arrow_on_any_of_its_fifty_frames() {
+        for (name, tokens) in wait_streams() {
+            for input in [NO_INPUT, A_PRESS, B_PRESS] {
+                let mut dialog = auto_arrow_dialog(tokens.clone());
+                // The glyph, then the frame that reaches the wait.
+                for _ in 0..2 {
+                    assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+                    assert!(!has_arrow_op(&dialog), "{name}: arrow before the wait");
+                }
+                let waiting_cursor = dialog.printer.cursor();
+                for call in 1..=AUTO_WAITING_CALLS {
+                    assert_eq!(dialog.tick(input), DialogOutcome::Continue);
+                    assert!(
+                        !has_arrow_op(&dialog),
+                        "{name}: arrow on waiting call {call}"
+                    );
+                    assert_eq!(dialog.revealed_glyph_count(), 1, "{name}: page up");
+                    assert_eq!(dialog.printer.cursor(), waiting_cursor, "{name}: cursor");
+                }
+                assert_eq!(dialog.tick(input), DialogOutcome::Continue);
+                assert!(
+                    !has_arrow_op(&dialog),
+                    "{name}: arrow on the releasing call"
+                );
+                let released = (dialog.revealed_glyph_count(), dialog.printer.cursor());
+                let auto_rest = frames_to_close_without_arrow(&mut dialog);
+
+                // A manual dialog confirmed on its first waiting frame ends up
+                // in the same place and closes after the same frames.
+                let mut manual = arrow_dialog(tokens.clone());
+                for _ in 0..2 {
+                    assert_eq!(manual.tick(NO_INPUT), DialogOutcome::Continue);
+                }
+                assert_eq!(manual.tick(A_PRESS), DialogOutcome::Continue);
+                assert_eq!(
+                    (manual.revealed_glyph_count(), manual.printer.cursor()),
+                    released,
+                    "{name}: the page advances as in manual mode"
+                );
+                let manual_rest = (1..=ONE_GLYPH_PRINT_FRAME_LIMIT * 2)
+                    .find(|_| manual.tick(NO_INPUT) == DialogOutcome::Closed);
+                assert_eq!(manual_rest, Some(auto_rest), "{name}: frames to close");
+            }
+        }
+    }
+
+    /// A scroll prompt whose cursor sits over the glyph before it:
+    /// `TextPrinterClearDownArrow` fills the rectangle at the cursor on
+    /// release even when no arrow was drawn (`text.c:1180-1188`), so pixels
+    /// right of the cursor go and those left of it stay, in either mode.
+    #[test]
+    fn an_auto_scroll_release_erases_the_cursor_rectangle_as_manual_mode_does() {
+        const CURSOR_X: i32 = 2;
+        let tokens = vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP,
+                args: vec![2],
+            },
+            Token::PromptScroll,
+            Token::Char('B'),
+            Token::End,
+        ];
+        let pixel = |dialog: &NpcDialog, x: i32| {
+            let (px, py) = box_pixel((x, 4));
+            dialog.compose_over(Framebuffer::new()).pixel(px, py)
+        };
+
+        let mut auto = auto_arrow_dialog(tokens.clone());
+        for _ in 0..2 {
+            let _ = auto.tick(NO_INPUT);
+        }
+        assert_eq!(auto.printer.cursor().0, CURSOR_X);
+        for _ in 0..AUTO_WAITING_CALLS {
+            let _ = auto.tick(NO_INPUT);
+            assert_eq!(pixel(&auto, CURSOR_X + 1), Some(OPAQUE_GLYPH_COLOR));
+        }
+        let _ = auto.tick(NO_INPUT);
+
+        let mut manual = arrow_dialog(tokens);
+        for _ in 0..2 {
+            let _ = manual.tick(NO_INPUT);
+        }
+        let _ = manual.tick(A_PRESS);
+
+        for dialog in [&auto, &manual] {
+            assert_eq!(pixel(dialog, CURSOR_X - 1), Some(OPAQUE_GLYPH_COLOR));
+            assert_eq!(pixel(dialog, CURSOR_X + 1), Some(FRAME_INTERIOR_COLOR));
+        }
+        let window = |dialog: &NpcDialog| {
+            let fb = dialog.compose_over(Framebuffer::new());
+            let (width, height) = textbox::STANDARD_BOX_CONTENT_SIZE_PX;
+            (0..height)
+                .flat_map(|y| (0..width).map(move |x| box_pixel((x, y))))
+                .map(|(x, y)| fb.pixel(x, y))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            window(&auto),
+            window(&manual),
+            "the released window holds the same pixels in both modes"
+        );
     }
 }

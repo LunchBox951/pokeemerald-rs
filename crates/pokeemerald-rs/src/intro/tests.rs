@@ -553,6 +553,7 @@ fn a_keypad_icon_draws_at_the_printers_placement_and_the_next_glyph_follows_it()
 
 #[test]
 fn clear_paints_the_erased_span_with_the_windows_background() {
+    const CLEARED_WIDTH: u8 = 4;
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
         synthetic_sources(&pixels),
@@ -565,7 +566,8 @@ fn clear_paints_the_erased_span_with_the_windows_background() {
     // `0x0D`/`0x11` are `EXT_CTRL_CODE_SHIFT_RIGHT`/`EXT_CTRL_CODE_CLEAR`
     // (`pokeemerald/src/text.c:1063-1072`), one argument byte each per
     // `charmap.txt`. `SHIFT_RIGHT 0` moves the cursor back over the `A` just
-    // printed, so `CLEAR` erases exactly that glyph's width. `tests` is a
+    // printed, so `CLEAR` erases `CLEARED_WIDTH` columns, fewer than the glyph's
+    // advance width, leaving its right-hand columns visible. `tests` is a
     // descendant of `intro`, so it can restart the scene's own printer
     // directly with a controlled token stream instead of the real speech.
     scene.printer.restart(vec![
@@ -576,7 +578,7 @@ fn clear_paints_the_erased_span_with_the_windows_background() {
         },
         Token::ExtCtrl {
             sub: 0x11,
-            args: vec![u8::try_from(NORMAL_A_ADVANCE_WIDTH).unwrap()],
+            args: vec![CLEARED_WIDTH],
         },
         Token::End,
     ]);
@@ -599,7 +601,7 @@ fn clear_paints_the_erased_span_with_the_windows_background() {
     );
 
     let (still_glyph_x, still_glyph_y) = box_pixel((
-        STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH + 4,
+        STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
         STANDARD_PRINTER_ORIGIN.1 + 8,
     ));
     assert_eq!(
@@ -615,7 +617,6 @@ fn clear_to_paints_only_up_to_its_target_column() {
     // `:1077-1090`); the argument is an origin-relative column, so this
     // erases fewer pixels than the glyph's full advance width.
     const CLEAR_TO_COLUMN: u8 = 4;
-    let cleared_width = i32::from(CLEAR_TO_COLUMN);
 
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
@@ -657,7 +658,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
     );
 
     let (still_glyph_x, still_glyph_y) = box_pixel((
-        STANDARD_PRINTER_ORIGIN.0 + cleared_width + 4,
+        STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH - 1,
         STANDARD_PRINTER_ORIGIN.1 + 8,
     ));
     assert_eq!(
@@ -716,10 +717,89 @@ fn min_letter_spacing_erases_the_post_glyph_gap_after_the_glyph_draws() {
         Some(SOLID_FRAME_COLOR),
         "the gap up to the minimum is erased after the glyph draws"
     );
+    // The glyph's cell holds nothing past its advance width on screen
+    // (`CopyGlyphToWindow` copies `gCurGlyph.width` columns, `text.c:608-609`),
+    // so the gap's far end is the frame background whether or not the clear
+    // reached it; the last copied glyph column is what stays observable.
+    assert_eq!(
+        probe(NORMAL_A_ADVANCE_WIDTH - 1),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the glyph's last copied column stays"
+    );
     assert_eq!(
         probe(i32::from(MINIMUM) + 1),
+        Some(SOLID_FRAME_COLOR),
+        "nothing is drawn past the glyph's width or the minimum"
+    );
+}
+
+#[test]
+fn min_letter_spacing_gap_clear_erases_an_earlier_glyph_inside_the_gap() {
+    // An earlier opaque 'A' at column 8 is overlapped by the gap that a later
+    // 'A' at column 0 clears up to the minimum of 12 (`text.c:1146-1156`), so
+    // only the gap's replay of the pre-glyph background can erase the seeded
+    // pixels; column 13 lies past the gap and keeps the seeded glyph.
+    const SKIP_TO_COLUMN: u8 = 0x12;
+    const MINIMUM: u8 = 12;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
+        crate::textbox::test_blank_down_arrow(),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::ExtCtrl {
+            sub: SKIP_TO_COLUMN,
+            args: vec![8],
+        },
+        Token::Char('A'),
+        Token::ExtCtrl {
+            sub: SKIP_TO_COLUMN,
+            args: vec![0],
+        },
+        Token::ExtCtrl {
+            sub: 0x14,
+            args: vec![MINIMUM],
+        },
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    for _ in 0..8 {
+        if scene
+            .ops
+            .iter()
+            .any(|op| matches!(op, WindowOp::ClearSpan(_)))
+        {
+            break;
+        }
+        scene.tick(NO_INPUT);
+    }
+    assert!(
+        scene
+            .ops
+            .iter()
+            .any(|op| matches!(op, WindowOp::ClearSpan(_))),
+        "the second glyph queues its gap span"
+    );
+
+    let fb = scene.compose();
+    let probe = |x: i32| {
+        let (x, y) = box_pixel((STANDARD_PRINTER_ORIGIN.0 + x, STANDARD_PRINTER_ORIGIN.1 + 8));
+        fb.pixel(x, y)
+    };
+    assert_eq!(
+        probe(13),
         Some(DARK_GREY_GLYPH_COLOR),
-        "pixels past the minimum are untouched"
+        "the seeded glyph past the gap stays"
+    );
+    assert_eq!(
+        probe(9),
+        Some(SOLID_FRAME_COLOR),
+        "the seeded glyph inside the gap is erased"
     );
 }
 
@@ -1206,6 +1286,7 @@ fn a_page_prompt_shows_the_down_arrow_until_a_or_b_advances_it() {
     const ARROW_WIDTH: i32 = 8;
     const ARROW_HEIGHT: i32 = 16;
     const MARKER_PALETTE_INDEX: u8 = 2;
+    const SKIP_TO_COLUMN: u8 = 0x12;
     for (prompt, press) in [
         (Token::PromptClear, PRESS_A),
         (Token::PromptClear, PRESS_B),
@@ -1215,9 +1296,18 @@ fn a_page_prompt_shows_the_down_arrow_until_a_or_b_advances_it() {
         let pixels = dark_grey_glyph_sheet_pixels();
         let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
         scene.down_arrow = crate::textbox::test_down_arrow(MARKER_PALETTE_INDEX);
-        scene
-            .printer
-            .restart(vec![Token::Char('A'), prompt, Token::Char('B'), Token::End]);
+        // The cursor returns to column 0, so the arrow's rectangle lies over
+        // 'A''s own columns: cell padding past its width is never painted.
+        scene.printer.restart(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP_TO_COLUMN,
+                args: vec![0],
+            },
+            prompt,
+            Token::Char('B'),
+            Token::End,
+        ]);
 
         // 'A' prints, then the tick that reaches the prompt arms the wait.
         for _ in 0..2 {
@@ -1321,5 +1411,143 @@ fn only_pages_with_genuine_prompts_draw_the_down_arrow() {
         }
         assert_eq!(drew, genuine, "page {page}");
         assert_eq!(scene.page_index, page, "page {page} still waits");
+    }
+}
+
+// -- Auto-scroll waits draw no arrow (`text.c:865-884`) ------------------------
+
+/// `EXT_CTRL_CODE_SKIP` and `EXT_CTRL_CODE_PAUSE_UNTIL_PRESS`.
+const SKIP: u8 = 0x12;
+const PAUSE_UNTIL_PRESS: u8 = 0x09;
+/// Waiting calls after the arming frame that leave an auto-scroll prompt
+/// waiting; the next one releases it (`TextPrinterWaitAutoMode`,
+/// `text.c:850-863`).
+const AUTO_WAITING_CALLS: usize = 49;
+
+/// Page 0 draws an arrow at its genuine prompts (`speech::page_draws_down_arrow`),
+/// so a stream restarted there would show one if suppression failed.
+fn arrow_scene_with_stream(pixels: &[u8], tokens: Vec<Token>, auto: bool) -> IntroScene {
+    let mut scene = synthetic_scene(pixels, TextSpeed::Instant);
+    scene.down_arrow = crate::textbox::test_down_arrow(SHADOW_GLYPH_PALETTE_INDEX);
+    if auto {
+        scene = IntroScene {
+            printer: scene.printer.with_auto_scroll(),
+            ..scene
+        };
+    }
+    scene.printer.restart(tokens);
+    scene
+}
+
+#[test]
+fn an_auto_scroll_wait_draws_no_arrow_on_any_of_its_fifty_frames() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let stream = |wait| vec![Token::Char('A'), wait, Token::Char('B'), Token::End];
+    let waits = [
+        ("clear", Token::PromptClear),
+        ("scroll", Token::PromptScroll),
+        (
+            "pause until press",
+            Token::ExtCtrl {
+                sub: PAUSE_UNTIL_PRESS,
+                args: vec![],
+            },
+        ),
+    ];
+    for (name, wait) in waits {
+        for input in [NO_INPUT, PRESS_A, PRESS_B] {
+            let mut scene = arrow_scene_with_stream(&pixels, stream(wait.clone()), true);
+            for _ in 0..2 {
+                assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+                assert!(!scene_has_down_arrow(&scene), "{name}: arrow before wait");
+            }
+            let waiting_cursor = scene.printer.cursor();
+            for call in 1..=AUTO_WAITING_CALLS {
+                assert_eq!(scene.tick(input), IntroStatus::Continue);
+                assert!(!scene_has_down_arrow(&scene), "{name}: waiting call {call}");
+                assert_eq!(scene.printer.cursor(), waiting_cursor, "{name}: cursor");
+                assert_eq!(scene.page_index, 0, "{name}: page up");
+            }
+            assert_eq!(scene.tick(input), IntroStatus::Continue);
+            assert!(!scene_has_down_arrow(&scene), "{name}: releasing call");
+            let released = (scene.ops.len(), scene.printer.cursor());
+
+            // Manual mode confirmed on its first waiting frame leaves the same
+            // state, and both then print 'B', end the page, and start page 1
+            // (the restart keeps the printer's mode).
+            let mut manual = arrow_scene_with_stream(&pixels, stream(wait.clone()), false);
+            for _ in 0..2 {
+                let _ = manual.tick(NO_INPUT);
+            }
+            let _ = manual.tick(PRESS_A);
+            assert_eq!(
+                (manual.ops.len(), manual.printer.cursor()),
+                released,
+                "{name}: the page advances as in manual mode"
+            );
+            for scene in [&mut scene, &mut manual] {
+                let mut frames = 0;
+                while scene.page_index == 0 {
+                    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+                    assert!(!scene_has_down_arrow(scene), "{name}: after release");
+                    frames += 1;
+                    assert!(frames <= 8, "{name}: the page never ended");
+                }
+                assert_eq!(scene.page_index, 1, "{name}: next page");
+            }
+            assert!(scene.printer.is_auto_scroll(), "{name}: mode kept");
+        }
+    }
+}
+
+/// A scroll prompt's release fills the 8x16 rectangle at the cursor even when
+/// no arrow was drawn (`TextPrinterClearDownArrow`, `text.c:1180-1188`).
+#[test]
+fn an_auto_scroll_release_erases_the_cursor_rectangle_as_manual_mode_does() {
+    const CURSOR_X: i32 = 2;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let stream = || {
+        vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP,
+                args: vec![2],
+            },
+            Token::PromptScroll,
+            Token::Char('B'),
+            Token::End,
+        ]
+    };
+    let pixel = |scene: &IntroScene, x: i32| {
+        let (px, py) = box_pixel((x, STANDARD_PRINTER_ORIGIN.1));
+        scene.compose().pixel(px, py)
+    };
+
+    let mut auto = arrow_scene_with_stream(&pixels, stream(), true);
+    for _ in 0..2 {
+        let _ = auto.tick(NO_INPUT);
+    }
+    assert_eq!(auto.printer.cursor().0, CURSOR_X);
+    for _ in 0..AUTO_WAITING_CALLS {
+        let _ = auto.tick(NO_INPUT);
+        assert_eq!(pixel(&auto, CURSOR_X + 1), Some(DARK_GREY_GLYPH_COLOR));
+    }
+    let _ = auto.tick(NO_INPUT);
+
+    let mut manual = arrow_scene_with_stream(&pixels, stream(), false);
+    for _ in 0..2 {
+        let _ = manual.tick(NO_INPUT);
+    }
+    let _ = manual.tick(PRESS_A);
+
+    for scene in [&auto, &manual] {
+        assert_eq!(pixel(scene, CURSOR_X - 1), Some(DARK_GREY_GLYPH_COLOR));
+        assert_eq!(pixel(scene, CURSOR_X + 1), Some(Rgb888::BLACK));
+    }
+    let (auto_fb, manual_fb) = (auto.compose(), manual.compose());
+    for y in 0..FRAMEBUFFER_HEIGHT {
+        for x in 0..FRAMEBUFFER_WIDTH {
+            assert_eq!(auto_fb.pixel(x, y), manual_fb.pixel(x, y), "({x}, {y})");
+        }
     }
 }

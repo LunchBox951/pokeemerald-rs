@@ -44,6 +44,7 @@ use crate::start_menu::StartMenu;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
+mod battle_start_stats;
 mod connections;
 mod escalator_arrival;
 mod field_poison;
@@ -290,11 +291,11 @@ pub(crate) struct OverworldPhase {
     /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
     /// same shape [`Self::dialog`] uses -- while
     /// [`Self::advance_active_battle_frame`] drives whichever variant's own
-    /// driver one turn per frame.
+    /// driver: a turn per frame, or the battle's text ([`Self::battle_sequence`]).
     pub(super) active_battle: Option<ActiveBattle>,
     /// The text sequencer of the battle in [`Self::active_battle`], when the
-    /// battle plays its text ([`live_battle_text`]). A battle without one
-    /// resolves a whole turn per frame.
+    /// battle plays its text ([`live_battle_text`]): the Route 101 first battle
+    /// and wild battles. A battle without one resolves a whole turn per frame.
     battle_sequence: Option<crate::flow::battle_sequence::BattleSequence>,
     /// Test-only: whether battles play their text; see [`live_battle_text::BattleText`].
     #[cfg(test)]
@@ -1010,7 +1011,7 @@ impl OverworldPhase {
         // (`battle_setup.c:365-372,930-943`); every battle's frames pass here.
         self.clear_poison_step_counter();
         self.active_battle = match active {
-            ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
+            ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle, buttons),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
             ActiveBattle::Rival { battle, trainer_id } => {
                 self.advance_route103_rival_battle_frame(battle, trainer_id)
@@ -1071,6 +1072,8 @@ mod animated_door_elevation_tests;
 #[cfg(test)]
 mod animation_tick_tests;
 #[cfg(test)]
+mod battle_start_stats_tests;
+#[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
 mod connection_live_objects_tests;
@@ -1121,6 +1124,10 @@ mod lead_owner_tests;
 /// overtake the text before it.
 #[cfg(test)]
 mod live_first_battle_tests;
+/// Random and party wild battles against the real battle text: their result
+/// and the party's return wait on the last message.
+#[cfg(test)]
+mod live_wild_battle_tests;
 #[cfg(test)]
 mod mat_field_input_gate_tests;
 #[cfg(test)]
