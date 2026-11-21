@@ -28844,6 +28844,20 @@
       "status": "pending"
     },
     "src/battle_arena.c": {
+      "artifacts": {
+        "BattleArena_AddMindPoints": {
+          "reason": "BattleArena_AddMindPoints (src/battle_arena.c:583-585) reads sMindRatings[gCurrentMove]; only that per-move lookup is modelled, as arena_mind_rating. NOT modelled: the per-battler arenaMindPoints accumulation and the Arena judgment that consumes it.",
+          "rust_target": "crates/assets/src/arena_mind_ratings.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "sMindRatings": {
+          "reason": "sMindRatings (src/battle_arena.c:58-276) re-expressed as a move-indexed accessor, arena_mind_rating: 212 moves at +1 and 4 (Protect, Detect, Endure, Fake Out) at -1, zero for every unlisted move including Counter, Mirror Coat and Bide (the table comment, :52-57), out-of-range moves refused. Table only: no Arena scoring or judgment screen consumes it yet.",
+          "rust_target": "crates/assets/src/arena_mind_ratings.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

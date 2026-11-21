@@ -8,7 +8,8 @@
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
-//! [`enemy_elevation`]), the species/move/ability display text
+//! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
+//! [`arena_mind_ratings`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
 //! Chat vocabulary group (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
@@ -41,6 +42,7 @@
 //! see that module's docs).
 
 pub mod abilities;
+pub mod arena_mind_ratings;
 pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
@@ -83,6 +85,9 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // `audio::VoiceGroupId`/`audio::SampleId` are re-exported here alongside the
 // three schema types they identify; `audio`'s own internal cross-references
 // between them stay reachable through the `audio` module path too.
+pub use arena_mind_ratings::{
+    arena_mind_rating, MIND_PENALISED_MOVE_COUNT, MIND_REWARDED_MOVE_COUNT,
+};
 pub use audio::{
     cry_id, AudioError, CryId, CryMode, CrySettings, CryTable, DirectSoundMode, DirectSoundSample,
     DirectSoundVoice, Envelope, KeySplitVoice, MusicPlayerId, NoiseVoice, ProgrammableWave,
