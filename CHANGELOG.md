@@ -11,6 +11,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 ## [0.0.135.0] - 2026-11-16
 
 - Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
+- When two trainers on Route 103 can see you at once, such as Marcos and Rhett on the east side, the one who challenges you is now picked in the same order as the original game.
 
 ## [0.0.134.0] - 2026-11-16
 
