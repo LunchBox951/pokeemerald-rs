@@ -751,6 +751,8 @@ pub(crate) fn has_unstamped_owner_name(record: &Pokemon, owner_id: u32) -> bool 
 }
 
 #[cfg(test)]
+mod repel_tests;
+#[cfg(test)]
 mod traded_tests;
 
 /// Whether `record` is an egg or Bad Egg: the unencrypted header's
@@ -874,6 +876,49 @@ pub(crate) fn live_lead_cute_charm_wild_gender(
     }
     let ratio = dex.species(lead.species()).ok()?.gender_ratio;
     Some(battle::Gender::of_personality(ratio, lead.personality()).cute_charm_wild_gender())
+}
+
+/// The level `IsWildLevelAllowedByRepel` compares a wild level with
+/// (`pokeemerald/src/wild_encounter.c:874-895`): that of the first slot of `party`, in
+/// order, with nonzero HP and `MON_DATA_IS_EGG` clear. `None` when no slot qualifies.
+///
+/// Every slot of `party` is scanned whatever the saved party count says, as upstream's
+/// loop runs over `PARTY_SIZE`. The egg test is the secure region's IV-word bit that
+/// `MON_DATA_IS_EGG` reads (`pokemon.c:3929-3931`), not the unencrypted header flag, and
+/// a record that fails its checksum counts as an egg (`pokemon.c:3733-3747`). HP and level
+/// are the record's unencrypted tail; nothing else is decoded, so a record whose moves
+/// the battle engine could not load still qualifies.
+///
+/// `lead` overlays the live lead's HP and level on its own slot: the lead is owned
+/// outside the saved party and may have changed since its record was last merged.
+pub(crate) fn first_repel_qualifying_level(
+    party: &[Pokemon],
+    lead: Option<&LoadedLead>,
+) -> Option<u8> {
+    for (slot, saved) in party.iter().enumerate() {
+        let overlaid;
+        let record = match lead.filter(|lead| lead.slot() == slot && !lead.is_lent()) {
+            Some(lead) => {
+                overlaid = {
+                    let mut record = *lead.record();
+                    overlay_battle_stats(&mut record, lead.battler());
+                    record
+                };
+                &overlaid
+            }
+            None => saved,
+        };
+        if record.hp == 0 {
+            continue;
+        }
+        let Ok(substructures) = record.box_data.substructures() else {
+            continue;
+        };
+        if read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT == 0 {
+            return Some(record.level);
+        }
+    }
+    None
 }
 
 /// Selects which saved slot is the active battler on continue: the first
