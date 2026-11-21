@@ -169,6 +169,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A door-animation entry differs from the upstream graphic's shape.
+    MalformedDoorAnimationAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battle-effect sprite entry differs from the upstream graphic's shape.
     MalformedBattleEffectAsset {
         /// Asset id.
@@ -384,6 +391,9 @@ impl fmt::Display for PackError {
             Self::MalformedPartyMenuAsset { id, detail } => {
                 write!(f, "asset pack: party-menu entry `{id}` {detail}")
             }
+            Self::MalformedDoorAnimationAsset { id, detail } => {
+                write!(f, "asset pack: door-animation entry `{id}` {detail}")
+            }
             Self::MalformedBattleEffectAsset { id, detail } => {
                 write!(f, "asset pack: battle-effect entry `{id}` {detail}")
             }
@@ -483,7 +493,8 @@ impl std::error::Error for PackError {
             | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedNamingScreenAsset { .. }
             | Self::MalformedBagAsset { .. }
-            | Self::MalformedTextPrinterAsset { .. } => None,
+            | Self::MalformedTextPrinterAsset { .. }
+            | Self::MalformedDoorAnimationAsset { .. } => None,
         }
     }
 }

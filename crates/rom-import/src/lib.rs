@@ -135,11 +135,11 @@ pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
-    Encoding, EvolutionSceneRoots, FieldMessageRoot, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
-    PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
-    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    DoorAnimationRoots, DoorAnimationRow, Encoding, EvolutionSceneRoots, FieldMessageRoot,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, NamingScreenRoots,
+    OpeningSceneRoots, PaletteRoot, PartyMenuRoots, PokeBallRoot, PokeBallRoots, Roots, SampleRoot,
+    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};

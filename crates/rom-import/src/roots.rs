@@ -29,8 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod door_animation;
 mod poke_ball;
 
+pub use door_animation::{DoorAnimationRoots, DoorAnimationRow};
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
 
 /// How a root's bytes sit in the ROM.
@@ -757,6 +759,8 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
+    /// The door animations' table and sheets.
+    pub door_animation: DoorAnimationRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -816,6 +820,7 @@ impl Roots {
         party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
+        door_animation: DoorAnimationRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -856,6 +861,7 @@ impl Roots {
                     .iter()
                     .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
+            .chain(self.door_animation.images.iter())
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
                 self.trainer_battlers

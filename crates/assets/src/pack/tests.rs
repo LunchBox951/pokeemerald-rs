@@ -9,6 +9,7 @@ mod battle_interface_elements;
 mod battle_message;
 mod battler;
 mod container;
+mod door_animation;
 mod event_scripts;
 mod evolution_scene;
 mod field_message;

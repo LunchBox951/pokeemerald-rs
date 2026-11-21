@@ -570,6 +570,28 @@ pub struct PokeBallPlan {
     pub open_sheet: ImagePlan,
 }
 
+/// One row of the door table, owned.
+#[derive(Debug, Clone)]
+pub struct DoorRowPlan {
+    /// The door metatile the row animates.
+    pub metatile: u16,
+    /// The normalized name of the row's sheet.
+    pub sheet: String,
+    /// The bus address of the row's eight-byte palette-bank array.
+    pub palette_slots: u32,
+}
+
+/// The door animations' roots, owned.
+#[derive(Debug, Clone)]
+pub struct DoorAnimationPlan {
+    /// `sDoorAnimGraphicsTable`.
+    pub table: u32,
+    /// The table's rows, in ROM order.
+    pub rows: Vec<DoorRowPlan>,
+    /// Every door sheet the rows name.
+    pub images: Vec<ImagePlan>,
+}
+
 /// One trainer front picture's roots, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPicPlan {
@@ -700,6 +722,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
+    /// The door animations' table and sheets.
+    pub door_animation: DoorAnimationPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.
