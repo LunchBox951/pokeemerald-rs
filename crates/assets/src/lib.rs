@@ -21,8 +21,9 @@
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
-//! [`battle_factory_styles`]), and the Battle Pike wild Pokémon rosters (see
-//! [`battle_pike_wild_mons`]); more
+//! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
+//! [`battle_pike_wild_mons`]), and the Battle Pyramid floor-item and Pickup
+//! distributions (see [`battle_pyramid_items`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -51,6 +52,7 @@ pub mod battle_anim;
 pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_pike_wild_mons;
+pub mod battle_pyramid_items;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
@@ -106,6 +108,12 @@ pub use battle_moves::{
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
     PIKE_WILD_HEADERS, PIKE_WILD_MON_MOVES, PIKE_WILD_MON_SLOTS,
+};
+pub use battle_pyramid_items::{
+    floor_item_row_offset, floor_item_rows, pickup_threshold, pickup_thresholds, pyramid_item,
+    pyramid_round_items, FloorItemRow, PyramidItemError, PyramidItemMode,
+    FLOOR_ITEM_ROWS_PER_FLOOR, FLOOR_ITEM_ROW_COUNT, PICKUP_ITEMS_PER_ROUND, PYRAMID_FLOORS,
+    PYRAMID_ROUNDS,
 };
 pub use easy_chat::{
     EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
