@@ -175,6 +175,11 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
 )]
 mod starter;
 
+/// `AdjustFriendship`'s walking event on a saved record, and the
+/// valid-species test shared with the field-poison drain.
+mod friendship;
+pub(crate) use friendship::{adjust_friendship_walking, has_valid_species};
+
 /// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
 mod take_item;
 pub(crate) use take_item::{take_held_item, TakeHeldItem};
