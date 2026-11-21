@@ -17,7 +17,10 @@ const THAWS: u16 = 0;
 const STAYS_FROZEN: u16 = 1;
 /// `Random() % 4 == 0` is full paralysis.
 const FULL_PARALYSIS: u16 = 0;
-const PARALYSIS_AVOIDED: u16 = 1;
+/// An even residue that still avoids full paralysis (`2 % 4 != 0`) but would
+/// be a confusion self-hit (`2 % 2 == 0`), so it differs from
+/// `CONFUSION_LETS_MOVE_THROUGH` and a swap of the two draws fails.
+const PARALYSIS_AVOIDED: u16 = 2;
 const CONFUSION_LETS_MOVE_THROUGH: u16 = 1;
 const CONFUSION_SELF_HIT: u16 = 0;
 const SELF_HIT_VARIANCE: u16 = 0;
