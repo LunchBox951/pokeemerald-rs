@@ -389,6 +389,7 @@ impl OverworldPhase {
                     reserves,
                     unplayable_member_remains,
                 }));
+                self.count_wild_battle_start();
             }
             Err(error) => {
                 eprintln!("wild encounter: can't start a battle ({error:?})");

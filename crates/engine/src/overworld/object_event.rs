@@ -76,7 +76,8 @@ pub fn tile_is_in_view(tile: (i32, i32), player_position: (i32, i32)) -> bool {
         && (SPAWN_MIN_Y_OFFSET..=SPAWN_MAX_Y_OFFSET).contains(&y_offset)
 }
 
-/// Returns the first visible object at a tile and elevation, in declaration order.
+/// Returns the first visible object at a tile and elevation: the lowest live object slot of a
+/// bound collection (`field_control_avatar.c:291`), the first declared of an unbound scan.
 ///
 /// With a bound live collection every result is already an admitted object, so `event_data` is
 /// not consulted: the scheduler applied the hide flag at admission, and a flag set later leaves
