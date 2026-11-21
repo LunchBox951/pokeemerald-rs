@@ -19,7 +19,10 @@
 //!
 //! Art a table row points at is not arbitrary: [`locate_image_copies`] keeps
 //! every copy so the locator can resolve its table against all of them and
-//! take the copy the selected row holds ([`ImageCopies::plan_at`]).
+//! take the copy the selected row holds ([`ImageCopies::plan_at`]). The
+//! starter chooser's two sprite sheets are decided this way, by the
+//! `CompressedSpriteSheet` record naming each; only a sheet with no such
+//! record is paired in address order.
 
 use std::collections::BTreeMap;
 
