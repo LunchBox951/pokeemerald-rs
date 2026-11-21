@@ -4,7 +4,9 @@ use pack_format::{image_entry_from_tiles, palette_entry, raw_entry, PackEntry};
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
-use super::locate;
+use super::{
+    locate, POKEBALL_SELECT_TAG, SHEET_SIZE, SHEET_SIZE_FIELD, SHEET_TAG_FIELD, STARTER_CIRCLE_TAG,
+};
 use crate::extract::scope::starter_chooser_ids;
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::plan::{Resolution, SymbolExpectation};
@@ -28,7 +30,26 @@ fn tilemap(seed: u8) -> Vec<u8> {
         .collect()
 }
 
-/// A ROM and pack holding all eight chooser roots, one distinct copy each.
+const POKEBALL_SHEET: &str = "starter-chooser/image/pokeball_selection";
+const CIRCLE_SHEET: &str = "starter-chooser/image/starter_circle";
+const POKEBALL_ADDR: u32 = 0x0811_0000;
+const CIRCLE_ADDR: u32 = 0x0812_0000;
+/// Where the fixture writes the two records that name the sheets.
+const POKEBALL_RECORD: usize = 0x19_0000;
+const CIRCLE_RECORD: usize = 0x19_0100;
+
+/// A `CompressedSpriteSheet` row `{data, size, tag}` followed by the empty
+/// terminator row.
+fn sheet_record(data: u32, size: u16, tag: u16) -> Vec<u8> {
+    let mut row = data.to_le_bytes().to_vec();
+    row.extend_from_slice(&size.to_le_bytes());
+    row.extend_from_slice(&tag.to_le_bytes());
+    row.extend_from_slice(&[0; 8]);
+    row
+}
+
+/// A ROM and pack holding all eight chooser roots, one distinct copy each,
+/// and the records upstream names the two sprite sheets by.
 fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
     let tiles = [
         distinctive_tiles(4),
@@ -52,6 +73,14 @@ fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
         .write(0x15_0000, &circle_bytes)
         .write(0x16_0000, &lz77_literals(&bag_map))
         .write(0x17_0000, &lz77_literals(&grass_map))
+        .write(
+            POKEBALL_RECORD,
+            &sheet_record(POKEBALL_ADDR, SHEET_SIZE, POKEBALL_SELECT_TAG),
+        )
+        .write(
+            CIRCLE_RECORD,
+            &sheet_record(CIRCLE_ADDR, SHEET_SIZE, STARTER_CIRCLE_TAG),
+        )
         .finish();
     let entries = vec![
         sheet("starter-chooser/image/tiles", &tiles[0]),
@@ -320,4 +349,172 @@ fn a_global_chooser_root_still_needs_its_map_symbol() {
             );
         });
     }
+}
+
+/// A fixture with an identical stray copy of `id`'s sheet at `stray`, a
+/// lower file offset than the copy the record names.
+fn with_stray(id: &str, stray: usize) -> (Vec<u8>, Vec<PackEntry>) {
+    let (mut rom, entries) = fixture();
+    let xor = if id == POKEBALL_SHEET { 0x11 } else { 0x22 };
+    let art: Vec<u8> = distinctive_tiles(4).iter().map(|b| b ^ xor).collect();
+    let packed = lz77_literals(&art);
+    rom[stray..stray + packed.len()].copy_from_slice(&packed);
+    (rom, entries)
+}
+
+fn image_addr(plan: &super::StarterChooserPlan, id: &str) -> u32 {
+    plan.images.iter().find(|i| i.id == id).expect(id).addr
+}
+
+#[test]
+fn a_lower_identical_stray_does_not_displace_the_sheet_record_copy() {
+    let (rom, entries) = fixture();
+    let mut rom = rom;
+    let ball: Vec<u8> = distinctive_tiles(4).iter().map(|b| b ^ 0x11).collect();
+    // A stray identical copy below the one the sheet record names.
+    let packed = lz77_literals(&ball);
+    rom[0x0F_0000..0x0F_0000 + packed.len()].copy_from_slice(&packed);
+    // sSpriteSheet_PokeballSelect[0]: {data = 0x08110000, size = 0x0800, tag = 0x1000}.
+    let mut record = Vec::new();
+    record.extend_from_slice(&0x0811_0000u32.to_le_bytes());
+    record.extend_from_slice(&0x0800u16.to_le_bytes());
+    record.extend_from_slice(&0x1000u16.to_le_bytes());
+    record.extend_from_slice(&[0; 8]);
+    rom[0x18_0000..0x18_0000 + record.len()].copy_from_slice(&record);
+    with_context("chooser-sheet-record", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located");
+        let ball = plan
+            .images
+            .iter()
+            .find(|i| i.id == "starter-chooser/image/pokeball_selection")
+            .expect("ball sheet");
+        let line = report
+            .iter()
+            .find(|l| l.id == "starter-chooser/image/pokeball_selection")
+            .expect("ball line");
+        eprintln!(
+            "chosen addr {:#x}, resolution {:?}",
+            ball.addr, line.resolution
+        );
+        assert_eq!(ball.addr, 0x0811_0000, "the record names this copy");
+        assert_ne!(line.resolution, Resolution::ArbitraryAmongIdentical);
+    });
+}
+
+#[test]
+fn each_sheet_resolves_to_its_record_copy_over_a_lower_stray() {
+    for (id, addr) in [(POKEBALL_SHEET, POKEBALL_ADDR), (CIRCLE_SHEET, CIRCLE_ADDR)] {
+        let (rom, entries) = with_stray(id, 0x0F_0000);
+        with_context("chooser-sheet-stray", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            assert_eq!(image_addr(&plan, id), addr, "{id}");
+            let line = report.iter().find(|l| l.id == id).expect(id);
+            assert_eq!(line.resolution, Resolution::StructDerived, "{id}");
+            assert_eq!(line.addr, addr, "{id}");
+        });
+    }
+}
+
+#[test]
+fn a_record_naming_the_lower_copy_picks_it_and_the_other_stays_unchosen() {
+    // The record, not address order, decides: here it names the low copy.
+    let (mut rom, entries) = with_stray(POKEBALL_SHEET, 0x0F_0000);
+    rom[POKEBALL_RECORD..POKEBALL_RECORD + 16].copy_from_slice(&sheet_record(
+        0x080F_0000,
+        SHEET_SIZE,
+        POKEBALL_SELECT_TAG,
+    ));
+    with_context("chooser-sheet-low", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located");
+        assert_eq!(image_addr(&plan, POKEBALL_SHEET), 0x080F_0000);
+        let line = report.iter().find(|l| l.id == POKEBALL_SHEET).unwrap();
+        assert_eq!(line.resolution, Resolution::StructDerived);
+    });
+}
+
+#[test]
+fn a_record_with_the_wrong_size_or_tag_names_nothing() {
+    for (id, record_at, addr, tag, other_tag) in [
+        (
+            POKEBALL_SHEET,
+            POKEBALL_RECORD,
+            POKEBALL_ADDR,
+            POKEBALL_SELECT_TAG,
+            STARTER_CIRCLE_TAG,
+        ),
+        (
+            CIRCLE_SHEET,
+            CIRCLE_RECORD,
+            CIRCLE_ADDR,
+            STARTER_CIRCLE_TAG,
+            POKEBALL_SELECT_TAG,
+        ),
+    ] {
+        for (label, decoy) in [
+            ("wrong size", sheet_record(addr, SHEET_SIZE + 0x20, tag)),
+            ("wrong tag", sheet_record(addr, SHEET_SIZE, tag + 2)),
+            (
+                "the other sheet's tag",
+                sheet_record(addr, SHEET_SIZE, other_tag),
+            ),
+            ("no record", vec![0; 16]),
+        ] {
+            let (mut rom, entries) = fixture();
+            rom[record_at..record_at + decoy.len()].copy_from_slice(&decoy);
+            with_context("chooser-sheet-wrong", &rom, entries, |ctx| {
+                let err = locate(ctx, &mut Vec::new()).unwrap_err();
+                assert!(
+                    matches!(&err, GenRomProfileError::StructMismatch { id: bad, .. } if bad == id),
+                    "{id} with {label}: {err}"
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn a_size_and_tag_at_the_wrong_offsets_name_nothing() {
+    let mut shifted = POKEBALL_ADDR.to_le_bytes().to_vec();
+    shifted.extend_from_slice(&[0, 0]);
+    shifted.extend_from_slice(&SHEET_SIZE.to_le_bytes());
+    shifted.extend_from_slice(&POKEBALL_SELECT_TAG.to_le_bytes());
+    let (mut rom, entries) = fixture();
+    rom[POKEBALL_RECORD..POKEBALL_RECORD + shifted.len()].copy_from_slice(&shifted);
+    with_context("chooser-sheet-shifted", &rom, entries, |ctx| {
+        let err = locate(ctx, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == POKEBALL_SHEET),
+            "{err}"
+        );
+    });
+}
+
+#[test]
+fn two_records_that_name_different_copies_settle_nothing() {
+    for (id, addr_tag) in [
+        (POKEBALL_SHEET, POKEBALL_SELECT_TAG),
+        (CIRCLE_SHEET, STARTER_CIRCLE_TAG),
+    ] {
+        let (mut rom, entries) = with_stray(id, 0x0F_0000);
+        let second = sheet_record(0x080F_0000, SHEET_SIZE, addr_tag);
+        rom[0x1A_0000..0x1A_0000 + second.len()].copy_from_slice(&second);
+        with_context("chooser-sheet-disagree", &rom, entries, |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::StructMismatch { id: bad, .. } if bad == id),
+                "{id}: {err}"
+            );
+        });
+    }
+}
+
+#[test]
+fn the_sheet_record_layout_is_the_one_upstream_writes() {
+    // `starter_choose.c:33-34,284-302`; `struct CompressedSpriteSheet`.
+    assert_eq!((POKEBALL_SELECT_TAG, STARTER_CIRCLE_TAG), (0x1000, 0x1001));
+    assert_eq!(SHEET_SIZE, 0x0800);
+    assert_eq!((SHEET_SIZE_FIELD, SHEET_TAG_FIELD), (4, 6));
 }
