@@ -52,8 +52,14 @@ const DISCOURAGE: i8 = -2;
 const SLIGHTLY_ENCOURAGE: i8 = 1;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
+/// `AI_TryToFaint_TryToEncourageQuickAttack`'s extra `score +2` for a Quick
+/// Attack finisher, applied before the shared `+4` it falls through into
+/// (`data/battle_ai_scripts.s:2629-2635`).
+const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
+const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
+const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
@@ -71,6 +77,10 @@ const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
 const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
 const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
 
+const AI_EFFECTIVENESS_QUARTER: u32 = 10;
+const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
+const AI_EFFECTIVENESS_HALF: u32 = 20;
+const AI_EFFECTIVENESS_HALF_WITH_STAB: u32 = 30;
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
 const AI_EFFECTIVENESS_SUPER: u32 = 80;
 const AI_EFFECTIVENESS_SUPER_WITH_STAB: u32 = 120;
@@ -133,9 +143,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:655,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 4] = [
-    MoveEffect::ABSORB,
+/// (`data/battle_ai_scripts.s:686,706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
     MoveEffect::HIGH_CRITICAL,
     MoveEffect::SPEED_DOWN_HIT,
     MoveEffect::VITAL_THROW,
@@ -150,10 +159,7 @@ const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 4] = [
 /// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
 /// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
 ///
-/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
-/// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::CHARGE, MoveEffect::QUICK_ATTACK];
+const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 1] = [MoveEffect::CHARGE];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1042,6 +1048,9 @@ fn score_try_to_faint(
             scores.simulated_damage_percent[slot],
         )?;
         if target.current_hp() <= damage {
+            if move_data.effect == MoveEffect::QUICK_ATTACK {
+                scores.adjust(slot, QUICK_ATTACK_FINISHER_BONUS);
+            }
             scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
@@ -1074,6 +1083,9 @@ fn score_viability(
     match scoreable_effect(dex, move_id)? {
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ALWAYS_HIT) => {
             score_always_hit_viability(scores, slot, user, target, rng);
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
+            score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
@@ -1123,6 +1135,35 @@ fn score_always_hit_viability(
     if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_ENCOURAGE);
     }
+}
+
+/// `AI_CV_Absorb` (`data/battle_ai_scripts.s:789`-`:798`): a draining move the
+/// target resists (half or quarter, with or without same-type bonus, as folded
+/// by `Cmd_if_type_effectiveness`, `src/battle_ai_script_commands.c:1515`-`:1556`)
+/// rolls once and loses three on a low byte of 50 or more. Every other class
+/// leaves the score alone and spends no draw.
+fn score_drain_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let resisted = matches!(
+        ai_type_effectiveness(dex, move_id, user, target)?,
+        Some(
+            AI_EFFECTIVENESS_HALF
+                | AI_EFFECTIVENESS_HALF_WITH_STAB
+                | AI_EFFECTIVENESS_QUARTER
+                | AI_EFFECTIVENESS_QUARTER_WITH_STAB
+        )
+    );
+    if resisted && random_roll_is_at_least(rng, RESISTED_DRAIN_PENALTY_THRESHOLD) {
+        scores.adjust(slot, RESISTED_DRAIN_PENALTY);
+    }
+    Ok(())
 }
 
 /// Exact six-entry `AI_CV_AttackDown_PhysicalTypeList`. Emerald omits Flying,
@@ -2467,8 +2508,12 @@ mod always_hit_viability_tests;
 #[cfg(test)]
 mod attract_tests;
 #[cfg(test)]
+mod drain_viability_tests;
+#[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
 mod prologue_tests;
+#[cfg(test)]
+mod quick_attack_tests;
 #[cfg(test)]
 mod stat_stage_tests;
