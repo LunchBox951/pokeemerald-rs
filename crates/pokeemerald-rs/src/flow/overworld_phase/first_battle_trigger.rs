@@ -144,6 +144,9 @@ impl OverworldPhase {
                     }
                 }
                 self.active_battle = Some(ActiveBattle::First(battle));
+                // `CB2_StartFirstBattle` counts the start once its transition is done
+                // (`pokeemerald/src/battle_setup.c:943-944`); a rejected start returned above.
+                self.count_wild_battle_start();
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
                 self.wild.restart_immunity_steps();

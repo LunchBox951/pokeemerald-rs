@@ -297,9 +297,12 @@ impl ObjectEventCollection {
     }
 
     /// Iterates the *active* entries at `(x, y, elevation)` by *live* position, in
-    /// declaration order: an entry the scheduler has not admitted, or has retired, has no
-    /// object, as `GetObjectEventIdByPosition` scans only active `gObjectEvents` slots.
-    /// A hide flag is not read here; the scheduler applied it at admission.
+    /// [`LiveObjectEvent::object_slot`] order: an entry the scheduler has not admitted, or has
+    /// retired, has no object, as `GetObjectEventIdByPosition` scans only active `gObjectEvents`
+    /// slots, lowest first. Stacked entries therefore answer by the slot each was admitted into
+    /// (the lowest free one), which differs from declaration order once a hidden earlier template
+    /// is admitted after a later one or a later template is admitted into a slot a retired object
+    /// freed. A hide flag is not read here; the scheduler applied it at admission.
     ///
     /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
     /// delegates here when a collection is bound; unbound, it scans authored
@@ -313,13 +316,20 @@ impl ObjectEventCollection {
         y: i32,
         elevation: u8,
     ) -> impl Iterator<Item = &LiveObjectEvent> {
-        self.entries.iter().filter(move |entry| {
-            let (ex, ey) = entry.state.position();
-            entry.is_active()
-                && ex == x
-                && ey == y
-                && elevations_compatible(entry.state.elevation(), elevation)
-        })
+        let mut found: Vec<&LiveObjectEvent> = self
+            .entries
+            .iter()
+            .filter(move |entry| {
+                let (ex, ey) = entry.state.position();
+                entry.is_active()
+                    && ex == x
+                    && ey == y
+                    && elevations_compatible(entry.state.elevation(), elevation)
+            })
+            .collect();
+        // An active entry always holds a slot, and no two hold the same one.
+        found.sort_by_key(|entry| entry.object_slot());
+        found.into_iter()
     }
 
     /// Iterates admitted entries that hold `(x, y, elevation)` for collision, by their *live*
@@ -699,6 +709,28 @@ mod tests {
         rig.event_data.flag_set(hide_flag()).unwrap();
         rig.tick(10);
         assert_eq!(ids_at(&rig, 2, 2), vec![1]);
+    }
+
+    #[test]
+    fn stacked_objects_answer_the_position_query_in_admission_slot_order() {
+        // A (id 1) and B (id 2) stand on the same tile. A is hidden at map load, so only B is
+        // spawned and takes the lower object slot; A takes the next slot once its flag clears and
+        // the camera moves (GetAvailableObjectEventId, event_object_movement.c:1367-1374).
+        // GetObjectEventIdByPosition (:2192-2206) scans slots in order, so B answers first.
+        let mut rig = Rig::new(
+            vec![
+                template(1, 2, 2, MovementType::FaceUp, HIDE),
+                template(2, 2, 2, MovementType::FaceUp, "0"),
+            ],
+            (2, 2),
+        );
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![2]);
+        rig.event_data.flag_clear(hide_flag()).unwrap();
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![2, 1], "slot order, B before A");
     }
 
     #[test]
