@@ -692,11 +692,11 @@ pub(crate) enum Texel {
 #[cfg(test)]
 mod tests {
     use super::{SpriteLayer, WindowSpans};
-    use crate::oam_budget::MAX_OAM_ENTRIES;
     use crate::affine::AffineMatrix;
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
     use crate::oam::{AffineMode, OamEntry, ObjMode, ObjShape};
+    use crate::oam_budget::MAX_OAM_ENTRIES;
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
     use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
