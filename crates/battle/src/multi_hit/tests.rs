@@ -1,6 +1,7 @@
 use super::{
     ensure_resolvable, is_multi_hit_effect, resolve_multi_hit, roll_hit_count,
-    spend_multi_hit_effect_chance_draw, MultiHitAdmission, EFFECT_MULTI_HIT, MAX_HITS, MIN_HITS,
+    spend_multi_hit_effect_chance_draw, MultiHitAdmission, EFFECT_DOUBLE_HIT, EFFECT_MULTI_HIT,
+    FIXED_DOUBLE_HIT_COUNT, MAX_HITS, MIN_HITS,
 };
 use crate::ability::suppresses_critical_hits;
 use crate::dex::Dex;
@@ -14,6 +15,9 @@ use assets::{MoveId, SpeciesId};
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
 const FURY_ATTACK: MoveId = MoveId::FURY_ATTACK;
 const TACKLE: MoveId = MoveId::TACKLE;
+const DOUBLE_KICK: MoveId = MoveId::DOUBLE_KICK;
+const BONEMERANG: MoveId = MoveId::BONEMERANG;
+const BONEMERANG_MISS_DRAW: u16 = 90;
 /// `MOVE_BONE_RUSH`: `EFFECT_MULTI_HIT`, Ground, 80 accuracy.
 const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
 const BULBASAUR: SpeciesId = SpeciesId(1);
@@ -300,4 +304,92 @@ fn a_missed_multi_hit_move_against_levitate_reports_levitate_without_a_count_dra
         MultiHitAdmission::Failed(HitOutcome::LevitateBlocked)
     );
     assert_eq!(rng.draws(), 1, "a failed roll never rolls the hit count");
+}
+
+#[test]
+fn both_double_hit_moves_are_accepted() {
+    let dex = Dex::new();
+    for move_id in [DOUBLE_KICK, BONEMERANG] {
+        assert_eq!(dex.move_data(move_id).unwrap().effect, EFFECT_DOUBLE_HIT);
+        assert!(is_multi_hit_effect(dex.move_data(move_id).unwrap().effect));
+        assert_eq!(ensure_resolvable(&dex, move_id), Ok(()));
+    }
+}
+
+/// `setmultihitcounter 2` sets the limit with no `Random()` call, so a landed
+/// fixed move spends exactly its accuracy draw.
+#[test]
+fn a_fixed_two_hit_move_is_admitted_on_one_draw_with_no_hit_count_roll() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, vec![DOUBLE_KICK, BONEMERANG]);
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
+    for move_id in [DOUBLE_KICK, BONEMERANG] {
+        // A single scripted draw: a second draw would exhaust the sequence.
+        let mut rng = SequenceRng::new([ACCURACY_HIT_DRAW]);
+        assert_eq!(
+            resolve_multi_hit(&dex, move_id, &attacker, &defender, &mut rng).unwrap(),
+            MultiHitAdmission::Admitted {
+                hit_limit: FIXED_DOUBLE_HIT_COUNT
+            }
+        );
+        assert_eq!(rng.draws(), 1, "{move_id:?}");
+    }
+    assert_eq!(FIXED_DOUBLE_HIT_COUNT, 2);
+}
+
+/// The hit limit is a constant even when the draw that would have been a
+/// count roll is a value that selects five hits for a variable-count move.
+#[test]
+fn a_fixed_two_hit_limit_ignores_any_following_draws() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, vec![DOUBLE_KICK]);
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
+    let mut rng = SequenceRng::new([ACCURACY_HIT_DRAW, 3, 3]);
+    assert_eq!(
+        resolve_multi_hit(&dex, DOUBLE_KICK, &attacker, &defender, &mut rng).unwrap(),
+        MultiHitAdmission::Admitted { hit_limit: 2 }
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn a_missed_fixed_two_hit_move_draws_only_accuracy() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, vec![BONEMERANG]);
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
+    let mut rng = SequenceRng::new([BONEMERANG_MISS_DRAW]);
+    assert_eq!(
+        resolve_multi_hit(&dex, BONEMERANG, &attacker, &defender, &mut rng).unwrap(),
+        MultiHitAdmission::Failed(HitOutcome::Miss)
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+/// A missed Bonemerang into Levitate keeps the classified Levitate verdict,
+/// still on the single accuracy draw.
+#[test]
+fn a_missed_bonemerang_against_levitate_reports_levitate_on_one_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, vec![BONEMERANG]);
+    let levitate_defender = mon(&dex, GASTLY, vec![TACKLE]);
+    let mut rng = SequenceRng::new([BONEMERANG_MISS_DRAW]);
+    assert_eq!(
+        resolve_multi_hit(&dex, BONEMERANG, &attacker, &levitate_defender, &mut rng).unwrap(),
+        MultiHitAdmission::Failed(HitOutcome::LevitateBlocked)
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn the_epilogue_spends_one_effect_chance_draw_for_a_fixed_two_hit_move() {
+    let dex = Dex::new();
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
+    for move_id in [DOUBLE_KICK, BONEMERANG] {
+        let mut rng = SequenceRng::new([0]);
+        assert_eq!(
+            spend_multi_hit_effect_chance_draw(&dex, move_id, true, &defender, &mut rng),
+            Ok(())
+        );
+        assert_eq!(rng.draws(), 1, "{move_id:?}");
+    }
 }

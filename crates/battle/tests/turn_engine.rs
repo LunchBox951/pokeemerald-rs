@@ -26,6 +26,8 @@ mod confusion;
 mod confusion_explosion;
 #[path = "turn_engine/cute_charm_contact/mod.rs"]
 mod cute_charm_contact;
+#[path = "turn_engine/double_hit.rs"]
+mod double_hit;
 #[path = "turn_engine/effect_spore_contact/mod.rs"]
 mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
