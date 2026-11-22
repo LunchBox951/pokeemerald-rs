@@ -22,7 +22,8 @@ use crate::oam::{AffineMode, OamEntry};
 
 const NORMAL_SCANLINE_CYCLES: i32 = 1210;
 const HBLANK_FREE_SCANLINE_CYCLES: i32 = 954;
-const MAX_OAM_ENTRIES: usize = 128;
+/// Physical OAM capacity: entries past this index are never admitted or drawn.
+pub(crate) const MAX_OAM_ENTRIES: usize = 128;
 const OAM_ENTRY_TRAVERSAL_CYCLES: i32 = 2;
 const SCREEN_WIDTH: i32 = 240;
 const REGULAR_ENTRY_BASE_REDUCTION: i32 = 2;

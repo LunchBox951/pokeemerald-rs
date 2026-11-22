@@ -18,7 +18,7 @@ use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
 use crate::mosaic::MosaicSize;
 use crate::oam::{AffineMode, OamEntry, ObjMode};
-use crate::oam_budget::OamAdmission;
+use crate::oam_budget::{OamAdmission, MAX_OAM_ENTRIES};
 use crate::palette::{Palette, Rgb888};
 use crate::sprite_affine;
 use crate::tile::{BitDepth, Tileset};
@@ -183,6 +183,9 @@ impl<'a> SpriteLayer<'a> {
     /// Borrows entries in OAM order, separate 4bpp and 8bpp tilesets, and a
     /// palette. Affine entries require matrices attached with
     /// [`with_affine_matrices`](Self::with_affine_matrices).
+    ///
+    /// Entries past the 128-entry OAM capacity are dropped here, so the
+    /// per-pixel scans never visit them.
     #[must_use]
     pub const fn new(
         entries: &'a [OamEntry],
@@ -190,6 +193,11 @@ impl<'a> SpriteLayer<'a> {
         tileset_8bpp: &'a Tileset,
         palette: &'a Palette,
     ) -> Self {
+        let entries = if entries.len() > MAX_OAM_ENTRIES {
+            entries.split_at(MAX_OAM_ENTRIES).0
+        } else {
+            entries
+        };
         Self {
             entries,
             tileset_4bpp,
@@ -688,6 +696,7 @@ mod tests {
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
     use crate::oam::{AffineMode, OamEntry, ObjMode, ObjShape};
+    use crate::oam_budget::MAX_OAM_ENTRIES;
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
     use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
@@ -747,6 +756,23 @@ mod tests {
             HIGHEST_OBJ_PRIORITY,
             enabled,
         )
+    }
+
+    #[test]
+    fn layer_keeps_only_the_physical_oam_capacity_for_per_pixel_scans() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &solid_4bpp_tile(RED_INDEX)).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let oversized = vec![entry(0, 0, false); MAX_OAM_ENTRIES + 3];
+        let layer = SpriteLayer::new(&oversized, &tileset, &tileset, &palette);
+        assert_eq!(layer.entries.len(), MAX_OAM_ENTRIES);
+
+        let exact = &oversized[..MAX_OAM_ENTRIES];
+        let layer = SpriteLayer::new(exact, &tileset, &tileset, &palette);
+        assert_eq!(layer.entries.len(), MAX_OAM_ENTRIES);
+
+        let short = &oversized[..5];
+        let layer = SpriteLayer::new(short, &tileset, &tileset, &palette);
+        assert_eq!(layer.entries.len(), 5);
     }
 
     fn solid_4bpp_tile(index: u8) -> [u8; BPP4_TILE_BYTES] {
