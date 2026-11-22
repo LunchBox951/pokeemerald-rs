@@ -308,11 +308,11 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    assert_eq!(
-        ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(AiFlags::TRY_TO_FAINT)),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
-    );
-    for flags in [only_cbm, only_cbm.union(AiFlags::CHECK_VIABILITY)] {
+    for flags in [
+        only_cbm,
+        only_cbm.union(AiFlags::CHECK_VIABILITY),
+        only_cbm.union(AiFlags::TRY_TO_FAINT),
+    ] {
         assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, flags), Ok(()));
     }
     assert_eq!(

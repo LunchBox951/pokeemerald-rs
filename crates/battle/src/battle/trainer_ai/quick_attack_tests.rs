@@ -9,7 +9,6 @@ use super::{
 };
 use crate::battle::opponent_ai::EnemyAction;
 use crate::dex::Dex;
-use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};
 use crate::script_rng::SequenceRng;
 use assets::trainers::AiFlags;
@@ -131,7 +130,7 @@ fn the_extra_bonus_decides_the_chosen_slot_at_the_exact_threshold() {
 }
 
 #[test]
-fn try_to_faint_admits_quick_attack_but_still_refuses_charge() {
+fn try_to_faint_admits_quick_attack_and_charge() {
     let dex = Dex::new();
     for flags in [
         AiFlags::TRY_TO_FAINT,
@@ -148,7 +147,7 @@ fn try_to_faint_admits_quick_attack_but_still_refuses_charge() {
         );
         assert_eq!(
             ensure_scoreable(&dex, MoveId::CHARGE, flags),
-            Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE)),
+            Ok(()),
             "{flags:?}"
         );
     }
