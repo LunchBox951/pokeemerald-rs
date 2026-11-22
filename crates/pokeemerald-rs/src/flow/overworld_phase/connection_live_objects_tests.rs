@@ -3,6 +3,7 @@
 //! `RemoveObjectEventIfOutsideView`, `src/event_object_movement.c:1699-1713,2167-2189`), instead
 //! of replacing the whole collection with the entered map's fresh templates.
 
+use super::connections::MapConnections;
 use super::tall_grass_tests::{
     grass_entries, route_101_phase_crossing_into_oldale, shown_image, LANDING_X, OLDALE_TOWN,
     ROUTE_101,
@@ -10,10 +11,11 @@ use super::tall_grass_tests::{
 use super::test_support::*;
 use super::OverworldPhase;
 use assets::{MovementType, ObjectEvent, TrainerType};
+use engine::overworld::collision::Collision;
 use engine::overworld::metatile_behavior::MB_TALL_GRASS;
 use engine::overworld::object_event::tile_is_in_view;
 use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
-use engine::overworld::Direction;
+use engine::overworld::{Direction, StepOutcome, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE};
 use platform::{ButtonState, Buttons};
 
 /// Oldale's south edge is 20 tiles below Route 101's north edge in the entered map's coordinates.
@@ -563,6 +565,154 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
         later.1 >= Some(2),
         "the animation continues rather than restarts"
     );
+}
+
+/// The sheets Oldale Town and Route 101 load, so the return crossing can rebind Route 101.
+const RETURNABLE_SPRITES: [&str; 8] = [
+    "girl_3",
+    "mart_employee",
+    "maniac",
+    "youngster",
+    "prof_birch",
+    "misc/birchs_bag",
+    "pokemon/enemy_zigzagoon",
+    "boy_2",
+];
+
+/// A phase at rest on Oldale's south edge after crossing north from Route 101 and stepping one
+/// tile west, facing south, with a Route 101 NPC at `(npc_x, 0)` carried along.
+fn out_and_back(npc_x: i16) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-out-and-back-{npc_x}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::overworld::test_support::write_route101_oldale_layout_pack(
+        &path,
+        &[],
+        &RETURNABLE_SPRITES,
+    );
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::test_support::synthetic_scene(20, 20),
+        ROUTE_101,
+        engine::overworld::PlayerState::new((LANDING_X, 0), 3, Direction::North),
+        None,
+    );
+    phase.pack_source =
+        crate::pack_source::PackSource::Test(Box::leak(path.clone().into_boxed_path()));
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, npc_x, 0)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    idle(&mut phase, 1);
+    assert!(entry_of(&phase, &templates[0]).is_active());
+    cross_north(&mut phase);
+    idle(&mut phase, WALK_FRAMES_PER_TILE.into());
+    turn_and_walk_one_tile(&mut phase, Buttons::LEFT);
+    for _ in 0..TURN_IN_PLACE_FRAMES {
+        phase.step(held(Buttons::DOWN));
+    }
+    assert_eq!(phase.map_id, OLDALE_TOWN);
+    assert_eq!(phase.player.position(), (12, 19));
+    assert_eq!(phase.player.facing(), Direction::South);
+    assert!(!phase.player.in_transit());
+    let carried = entry_of(&phase, &templates[0]);
+    assert!(carried.is_active());
+    assert_eq!(carried.carried_from(), Some(ROUTE_101));
+    assert_eq!(carried.state().position(), (i32::from(npc_x), 20));
+    assert!(tile_is_in_view(
+        carried.state().position(),
+        phase.player.position()
+    ));
+    (phase, templates, path)
+}
+
+/// The step south from `phase`'s resting player, resolved the way [`OverworldPhase::step`] does.
+fn return_step(phase: &OverworldPhase) -> StepOutcome {
+    let runtime = phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events);
+    let maps = MapConnections {
+        pack: &phase.connection_pack,
+        source: phase.pack_source.clone(),
+        departed: phase.map_id,
+        departed_objects: &phase.object_events,
+    };
+    let mut probe = phase.player;
+    probe.step(
+        Some(Direction::South),
+        &runtime,
+        &maps,
+        &phase.save1.event_data,
+    )
+}
+
+/// An NPC left in view by the crossing still holds its translated tile when the player returns
+/// toward it from the side (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4724-4741`).
+#[test]
+fn a_return_toward_a_carried_npcs_translated_tile_is_refused() {
+    let (mut phase, _, path) = out_and_back(12);
+    assert_eq!(
+        return_step(&phase),
+        StepOutcome::Blocked {
+            direction: Direction::South,
+            collision: Collision::ObjectEvent,
+        }
+    );
+    phase.step(held(Buttons::DOWN));
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(phase.map_id, OLDALE_TOWN, "the return never rebound");
+    assert_eq!(phase.player.position(), (12, 19));
+    assert!(!phase.player.in_transit());
+}
+
+/// The control: the same return one column away from the carried NPC crosses.
+#[test]
+fn a_return_beside_a_carried_npcs_translated_tile_crosses() {
+    let (mut phase, _, path) = out_and_back(11);
+    assert_eq!(
+        return_step(&phase),
+        StepOutcome::Crossed {
+            to_map: ROUTE_101,
+            to_position: (12, 0),
+        }
+    );
+    phase.step(held(Buttons::DOWN));
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(phase.map_id, ROUTE_101);
+    assert_eq!(phase.player.position(), (12, 0));
+}
+
+/// The first crossing is not refused by the entered map's authored NPC alone: Oldale's rival
+/// template stands on the landing tile, but nothing has spawned there yet.
+#[test]
+fn a_first_crossing_is_not_refused_by_the_entered_maps_authored_npc() {
+    const RIVAL_X: i32 = 11;
+    let (mut phase, path) =
+        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    phase.player = engine::overworld::PlayerState::new((RIVAL_X, 0), 3, Direction::North);
+    let oldale = assets::MapEventsTable::new()
+        .resolve(OLDALE_TOWN)
+        .expect("Oldale's events");
+    let rival = oldale
+        .object_events
+        .iter()
+        .find(|event| event.local_id == 4)
+        .expect("Oldale's rival");
+    assert_eq!((i32::from(rival.x), i32::from(rival.y)), (RIVAL_X, 19));
+    let hide_flag = assets::object_event_flags::resolve(rival.flag).expect("a hide flag");
+    phase
+        .save1
+        .event_data
+        .flag_clear(hide_flag)
+        .expect("a settable flag");
+    assert!(engine::overworld::object_event::object_event_is_visible(
+        rival,
+        &phase.save1.event_data
+    ));
+
+    cross_north(&mut phase);
+    std::fs::remove_file(path).expect("scratch pack");
+    assert_eq!(phase.player.position(), (RIVAL_X, 19));
 }
 
 /// `DoesObjectCollideWithObjectAt` scans active objects whatever map they came from
