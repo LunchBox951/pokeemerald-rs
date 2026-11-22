@@ -49,6 +49,7 @@ const REDUNDANT_CONFUSION_PENALTY: i8 = -5;
 const SLIGHTLY_DISCOURAGE: i8 = -1;
 const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
+const SLIGHTLY_ENCOURAGE: i8 = 1;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
 
@@ -60,6 +61,15 @@ const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
 const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
 const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
+
+/// `AI_CV_AlwaysHit` compares raw stages (`0..=12`, neutral `6`)
+/// (`data/battle_ai_scripts.s:1076`-`:1079`); these are the same cut-offs as
+/// signed offsets, so "above raw 10" is offset 5 or more.
+const ALWAYS_HIT_EVASION_IMMEDIATE_STAGE: i8 = 4;
+const ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE: i8 = -4;
+const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
+const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
+const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
 
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
 const AI_EFFECTIVENESS_SUPER: u32 = 80;
@@ -123,10 +133,9 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:655,666,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
+/// (`data/battle_ai_scripts.s:655,686,706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 4] = [
     MoveEffect::ABSORB,
-    MoveEffect::ALWAYS_HIT,
     MoveEffect::HIGH_CRITICAL,
     MoveEffect::SPEED_DOWN_HIT,
     MoveEffect::VITAL_THROW,
@@ -1063,6 +1072,9 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ALWAYS_HIT) => {
+            score_always_hit_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1087,6 +1099,30 @@ fn score_viability(
         }
     }
     Ok(())
+}
+
+/// `AI_CV_AlwaysHit` (`data/battle_ai_scripts.s:1075`-`:1088`); upstream's
+/// raw stages are the signed offsets plus six.
+fn score_always_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    let evasion = target.stages().evasion.offset();
+    let accuracy = user.stages().accuracy.offset();
+    let rolls = if evasion > ALWAYS_HIT_EVASION_IMMEDIATE_STAGE
+        || accuracy < ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE
+    {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+        true
+    } else {
+        evasion > ALWAYS_HIT_EVASION_RANDOM_STAGE || accuracy < ALWAYS_HIT_ACCURACY_RANDOM_STAGE
+    };
+    if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
 }
 
 /// Exact six-entry `AI_CV_AttackDown_PhysicalTypeList`. Emerald omits Flying,
@@ -2426,6 +2462,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod always_hit_viability_tests;
 #[cfg(test)]
 mod attract_tests;
 #[cfg(test)]

@@ -253,7 +253,6 @@ fn admission_is_flag_aware() {
     }
     for move_id in [
         MoveId::ABSORB,
-        MoveId::SWIFT,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
         MoveId::VITAL_THROW,
