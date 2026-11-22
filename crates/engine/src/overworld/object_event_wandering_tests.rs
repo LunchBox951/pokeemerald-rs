@@ -8,6 +8,7 @@ use assets::{MapId, MovementType, ObjectEvent};
 
 use super::super::Lifecycle;
 use crate::overworld::direction::Direction;
+use crate::overworld::object_event::FrameContext;
 use crate::overworld::object_event::StepKind;
 use crate::overworld::object_event_harness::{template, Rig, ScriptedRng};
 
@@ -645,4 +646,54 @@ fn route_103s_fisherman_patrols_from_a_zero_x_range() {
         tick_to(&mut rig, &mut ran, frame);
         assert_eq!(position(&rig, 6), tile, "frame {frame}");
     }
+}
+
+#[test]
+fn a_frozen_frame_lets_the_named_object_finish_its_step_and_start_nothing_after() {
+    let mut rig = rig_of(MovementType::WalkUpAndDown, (2, 2), &[]);
+    rig.tick(5);
+    assert_eq!(step(&rig, 1), Some((StepKind::Walk, 5)));
+    rig.frozen = true;
+
+    let mut frames_to_finish = 0;
+    while step(&rig, 1).is_some() {
+        let context = FrameContext {
+            player_position: rig.player,
+            event_data: &rig.event_data,
+            frozen: rig.frozen,
+            player_dashing: rig.dashing,
+            terrain: rig.terrain.runtime(),
+            player_previous_position: rig.player,
+            player_elevation: rig.player_elevation,
+        };
+        rig.collection
+            .run_frame_finishing_step(&context, Some((None, 1)), &mut rig.rng);
+        frames_to_finish += 1;
+    }
+    assert_eq!(
+        frames_to_finish, 11,
+        "the sixteen-frame step runs to its end"
+    );
+    assert_eq!(position(&rig, 1), (20, 19));
+    assert_eq!(
+        previous(&rig, 1),
+        (20, 19),
+        "the finished walk settles its tile"
+    );
+
+    let context = FrameContext {
+        player_position: rig.player,
+        event_data: &rig.event_data,
+        frozen: rig.frozen,
+        player_dashing: rig.dashing,
+        terrain: rig.terrain.runtime(),
+        player_previous_position: rig.player,
+        player_elevation: rig.player_elevation,
+    };
+    for _ in 0..40 {
+        rig.collection
+            .run_frame_finishing_step(&context, Some((None, 1)), &mut rig.rng);
+    }
+    assert_eq!(step(&rig, 1), None, "a frozen object starts no new step");
+    assert_eq!(position(&rig, 1), (20, 19));
 }

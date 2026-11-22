@@ -48,8 +48,9 @@
 //!   data.
 //! - **`FreezeObjectEvents`/`LockPlayerFieldControls`.** The approach owns
 //!   every frame it runs on ([`super::sight_trainer_trigger::SightTrainerOutcome::owns_frame`]), which is
-//!   the observable half of both; there are no other moving object events to
-//!   freeze, and the one control this port's own lock does not reach -- the
+//!   the observable half of both; every other object event is frozen with it, and the
+//!   approaching trainer finishes a step already in flight before the icon, as a patrolling
+//!   trainer can be mid-step when it sees the player. The one control this port's own lock does not reach -- the
 //!   start menu -- is [`super::start_menu`]'s to gate, not this module's.
 //!   the loaded lead is therefore left in place until the
 //!   battle actually starts, so a save taken mid-approach persists an honest
@@ -245,9 +246,20 @@ impl SightApproach {
         self.stage = ApproachStage::IntroMessage { opened: true };
     }
 
+    /// The `(carried_from, local_id)` of the approaching trainer while the lock handoff waits
+    /// on it: `FreezeForApproachingTrainers` leaves it unfrozen until its in-flight step ends
+    /// (`event_object_lock.c:130-147`), so the scheduler lets that step finish. The walk-up and
+    /// the icon drive the trainer themselves.
+    pub(in crate::flow::overworld_phase) fn trainer_finishing_step(
+        &self,
+    ) -> Option<(Option<assets::MapId>, u8)> {
+        matches!(self.stage, ApproachStage::LockHandoff { .. })
+            .then_some((self.carried_from, self.local_id))
+    }
+
     /// Spend one frame of [`ApproachStage::LockHandoff`]. `player_was_moving`
-    /// is whether the player's step was still in flight *before* this frame's
-    /// animation ran: the freeze task polls the state the previous frame left,
+    /// is whether the player's step, or the approaching trainer's, was still in flight *before*
+    /// this frame's animation ran: the freeze task polls the state the previous frame left,
     /// so the frame a step drains on is still a moving frame -- the trigger
     /// frame included, which [`crate::flow::overworld_phase::OverworldPhase::step`] reports itself.
     pub(super) fn advance_lock_handoff(&mut self, player_was_moving: bool) {

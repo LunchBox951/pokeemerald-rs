@@ -7,6 +7,7 @@ use engine::event_data::EventData;
 use engine::overworld::object_event::FrameContext;
 use engine::overworld::{MapRuntime, PlayerState};
 
+use super::sight_trainer_approach::SightApproach;
 use super::OverworldPhase;
 
 /// What one overworld frame lets the object-event scheduler see of the player and the flags.
@@ -62,7 +63,9 @@ impl OverworldPhase {
     /// start menu, or a battle owns the field: upstream's `lock`/`lockall`,
     /// `FreezeForApproachingTrainers` and `ShowStartMenu` freeze them
     /// (`src/scrcmd.c:2193-2208`, `src/start_menu.c:581`) and unfreeze when the
-    /// owner closes (`src/start_menu.c:1421`).
+    /// owner closes (`src/start_menu.c:1421`). The approaching trainer is the exception while
+    /// its approach waits on the lock: it finishes the step it is in the middle of first
+    /// (`event_object_lock.c:130-147`).
     pub(super) fn advance_object_events(&mut self) {
         let frozen = self.dialog.is_some()
             || self.sight_approach.is_some()
@@ -82,14 +85,21 @@ impl OverworldPhase {
             self.scene.runtime(),
             frozen,
         );
+        let finishing = self
+            .sight_approach
+            .as_ref()
+            .and_then(SightApproach::trainer_finishing_step);
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
-            self.object_events.run_frame(&context, scratch);
+            self.object_events
+                .run_frame_finishing_step(&context, finishing, scratch);
         } else {
-            self.object_events.run_frame(&context, &mut self.rng);
+            self.object_events
+                .run_frame_finishing_step(&context, finishing, &mut self.rng);
         }
         #[cfg(not(test))]
-        self.object_events.run_frame(&context, &mut self.rng);
+        self.object_events
+            .run_frame_finishing_step(&context, finishing, &mut self.rng);
         // Movement and respawns have changed tiles; settle their elevations
         // before the begin-step pass and the frame's rendering read them.
         self.scene.update_object_elevations(&mut self.object_events);

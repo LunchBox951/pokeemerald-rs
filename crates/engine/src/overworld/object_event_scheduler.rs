@@ -33,7 +33,7 @@
 //! (`LookAround`, `FaceDownAndRight`, in [`random_facing`]), and the wanderers and bounded
 //! patrols (in [`wandering`]) are modelled; every other type is inert.
 
-use assets::MovementType;
+use assets::{MapId, MovementType};
 
 use crate::event_data::EventData;
 use crate::overworld::map_runtime::MapRuntime;
@@ -142,11 +142,37 @@ impl ObjectEventCollection {
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
     /// sprite-slot order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
+        self.run_frame_finishing_step(context, None, rng);
+    }
+
+    /// [`Self::run_frame`] for a frozen frame that still lets one object finish the step it is
+    /// in the middle of: `finishing` is that entry's `(carried_from, local_id)`
+    /// ([`Self::find`]). `FreezeForApproachingTrainers` freezes the approaching trainer only
+    /// once its `singleMovementActive` clears, so until then its callback keeps running
+    /// (`event_object_lock.c:130-147,151-190`); the frame after the step ends, the entry is
+    /// frozen like the rest and starts nothing new. An unfrozen frame runs every entry, so
+    /// `finishing` changes nothing then.
+    pub fn run_frame_finishing_step(
+        &mut self,
+        context: &FrameContext<'_>,
+        finishing: Option<(Option<MapId>, u8)>,
+        rng: &mut impl RandomSource,
+    ) {
         let _ = self.admit_on_map_load(context.player_position, context.event_data);
         if !context.frozen {
             for index in self.active_indices_in_sprite_slot_order() {
                 // Callbacks run one after another, so each sees the tiles the earlier ones
                 // have just taken or released.
+                let occupants = self.occupants_other_than(index, context);
+                self.entries[index].run_movement_type(context, rng, &occupants);
+            }
+        } else if let Some((carried_from, local_id)) = finishing {
+            let in_flight = self.entries.iter().position(|entry| {
+                entry.carried_from == carried_from
+                    && entry.template.local_id == local_id
+                    && entry.state.step().is_some()
+            });
+            if let Some(index) = in_flight {
                 let occupants = self.occupants_other_than(index, context);
                 self.entries[index].run_movement_type(context, rng, &occupants);
             }
