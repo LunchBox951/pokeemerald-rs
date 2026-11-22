@@ -37,6 +37,8 @@ use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 const PERCENT_SCALE: u32 = 100;
+/// `AI_CalcDmg`'s `gBattleMoveDamage *= 2` for a charged Electric move.
+const CHARGE_DAMAGE_MULTIPLIER: u32 = 2;
 const AI_RANDOM_ROLL_MODULUS: u16 = 256;
 const SIMULATED_DAMAGE_VARIANCE: u16 = 16;
 const MINIMUM_DAMAGE: u32 = 1;
@@ -134,17 +136,16 @@ const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
 
 /// Effects `AI_TryToFaint` refuses until its extra scoring is ported.
 ///
-/// `Charge` doubles the next Electric move's damage, which upstream's
+/// `Charge` is not listed: `estimated_damage` applies the doubling
 /// `AI_CalcDmg` folds into every simulated-damage read
-/// (`src/battle_script_commands.c:1306-1316`); `estimated_damage` does not, so
-/// the one damage-reading script, `TRY_TO_FAINT` (`if_can_faint`,
-/// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
-/// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
+/// (`src/battle_script_commands.c:1306-1316`), so `TRY_TO_FAINT` (`if_can_faint`,
+/// `data/battle_ai_scripts.s:2618`) scores it as an ordinary status move.
+/// `AI_CheckViability` neither dispatches `EFFECT_CHARGE` nor reads damage
+/// (`:619-743`).
 ///
 /// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
 /// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::CHARGE, MoveEffect::QUICK_ATTACK];
+const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 1] = [MoveEffect::QUICK_ATTACK];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -785,6 +786,15 @@ fn estimated_damage(
     // `CalculateBaseDamage` applies the attacker's Flash Fire latch to a Fire
     // move in every simulated read too (`pokemon.c:3366-3371`).
     let damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
+    // `AI_CalcDmg` doubles a charged attacker's Electric move before the
+    // caller's STAB and chart rows, as live damage does
+    // (`battle_script_commands.c:1306-1316`). Saturated stats can already
+    // yield `u32::MAX`, so the doubling saturates.
+    let damage = if attacker.volatiles().charged_up() && move_type == Type::Electric {
+        damage.saturating_mul(CHARGE_DAMAGE_MULTIPLIER)
+    } else {
+        damage
+    };
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
@@ -2428,6 +2438,8 @@ mod tests {
 
 #[cfg(test)]
 mod attract_tests;
+#[cfg(test)]
+mod charge_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
