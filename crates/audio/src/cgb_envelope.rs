@@ -357,10 +357,9 @@ impl CgbEnvelope {
             return (false, false);
         }
         self.latch_goal(live_goal);
-        if self.volume > 0 {
-            self.volume -= 1;
-        }
-        let transitioned = if self.volume == 0 {
+        // `m4a.c:1087-1088`: wrap the byte, then test it as signed.
+        self.volume = self.volume.wrapping_sub(1);
+        let transitioned = if i8::from_ne_bytes([self.volume]) <= 0 {
             self.enter_pseudo_echo_or_silence()
         } else {
             self.frames_until_step = u16::from(self.adsr.release);
@@ -555,6 +554,65 @@ mod tests {
         let boundaries: Vec<u32> = (2..=256).filter(|_| env.step().1).collect();
 
         assert_eq!(boundaries, vec![256]);
+    }
+
+    #[test]
+    fn release_retires_when_volume_turns_negative_as_signed_byte() {
+        // (16*255+15)>>4 = 255 sustain volume; m4a.c:1087-1088 decrements to
+        // 254 then tests (s8)254 = -2 <= 0, so with no echo the voice retires.
+        let mut env = plain_envelope(adsr(0, 0, 255, 1), 16);
+        env.step();
+        assert_eq!(env.volume(), 255);
+
+        env.note_off();
+        env.step();
+        env.step();
+
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
+    }
+
+    #[test]
+    fn release_signed_boundary_129_retires_at_once_128_keeps_ramping() {
+        // (16*129+15)>>4 = 129 decrements to 128 = (s8)-128 and retires;
+        // (16*128+15)>>4 = 128 decrements to 127 and keeps releasing.
+        let mut retires = plain_envelope(adsr(0, 0, 129, 1), 16);
+        retires.step();
+        assert_eq!(retires.volume(), 129);
+        retires.note_off();
+        retires.step();
+        retires.step();
+        assert!(!retires.is_active());
+        assert_eq!(retires.volume(), 0);
+
+        let mut keeps = plain_envelope(adsr(0, 0, 128, 1), 16);
+        keeps.step();
+        assert_eq!(keeps.volume(), 128);
+        keeps.note_off();
+        keeps.step();
+        keeps.step();
+        assert!(keeps.is_active());
+        assert_eq!(keeps.volume(), 127);
+    }
+
+    #[test]
+    fn release_from_a_negative_byte_enters_pseudo_echo() {
+        // Sustain volume 255 decrements to 254 = (s8)-2 and takes the echo
+        // start: floor (16*128+255)>>8 = 8, held for the echo length.
+        let mut env = CgbEnvelope::new(adsr(0, 0, 255, 1), 16, 128, 3);
+        env.step();
+        assert_eq!(env.volume(), 255);
+
+        env.note_off();
+        env.step();
+        env.step();
+
+        assert!(env.is_active());
+        assert_eq!(env.volume(), 8);
+        step_frames(&mut env, 2);
+        assert!(env.is_active());
+        env.step();
+        assert!(!env.is_active());
     }
 
     #[test]
