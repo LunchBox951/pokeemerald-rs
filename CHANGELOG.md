@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.140.0] - 2026-11-22
+
+- General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game. No Pokémon you can meet or raise knows it yet.
+
 ## [0.0.139.0] - 2026-11-21
 
 - Pokémon in your party now grow friendlier as you walk, as in the original game.
