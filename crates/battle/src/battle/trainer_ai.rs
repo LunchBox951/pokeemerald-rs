@@ -51,6 +51,10 @@ const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
+/// `AI_TryToFaint_TryToEncourageQuickAttack`'s extra `score +2` for a Quick
+/// Attack finisher, applied before the shared `+4` it falls through into
+/// (`data/battle_ai_scripts.s:2629-2635`).
+const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
@@ -141,10 +145,7 @@ const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
 /// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
 /// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
 ///
-/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
-/// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::CHARGE, MoveEffect::QUICK_ATTACK];
+const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 1] = [MoveEffect::CHARGE];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1033,6 +1034,9 @@ fn score_try_to_faint(
             scores.simulated_damage_percent[slot],
         )?;
         if target.current_hp() <= damage {
+            if move_data.effect == MoveEffect::QUICK_ATTACK {
+                scores.adjust(slot, QUICK_ATTACK_FINISHER_BONUS);
+            }
             scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
@@ -2432,5 +2436,7 @@ mod attract_tests;
 mod leech_seed_tests;
 #[cfg(test)]
 mod prologue_tests;
+#[cfg(test)]
+mod quick_attack_tests;
 #[cfg(test)]
 mod stat_stage_tests;
