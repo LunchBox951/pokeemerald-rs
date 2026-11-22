@@ -309,3 +309,19 @@ fn the_multiplier_leaves_frame_size_and_sustained_pitch_unchanged() {
     assert_eq!(slow_volume, unity_volume);
     assert_eq!(fast_volume, unity_volume);
 }
+
+#[test]
+fn the_accumulator_holds_a_full_effective_tempo_on_top_of_the_largest_remainder() {
+    let track = vec![Event::Wait(u8::MAX), Event::Wait(u8::MAX), Event::Fine];
+    let mut seq = Sequencer::new(test_song(vec![track], MAX_TEMPO_BPM));
+    seq.set_tempo_multiplier(32_896);
+    // (510 * 32896) >> 8 = 65535, the widest effective tempo.
+    assert_eq!(seq.effective_tempo(), u16::MAX);
+    seq.tempo_c = u32::from(TEMPO_UNIT) - 1;
+    seq.advance_frame();
+    // 149 + 65535 = 65684 = 437 * 150 + 134: past u16::MAX.
+    assert_eq!(seq.tempo_c, 134);
+    // 437 ticks: 255 through the first wait, 182 into the second.
+    assert_eq!(seq.tracks[0].wait, 255 - 182);
+    assert!(!seq.tracks[0].ended);
+}
