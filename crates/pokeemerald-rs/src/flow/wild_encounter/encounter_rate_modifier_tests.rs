@@ -1,7 +1,9 @@
-//! The flute flags and a Cleanse Tag held by party slot 0 through the production roll
-//! (`WildEncounterCheck`, `pokeemerald/src/wild_encounter.c:502-528`; the modifiers
-//! `:946-967`): the saved slot 0 decides the Tag even when it is fainted, an egg, or not
-//! the battle lead, and every case spends the same draws in the same order.
+//! The flute flags, a Cleanse Tag held by party slot 0 and slot 0's Stench, Illuminate,
+//! White Smoke or Arena Trap through the production roll (`WildEncounterCheck`,
+//! `pokeemerald/src/wild_encounter.c:502-528`; the item modifiers `:946-967`): the saved
+//! slot 0 decides the Tag even when it is fainted, an egg, or not the battle lead, the
+//! ability only when slot 0 is not an egg, and every case spends the same draws in the
+//! same order.
 
 use super::test_support::{
     held, player_mon, route_101_phase, walk_east_and_land, ENCOUNTER_SEED, FRAMES_PER_STEP,
@@ -352,4 +354,203 @@ fn another_battle_item_still_disables_the_roll_for_a_lead() {
     let phase = roll_on_grass(phase, seed);
     assert!(!phase.is_wild_battle_active());
     assert_eq!(phase.rng.state(), Rng::new(seed).state(), "no draw at all");
+}
+
+const GRIMER: u16 = 88;
+const VOLBEAT: u16 = 386;
+const TORKOAL: u16 = 321;
+const TRAPINCH: u16 = 332;
+
+/// `(species, ability slot, the ability it names)`: one real holder per scaling ability.
+const HOLDERS: [(u16, u8, assets::AbilityId, bool); 4] = [
+    (GRIMER, 0, assets::AbilityId::STENCH, false),
+    (VOLBEAT, 0, assets::AbilityId::ILLUMINATE, true),
+    (TORKOAL, 0, assets::AbilityId::WHITE_SMOKE, false),
+    (TRAPINCH, 1, assets::AbilityId::ARENA_TRAP, true),
+];
+
+fn holder(species: u16, ability_slot: u8) -> BattlePokemon {
+    mon(species).with_ability_slot(ability_slot)
+}
+
+fn saved(battler: &BattlePokemon) -> engine::save::Pokemon {
+    crate::party::to_save_pokemon(&Dex::new(), battler)
+}
+
+fn saved_ability(record: &engine::save::Pokemon) -> Option<assets::AbilityId> {
+    crate::party::slot_zero_wild_level_ability(&Dex::new(), std::slice::from_ref(record))
+}
+
+#[test]
+fn the_holders_really_carry_the_abilities_that_scale_the_rate() {
+    for (species, slot, ability, _) in HOLDERS {
+        assert_eq!(
+            saved_ability(&saved(&holder(species, slot))),
+            Some(ability),
+            "species {species} slot {slot}"
+        );
+    }
+}
+
+/// Table rate 20 scales to 320. Seed 103 draws 170 (below 320 but not below the halved 160)
+/// and seed 56 draws 336 (not below 320 but below the doubled 640). A fainted holder in saved
+/// slot 0 behind a healthy Treecko decides the rate: halvers turn
+/// seed 103's acceptance (170 < 320) into a refusal (170 >= 160), doublers turn seed 56's
+/// refusal (336 >= 320) into an acceptance (336 < 640).
+#[test]
+fn a_slot_zero_ability_scales_the_production_roll() {
+    let (halve_seed, _) = SEED_RATE_DRAW_170;
+    let (double_seed, _) = SEED_RATE_DRAW_336;
+    for (species, slot, ability, doubles) in HOLDERS {
+        let build = |seed: u32| {
+            let mut phase = grass_phase(NONE);
+            lead_from_slot_one(&mut phase, saved(&fainted_holder(species, slot)));
+            assert_eq!(
+                phase.lead_slot_for_test(),
+                Some(1),
+                "{ability:?}: not the lead"
+            );
+            roll_on_grass(phase, seed)
+        };
+        let (seed, label) = if doubles {
+            (double_seed, "doubles: 336 < 640")
+        } else {
+            (halve_seed, "halves: 170 >= 160")
+        };
+        let phase = build(seed);
+        if doubles {
+            assert_encounter(&phase, &format!("{ability:?} {label}"));
+        } else {
+            assert_no_encounter(&phase, seed, &format!("{ability:?} {label}"));
+        }
+        // The other seed keeps its baseline outcome: a halver still refuses 336 (>= 160) and a
+        // doubler still accepts 170 (< 640).
+        let (other_seed, other_accepts) = if doubles {
+            (halve_seed, true)
+        } else {
+            (double_seed, false)
+        };
+        let other = build(other_seed);
+        if other_accepts {
+            assert_encounter(&other, &format!("{ability:?} other seed"));
+        } else {
+            assert_no_encounter(&other, other_seed, &format!("{ability:?} other seed"));
+        }
+    }
+}
+
+fn fainted_holder(species: u16, slot: u8) -> BattlePokemon {
+    let mut battler = holder(species, slot);
+    battler.apply_damage(u32::MAX);
+    battler
+}
+
+/// An egg in slot 0 has no ability (`:509`), so the baseline outcome returns, while any
+/// other ability (Treecko's Overgrow) never scaled it in the first place.
+#[test]
+fn an_egg_or_an_unrelated_ability_in_slot_zero_leaves_the_rate_unchanged() {
+    let (halve_seed, _) = SEED_RATE_DRAW_170;
+    let (double_seed, _) = SEED_RATE_DRAW_336;
+    for (species, slot, ability, doubles) in HOLDERS {
+        let seed = if doubles { double_seed } else { halve_seed };
+        let egg = into_egg(saved(&holder(species, slot)));
+        assert_eq!(
+            saved_ability(&egg),
+            None,
+            "{ability:?}: an egg has no ability"
+        );
+        let mut phase = grass_phase(NONE);
+        lead_from_slot_one(&mut phase, egg);
+        let phase = roll_on_grass(phase, seed);
+        if doubles {
+            assert_no_encounter(
+                &phase,
+                seed,
+                &format!("{ability:?} egg, baseline refuses 336"),
+            );
+        } else {
+            assert_encounter(&phase, &format!("{ability:?} egg, baseline accepts 170"));
+        }
+    }
+    for (seed, accepts) in [(halve_seed, true), (double_seed, false)] {
+        let mut phase = grass_phase(NONE);
+        lead_from_slot_one(&mut phase, saved(&fainted(TREECKO)));
+        let phase = roll_on_grass(phase, seed);
+        if accepts {
+            assert_encounter(&phase, "Overgrow");
+        } else {
+            assert_no_encounter(&phase, seed, "Overgrow");
+        }
+    }
+}
+
+/// Only saved slot 0 counts: a holder that leads from slot 1 (behind a plain slot 0), or sits
+/// in a reserve slot, changes nothing; the unsaved party's live lead is slot 0.
+#[test]
+fn only_slot_zero_supplies_the_rate_ability() {
+    let (halve_seed, _) = SEED_RATE_DRAW_170;
+    let (double_seed, _) = SEED_RATE_DRAW_336;
+
+    // Grimer (Stench) leads from slot 1 behind a fainted Treecko: seed 103 still accepts.
+    let mut phase = grass_phase(NONE);
+    phase.save1.player_party_count = 2;
+    phase.save1.player_party[0] = saved(&fainted(TREECKO));
+    let grimer = holder(GRIMER, 0);
+    phase.set_backed_lead_for_test(1, saved(&grimer), grimer);
+    assert_encounter(&roll_on_grass(phase, halve_seed), "Stench on slot 1");
+
+    // Volbeat (Illuminate) leads from slot 1 behind a fainted Treecko: seed 56 still refuses.
+    let mut phase = grass_phase(NONE);
+    phase.save1.player_party_count = 2;
+    phase.save1.player_party[0] = saved(&fainted(TREECKO));
+    let volbeat = holder(VOLBEAT, 0);
+    phase.set_backed_lead_for_test(1, saved(&volbeat), volbeat);
+    assert_no_encounter(
+        &roll_on_grass(phase, double_seed),
+        double_seed,
+        "Illuminate on slot 1",
+    );
+
+    // An unsaved party's live lead is slot 0.
+    let mut phase = grass_phase(NONE);
+    phase.set_fresh_lead_for_test(holder(GRIMER, 0));
+    assert_eq!(phase.save1.player_party_count, 0, "setup: an unsaved party");
+    assert_no_encounter(
+        &roll_on_grass(phase, halve_seed),
+        halve_seed,
+        "unsaved Stench lead",
+    );
+    let mut phase = grass_phase(NONE);
+    phase.set_fresh_lead_for_test(holder(VOLBEAT, 0));
+    assert_encounter(
+        &roll_on_grass(phase, double_seed),
+        "unsaved Illuminate lead",
+    );
+}
+
+/// Seed 138 accepts under every ability (138 < 160), so the whole encounter -- slot, level and
+/// opponent construction -- spends the same draws as a Treecko lead.
+#[test]
+fn an_accepted_roll_spends_the_same_draws_whatever_the_slot_zero_ability() {
+    let (seed, _) = SEED_RATE_DRAW_138;
+    let baseline = roll_on_grass(sole_lead_holding(NONE, ItemId::NONE), seed);
+    assert_encounter(&baseline, "baseline");
+    let Some(ActiveBattle::Wild(WildBattle { battle: base, .. })) = baseline.active_battle.as_ref()
+    else {
+        unreachable!("asserted above");
+    };
+    for (species, slot, ability, _) in HOLDERS {
+        let mut phase = grass_phase(NONE);
+        lead_from_slot_one(&mut phase, saved(&fainted_holder(species, slot)));
+        let phase = roll_on_grass(phase, seed);
+        assert_encounter(&phase, &format!("{ability:?}"));
+        let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref()
+        else {
+            unreachable!("asserted above");
+        };
+        assert_eq!(phase.rng.state(), baseline.rng.state(), "{ability:?}");
+        assert_eq!(battle.enemy().personality(), base.enemy().personality());
+        assert_eq!(battle.enemy().ivs(), base.enemy().ivs());
+        assert_eq!(battle.random_turn_number(), base.random_turn_number());
+    }
 }
