@@ -39,7 +39,7 @@ pub(super) fn apply_test_event(seq: &mut Sequencer, track_id: usize, event: &Eve
         song,
         tracks,
         mixer,
-        tempo_i,
+        tempo,
         mem_acc,
         ..
     } = seq;
@@ -48,7 +48,7 @@ pub(super) fn apply_test_event(seq: &mut Sequencer, track_id: usize, event: &Eve
         &mut tracks[track_id],
         mixer,
         track_id,
-        tempo_i,
+        tempo,
         mem_acc,
         event,
     );
