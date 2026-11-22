@@ -4,6 +4,22 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.139.0] - 2026-11-21
+
+- Pokémon in your party now grow friendlier as you walk, as in the original game.
+
+## [0.0.138.0] - 2026-11-21
+
+- Pokémon with the Flame Body ability, such as Magmar and Slugma, can now take part in battles: an attacker that makes contact with one may be burned, as in the original game.
+
+## [0.0.137.0] - 2026-11-21
+
+- General improvements in preparation for music that changes speed during play, as the Berry Blender's does in the original game.
+
+## [0.0.136.0] - 2026-11-20
+
+- General improvements in preparation for faithful Game Boy sound: a note that slides past the highest pitch the moment it starts is now cut off the way the original hardware cuts it off.
+
 ## [0.0.135.0] - 2026-11-16
 
 - Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
@@ -605,7 +621,9 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...dev
+[0.0.137.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57283ac35b0dc473f4019d9c8b860647c772b6c5...dev
+[0.0.136.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d4e145cf37a5628e52a59eccb3092d8cd73d5c46...57283ac35b0dc473f4019d9c8b860647c772b6c5
+[0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...d4e145cf37a5628e52a59eccb3092d8cd73d5c46
 [0.0.134.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9...1f45ccd281cb57bec4574de8de41951f795ba93a
 [0.0.133.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee...473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9
 [0.0.132.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/24594ecbe4716bc05f0c10ea5bf7715160d5b34d...cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee

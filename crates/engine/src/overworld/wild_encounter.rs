@@ -1,20 +1,26 @@
 //! Selects ordinary land encounters while preserving the shared RNG stream.
 //!
 //! A same-behavior encounter draws for rate, slot, then level, plus one more
-//! coin when party slot 0 holds Hustle, Vital Spirit or Pressure. A metatile
+//! coin when party slot 0 holds Hustle, Vital Spirit or Pressure. A Magnet Pull
+//! or Static lead first draws a coin and may pick the slot itself. A metatile
 //! behavior change first draws whether an encounter check is allowed. Each
 //! failed eligibility check stops before later draws. The caller resolves the
 //! map header and slot 0's ability, and builds a battle participant from the
 //! returned [`WildEncounter`].
 //!
+//! An active saved Repel then rejects a generated level below the first usable party
+//! member's ([`RepelGate`]); the gate draws nothing.
+//!
 //! The rate roll applies the two flute flags, a Cleanse Tag held by slot 0, and
 //! slot 0's Stench, Illuminate, White Smoke or Arena Trap ([`EncounterRateModifiers`])
 //! before its clamp; none of them draws. This module does not apply the bike, other
-//! item, Sand Veil (it needs saved weather the port does not type), the Battle Pyramid
-//! Stench variant, or repel modifiers, and it does not select water, fishing,
-//! rock-smash, roamer, outbreak, or special-mode encounters.
+//! item, Sand Veil (it needs saved weather the port does not type), or Battle Pyramid
+//! Stench variant modifiers, and it does not select water, fishing, rock-smash,
+//! roamer, outbreak, or special-mode encounters.
 
-use assets::{AbilityId, LandEncounters, SpeciesId, WildEncounterHeader, WildPokemon};
+use assets::{
+    AbilityId, LandEncounters, SpeciesId, SpeciesTable, Type, WildEncounterHeader, WildPokemon,
+};
 
 use super::metatile_behavior::{is_land_wild_encounter, MB_NORMAL};
 use crate::rng::RandomSource;
@@ -206,14 +212,72 @@ pub fn allow_wild_check_on_new_metatile(rng: &mut impl RandomSource) -> bool {
     rng.next_u16() % NEW_METATILE_ROLL_RANGE < NEW_METATILE_CHECK_CHANCE
 }
 
+/// Picks one land slot whose species has the `wanted` type, each with equal odds.
+///
+/// Draws once, and only when some but not all slots match: with none there is
+/// nothing to pick, and with all twelve the pull would change nothing
+/// (`TryGetRandomWildMonIndexByType`, `src/wild_encounter.c:914-934`).
+fn try_random_land_slot_by_type(
+    land: &LandEncounters,
+    wanted: Type,
+    rng: &mut impl RandomSource,
+) -> Option<usize> {
+    let species_table = SpeciesTable::new();
+    let matching_slots = || {
+        land.mons.iter().enumerate().filter_map(|(slot, mon)| {
+            let stats = species_table.get(mon.species)?;
+            stats.types.contains(&wanted).then_some(slot)
+        })
+    };
+    let matching_count = matching_slots().count();
+    if matching_count == 0 || matching_count == land.mons.len() {
+        return None;
+    }
+    matching_slots().nth(usize::from(rng.next_u16()) % matching_count)
+}
+
+/// `TryGetAbilityInfluencedWildMonIndex`, `src/wild_encounter.c:936-953`; an egg lead is `None`.
+fn try_ability_influenced_land_slot(
+    land: &LandEncounters,
+    slot_zero_ability: Option<AbilityId>,
+    ability: AbilityId,
+    wanted: Type,
+    rng: &mut impl RandomSource,
+) -> Option<usize> {
+    if slot_zero_ability != Some(ability) || !rng.next_u16().is_multiple_of(2) {
+        return None;
+    }
+    try_random_land_slot_by_type(land, wanted, rng)
+}
+
 /// Draws a land encounter's slot and then its level for `slot_zero_ability`
 /// (see [`choose_wild_mon_level`]).
+///
+/// The slot phase tries Magnet Pull with Steel, then Static with Electric,
+/// before the ordinary draw (`TryGenerateWildMon`, `src/wild_encounter.c:430-436`).
+/// A pulled slot skips the ordinary draw; a failed pull still takes it.
 pub fn try_generate_wild_mon_land(
     land: &LandEncounters,
     slot_zero_ability: Option<AbilityId>,
     rng: &mut impl RandomSource,
 ) -> WildEncounter {
-    let slot = choose_land_mon_index(rng);
+    let slot = try_ability_influenced_land_slot(
+        land,
+        slot_zero_ability,
+        AbilityId::MAGNET_PULL,
+        Type::Steel,
+        rng,
+    )
+    .or_else(|| {
+        try_ability_influenced_land_slot(
+            land,
+            slot_zero_ability,
+            AbilityId::STATIC,
+            Type::Electric,
+            rng,
+        )
+    })
+    .unwrap_or_else(|| choose_land_mon_index(rng));
     let mon = land.mons[slot];
     let level = choose_wild_mon_level(&mon, slot_zero_ability, rng);
     WildEncounter {
@@ -221,6 +285,52 @@ pub fn try_generate_wild_mon_land(
         level,
         slot,
     }
+}
+
+/// The saved Repel state `IsWildLevelAllowedByRepel` consults
+/// (`src/wild_encounter.c:874-895`). Evaluating it draws nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RepelGate {
+    /// `VAR_REPEL_STEP_COUNT` is zero: every level is accepted without a party read.
+    #[default]
+    Inactive,
+    /// `VAR_REPEL_STEP_COUNT` is nonzero.
+    Active {
+        /// Level of the first party member (over all six slots) with nonzero HP and
+        /// `MON_DATA_IS_EGG` clear, or `None` when no member qualifies.
+        first_qualifying_level: Option<u8>,
+    },
+}
+
+impl RepelGate {
+    /// Whether a wild Pokémon of `wild_level` may be encountered: a level strictly
+    /// below the first usable member's is rejected, and so is every level when no
+    /// member is usable.
+    #[must_use]
+    pub const fn allows(self, wild_level: u8) -> bool {
+        match self {
+            Self::Inactive => true,
+            Self::Active {
+                first_qualifying_level: Some(party_level),
+            } => wild_level >= party_level,
+            Self::Active {
+                first_qualifying_level: None,
+            } => false,
+        }
+    }
+}
+
+/// [`try_generate_wild_mon_land`], then `repel` (`:448-455`): `None` when the gate
+/// rejects the finished level. The gate draws nothing, so a rejection has spent the slot
+/// and level draws and none of the later construction draws.
+pub fn try_generate_wild_mon_land_with_repel(
+    land: &LandEncounters,
+    slot_zero_ability: Option<AbilityId>,
+    repel: RepelGate,
+    rng: &mut impl RandomSource,
+) -> Option<WildEncounter> {
+    let encounter = try_generate_wild_mon_land(land, slot_zero_ability, rng);
+    repel.allows(encounter.level).then_some(encounter)
 }
 
 /// [`standard_wild_encounter_with_rate_modifiers`] with no flute flag, no Cleanse Tag and no ability.
@@ -256,6 +366,29 @@ pub fn standard_wild_encounter_with_rate_modifiers(
     rate_modifiers: EncounterRateModifiers,
     rng: &mut impl RandomSource,
 ) -> Option<WildEncounter> {
+    standard_wild_encounter_with_repel(
+        header,
+        current_metatile_behavior,
+        previous_metatile_behavior,
+        slot_zero_ability,
+        rate_modifiers,
+        RepelGate::Inactive,
+        rng,
+    )
+}
+
+/// [`standard_wild_encounter_with_rate_modifiers`] that also applies `repel` to the
+/// finished level ([`try_generate_wild_mon_land_with_repel`]). A rejection returns
+/// `None` after the rate, slot and level draws.
+pub fn standard_wild_encounter_with_repel(
+    header: Option<&WildEncounterHeader>,
+    current_metatile_behavior: u8,
+    previous_metatile_behavior: u8,
+    slot_zero_ability: Option<AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
+    repel: RepelGate,
+    rng: &mut impl RandomSource,
+) -> Option<WildEncounter> {
     let header = header?;
     if !is_land_wild_encounter(current_metatile_behavior) {
         return None;
@@ -269,7 +402,7 @@ pub fn standard_wild_encounter_with_rate_modifiers(
     if !wild_encounter_check_with_rate_modifiers(land.encounter_rate, rate_modifiers, rng) {
         return None;
     }
-    Some(try_generate_wild_mon_land(land, slot_zero_ability, rng))
+    try_generate_wild_mon_land_with_repel(land, slot_zero_ability, repel, rng)
 }
 
 /// Per-step encounter immunity and previous-metatile state.
@@ -333,7 +466,7 @@ impl WildEncounterState {
     /// Rolls for an encounter and records the completed step's behavior.
     ///
     /// Immune steps consume no RNG. A successful encounter restarts immunity;
-    /// failed eligible rolls leave the counter at its ceiling.
+    /// failed eligible rolls, including a Repel rejection, leave the counter at its ceiling.
     /// `slot_zero_ability` is passed to [`choose_wild_mon_level`] and `rate_modifiers`
     /// to [`wild_encounter_check_with_rate_modifiers`].
     pub fn check_standard_wild_encounter_with_rate_modifiers(
@@ -344,16 +477,38 @@ impl WildEncounterState {
         rate_modifiers: EncounterRateModifiers,
         rng: &mut impl RandomSource,
     ) -> Option<WildEncounter> {
+        self.check_standard_wild_encounter_with_repel(
+            current_metatile_behavior,
+            header,
+            slot_zero_ability,
+            rate_modifiers,
+            RepelGate::Inactive,
+            rng,
+        )
+    }
+
+    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with `repel` applied to
+    /// the finished level; a rejected encounter does not restart immunity.
+    pub fn check_standard_wild_encounter_with_repel(
+        &mut self,
+        current_metatile_behavior: u8,
+        header: Option<&WildEncounterHeader>,
+        slot_zero_ability: Option<AbilityId>,
+        rate_modifiers: EncounterRateModifiers,
+        repel: RepelGate,
+        rng: &mut impl RandomSource,
+    ) -> Option<WildEncounter> {
         let encounter = if self.immunity_steps < WILD_ENCOUNTER_IMMUNITY_STEPS {
             self.immunity_steps += 1;
             None
         } else {
-            standard_wild_encounter_with_rate_modifiers(
+            standard_wild_encounter_with_repel(
                 header,
                 current_metatile_behavior,
                 self.prev_metatile_behavior,
                 slot_zero_ability,
                 rate_modifiers,
+                repel,
                 rng,
             )
         };

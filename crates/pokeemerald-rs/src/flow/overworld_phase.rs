@@ -44,8 +44,10 @@ use crate::start_menu::StartMenu;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
+mod battle_start_stats;
 mod connections;
 mod escalator_arrival;
+mod field_friendship;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -1071,6 +1073,8 @@ mod animated_door_elevation_tests;
 #[cfg(test)]
 mod animation_tick_tests;
 #[cfg(test)]
+mod battle_start_stats_tests;
+#[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
 mod connection_live_objects_tests;
@@ -1088,6 +1092,8 @@ mod door_sequencing_tests;
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
 mod fainted_lead_party_tests;
+#[cfg(test)]
+mod field_friendship_tests;
 #[cfg(test)]
 mod field_input_ordering_tests;
 #[cfg(test)]
