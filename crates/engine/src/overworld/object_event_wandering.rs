@@ -4,7 +4,7 @@
 //! and forth along its initial facing (the patrols).
 //!
 //! The wanderers run the seven-step table of `event_object_movement.c:2566-2629,2897-3029` and
-//! the patrols the four-step one of `:3764-3822`; the callback table aliases all four `Walk*And*`
+//! the patrols the callback of `:3764-3822`; the callback table aliases all four `Walk*And*`
 //! types to `WalkBackAndForth` (`:249-252`). The aliased `WanderDownAndUp` and
 //! `WanderRightAndLeft` are not scheduled.
 //!
@@ -50,6 +50,12 @@ pub(super) static WANDER_UP_AND_DOWN: Wander = Wander {
 pub(super) static WANDER_LEFT_AND_RIGHT: Wander = Wander {
     directions: &[Direction::West, Direction::East],
 };
+
+/// The patrol's callback phases (its `sTypeFuncId`): drop any leftover action, pick and start
+/// the next leg, and run that leg to its end.
+const PATROL_START: u8 = 0;
+const PATROL_NEXT_LEG: u8 = 1;
+const PATROL_WALKING: u8 = 2;
 
 /// `sMovementDelaysMedium` (`:709`), indexed by `Random() % 4`.
 const WANDER_DELAYS: [i16; 4] = [32, 64, 96, 128];
@@ -176,59 +182,65 @@ impl LiveObjectEvent {
         }
     }
 
-    /// One call of `MovementType_WalkBackAndForth_Step0` to `_Step3`; `true` runs the next step
+    /// One call of `MovementType_WalkBackAndForth` (`:3764-3822`); `true` runs the next phase
     /// this frame.
     ///
     /// The patrol walks from its initial tile toward the facing its movement type starts with,
     /// and turns back at the edge of its range. Only leaving the range turns it back: any other
-    /// collision makes it walk in place on that tile and try again.
+    /// collision makes it walk in place on that tile and try again. A leg that ends on one frame
+    /// is followed by the next leg's first frame on the next.
     pub(super) fn walk_back_and_forth_step(
         &mut self,
         context: &FrameContext<'_>,
         occupants: &[Occupant],
     ) -> bool {
         match self.type_func_id() {
-            0 => {
+            PATROL_START => {
                 self.state.clear_step();
-                self.set_type_func_id(1);
+                self.set_type_func_id(PATROL_NEXT_LEG);
                 true
             }
-            1 => {
-                let base = initial_facing_direction(self.state.movement_type());
-                let direction = if self.sequence_index() == 0 {
-                    base
-                } else {
-                    base.opposite()
-                };
-                self.state.face(direction);
-                self.set_type_func_id(2);
-                true
-            }
-            2 => {
-                if self.sequence_index() != 0 && self.is_at_initial_tile() {
-                    self.set_sequence_index(0);
-                    self.state.face(self.state.facing().opposite());
-                }
-                let mut collision = self.collision(self.state.facing(), context, occupants);
-                if collision == Some(NpcCollision::OutsideRange) {
-                    self.set_sequence_index(self.sequence_index().wrapping_add(1));
-                    self.state.face(self.state.facing().opposite());
-                    collision = self.collision(self.state.facing(), context, occupants);
-                }
-                let direction = self.state.facing();
-                if collision.is_some() {
+            PATROL_NEXT_LEG => {
+                let (direction, blocked) = self.next_patrol_leg(context, occupants);
+                if blocked {
                     self.state.begin_normal_walk_in_place(direction);
                 } else {
                     self.start_walk(direction, context);
                 }
-                self.set_type_func_id(3);
+                self.set_type_func_id(PATROL_WALKING);
                 false
             }
             _ => {
-                self.run_action_then(1, context);
+                self.run_action_then(PATROL_NEXT_LEG, context);
                 false
             }
         }
+    }
+
+    /// The direction the patrol's next leg faces and whether something blocks it. The sequence
+    /// index is zero on the outbound leg and counts the times the range has turned it back; a
+    /// returning patrol that is back on its initial tile starts outbound again.
+    fn next_patrol_leg(
+        &mut self,
+        context: &FrameContext<'_>,
+        occupants: &[Occupant],
+    ) -> (Direction, bool) {
+        let outbound = initial_facing_direction(self.state.movement_type());
+        if self.sequence_index() != 0 && self.is_at_initial_tile() {
+            self.set_sequence_index(0);
+        }
+        let mut direction = if self.sequence_index() == 0 {
+            outbound
+        } else {
+            outbound.opposite()
+        };
+        let mut collision = self.collision(direction, context, occupants);
+        if collision == Some(NpcCollision::OutsideRange) {
+            self.set_sequence_index(self.sequence_index().wrapping_add(1));
+            direction = direction.opposite();
+            collision = self.collision(direction, context, occupants);
+        }
+        (direction, collision.is_some())
     }
 
     /// `GetCollisionInDirection` (`:4650-4656`) for this entry against `occupants`, within the
