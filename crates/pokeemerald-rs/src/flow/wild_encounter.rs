@@ -12,6 +12,15 @@
 //! headless driver has no battle-vblank interleaving. The callback remains pending in the
 //! ledger.
 //!
+//! # Ability turn-away
+//!
+//! After the level and the Repel verdict, a Keen Eye or Intimidate party slot 0 may reject a
+//! level at least five below its own on one more coin (`IsAbilityAllowingEncounter`,
+//! `src/wild_encounter.c:897-913`). Slot 0 is the saved record, even when it is fainted behind
+//! another battle lead; only a live lead standing in slot 0 overrides its level, and an unsaved
+//! party is its live lead alone. A rejection starts no battle and draws nothing for the
+//! wild Pokémon.
+//!
 //! # Headless action policy
 //!
 //! With no battle menu, a wild battle attempts to run every turn: [`take_run_turn`], which
@@ -48,7 +57,8 @@ use engine::event_data::{EventData, VAR_REPEL_STEP_COUNT};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{
-    EncounterRateModifiers, RepelGate, WildEncounter, WildEncounterState,
+    EncounterGates, EncounterRateModifiers, LowLevelAbilityGate, RepelGate, WildEncounter,
+    WildEncounterState,
 };
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
@@ -57,7 +67,7 @@ use engine::save::{Pokemon, SaveBlock1};
 use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
-use crate::party::{first_repel_qualifying_level, LoadedLead};
+use crate::party::{first_repel_qualifying_level, slot_zero_level, LoadedLead};
 
 /// Marks `lead` traded when its OT id differs from the save owner's -- the
 /// id half of `IsOtherTrainer` (`pokemon.c:6611-6620`); a lead the save
@@ -94,6 +104,8 @@ pub(super) struct StepEncounterInputs<'a> {
     pub(super) party: &'a [Pokemon],
     /// The owned lead, whose live HP and level override its saved slot.
     pub(super) lead: Option<&'a LoadedLead>,
+    /// Party slot 0's level for the low-level ability gate, if the party has a slot 0.
+    slot_zero_level: Option<u8>,
 }
 
 impl<'a> StepEncounterInputs<'a> {
@@ -103,11 +115,20 @@ impl<'a> StepEncounterInputs<'a> {
         save1: &'a SaveBlock1,
         lead: Option<&'a LoadedLead>,
     ) -> Self {
+        let stored = usize::from(save1.player_party_count).min(save1.player_party.len());
+        // As the slot-0 ability is resolved: an unsaved party is its live lead alone.
+        let slot_zero_level = if stored == 0 {
+            lead.filter(|lead| !lead.is_lent())
+                .map(|lead| lead.battler().level())
+        } else {
+            slot_zero_level(&save1.player_party[..stored], lead)
+        };
         Self {
             rate_modifiers,
             event_data: &save1.event_data,
             party: &save1.player_party,
             lead,
+            slot_zero_level,
         }
     }
 }
@@ -129,6 +150,17 @@ impl StepEncounterInputs<'_> {
     }
 }
 
+impl StepEncounterInputs<'_> {
+    /// `IsAbilityAllowingEncounter`'s slot-0 level (`src/wild_encounter.c:897-913`); the
+    /// ability it tests is the one passed to [`roll_for_step`].
+    fn low_level_ability_gate(&self) -> LowLevelAbilityGate {
+        self.slot_zero_level
+            .map_or(LowLevelAbilityGate::Inactive, |level| {
+                LowLevelAbilityGate::SlotZero { level }
+            })
+    }
+}
+
 pub(super) fn roll_for_step(
     state: &mut WildEncounterState,
     rng: &mut Rng,
@@ -141,12 +173,16 @@ pub(super) fn roll_for_step(
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter_with_repel(
+    let gates = EncounterGates {
+        repel: inputs.repel_gate(),
+        low_level_ability: inputs.low_level_ability_gate(),
+    };
+    state.check_standard_wild_encounter_with_gates(
         metatile_behavior,
         encounter_header,
         slot_zero_ability,
         inputs.rate_modifiers,
-        inputs.repel_gate(),
+        gates,
         rng,
     )
 }
@@ -344,6 +380,8 @@ pub(super) fn advance_wild_battle(
     finalize_party_battle_turn(battle_slot, turn_failed)
 }
 
+#[cfg(test)]
+mod ability_gate_tests;
 #[cfg(test)]
 mod battle_write_back_tests;
 #[cfg(test)]
