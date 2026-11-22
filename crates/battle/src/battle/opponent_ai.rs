@@ -57,9 +57,13 @@ pub(crate) const FIRST_BATTLE_FLEE_HP_PERCENT: u32 = 20;
 
 /// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
 /// so a malformed save can carry a zero maximum; it reads as full-scale rather
-/// than dividing by zero.
-fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp.max(1)
+/// than dividing by zero. The product widens to `u64` because the cache may
+/// also carry `u32` HP past what `u32` can scale, and the quotient saturates.
+/// Shared with the trainer AI.
+pub(super) fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
+    let percent = u64::from(PERCENT_SCALE) * u64::from(pokemon.current_hp())
+        / u64::from(pokemon.stats().max_hp.max(1));
+    u32::try_from(percent).unwrap_or(u32::MAX)
 }
 
 fn move_slots_with_pp(pokemon: &BattlePokemon) -> Vec<usize> {
@@ -195,6 +199,47 @@ mod tests {
             EnemyAction::Move(1)
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    fn cached_hp_pokemon(max_hp: u32, current_hp: u32) -> BattlePokemon {
+        mon(BULBASAUR, 5, vec![TACKLE]).with_cached_stats(
+            crate::pokemon::Stats {
+                max_hp,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            current_hp,
+        )
+    }
+
+    #[test]
+    fn a_cache_adopted_hp_past_the_u32_percent_product_does_not_overflow() {
+        // 100 * 50_000_000 exceeds u32::MAX before the divide.
+        let half = cached_hp_pokemon(100_000_000, 50_000_000);
+        assert_eq!(current_hp_percent(&half), 50);
+        let full = cached_hp_pokemon(u32::MAX, u32::MAX);
+        assert_eq!(current_hp_percent(&full), PERCENT_SCALE);
+    }
+
+    #[test]
+    fn a_cached_hp_percent_above_u32_saturates() {
+        let malformed = cached_hp_pokemon(1, u32::MAX);
+        assert_eq!(current_hp_percent(&malformed), u32::MAX);
+    }
+
+    #[test]
+    fn first_battle_choice_does_not_overflow_on_cache_adopted_player_hp() {
+        let enemy = mon(ZIGZAGOON, 50, vec![TACKLE, GROWL]);
+        let player = cached_hp_pokemon(100_000_000, 50_000_000);
+        let mut rng = SequenceRng::new([0; MAX_MON_MOVES + 1]);
+
+        assert_eq!(
+            choose_enemy_action_first_battle(&enemy, &player, &mut rng),
+            EnemyAction::Move(0)
+        );
     }
 
     #[test]
