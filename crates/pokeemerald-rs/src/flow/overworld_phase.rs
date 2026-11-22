@@ -49,6 +49,7 @@ mod connections;
 mod escalator_arrival;
 mod field_friendship;
 mod field_poison;
+mod field_repel;
 mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
@@ -1098,6 +1099,8 @@ mod field_friendship_tests;
 mod field_input_ordering_tests;
 #[cfg(test)]
 mod field_poison_tests;
+#[cfg(test)]
+mod field_repel_tests;
 #[cfg(test)]
 mod first_battle_conclusion_tests;
 #[cfg(test)]

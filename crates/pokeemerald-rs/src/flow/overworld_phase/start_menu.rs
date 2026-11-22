@@ -243,7 +243,7 @@ impl OverworldPhase {
     /// Opens `tokens` in the field message box (`ShowFieldMessage`), at the
     /// saved text speed. A box that cannot be built is logged and the field
     /// carries on without it; the return says whether it opened.
-    fn show_field_message(&mut self, tokens: Vec<Token>) -> bool {
+    pub(super) fn show_field_message(&mut self, tokens: Vec<Token>) -> bool {
         #[cfg(test)]
         if matches!(self.synthetic_start_menu, super::SyntheticStartMenu::Builds) {
             self.dialog =

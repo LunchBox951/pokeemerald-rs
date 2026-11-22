@@ -76,6 +76,18 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+
+/// What one counted step did to the Repel counter ([`EventData::count_down_repel`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepelStep {
+    /// The counter was already zero and stays zero.
+    Inactive,
+    /// The counter dropped and is still nonzero.
+    Counting,
+    /// The counter dropped from one to zero: the Repel just ran out.
+    WoreOff,
+}
+
 const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
 const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
 const ABNORMAL_WEATHER_NONE: u16 = 0;
@@ -139,6 +151,24 @@ impl Default for EventData {
 }
 
 impl EventData {
+    /// Counts [`VAR_REPEL_STEP_COUNT`] down by one counted step (`UpdateRepelCounter`,
+    /// `src/wild_encounter.c:850-872`): a nonzero counter drops by one and a zero counter is left
+    /// alone. Draws nothing from the RNG. The caller owns the map exemptions and the expiry
+    /// message.
+    pub fn count_down_repel(&mut self) -> RepelStep {
+        // An ordinary variable id, so neither access can fail.
+        let steps = self.var_get(VAR_REPEL_STEP_COUNT).unwrap_or(0);
+        let Some(remaining) = steps.checked_sub(1) else {
+            return RepelStep::Inactive;
+        };
+        let _ = self.var_set(VAR_REPEL_STEP_COUNT, remaining);
+        if remaining == 0 {
+            RepelStep::WoreOff
+        } else {
+            RepelStep::Counting
+        }
+    }
+
     /// Creates event data with every flag clear and every variable zero.
     #[must_use]
     pub const fn new() -> Self {
@@ -339,6 +369,37 @@ mod tests {
         data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
         data.clear_temp_field_event_data();
         assert_eq!(data.var_get(VAR_REPEL_STEP_COUNT), Ok(37));
+    }
+
+    #[test]
+    fn the_repel_counter_counts_down_to_zero_and_reports_only_the_last_step() {
+        let mut data = EventData::new();
+        data.var_set(VAR_REPEL_STEP_COUNT, 3).unwrap();
+        for (expected, left) in [
+            (RepelStep::Counting, 2),
+            (RepelStep::Counting, 1),
+            (RepelStep::WoreOff, 0),
+        ] {
+            assert_eq!(data.count_down_repel(), expected);
+            assert_eq!(data.var_get(VAR_REPEL_STEP_COUNT), Ok(left));
+        }
+    }
+
+    #[test]
+    fn a_zero_repel_counter_stays_zero_and_changes_nothing_else() {
+        let mut data = EventData::new();
+        data.var_set(VAR_REPEL_STEP_COUNT + 1, 9).unwrap();
+        assert_eq!(data.count_down_repel(), RepelStep::Inactive);
+        assert_eq!(data.var_get(VAR_REPEL_STEP_COUNT), Ok(0));
+        assert_eq!(data.var_get(VAR_REPEL_STEP_COUNT + 1), Ok(9));
+    }
+
+    #[test]
+    fn a_repel_counter_of_one_expires_on_the_first_step() {
+        let mut data = EventData::new();
+        data.var_set(VAR_REPEL_STEP_COUNT, 1).unwrap();
+        assert_eq!(data.count_down_repel(), RepelStep::WoreOff);
+        assert_eq!(data.count_down_repel(), RepelStep::Inactive);
     }
 
     #[test]

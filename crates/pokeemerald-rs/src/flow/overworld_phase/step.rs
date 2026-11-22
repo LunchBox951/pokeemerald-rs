@@ -485,6 +485,9 @@ impl OverworldPhase {
             self.sync_saved_position();
             return;
         }
+        // The last step-based consumer: a step the poison drain claimed never reaches it, and the
+        // step that ends the Repel claims this one ahead of the roll.
+        let repel_expired = self.update_repel_counter(landed, door_warp);
         let runtime = self.scene.runtime().with_object_events(&self.object_events);
         // The roll happens only on a completed step the door-shaped warp
         // has not already claimed (`roll_eligible_landing`), only on a
@@ -498,7 +501,7 @@ impl OverworldPhase {
         // now, and it is what `GetPlayerPosition` would report there.
         let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
         let rolled_landing = wild_encounter::roll_eligible_landing(tile_center, door_warp)
-            .filter(|_| wild_table_fightable && wild_lead_admissible);
+            .filter(|_| wild_table_fightable && wild_lead_admissible && !repel_expired);
         let slot_zero_ability = rolled_landing.and_then(|_| self.slot_zero_wild_level_ability());
         let rate_modifiers = self.encounter_rate_modifiers();
         let encounter = wild_encounter::roll_for_step(
@@ -518,7 +521,7 @@ impl OverworldPhase {
         // asserted, so a change that makes it reachable fails a test
         // first (`first_battle_trigger_tests::precedence::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
         // `first_battle_trigger_tests::precedence::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
-        let field_event_fired = encounter.is_some() || first_battle_triggered;
+        let field_event_fired = encounter.is_some() || first_battle_triggered || repel_expired;
         // `ProcessPlayerFieldInput` returns TRUE the moment any of the
         // three completed-step branches above fires --
         // `TryStartStepBasedScript` at `:155-161` (the coord event and
