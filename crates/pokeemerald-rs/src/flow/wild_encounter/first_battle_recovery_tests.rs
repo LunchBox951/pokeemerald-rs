@@ -1,7 +1,7 @@
 //! First-battle recovery: a lost Route 101 first battle heals the lead the same frame it
 //! ends, so a fainted lead never reaches a later roll.
 
-use super::test_support::{held, route_101_phase_with_grass, walk_east_and_land};
+use super::test_support::{held, route_101_phase_with_grass_from_source, walk_east_and_land};
 use assets::{MoveId, SpeciesId};
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs, MAX_IV};
 use engine::overworld::{Direction, PlayerState};
@@ -48,7 +48,10 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
     const VAR_STARTER_MON: u16 = 0x4023;
 
     let (tx, ty) = TRIGGER_TILE;
-    let mut phase = route_101_phase_with_grass(
+    // The conclusion's lab warp must land, or it rolls the story writes back.
+    let lab = crate::overworld::test_support::BirchsLabPack::new();
+    let mut phase = route_101_phase_with_grass_from_source(
+        lab.source(),
         25,
         25,
         PlayerState::new((tx - 1, ty), TRIGGER_ELEVATION, Direction::East),
@@ -127,11 +130,10 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
          the overwrite itself is pinned by first_battle_conclusion_tests' pre-poisoned run; \
          the two non-default vars above prove the conclusion ran here)"
     );
-    // Deliberately not asserting on `phase.map_id`/`phase.player.position()`
-    // here: `conclude_first_battle`'s own warp to the lab depends on a local
-    // asset pack being extracted (`OverworldPhase::warp_to_position`'s own
-    // "leaves the player exactly where they stood" failure contract when one
-    // isn't) -- this test must pass identically either way, so the warp
-    // itself is `first_battle_conclusion_tests`' `#[ignore]`d real-pack
-    // proof, not this one's.
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "the vars above only survive because the warp to the lab landed; a failed warp rolls \
+         the conclusion back (`first_battle_conclusion_tests`' failed-lab-load test)"
+    );
 }

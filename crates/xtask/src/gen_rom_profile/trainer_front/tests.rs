@@ -21,6 +21,8 @@ const ART: u32 = 0x20_0000;
 /// A second table at another base, and an unreferenced palette copy.
 const OTHER_TABLE: u32 = 0x12_0000;
 const STRAY_PALETTE: u32 = 0x18_0000;
+/// Unreferenced picture copies, below the ones the table names.
+const STRAY_IMAGE: u32 = 0x0E_0000;
 
 fn lz77_literals(data: &[u8]) -> Vec<u8> {
     let size = u32::try_from(data.len()).expect("small").to_le_bytes();
@@ -283,6 +285,40 @@ fn a_palette_stored_twice_takes_the_copy_its_table_row_names() {
         assert_eq!(line.addr, BUS + palette_at(index));
         assert_eq!(line.resolution, Resolution::StructDerived);
     }
+}
+
+#[test]
+fn a_picture_stored_twice_takes_the_copy_its_table_row_names() {
+    // The stray copies sit at lower addresses than the ones the table names.
+    let mut fixture = base_fixture();
+    for index in 0..TRAINER_FRONT_PICS.len() {
+        fixture = fixture.write(
+            STRAY_IMAGE as usize + index * 0x1000,
+            &lz77_literals(&tiles(index)),
+        );
+    }
+    let rom = fixture.finish();
+    with_context("trainer-front-stray-image", &rom, entries(), |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located");
+        assert_eq!(plan.front_table, BUS + FRONT_TABLE);
+        for (index, pic) in TRAINER_FRONT_PICS.iter().enumerate() {
+            assert_eq!(plan.trainers[index].front.addr, BUS + image_at(index));
+            let line = report
+                .iter()
+                .find(|line| line.id == pic.image_id)
+                .expect("a report line");
+            assert_eq!(line.addr, BUS + image_at(index));
+            assert_eq!(line.resolution, Resolution::StructDerived);
+            assert_eq!(
+                line.symbol,
+                SymbolExpectation::Exact(format!(
+                    "gTrainerFrontPic_{}",
+                    crate::gen_rom_profile::locate::camel_case(pic.name)
+                ))
+            );
+        }
+    });
 }
 
 #[test]
