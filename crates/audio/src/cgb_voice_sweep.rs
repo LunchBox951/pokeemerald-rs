@@ -3,7 +3,7 @@ use super::*;
 use crate::psg::{FrameClocks, FrameSequencer};
 
 #[test]
-fn a_hardware_muted_square_keeps_its_duty_position_running() {
+fn a_trigger_stopped_square_keeps_its_duty_position_running() {
     const FRAME_SAMPLES: usize = 37;
     let mut muted = square_voice(
         CgbChannelNumber::Square1,
@@ -15,8 +15,8 @@ fn a_hardware_muted_square_keeps_its_duty_position_running() {
     let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
     muted.render(&mut acc, &[]);
     assert!(
-        acc.iter().all(|&(l, r)| l == 0 && r == 0),
-        "the overflow must have muted the channel",
+        acc.iter().all(|&sample| sample == (28, 28)),
+        "the overflow stops the channel on the level its trigger latched",
     );
     for _ in 0..FRAME_SAMPLES {
         free_running.sample();
@@ -51,9 +51,10 @@ fn square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger() {
         muted.begin_frame(false);
         muted.render(&mut acc, &[]);
         assert!(
-            acc.iter().all(|&(l, r)| l == 0 && r == 0),
-            "a born-muted channel must be silent from frame 0"
+            acc.iter().all(|&sample| sample == (28, 28)),
+            "a born-stopped channel holds its trigger's level from frame 0"
         );
+        assert!(muted.hardware_muted && muted.sweep_held);
 
         muted.set_track_pitch(i32::from(safe_key) - i32::from(high_key), 0);
         muted.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
@@ -338,10 +339,10 @@ fn adjudicator_sweep_overflow_holds_the_level_at_the_overflow_tick() {
                 Some(upward_sweep(1, shift)),
                 TestNote::at_key(key),
             );
+            voice.begin_frame(false);
             if voice.hardware_muted {
                 continue;
             }
-            voice.begin_frame(false);
             let ticks = FrameSequencer::default().advance(SAMPLES);
 
             // Oracle: replay a copy up to each sweep tick without the tick, read
@@ -586,9 +587,10 @@ fn attack_to_decay_volume_write_retriggers_channel1_sweep_from_the_current_frequ
     let mut acc = vec![(0i32, 0i32); 8];
     voice.render(&mut acc, &[]);
     assert!(
-        acc.iter().all(|&(l, r)| l == 0 && r == 0),
+        acc.iter().all(|&sample| sample == (30, 30)),
         "the attack-to-decay volume write must retrigger channel 1, reloading the sweep \
-         shadow from the bent frequency and finding it overflows"
+         shadow from the bent frequency and finding it overflows; the channel holds the \
+         duty level at the reset initial volume"
     );
 }
 
@@ -629,14 +631,14 @@ fn live_track_volume_update_retriggers_channel1_sweep_from_the_current_frequency
     let mut acc = vec![(0i32, 0i32); 8];
     voice.render(&mut acc, &[]);
     assert!(
-        acc.iter().all(|&(l, r)| l == 0 && r == 0),
+        acc.iter().all(|&sample| sample == (28, 28)),
         "a live volume update must retrigger channel 1, reloading the sweep shadow from \
-         the bent frequency and finding it overflows"
+         the bent frequency and finding it overflows; the channel holds the re-latched level"
     );
 }
 
 #[test]
-fn a_trigger_time_sweep_overflow_only_mutes_the_channel_until_the_next_safe_trigger() {
+fn a_trigger_time_sweep_overflow_only_stops_the_channel_until_the_next_safe_trigger() {
     let safe_key = 48;
     let overflowing_key = 120;
     let mut voice = square_voice(
@@ -653,8 +655,8 @@ fn a_trigger_time_sweep_overflow_only_mutes_the_channel_until_the_next_safe_trig
     let mut muted = vec![(0i32, 0i32); 8];
     voice.render(&mut muted, &[]);
     assert!(
-        muted.iter().all(|&(l, r)| l == 0 && r == 0),
-        "the overflowing trigger must silence the hardware channel"
+        muted.iter().all(|&sample| sample == (28, 28)),
+        "the overflowing trigger must stop the channel on the level it re-latched"
     );
 
     // `m4a.c:1053-1056`.

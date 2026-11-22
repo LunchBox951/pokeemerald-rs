@@ -26,7 +26,7 @@ use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
 use crate::new_game::{NewGameIdentity, NewGameOptions};
-use crate::textbox::{self, ArrowWindow, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
+use crate::textbox::{self, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 pub use speech::NUM_PAGES;
 
@@ -363,16 +363,13 @@ impl IntroScene {
             self.window_fill = self.printer.cleared_window_colors();
         }
         // The speech's genuine `\p` and `\l` prompts wait on the same arrow a
-        // field message does (`PromptArrow::tick`); a page whose `{P}` only
+        // field message does (`PromptArrow::follow`); a page whose `{P}` only
         // stands in for a wait upstream draws none (`speech::pages`' table).
         if speech::page_draws_down_arrow(self.page_index) {
-            self.prompt_arrow.tick(
+            self.prompt_arrow.follow(
+                &self.printer,
                 &event,
-                ArrowWindow {
-                    cursor: self.printer.cursor(),
-                    colors: self.printer.colors(),
-                    content_height: textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
-                },
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
                 &self.down_arrow,
                 &mut self.ops,
             );

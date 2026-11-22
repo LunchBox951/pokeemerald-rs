@@ -9,7 +9,7 @@ use assets::{AbilityId, MoveId, SpeciesId};
 
 use super::admission::ensure_participant_admissible;
 use super::trainer::fixed_ivs;
-use super::{Battle, BattleEvent, EnemyAction, PlayerAction};
+use super::{Battle, BattleEvent, BattlerSide, EnemyAction, PlayerAction};
 use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -421,4 +421,71 @@ fn a_forced_replacement_cannot_send_in_a_statused_trace_holder_that_copies_a_cur
     assert_eq!(holder.status1(), Status1::Paralysed);
     assert_eq!(holder.ability(), AbilityId::TRACE);
     rng.assert_exhausted();
+}
+
+const PSYBEAM: MoveId = MoveId::PSYBEAM;
+
+/// A settled holder never copies again, so no ability change can reach the
+/// player's attacker after its move was screened at selection.
+#[test]
+fn a_settled_player_trace_holder_keeps_its_copy_when_the_enemy_switches_to_serene_grace() {
+    let dex = Dex::new();
+    let player = mon(&dex, SpeciesId::PORYGON2, 100, &[PSYBEAM]);
+    let lead = mon(&dex, SpeciesId::GASTLY, 100, &[SPLASH]);
+    let serene = BattlePokemon::new(
+        &dex,
+        SpeciesId::CHANSEY,
+        100,
+        fixed_ivs(255),
+        1,
+        vec![SPLASH],
+    )
+    .expect("dex-resident");
+    assert_eq!(serene.ability(), AbilityId::SERENE_GRACE);
+    // Accuracy, non-critical, damage roll, then an effect chance of 99 that
+    // misses Psybeam's 10 percent.
+    let mut rng = script(&[&C, &U, &[0, 1, 0, 99]]);
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        vec![lead, serene],
+        &mut rng,
+    )
+    .unwrap();
+    assert_eq!(battle.player().native_ability(), AbilityId::TRACE);
+    assert_eq!(battle.player().ability(), AbilityId::LEVITATE);
+    assert!(!battle.battler_state(BattlerSide::Player).trace_pending());
+
+    let events = turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+
+    assert_eq!(battle.enemy().ability(), AbilityId::SERENE_GRACE);
+    assert_eq!(battle.player().ability(), AbilityId::LEVITATE);
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        BattleEvent::TracedAbility {
+            by_player: true,
+            ..
+        }
+    )));
+    rng.assert_exhausted();
+}
+
+/// A queued holder waits only on an opponent with no ability to copy, so
+/// this keeps a player holder from still being queued at an enemy switch.
+#[test]
+fn every_battleable_species_has_an_ability_for_trace_to_copy() {
+    let dex = Dex::new();
+    let mut checked = 0;
+    let count = u16::try_from(assets::species::SPECIES_COUNT).expect("species ids fit in u16");
+    for id in 1..count {
+        let species = SpeciesId(id);
+        if BattlePokemon::new(&dex, species, 5, fixed_ivs(0), 0, vec![SPLASH]).is_err() {
+            continue;
+        }
+        let mon = mon(&dex, species, 5, &[SPLASH]);
+        assert_ne!(mon.native_ability(), AbilityId::NONE, "{species:?}");
+        checked += 1;
+    }
+    assert!(checked > 380, "{checked}");
 }

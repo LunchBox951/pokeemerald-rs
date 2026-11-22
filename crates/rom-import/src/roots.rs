@@ -264,8 +264,8 @@ pub struct TextWindowRoots {
     pub window_palettes: GbaPtr,
 }
 
-/// Interface art: the text printer's down-arrow sheet and the palettes the
-/// no-save menus need.
+/// Interface art: the text printer's light and dark down-arrow sheets and the
+/// palettes the no-save menus need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceRoots {
     /// Every `interface/image/*` sheet.
