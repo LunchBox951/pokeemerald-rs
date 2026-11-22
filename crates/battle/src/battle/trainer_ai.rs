@@ -19,7 +19,9 @@
 use assets::trainers::AiFlags;
 use assets::{AbilityId, MoveEffect, MoveId, Type, TypeChart};
 
-use super::opponent_ai::{all_known_moves_are_spent, selectable_slot, EnemyAction};
+use super::opponent_ai::{
+    all_known_moves_are_spent, current_hp_percent, selectable_slot, EnemyAction,
+};
 use crate::damage::{
     apply_stab, apply_type_effectiveness, base_damage_with_flash_fire, has_stab, BattleRng,
 };
@@ -484,16 +486,6 @@ fn select_highest_scoring_move(
 
     let selected = usize::from(rng.next_u16()) % highest_scoring_slots.len();
     highest_scoring_slots[selected]
-}
-
-/// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
-/// so a malformed save can carry a zero maximum; it reads as full-scale rather
-/// than dividing by zero. The product widens to `u64` because the cache may
-/// also carry `u32` HP past what `u32` can scale, and the quotient saturates.
-fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    let percent = u64::from(PERCENT_SCALE) * u64::from(pokemon.current_hp())
-        / u64::from(pokemon.stats().max_hp.max(1));
-    u32::try_from(percent).unwrap_or(u32::MAX)
 }
 
 fn random_roll_is_at_least(rng: &mut impl BattleRng, threshold: u16) -> bool {
