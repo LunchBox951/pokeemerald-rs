@@ -148,30 +148,18 @@ impl ItemEffect {
     /// Argument bytes sit in flag order from [`ITEM_EFFECT_ARG_START`]. The
     /// scan tests overlapping bits rather than looking up one flag's argument:
     /// once the item sets the queried bit, it returns the first counted flag at
-    /// or below that bit. Field 4 counts `EV_HP`, `EV_ATK`, `HEAL_HP` and
-    /// `HEAL_PP`; field 5 counts every flag below `FRIENDSHIP_HIGH`, `PP_MAX`
-    /// included. `PP_UP` is dropped before the scan, so its own query never
-    /// matches, and `REVIVE` is cleared once `HEAL_HP` is reached.
-    ///
+    /// or below that bit, so several queries can return the same offset.
     /// Counting a flag advances the offset but does not mean the flag has an
-    /// argument byte. `PP_MAX` is counted without one: the PP Max item's three
-    /// argument bytes belong to the three friendship flags.
-    ///
-    /// `ENERGY_POWDER` sets all three friendship flags (arguments at 7, 8, 9),
-    /// so queries for low, middle and high friendship all return 7, the low
-    /// argument. The middle and high queries never return 8 or 9. The PP Max
-    /// item sets the `PP_MAX` flag and all three friendship flags (arguments at
-    /// 6, 7, 8), so its `PP_MAX` and friendship queries all return 6, the low
-    /// friendship argument.
+    /// argument byte: `PP_MAX` is counted without one, and the PP Max item's
+    /// three argument bytes belong to the three friendship flags.
     ///
     /// The result is 0 for fields 0 to 3, or when the scan first reaches a set
     /// `ITEM4_EVO_STONE` or `ITEM5_FRIENDSHIP_HIGH` bit in the queried field,
     /// whether or not the queried bit is set. Otherwise a query that matches
     /// nothing yields [`ITEM_EFFECT_ARG_START`] plus the number of flags the
-    /// scan counted, which can pass the end of the effect when a counted flag
-    /// has no byte of its own, as for the PP Max item. A caller
-    /// cannot read the result as the queried flag's argument and must check the
-    /// flag itself.
+    /// scan counted, which can pass the end of the effect. A caller cannot
+    /// read the result as the queried flag's argument and must check the flag
+    /// itself.
     #[must_use]
     pub fn param_offset(&self, effect_byte: usize, effect_bit: u8) -> usize {
         let mut effect_bit = effect_bit;
