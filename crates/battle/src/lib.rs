@@ -36,7 +36,7 @@
 //! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) |
 //! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) |
 //! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) |
-//! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) |
+//! | [`multi_hit`] | `BattleScript_EffectMultiHit` / `_EffectDoubleHit` ([`multi_hit::is_multi_hit_effect`]) |
 //! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) |
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
@@ -124,7 +124,8 @@
 //! `seteffectwithchance`), [`fixed_damage`] (Sonic Boom / Dragon Rage /
 //! Seismic Toss / Night Shade — 2 draws, no crit roll and no damage roll,
 //! and a flat figure no stat can move), [`multi_hit`]
-//! (`Cmd_setmultihitcounter`'s **two-stage** 2..5 draw, then a crit and a
+//! (`Cmd_setmultihitcounter`'s **two-stage** 2..5 draw, or none for the
+//! fixed two-hit Double Kick and Bonemerang, then a crit and a
 //! damage roll per hit, then one trailing effect-chance draw for the whole
 //! move), and [`flag_move`] (Splash, Focus Energy, Charge — **zero** draws
 //! on every path, which [`flag_move::resolve_flag_move`]'s signature

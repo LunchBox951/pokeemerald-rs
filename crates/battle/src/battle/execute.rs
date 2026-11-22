@@ -1280,7 +1280,7 @@ mod pipeline_agreement_tests {
         ),
         (&[3], MovePipeline::Drain),
         (&[41, 87, 130], MovePipeline::FixedDamage),
-        (&[29], MovePipeline::MultiHit),
+        (&[29, 44], MovePipeline::MultiHit),
         (&[47, 85, 174], MovePipeline::Flag),
         (&[156], MovePipeline::DefenseCurl),
         (&[67], MovePipeline::Paralyze),

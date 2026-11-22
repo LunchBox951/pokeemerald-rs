@@ -152,6 +152,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "BattleScript_EffectDoubleHit": {
+          "reason": "data/battle_scripts_1.s:839-:847, EFFECT_DOUBLE_HIT (Double Kick, Bonemerang). Reuses the BattleScript_EffectMultiHit loop (goto BattleScript_MultiHitLoop, :846) with the same once-vs-per-hit split: ONE accuracycheck (:841), setmultihitcounter 2 (:844) as a constant limit with NO hit-count draw (multi_hit::resolve_multi_hit, see src/battle_script_commands.c#Cmd_setmultihitcounter), then per iteration critcalc/damagecalc/typecalc plus adjustnormaldamage's own damage roll inside Battle::execute_multi_hit_move/apply_multi_hit_attempts, and ONE trailing effect-chance draw. A target or attacker faint, or contact-induced sleep, ends the series at the top of the next iteration with that strike's draws unspent; Ghost (Double Kick), Flying and Levitate (Bonemerang) immunity spend a crit draw but no damage roll, as for variable-count moves. The same NOT-modelled list as BattleScript_EffectMultiHit applies (Sleep Talk guard, Endure/Focus Band, animation/string instructions), and the sMULTIHIT_EFFECT byte (:845) is zeroed rather than carried because neither move sets a per-hit effect.",
+          "rust_target": "crates/battle/src/multi_hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BattleScript_EffectFlinchHit": {
           "reason": "data/battle_scripts_1.s:668-670. setmoveeffect MOVE_EFFECT_FLINCH then goto BattleScript_EffectHit: EFFECT_FLINCH_HIT (Headbutt, Bite) shares the ordinary damage script and reaches secondary::spend_effect_chance_draw's trailing chance draw exactly like EFFECT_POISON_HIT. A landed roll returns SecondaryApplication::Flinch unless Shield Dust or Inner Focus silently refuses it (battle_script_commands.c:2253-2255, :2547-2559); crate::battle::execute then sets Volatiles::flinched only if the target survived the hit and has not yet acted this turn (:2261-2264, :2561-2565), with no draw and no event, and CANCELER_FLINCH spends the target's action later (ledger src/battle_util.c#AtkCanceler_UnableToUseMove). The chance draw is spent on every path. Some other moves sharing the effect carry a 10% chance (e.g. Bone Club, Hyper Fang); the chance is read from the move. NOT modelled: Serene Grace's chance doubling, which secondary::ensure_admissible refuses wherever the flinch could land, and the effect-shared Fake Out first-turn and Twister airborne rules (their own scripts).",
           "rust_target": "crates/battle/src/secondary.rs",
@@ -29438,7 +29444,7 @@
           "status": "stubbed"
         },
         "Cmd_setmultihitcounter": {
-          "reason": "battle_script_commands.c:7139-:7155. The gBattlescriptCurrInstr[1] == 0 branch (:7147-:7151) is rewritten as multi_hit::roll_hit_count, reproducing the TWO-STAGE draw rather than its output distribution: Random() & 3 settles at 2 or 3 for one draw when it lands on 0/1, and redraws-and-adds-2 for two draws when it lands on 2/3. Sampling the resulting 3/8,3/8,1/8,1/8 shape directly would spend the wrong number of draws half the time. NOT modelled: the literal-count branch at :7143 (gBattlescriptCurrInstr[1] != 0), used by Twineedle/Triple Kick/Bonemerang-style fixed-count scripts, none of which is an executable effect here.",
+          "reason": "battle_script_commands.c:7139-:7155. The gBattlescriptCurrInstr[1] == 0 branch (:7147-:7151) is rewritten as multi_hit::roll_hit_count, reproducing the TWO-STAGE draw rather than its output distribution: Random() & 3 settles at 2 or 3 for one draw when it lands on 0/1, and redraws-and-adds-2 for two draws when it lands on 2/3. Sampling the resulting 3/8,3/8,1/8,1/8 shape directly would spend the wrong number of draws half the time. The literal-count branch (:7143, gBattlescriptCurrInstr[1] != 0) is rewritten for the one literal that is executable here: BattleScript_EffectDoubleHit's setmultihitcounter 2 (Double Kick, Bonemerang), taken by multi_hit::resolve_multi_hit as multi_hit::FIXED_DOUBLE_HIT_COUNT with no Random() call. NOT modelled: the other literal counts (Twineedle's 2 and Triple Kick's 3 belong to scripts that are not executable effects here).",
           "rust_target": "crates/battle/src/multi_hit.rs",
           "spec": "S-6",
           "status": "stubbed"

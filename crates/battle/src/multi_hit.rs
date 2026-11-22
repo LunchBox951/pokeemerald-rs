@@ -1,7 +1,11 @@
-//! Admission and epilogue draws for variable-count multi-hit moves.
+//! Admission and epilogue draws for multi-hit moves: the variable-count
+//! `EFFECT_MULTI_HIT` and the fixed two-hit `EFFECT_DOUBLE_HIT`.
 //!
 //! [`resolve_multi_hit`] validates the move, checks accuracy once, and either
-//! classifies the failed roll or rolls the hit limit. [`crate::battle::Battle`] owns the
+//! classifies the failed roll or selects the hit limit: rolled for the
+//! variable-count effect, a constant two with no draw for the fixed one
+//! (`BattleScript_EffectDoubleHit`, `data/battle_scripts_1.s:839`-`:847`).
+//! [`crate::battle::Battle`] owns the
 //! interruptible loop so it can read both battlers' live HP before each hit
 //! and avoid drawing work for hits that will not run. After that loop,
 //! [`spend_multi_hit_effect_chance_draw`] spends one trailing draw for the
@@ -23,16 +27,25 @@ const HIT_COUNT_REDRAW_THRESHOLD: u8 = 2;
 /// The effect ID resolved by the variable-count multi-hit pipeline.
 pub const EFFECT_MULTI_HIT: MoveEffect = MoveEffect::MULTI_HIT;
 
+/// The effect ID resolved by the fixed two-hit pipeline (Double Kick,
+/// Bonemerang).
+pub const EFFECT_DOUBLE_HIT: MoveEffect = MoveEffect::DOUBLE_HIT;
+
+/// The constant hit limit of [`EFFECT_DOUBLE_HIT`] moves, set without a draw
+/// by `setmultihitcounter 2` (`src/battle_script_commands.c:7139`-`:7142`).
+pub const FIXED_DOUBLE_HIT_COUNT: u8 = 2;
+
 /// The fewest hits a variable-count multi-hit move can attempt.
 pub const MIN_HITS: u8 = 2;
 
 /// The most hits a variable-count multi-hit move can attempt.
 pub const MAX_HITS: u8 = 5;
 
-/// Returns whether `effect` uses the variable-count multi-hit pipeline.
+/// Returns whether `effect` uses the multi-hit pipeline, whether its hit
+/// count is rolled ([`EFFECT_MULTI_HIT`]) or fixed ([`EFFECT_DOUBLE_HIT`]).
 #[must_use]
 pub fn is_multi_hit_effect(effect: MoveEffect) -> bool {
-    effect == EFFECT_MULTI_HIT
+    effect == EFFECT_MULTI_HIT || effect == EFFECT_DOUBLE_HIT
 }
 
 fn draw_hit_count_offset(rng: &mut impl BattleRng) -> u8 {
@@ -61,8 +74,8 @@ pub fn roll_hit_count(rng: &mut impl BattleRng) -> u8 {
 /// # Errors
 ///
 /// - [`BattleError::UnknownMove`] if `move_id` is not in `dex`.
-/// - [`BattleError::UnsupportedMoveEffect`] if it is not a variable-count
-///   multi-hit move.
+/// - [`BattleError::UnsupportedMoveEffect`] if it is neither a variable-count
+///   nor a fixed two-hit move.
 /// - [`BattleError::UnsupportedMoveType`] if its type cannot participate in
 ///   battle calculations.
 pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
@@ -77,17 +90,20 @@ pub enum MultiHitAdmission {
     Failed(HitOutcome),
     /// The move landed and may attempt up to `hit_limit` hits.
     Admitted {
-        /// The rolled hit limit, from [`MIN_HITS`] through [`MAX_HITS`].
+        /// The hit limit: rolled from [`MIN_HITS`] through [`MAX_HITS`] for a
+        /// variable-count move, [`FIXED_DOUBLE_HIT_COUNT`] for a fixed one.
         hit_limit: u8,
     },
 }
 
-/// Admits a multi-hit move with one accuracy draw, then rolls its hit limit.
+/// Admits a multi-hit move with one accuracy draw, then selects its hit limit.
 ///
 /// A failed accuracy roll returns [`MultiHitAdmission::Failed`] after that one
 /// draw, classified by [`classify_accuracy_failure`] and so never rolling a
-/// hit count. A successful admission returns
-/// [`MultiHitAdmission::Admitted`] after one or two additional count draws.
+/// hit count. A successful admission of a variable-count move returns
+/// [`MultiHitAdmission::Admitted`] after one or two additional count draws; a
+/// fixed two-hit move returns it with [`FIXED_DOUBLE_HIT_COUNT`] and no
+/// further draw.
 /// The caller must process hits against live battle state before spending the
 /// trailing draw with [`spend_multi_hit_effect_chance_draw`].
 ///
@@ -109,7 +125,11 @@ pub fn resolve_multi_hit(
             dex, move_id, defender,
         )?));
     }
-    let hit_limit = roll_hit_count(rng);
+    let hit_limit = if dex.move_data(move_id)?.effect == EFFECT_DOUBLE_HIT {
+        FIXED_DOUBLE_HIT_COUNT
+    } else {
+        roll_hit_count(rng)
+    };
     Ok(MultiHitAdmission::Admitted { hit_limit })
 }
 
@@ -117,8 +137,8 @@ pub fn resolve_multi_hit(
 ///
 /// # Errors
 ///
-/// Returns any error from [`spend_effect_chance_draw`]. `EFFECT_MULTI_HIT`
-/// is never `EFFECT_POISON_HIT`, so the poison signal is always `false` and
+/// Returns any error from [`spend_effect_chance_draw`]. Neither multi-hit
+/// effect is `EFFECT_POISON_HIT`, so the poison signal is always `false` and
 /// the draw is discarded.
 pub fn spend_multi_hit_effect_chance_draw(
     dex: &Dex,
