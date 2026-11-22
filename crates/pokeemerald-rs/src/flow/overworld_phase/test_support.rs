@@ -569,6 +569,11 @@ pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase 
 /// Lead construction and inspection for tests, so a test never names the
 /// `LoadedLead` directly (see [`super::lead_owner`]).
 impl OverworldPhase {
+    /// Whether a field message box is open and holding field input.
+    pub(in crate::flow) const fn field_message_open_for_test(&self) -> bool {
+        self.dialog.is_some()
+    }
+
     /// Installs `battler` as an unbacked lead (slot 0).
     pub(in crate::flow) fn set_fresh_lead_for_test(&mut self, battler: battle::BattlePokemon) {
         self.install_fresh_lead(battler);

@@ -146,6 +146,80 @@ fn a_member_ahead_of_the_lead_sets_the_comparison_level() {
     assert_rejected(&roll_on_seeded_grass(phase));
 }
 
+/// The tile the countdown tests walk onto, six steps from the lane's start: the first four
+/// rolls spend the encounter immunity (`sWildEncounterImmunitySteps`), the one that ends the
+/// Repel rolls nothing, and so the grass is the sixth step.
+const COUNTDOWN_GRASS: (u16, u16) = (8, 5);
+const COUNTDOWN_STEPS: usize = 6;
+
+/// Steps from the walking lane's start with a level-10 lead, the Repel counting down on the
+/// way. The expiry message is a synthetic box, dismissed with A as a player does.
+fn walk_counting_down(repel_steps: u16, steps: usize) -> OverworldPhase {
+    let mut phase = route_101_phase(
+        PlayerState::new((2, 5), 3, Direction::East),
+        COUNTDOWN_GRASS,
+    );
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_REPEL_STEP_COUNT, repel_steps)
+        .unwrap();
+    phase.save1.player_party_count = 1;
+    lead_at(&mut phase, 0, 10);
+    phase.synthetic_start_menu = crate::flow::overworld_phase::SyntheticStartMenu::Builds;
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    for _ in 0..steps {
+        for _ in 0..FRAMES_PER_STEP {
+            phase.step(held(Buttons::RIGHT));
+        }
+        phase.step(ButtonState::new());
+        for _ in 0..600 {
+            if !phase.field_message_open_for_test() {
+                break;
+            }
+            let mut press = ButtonState::new();
+            press.update(Buttons::A);
+            phase.step(press);
+        }
+    }
+    phase
+}
+
+fn repel_steps_left(phase: &OverworldPhase) -> u16 {
+    phase
+        .save1
+        .event_data
+        .var_get(VAR_REPEL_STEP_COUNT)
+        .unwrap()
+}
+
+/// After the Repel ends on a plain tile, a later real step onto the grass accepts the encounter
+/// a level-10 lead would have rejected; with Repel steps still left that same step is rejected
+/// after the selection draws. Counting spends no draw either way.
+#[test]
+fn the_gate_accepts_lower_level_encounters_once_the_countdown_has_expired() {
+    let expired = walk_counting_down(2, COUNTDOWN_STEPS);
+    assert_eq!(repel_steps_left(&expired), 0);
+    assert_eq!(wild_level(&expired), Some(2));
+    assert_ne!(expired.rng.state(), rng_state_after(SELECTION_DRAWS));
+
+    let still_active = walk_counting_down(8, COUNTDOWN_STEPS);
+    assert_eq!(repel_steps_left(&still_active), 2);
+    assert_rejected(&still_active);
+}
+
+/// The step that ends the Repel is claimed ahead of the roll, so even a grass step draws nothing
+/// and starts no battle (`TryStartStepBasedScript` before `CheckStandardWildEncounter`,
+/// `field_control_avatar.c:155-162`).
+#[test]
+fn the_expiry_step_on_grass_rolls_no_encounter() {
+    let phase = walk_counting_down(6, COUNTDOWN_STEPS);
+
+    assert_eq!(repel_steps_left(&phase), 0);
+    assert_eq!(wild_level(&phase), None);
+    assert_eq!(phase.rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}
+
 /// Save-and-continue: the saved counter, not a fresh one, decides the continued session's
 /// first landing. The same seeded landing is rejected after a reload that preserved a
 /// nonzero counter and accepted after one that saved zero.
