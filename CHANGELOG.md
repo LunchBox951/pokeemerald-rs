@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.140.0] - 2026-11-22
 
-- General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game. No Pokémon you can meet or raise knows it yet.
+- General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game.
 
 ## [0.0.139.0] - 2026-11-21
 
