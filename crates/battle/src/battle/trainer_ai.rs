@@ -59,6 +59,8 @@ const STRONGLY_ENCOURAGE: i8 = 4;
 const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
+const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
+const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
@@ -67,6 +69,10 @@ const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
 const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
 
+const AI_EFFECTIVENESS_QUARTER: u32 = 10;
+const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
+const AI_EFFECTIVENESS_HALF: u32 = 20;
+const AI_EFFECTIVENESS_HALF_WITH_STAB: u32 = 30;
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
 const AI_EFFECTIVENESS_SUPER: u32 = 80;
 const AI_EFFECTIVENESS_SUPER_WITH_STAB: u32 = 120;
@@ -129,9 +135,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:655,666,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
-    MoveEffect::ABSORB,
+/// (`data/battle_ai_scripts.s:666,686,706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 4] = [
     MoveEffect::ALWAYS_HIT,
     MoveEffect::HIGH_CRITICAL,
     MoveEffect::SPEED_DOWN_HIT,
@@ -1063,6 +1068,9 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
+            score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1085,6 +1093,35 @@ fn score_viability(
         ScoreableEffect::DefenseDown => {
             score_defense_drop_viability(scores, slot, user, target, rng);
         }
+    }
+    Ok(())
+}
+
+/// `AI_CV_Absorb` (`data/battle_ai_scripts.s:789`-`:798`): a draining move the
+/// target resists (half or quarter, with or without same-type bonus, as folded
+/// by `Cmd_if_type_effectiveness`, `src/battle_ai_script_commands.c:1515`-`:1556`)
+/// rolls once and loses three on a low byte of 50 or more. Every other class
+/// leaves the score alone and spends no draw.
+fn score_drain_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let resisted = matches!(
+        ai_type_effectiveness(dex, move_id, user, target)?,
+        Some(
+            AI_EFFECTIVENESS_HALF
+                | AI_EFFECTIVENESS_HALF_WITH_STAB
+                | AI_EFFECTIVENESS_QUARTER
+                | AI_EFFECTIVENESS_QUARTER_WITH_STAB
+        )
+    );
+    if resisted && random_roll_is_at_least(rng, RESISTED_DRAIN_PENALTY_THRESHOLD) {
+        scores.adjust(slot, RESISTED_DRAIN_PENALTY);
     }
     Ok(())
 }
@@ -2430,6 +2467,8 @@ mod tests {
 mod attract_tests;
 #[cfg(test)]
 mod charge_tests;
+#[cfg(test)]
+mod drain_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
