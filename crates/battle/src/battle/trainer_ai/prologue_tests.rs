@@ -252,7 +252,6 @@ fn admission_is_flag_aware() {
         );
     }
     for move_id in [
-        MoveId::ABSORB,
         MoveId::SWIFT,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
@@ -263,6 +262,15 @@ fn admission_is_flag_aware() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         );
     }
+    // `AI_CV_Absorb` is ported, so a draining move passes `CHECK_VIABILITY`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::ABSORB,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
     // `AI_CheckViability` has no `EFFECT_ACCURACY_DOWN_HIT` branch
     // (`data/battle_ai_scripts.s:655-743`), unlike Speed Down Hit's at `:706`.
     assert_eq!(
