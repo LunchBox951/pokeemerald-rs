@@ -7,6 +7,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 ## [0.0.139.0] - 2026-11-21
 
 - Pokémon in your party now grow friendlier as you walk, as in the original game.
+- General improvements in preparation for Repel: wild encounters will skip wild Pokémon weaker than the first healthy Pokémon in your party while a Repel is active. Nothing starts a Repel yet.
+- General improvements in preparation for Magnet Pull and Static: a lead Pokémon with either ability will draw Steel-type or Electric-type wild Pokémon on land more often, as in the original game. Your party cannot include one yet.
 
 ## [0.0.138.0] - 2026-11-21
 
