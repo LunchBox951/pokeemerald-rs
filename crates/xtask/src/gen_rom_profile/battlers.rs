@@ -9,22 +9,22 @@
 //! The walk:
 //!
 //! 1. Images are found by their decompressed tiles ([`super::images`]).
-//!    Palettes are found by their decompressed colours, which can match more
-//!    than one stream.
+//!    Palettes are found by their decompressed colours. Either can match more
+//!    than one stream, so every copy is kept.
 //! 2. Each table is found through the pointers to the art: biased back by
 //!    each species' own row, they name candidate table bases, and exactly one
 //!    base must hold, at every species' row, a pointer to that species' art
 //!    and the size and tag upstream's `SPECIES_SPRITE`, `SPECIES_PAL`, and
 //!    `SPECIES_SHINY_PAL` macros write.
-//! 3. A palette's address is the pointer its table row holds, which settles
-//!    a bank the ROM stores more than once.
+//! 3. An image's or palette's address is the pointer its table row holds,
+//!    which settles art the ROM stores more than once.
 
 use std::collections::BTreeSet;
 
 use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
-use super::images::{locate_images, ImageQuery};
+use super::images::{locate_image_copies, ImageCopies, ImageQuery};
 use super::inventory;
 use super::locate::{only_one_matching, to_addr, u16_at_addr, u32_at_addr};
 use super::plan::{
@@ -91,7 +91,7 @@ pub fn locate(
         .flat_map(|battler| [battler.front_id(), battler.back_id()])
         .map(ImageQuery::lz77)
         .collect();
-    let images = locate_images(ctx, &queries, report)?;
+    let images = locate_image_copies(ctx, &queries)?;
     let palette_candidates = palette_candidates(ctx)?;
     let [front_table, back_table, palette_table, shiny_palette_table] =
         locate_tables(ctx, &images, &palette_candidates, report)?;
@@ -118,8 +118,22 @@ pub fn locate(
         )?;
         plans.push(BattlerSpeciesPlan {
             species,
-            front: images[index * 2].clone(),
-            back: images[index * 2 + 1].clone(),
+            front: image_plan(
+                ctx,
+                &battler.front_id(),
+                &images[index * 2],
+                front_table,
+                species,
+                report,
+            )?,
+            back: image_plan(
+                ctx,
+                &battler.back_id(),
+                &images[index * 2 + 1],
+                back_table,
+                species,
+                report,
+            )?,
             normal,
             shiny,
         });
@@ -163,7 +177,7 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
 /// order, through the art their species rows point at.
 fn locate_tables(
     ctx: &Context<'_>,
-    images: &[ImagePlan],
+    images: &[ImageCopies],
     palettes: &[Vec<u32>],
     report: &mut Vec<ReportLine>,
 ) -> Result<[u32; 4], GenRomProfileError> {
@@ -178,14 +192,14 @@ fn locate_tables(
         find_table(
             ctx,
             "gMonStillFrontPicTable",
-            &rows(&|index| vec![images[index * 2].addr]),
+            &rows(&|index| images[index * 2].addrs()),
             Row::Picture,
             report,
         )?,
         find_table(
             ctx,
             "gMonBackPicTable",
-            &rows(&|index| vec![images[index * 2 + 1].addr]),
+            &rows(&|index| images[index * 2 + 1].addrs()),
             Row::Picture,
             report,
         )?,
@@ -211,6 +225,20 @@ fn locate_tables(
 /// The pointer in `species`' row of the table at `table`.
 fn row_pointer(ctx: &Context<'_>, table: u32, species: u16) -> Option<u32> {
     u32_at_addr(ctx.rom, table + u32::from(species) * RECORD_BYTES)
+}
+
+/// The image plan for the copy `species`' row of the table at `table` points at.
+fn image_plan(
+    ctx: &Context<'_>,
+    id: &str,
+    copies: &ImageCopies,
+    table: u32,
+    species: u16,
+    report: &mut Vec<ReportLine>,
+) -> Result<ImagePlan, GenRomProfileError> {
+    let addr = row_pointer(ctx, table, species)
+        .ok_or_else(|| GenRomProfileError::NotFound { id: id.to_owned() })?;
+    copies.plan_at(ctx, addr, report)
 }
 
 /// The palette plan for the stream a table row points at.
@@ -514,6 +542,44 @@ mod tests {
             let mut report = Vec::new();
             let plan = locate(ctx, &mut report).expect("located");
             assert_eq!(plan.species[0].normal.addr, 0x0800_0000 + art_at(0, 2));
+        });
+    }
+
+    #[test]
+    fn a_front_image_stored_twice_takes_the_copy_its_table_row_names() {
+        // An unreferenced identical copy of species 0's front sits below the one the table names.
+        let mut bytes = rom(0);
+        let stream = lz77_literals(&tiles(0, tile_count(image_height(0, 0))));
+        bytes[STRAY as usize..STRAY as usize + stream.len()].copy_from_slice(&stream);
+        with_context("battlers-stray-front", &bytes, entries(), |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            assert_eq!(plan.front_table, 0x0800_0000 + FRONT_TABLE);
+            assert_eq!(plan.species[0].front.addr, 0x0800_0000 + art_at(0, 0));
+            let line = report
+                .iter()
+                .find(|line| line.id == BATTLERS[0].front_id())
+                .expect("a report line");
+            assert_eq!(line.resolution, Resolution::StructDerived);
+        });
+    }
+
+    #[test]
+    fn a_back_image_stored_twice_takes_the_copy_its_table_row_names() {
+        // An unreferenced identical copy of species 0's back sits below the one the table names.
+        let mut bytes = rom(0);
+        let stream = lz77_literals(&tiles(1, tile_count(image_height(0, 1))));
+        bytes[STRAY as usize..STRAY as usize + stream.len()].copy_from_slice(&stream);
+        with_context("battlers-stray-back", &bytes, entries(), |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            assert_eq!(plan.back_table, 0x0800_0000 + BACK_TABLE);
+            assert_eq!(plan.species[0].back.addr, 0x0800_0000 + art_at(0, 1));
+            let line = report
+                .iter()
+                .find(|line| line.id == BATTLERS[0].back_id())
+                .expect("a report line");
+            assert_eq!(line.resolution, Resolution::StructDerived);
         });
     }
 
