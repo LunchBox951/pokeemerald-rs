@@ -137,6 +137,10 @@ pub(crate) use overworld_phase::OverworldPhase;
 #[cfg(test)]
 mod save_continue_support;
 
+/// I-6: the saved play time ticks from game entry and is what a save writes.
+#[cfg(test)]
+mod play_time_tests;
+
 /// Elevation-history and stale-image regressions across save and continue.
 #[cfg(test)]
 mod save_continue_elevation_tests;
