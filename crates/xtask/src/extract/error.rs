@@ -238,6 +238,13 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A PC wallpaper source differs from its upstream graphic's shape.
+    PcWallpaperAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A party-menu source differs from its upstream graphic's shape.
     PartyMenuAssetMismatch {
         /// Source path.
@@ -520,6 +527,9 @@ impl fmt::Display for ExtractError {
             }
             Self::NamingScreenAssetMismatch { path, detail } => {
                 write!(f, "naming-screen asset `{}` {detail}", path.display())
+            }
+            Self::PcWallpaperAssetMismatch { path, detail } => {
+                write!(f, "PC wallpaper asset `{}` {detail}", path.display())
             }
             Self::PartyMenuAssetMismatch { path, detail } => {
                 write!(f, "party-menu asset `{}` {detail}", path.display())
