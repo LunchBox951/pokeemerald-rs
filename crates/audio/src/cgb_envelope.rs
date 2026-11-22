@@ -120,7 +120,8 @@ impl CgbEnvelope {
         }
     }
 
-    /// Return the current envelope volume.
+    /// Return the current envelope volume. A sustain override can push it
+    /// past the goal maximum, anywhere in 0-255 (`m4a.c:921`).
     #[must_use]
     pub fn volume(&self) -> u8 {
         self.volume
