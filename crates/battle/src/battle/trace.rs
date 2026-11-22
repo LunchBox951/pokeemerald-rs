@@ -149,23 +149,10 @@ pub(super) fn ensure_copies_admissible(
     Ok(())
 }
 
-/// Refuses a switch that would send in a native Trace holder whose status
-/// the opposing battler's current ability forbids, before the switch changes
-/// anything.
-///
-/// A holder that gained a primary status while it held a copied ability keeps
-/// that status on the bench, so its re-copy can pair the status with an
-/// ability that cures it. Upstream never holds that pairing: the move-end
-/// immunity pass clears the status (`battle_util.c:2873`-`:2951`, reached from
-/// `MOVEEND_IMMUNITY_ABILITIES`, `battle_script_commands.c:4285`-`:4289`),
-/// which the engine does not model, so the entry is refused as construction
-/// refuses the same pairing ([`ensure_participant_admissible`]).
-///
-/// The projection is the incoming member after the switch-in reset (primary
-/// status kept; volatiles and any stale copy cleared) holding `opponent`'s
-/// current ability. A copy that stays queued, because the opponent has fainted
-/// or has no ability, is not screened: its copy happens later, against the
-/// opponent then present.
+/// Refuses a switch that would send in a native Trace holder whose kept
+/// status the opposing battler's current ability forbids. Upstream cures that
+/// pairing at move end (`battle_util.c:2873`-`:2951`), which is unmodelled;
+/// a copy that stays queued is screened when it happens.
 ///
 /// # Errors
 ///
