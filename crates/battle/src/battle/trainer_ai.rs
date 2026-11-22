@@ -101,7 +101,7 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant. Any
 /// other effect is never an implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
     MoveEffect::ABSORB,
     MoveEffect::POISON_HIT,
     MoveEffect::THAW_HIT,
@@ -117,6 +117,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
     MoveEffect::SPLASH,
     MoveEffect::QUICK_ATTACK,
     MoveEffect::CHARGE,
+    MoveEffect::FLINCH_HIT,
+    MoveEffect::FLINCH_MINIMIZE_HIT,
     MoveEffect::ROLLOUT,
 ];
 
@@ -486,9 +488,12 @@ fn select_highest_scoring_move(
 
 /// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
 /// so a malformed save can carry a zero maximum; it reads as full-scale rather
-/// than dividing by zero.
+/// than dividing by zero. The product widens to `u64` because the cache may
+/// also carry `u32` HP past what `u32` can scale, and the quotient saturates.
 fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp.max(1)
+    let percent = u64::from(PERCENT_SCALE) * u64::from(pokemon.current_hp())
+        / u64::from(pokemon.stats().max_hp.max(1));
+    u32::try_from(percent).unwrap_or(u32::MAX)
 }
 
 fn random_roll_is_at_least(rng: &mut impl BattleRng, threshold: u16) -> bool {
@@ -570,8 +575,8 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 ];
 
 /// Refuses a scoring target whose species has two ability slots and whose
-/// true ability is not a trapping one, because upstream's ability read for it
-/// depends on battle history or a random guess the engine does not model
+/// native ability is not a trapping one, because upstream's ability read for
+/// it depends on battle history or a random guess the engine does not model
 /// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
 /// Pull, or Arena Trap is admitted: upstream returns it before the guess
 /// (`src/battle_ai_script_commands.c:1368-1376`).
@@ -582,7 +587,7 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 /// whose selected ability is not a trapping one.
 pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
     let [_, second] = target.ability_slots();
-    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.native_ability()) {
         Ok(())
     } else {
         Err(BattleError::AmbiguousPlayerAbility(target.species()))
@@ -592,7 +597,11 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
 /// targets admission allows: a true trapping ability, read directly
 /// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
-/// species' sole ability. No history lookup, no draw.
+/// species' sole ability. No history lookup, no draw. A Trace copy is the
+/// one history entry the read can reach: the drain ends in `RecordAbilityBattle`
+/// for the copied ability (`src/battle_util.c:3194`-`:3195`, `ABILITYEFFECT_TRACE`
+/// is below `ABILITYEFFECT_CHECK_OTHER_SIDE`), so a single-ability Trace
+/// holder reads as the ability it copied.
 ///
 /// # Errors
 ///
@@ -719,6 +728,13 @@ fn score_bad_move_prologue(
     Ok(false)
 }
 
+/// Saturated stats can already yield `u32::MAX` damage, so the product with the
+/// percentage needs the `u64` width `apply_damage_roll` uses.
+fn scale_by_simulated_percent(damage: u32, simulated_damage_percent: u32) -> u32 {
+    let scaled = u64::from(damage) * u64::from(simulated_damage_percent) / u64::from(PERCENT_SCALE);
+    u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -731,8 +747,7 @@ fn estimated_damage(
         return Ok(MINIMUM_DAMAGE);
     };
     let category = MoveCategory::for_type(move_type);
-    let (attack_stat, attack_stage) = attacker.attacking_stat(category);
-    let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
+    let (attack_stat, attack_stage) = attacker.damage_attacking_stat(category);
     // Upstream's `CalculateBaseDamage` halves raw Special Attack for Fire/Ice
     // against Thick Fat before stage scaling (`pokemon.c:3202-3204`); the AI
     // estimates every populated slot, depleted or not.
@@ -746,7 +761,7 @@ fn estimated_damage(
         category,
         attack_stat,
     );
-    let (defense_stat, defense_stage) = defender.defending_stat(category);
+    let (defense_stat, defense_stage) = defender.damage_defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
         power: u32::from(move_data.power),
@@ -773,7 +788,7 @@ fn estimated_damage(
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
-        return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
+        return Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE));
     }
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
     let damage = if defender_levitate_blocked(move_type, defender.ability()) {
@@ -781,7 +796,7 @@ fn estimated_damage(
     } else {
         fold_ai_type_effectiveness(damage, move_type, defender.types())
     };
-    Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
+    Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1358,6 +1373,67 @@ mod tests {
         assert!(latched > plain, "{latched} must exceed {plain}");
     }
 
+    /// `AI_CalcDmg` runs `CalculateBaseDamage` (`battle_script_commands.c:1306`
+    /// -`:1318`), so the player's Defense badges shrink the estimate.
+    #[test]
+    fn the_estimate_reads_the_players_defense_badges() {
+        use crate::badge_boosts::BadgeBoosts;
+
+        let dex = Dex::new();
+        let planted = |species, moves| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                50,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .expect("test Pokemon must be dex-resident")
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: 101,
+                    defense: 101,
+                    speed: 101,
+                    sp_attack: 101,
+                    sp_defense: 101,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(MUDKIP, vec![MoveId::POUND, MoveId::WATER_GUN]);
+        let player = planted(TORCHIC, vec![SCRATCH]);
+        let plain = |move_id| estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+        let badged = |move_id, badges: [bool; 4]| {
+            let player = player
+                .clone()
+                .with_stat_badges(BadgeBoosts::from_badges(badges));
+            estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE)
+        };
+        let pound = plain(MoveId::POUND).unwrap();
+        let water_gun = plain(MoveId::WATER_GUN).unwrap();
+
+        assert!(badged(MoveId::POUND, [false, false, true, false]).unwrap() < pound);
+        assert_eq!(
+            badged(MoveId::POUND, [true, true, false, true]).unwrap(),
+            pound
+        );
+        assert!(badged(MoveId::WATER_GUN, [false, false, false, true]).unwrap() < water_gun);
+        assert_eq!(
+            badged(MoveId::WATER_GUN, [true, true, true, false]).unwrap(),
+            water_gun
+        );
+
+        let boosted_enemy = enemy
+            .clone()
+            .with_stat_badges(BadgeBoosts::from_badges([true; 4]));
+        assert!(
+            estimated_damage(&dex, MoveId::POUND, &boosted_enemy, &player, PERCENT_SCALE).unwrap()
+                > pound
+        );
+    }
+
     /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty
     /// slot, depleted or not (`battle_ai_script_commands.c:1204-1213`), and it
     /// halves raw Special Attack for Fire/Ice against Thick Fat
@@ -1434,6 +1510,45 @@ mod tests {
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
         rng.assert_exhausted();
+    }
+
+    /// Haley's real party uses `AI_SCRIPT_CHECK_BAD_MOVE` only, and
+    /// `AI_CheckBadMove` has no flinch branch (`battle_ai_scripts.s:105-214`),
+    /// so Astonish, Bite and Headbutt add no effect-specific draw: the four
+    /// score-initialisation draws plus one tied-move selection, and nothing
+    /// else.
+    #[test]
+    fn flinch_moves_add_no_effect_specific_draw_to_a_check_bad_move_only_turn() {
+        let dex = Dex::new();
+        let flags = AiFlags::CHECK_BAD_MOVE;
+        let target = pokemon(TREECKO, vec![POUND]);
+        let enemy = pokemon(
+            MUDKIP,
+            vec![MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT],
+        );
+        for move_id in [MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT] {
+            assert_eq!(
+                ensure_scoreable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                crate::battle::trainer::ensure_move_playable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+        }
+        for (selection, expected) in [
+            (SELECT_FIRST_TIED_MOVE, EnemyAction::Move(0)),
+            (SELECT_SECOND_TIED_MOVE, EnemyAction::Move(1)),
+        ] {
+            let mut rng = rng_with_maximum_simulated_damage([selection]);
+            let action =
+                choose_trainer_action(&dex, &enemy, &target, flags, FIRST_TURN, &mut rng).unwrap();
+            assert_eq!(action, expected);
+            assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+            rng.assert_exhausted();
+        }
     }
 
     #[test]
@@ -2210,6 +2325,79 @@ mod tests {
         let control =
             estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &plusle, PERCENT_SCALE).unwrap();
         assert!(boosted > control, "{boosted} vs {control}");
+    }
+
+    fn cached_hp_pokemon(max_hp: u32, current_hp: u32) -> BattlePokemon {
+        BattlePokemon::new(
+            &Dex::new(),
+            TREECKO,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![MoveId::POUND],
+        )
+        .unwrap()
+        .with_cached_stats(
+            crate::pokemon::Stats {
+                max_hp,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            current_hp,
+        )
+    }
+
+    #[test]
+    fn a_cache_adopted_hp_past_the_u32_percent_product_does_not_overflow() {
+        // 100 * 50_000_000 exceeds u32::MAX before the divide.
+        let half = cached_hp_pokemon(100_000_000, 50_000_000);
+        assert_eq!(super::current_hp_percent(&half), 50);
+        let full = cached_hp_pokemon(u32::MAX, u32::MAX);
+        assert_eq!(super::current_hp_percent(&full), PERCENT_SCALE);
+        let tenth = cached_hp_pokemon(4_000_000_000, 400_000_000);
+        assert_eq!(super::current_hp_percent(&tenth), 10);
+    }
+
+    #[test]
+    fn a_cached_hp_percent_above_u32_saturates() {
+        let malformed = cached_hp_pokemon(1, u32::MAX);
+        assert_eq!(super::current_hp_percent(&malformed), u32::MAX);
+    }
+
+    #[test]
+    fn a_saturated_estimate_does_not_overflow_the_percentage() {
+        let dex = Dex::new();
+        let planted = |species, moves, stat| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                100,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .unwrap()
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: stat,
+                    defense: stat,
+                    speed: stat,
+                    sp_attack: stat,
+                    sp_defense: stat,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(TREECKO, vec![POUND, MoveId::STRUGGLE], u32::MAX);
+        let player = planted(TORCHIC, vec![SCRATCH], 1);
+        for move_id in [POUND, MoveId::STRUGGLE] {
+            let estimate = estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+            assert_eq!(estimate, Ok(u32::MAX), "{move_id:?}");
+        }
     }
 
     #[test]

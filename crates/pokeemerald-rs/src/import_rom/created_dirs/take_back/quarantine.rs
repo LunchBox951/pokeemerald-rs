@@ -20,6 +20,16 @@
 //! instead was rejected: it would leave a hidden directory and a warning
 //! after every failed import, which is meant to leave no trace.
 //!
+//! - Where that repair runs, a swapped-in directory of this user's with no
+//!   group or other bits, whose owner bits are missing, is given them back
+//!   before the listing can show it is not empty; it is then refused and
+//!   left with its contents, but at `0700`. Only this user's own private
+//!   directory is reachable this way.
+//! - A umask that takes the owner's read from the quarantine is repaired
+//!   through an `O_PATH` pin (see [`open_listable`]), which holds a second
+//!   descriptor for a moment: with exactly one free, that case is left
+//!   standing, as any quarantine that cannot be opened is.
+//!
 //! A quarantine that cannot be opened after `mkdirat` is left standing, since
 //! nothing proves the name still denotes it. On a filesystem out of space,
 //! quota or inodes the quarantine's `mkdirat` fails and the created levels
@@ -27,7 +37,7 @@
 //! never needs a quarantine (see [`super::restore`]).
 
 use std::ffi::OsStr;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 
 use rom_import::OneLinePath;
@@ -56,7 +66,9 @@ pub(in super::super) fn unguessable_quarantine_name() -> Option<String> {
 /// group or other permission bits, as a quarantine this rollback just made
 /// with `0700` is under any umask; one that qualifies is then set to
 /// exactly `0700` through its own descriptor, since a umask such as `0177`
-/// masks the owner's search bit the capture's rename needs. It is read
+/// masks the owner's search bit the capture's rename needs (one that masks
+/// the owner's read is repaired earlier, by [`open_listable`], which this
+/// descriptor comes from). It is read
 /// through its own descriptor, never a second one opened for the listing,
 /// so a quarantine that took the last free descriptor can still be vouched
 /// for. A stat, listing or `fchmod` that fails is the error, not a verdict:
@@ -87,6 +99,74 @@ fn is_fresh_quarantine(quarantine: &mut Dir) -> rustix::io::Result<bool> {
     }
     rustix::fs::fchmod(quarantine.fd()?, Mode::RWXU)?;
     Ok(true)
+}
+
+/// Opens the quarantine `name` in `home` for listing, giving back first the
+/// owner access a umask took from it where that is needed: `None` if what
+/// it denotes is not a directory of this user's without group or other
+/// permission bits, as a quarantine just made with `0700` is under any
+/// umask.
+///
+/// A umask such as `0444` or `0777` leaves a quarantine its owner cannot
+/// read, which the read-mode open refuses with `EACCES` before
+/// [`is_fresh_quarantine`] could `fchmod` it. That open is still tried first
+/// because it needs one descriptor, not two. On Linux and Android the
+/// `EACCES` falls back to an `O_PATH` pin, and the repair goes through the pin
+/// so a later swap of the name cannot redirect it. Elsewhere the `EACCES`
+/// stands. Emptiness is left to [`is_fresh_quarantine`].
+fn open_listable(home: BorrowedFd<'_>, name: &str) -> rustix::io::Result<Option<OwnedFd>> {
+    let read_mode = rustix::fs::openat(
+        home,
+        name,
+        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    );
+    match read_mode {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        Err(rustix::io::Errno::ACCESS) => open_listable_through_pin(home, name),
+        other => other.map(Some),
+    }
+}
+
+/// [`open_listable`]'s fallback when the owner's read bit is missing.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn open_listable_through_pin(
+    home: BorrowedFd<'_>,
+    name: &str,
+) -> rustix::io::Result<Option<OwnedFd>> {
+    use std::os::fd::AsRawFd as _;
+
+    let pin = rustix::fs::openat(
+        home,
+        name,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let stat = rustix::fs::fstat(&pin)?;
+    let mode = Mode::from_raw_mode(stat.st_mode);
+    if stat.st_uid != rustix::process::geteuid().as_raw()
+        || !(mode & Mode::RWXG.union(Mode::RWXO)).is_empty()
+    {
+        return Ok(None);
+    }
+    // `fchmod(2)` refuses an `O_PATH` descriptor. `fchmodat(pin, ".")` acts
+    // on the pinned inode but needs its search bit, which a mask such as
+    // `0777` took too; the pin's `/proc/self/fd` link names the same inode.
+    match rustix::fs::chmodat(&pin, ".", Mode::RWXU, AtFlags::empty()) {
+        Err(rustix::io::Errno::ACCESS) => rustix::fs::chmod(
+            format!("/proc/self/fd/{}", pin.as_raw_fd()).as_str(),
+            Mode::RWXU,
+        )
+        .map_err(|_| rustix::io::Errno::ACCESS)?,
+        result => result?,
+    }
+    rustix::fs::openat(
+        &pin,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(Some)
 }
 
 /// A quarantine this rollback made and holds open, in `home` under `name`.
@@ -175,13 +255,22 @@ pub(super) fn open_quarantine_vouched_by<'a>(
     after_mkdir();
     // `Dir::new` lists through this same descriptor, so checking the
     // quarantine costs no second one.
-    let opened = rustix::fs::openat(
-        home,
-        name,
-        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .and_then(Dir::new);
+    let opened = match open_listable(home, name) {
+        // What the name denotes cannot be ours to fill: not a private
+        // directory of this user's, whatever else it holds.
+        Ok(None) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{} is not the private cleanup directory rollback made, so it is left untouched",
+                    OneLinePath(&path)
+                ),
+            );
+            return None;
+        }
+        Ok(Some(fd)) => Dir::new(fd),
+        Err(err) => Err(err),
+    };
     let Ok(mut held) = opened else {
         // Without a descriptor nothing proves the name still denotes the
         // directory just made, so it is not unlinked by name.

@@ -198,7 +198,8 @@ pub(crate) fn leaked(events: Vec<ObjectEvent>) -> &'static [ObjectEvent] {
 
 /// Runs one scheduler frame over `collection` on flat ground with the player at `player` and
 /// `event_data` as the flags: on a fresh collection, the map-load admission pass, after which
-/// every in-window entry whose hide flag is clear is active.
+/// every in-window entry whose hide flag is clear is active, up to the fifteen object slots the
+/// player leaves.
 pub(crate) fn admit(
     collection: &mut ObjectEventCollection,
     player: TilePos,

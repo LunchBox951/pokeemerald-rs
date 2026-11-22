@@ -126,10 +126,15 @@ impl OverworldPhase {
         buttons: ButtonState,
     ) -> Option<SightTrainerOutcome> {
         let approach = self.sight_approach.as_ref()?;
-        let (stage, local_id) = (approach.stage, approach.local_id);
+        let (stage, local_id, carried_from) =
+            (approach.stage, approach.local_id, approach.carried_from);
         let player_was_moving = self.player.in_transit();
         self.tick_player_under_approach_lock();
-        if self.object_events.get(local_id).is_none() {
+        // A local id names an object only within its own map, so the entry
+        // is `(carried_from, local_id)`, never the bare id: the entered map
+        // may declare a namesake (`GetObjectEventIdByLocalIdAndMap`,
+        // `event_object_movement.c:1263-1285`).
+        if self.object_events.find(carried_from, local_id).is_none() {
             return Some(self.cancel_approach_without_trainer(local_id, stage));
         }
         match stage {
@@ -137,8 +142,14 @@ impl OverworldPhase {
                 // `lockfortrainer` (`scrcmd.c:2193-2208`) holds
                 // `DoTrainerApproach`'s icon (`trainer_battle.inc:1-7`) back
                 // until the handoff constants' frames have passed.
-                if let Some(approach) = &mut self.sight_approach {
+                if let (Some(approach), Some(live)) = (
+                    &mut self.sight_approach,
+                    self.object_events.find_mut(carried_from, local_id),
+                ) {
                     approach.advance_lock_handoff(player_was_moving);
+                    if matches!(approach.stage, ApproachStage::ExclamationIcon { .. }) {
+                        super::SightApproach::exclamation_mark(live.state_mut());
+                    }
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }
@@ -146,7 +157,7 @@ impl OverworldPhase {
                 let player_position = self.player.position();
                 if let (Some(approach), Some(live)) = (
                     &mut self.sight_approach,
-                    self.object_events.get_mut(local_id),
+                    self.object_events.find_mut(carried_from, local_id),
                 ) {
                     let scene = &self.scene;
                     approach.advance_movement(live.state_mut(), player_position, |state| {
@@ -169,7 +180,7 @@ impl OverworldPhase {
                 }
                 if let (Some(approach), Some(live)) = (
                     &mut self.sight_approach,
-                    self.object_events.get_mut(local_id),
+                    self.object_events.find_mut(carried_from, local_id),
                 ) {
                     let facing = approach.stop_facing_player(live.state_mut());
                     // `CancelPlayerForcedMovement` never clears
@@ -306,6 +317,9 @@ impl OverworldPhase {
             battle: approach.battle,
             trainer_id: approach.trainer_id,
         });
+        // The approach's built battle commits here, once: `take` above leaves no approach for
+        // a second call (`DoTrainerBattle`, `pokeemerald/src/battle_setup.c:462-463`).
+        self.count_trainer_battle_start();
         // Mirrors `begin_route103_rival_battle`'s own
         // `restart_immunity_steps` call -- see that method's own
         // doc comment for why this is kept for stream-order parity
@@ -374,10 +388,42 @@ impl OverworldPhase {
             engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
         self.sight_approach = Some(SightApproach::new(
             templates[0].local_id,
+            None,
             1,
             "Whoa!",
             battle,
             TrainerId(703),
         ));
+    }
+}
+
+#[cfg(test)]
+mod handoff_boundary_tests {
+    use super::*;
+    use crate::flow::overworld_phase::test_support::synthetic_phase;
+    use engine::overworld::{Direction, PlayerState};
+    use engine::save::GameStat;
+
+    /// A handoff with no approach is refused before it starts or counts a battle.
+    #[test]
+    fn a_handoff_with_no_approach_is_refused_and_counts_nothing() {
+        let mut phase = synthetic_phase(PlayerState::new((10, 6), 3, Direction::North), None);
+        assert!(phase.sight_approach.is_none());
+
+        assert!(matches!(
+            phase.start_sight_trainer_battle(),
+            SightTrainerOutcome::Refused
+        ));
+
+        let stats = &phase.save1.game_stats;
+        assert_eq!(
+            (
+                stats.get(GameStat::TotalBattles),
+                stats.get(GameStat::WildBattles),
+                stats.get(GameStat::TrainerBattles)
+            ),
+            (0, 0, 0)
+        );
+        assert!(phase.active_battle.is_none());
     }
 }

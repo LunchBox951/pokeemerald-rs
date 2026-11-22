@@ -70,6 +70,17 @@ impl LiveObjectEvent {
         self.lifecycle.is_active()
     }
 
+    /// Returns the entry's index in upstream's `gObjectEvents` while it is admitted, `None`
+    /// otherwise. Slot 0 is the player's avatar, so an NPC holds `1..=15`
+    /// (`field_player_avatar.c:1399-1401`). The slot is the lowest one free at admission
+    /// (`GetAvailableObjectEventId`, `event_object_movement.c:1367-1374`), is kept across a
+    /// connection crossing, and is released at removal for a later admission to reuse; it is
+    /// not [`Self::id`], which no admission reuses, and is not the sprite slot callbacks run in.
+    #[must_use]
+    pub const fn object_slot(&self) -> Option<usize> {
+        self.lifecycle.object_slot()
+    }
+
     /// Returns the map this entry's template belongs to when that is not the map the collection
     /// currently stands in, i.e. the entry survived a connection crossing; `None` for an entry of
     /// the current map.
@@ -211,13 +222,15 @@ impl ObjectEventCollection {
     /// `event_object_movement.c:1677-1713,2167-2189,2217-2222`). Here every active entry is
     /// shifted by `shift` (departed to entered tile coordinates) in its current, previous,
     /// template, and initial tiles; an entry the departed visit never admitted, or already
-    /// retired, has no object upstream and is dropped. Each keeps its template, its sprite slot and
-    /// its movement state, and still runs its callback on the crossing frame.
+    /// retired, has no object upstream and is dropped. Each keeps its template, its object and sprite
+    /// slots and its movement state, and still runs its callback on the crossing frame.
     ///
     /// The spawn and the removal are the scheduler's: the departed collection's last reconciled
     /// player tile is shifted along, so the next [`Self::run_frame`] sees a camera move, runs the
-    /// callbacks, then admits before it removes, and an outgoing object still holds its sprite
-    /// slot while a newcomer takes one.
+    /// callbacks, then admits before it removes, and an outgoing object still holds its sprite and
+    /// object slots while a newcomer takes one. The carried entries count against the object
+    /// pool's fifteen NPC slots ([`LiveObjectEvent::object_slot`]), so a newcomer finding it full
+    /// stays unadmitted until a later camera pass has a slot for it.
     ///
     /// The entered map's `templates` follow in declaration order, unadmitted: the scheduler admits
     /// one only when the view and its hide flag allow, as at any map load, so a crossing never
@@ -284,9 +297,12 @@ impl ObjectEventCollection {
     }
 
     /// Iterates the *active* entries at `(x, y, elevation)` by *live* position, in
-    /// declaration order: an entry the scheduler has not admitted, or has retired, has no
-    /// object, as `GetObjectEventIdByPosition` scans only active `gObjectEvents` slots.
-    /// A hide flag is not read here; the scheduler applied it at admission.
+    /// [`LiveObjectEvent::object_slot`] order: an entry the scheduler has not admitted, or has
+    /// retired, has no object, as `GetObjectEventIdByPosition` scans only active `gObjectEvents`
+    /// slots, lowest first. Stacked entries therefore answer by the slot each was admitted into
+    /// (the lowest free one), which differs from declaration order once a hidden earlier template
+    /// is admitted after a later one or a later template is admitted into a slot a retired object
+    /// freed. A hide flag is not read here; the scheduler applied it at admission.
     ///
     /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
     /// delegates here when a collection is bound; unbound, it scans authored
@@ -300,13 +316,20 @@ impl ObjectEventCollection {
         y: i32,
         elevation: u8,
     ) -> impl Iterator<Item = &LiveObjectEvent> {
-        self.entries.iter().filter(move |entry| {
-            let (ex, ey) = entry.state.position();
-            entry.is_active()
-                && ex == x
-                && ey == y
-                && elevations_compatible(entry.state.elevation(), elevation)
-        })
+        let mut found: Vec<&LiveObjectEvent> = self
+            .entries
+            .iter()
+            .filter(move |entry| {
+                let (ex, ey) = entry.state.position();
+                entry.is_active()
+                    && ex == x
+                    && ey == y
+                    && elevations_compatible(entry.state.elevation(), elevation)
+            })
+            .collect();
+        // An active entry always holds a slot, and no two hold the same one.
+        found.sort_by_key(|entry| entry.object_slot());
+        found.into_iter()
     }
 
     /// Iterates admitted entries that hold `(x, y, elevation)` for collision, by their *live*
@@ -337,9 +360,12 @@ impl ObjectEventCollection {
     /// collection by hand and then place its objects.
     #[cfg(test)]
     pub(crate) fn admit_all_for_test(&mut self) {
-        for entry in &mut self.entries {
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            // Upstream admits at most 15 NPCs; object slot 0 is the player's.
+            assert!(index < 15, "a collection holds at most 15 NPC objects");
             entry.lifecycle = Lifecycle::Active {
-                sprite_slot: 0,
+                object_slot: index + 1,
+                sprite_slot: index,
                 initial: entry.state.template_position(),
                 type_func_id: 0,
                 delay: 0,
@@ -348,8 +374,9 @@ impl ObjectEventCollection {
         }
     }
 
-    /// Iterates every entry in declaration order, the order upstream's
-    /// `gObjectEvents` slot scan visits them (`trainer_see.c:196-219`).
+    /// Iterates every entry in declaration order. That is not the order of upstream's
+    /// `gObjectEvents` scan (`trainer_see.c:196-219`): that follows [`LiveObjectEvent::object_slot`],
+    /// which admission and removal reorder and a crossing keeps.
     pub fn entries(&self) -> impl Iterator<Item = &LiveObjectEvent> {
         self.entries.iter()
     }
@@ -682,6 +709,28 @@ mod tests {
         rig.event_data.flag_set(hide_flag()).unwrap();
         rig.tick(10);
         assert_eq!(ids_at(&rig, 2, 2), vec![1]);
+    }
+
+    #[test]
+    fn stacked_objects_answer_the_position_query_in_admission_slot_order() {
+        // A (id 1) and B (id 2) stand on the same tile. A is hidden at map load, so only B is
+        // spawned and takes the lower object slot; A takes the next slot once its flag clears and
+        // the camera moves (GetAvailableObjectEventId, event_object_movement.c:1367-1374).
+        // GetObjectEventIdByPosition (:2192-2206) scans slots in order, so B answers first.
+        let mut rig = Rig::new(
+            vec![
+                template(1, 2, 2, MovementType::FaceUp, HIDE),
+                template(2, 2, 2, MovementType::FaceUp, "0"),
+            ],
+            (2, 2),
+        );
+        rig.event_data.flag_set(hide_flag()).unwrap();
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![2]);
+        rig.event_data.flag_clear(hide_flag()).unwrap();
+        rig.player = (3, 2);
+        rig.tick(1);
+        assert_eq!(ids_at(&rig, 2, 2), vec![2, 1], "slot order, B before A");
     }
 
     #[test]
@@ -1154,6 +1203,88 @@ mod tests {
                 Some(2),
                 "the newcomer is spawned while the outgoing object still holds slot 0"
             );
+        }
+
+        /// Fifteen departed NPCs admitted beside a player at `(5, 5)`: departed `1` at
+        /// `(5, first_y)`, the other fourteen at `(5, 6)`.
+        fn full_departed_pool(first_y: i16) -> Rig {
+            let mut templates: Vec<ObjectEvent> = (2..=15).map(|id| fixed(id, 5, 6)).collect();
+            templates.insert(0, fixed(1, 5, first_y));
+            let mut rig = Rig::new(templates, (5, 5));
+            rig.tick(1);
+            assert_eq!(
+                rig.collection.entries().filter(|e| e.is_active()).count(),
+                15
+            );
+            rig
+        }
+
+        fn object_slot_of(
+            collection: &ObjectEventCollection,
+            carried_from: Option<MapId>,
+            id: u8,
+        ) -> Option<usize> {
+            collection.find(carried_from, id).unwrap().object_slot()
+        }
+
+        #[test]
+        fn carried_entries_fill_the_object_pool_against_the_entered_maps_newcomer() {
+            // The player's slot and the fifteen carried NPCs are all of `gObjectEvents`
+            // (`global.h:46`), so `GetAvailableObjectEventId` refuses the entered map's
+            // object (`event_object_movement.c:1367-1374`). Its local id matching a carried
+            // object's, from another map, changes nothing (`:1263-1285`).
+            let rig = full_departed_pool(6);
+            let mut carried = cross(&rig.collection, vec![fixed(1, 5, 25)]);
+
+            frame(&mut carried, (5, 24));
+
+            for id in 1..=15u8 {
+                assert_eq!(
+                    object_slot_of(&carried, Some(DEPARTED), id),
+                    Some(usize::from(id)),
+                    "{id}"
+                );
+            }
+            assert_eq!(object_slot_of(&carried, None, 1), None);
+            assert!(!carried.find(None, 1).unwrap().is_active());
+            assert_eq!(carried.entries().filter(|e| e.is_active()).count(), 15);
+        }
+
+        #[test]
+        fn a_newcomer_refused_on_the_crossing_frame_is_admitted_once_the_outgoing_object_is_gone() {
+            // Spawn precedes removal (`:2217-2222`): the outgoing object still holds slot 1 on the
+            // crossing frame, the camera must move again before the newcomer gets it.
+            let rig = full_departed_pool(14);
+            let mut carried = cross(&rig.collection, vec![fixed(1, 5, 25)]);
+
+            frame(&mut carried, (5, 24));
+            assert!(
+                carried.find(Some(DEPARTED), 1).is_none(),
+                "outgoing removed"
+            );
+            assert_eq!(carried.entries().filter(|e| e.is_active()).count(), 14);
+            assert!(!carried.find(None, 1).unwrap().is_active());
+
+            frame(&mut carried, (5, 24));
+            assert!(
+                !carried.find(None, 1).unwrap().is_active(),
+                "no camera move"
+            );
+
+            frame(&mut carried, (5, 23));
+            assert_eq!(object_slot_of(&carried, None, 1), Some(1));
+            assert_eq!(
+                slot_of(carried.find(None, 1).unwrap()),
+                Some(0),
+                "the outgoing object's sprite slot"
+            );
+            for id in 2..=15u8 {
+                assert_eq!(
+                    object_slot_of(&carried, Some(DEPARTED), id),
+                    Some(usize::from(id)),
+                    "{id}"
+                );
+            }
         }
     }
 }
