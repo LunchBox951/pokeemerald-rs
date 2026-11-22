@@ -489,3 +489,39 @@ fn every_battleable_species_has_an_ability_for_trace_to_copy() {
     }
     assert!(checked > 380, "{checked}");
 }
+
+/// The refused replacement leaves the fainted Rattata active, so a later
+/// turn reaches the faint pass again; `Cmd_getexp` pays one faint once.
+#[test]
+fn a_refused_forced_replacement_does_not_pay_the_faint_again_on_a_later_turn() {
+    let dex = Dex::new();
+    let reserve = mon(&dex, SpeciesId::PERSIAN, 99, &[TACKLE, SPLASH]);
+    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[&U, &H]);
+    let Reentry { battle, rng } = &mut fixture;
+    turn_with(battle, 0, EnemyAction::Move(0), rng).expect("Thunder Wave");
+    bench_the_statused_holder(&mut fixture);
+    let Reentry { battle, rng } = &mut fixture;
+    let before = battle.player().experience();
+
+    let refused = turn_with(battle, 0, EnemyAction::Move(1), rng);
+    assert_eq!(
+        refused,
+        Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
+    );
+    let paid = battle.player().experience();
+    assert!(paid > before, "the faint pays once");
+
+    let mut retry_rng = SequenceRng::new(vec![0; 64]);
+    let retry = battle
+        .take_turn(PlayerAction::UseMove(0), &mut retry_rng)
+        .expect_err("the replacement is refused again");
+    assert_eq!(
+        retry.error,
+        BattleError::UnportedAbilityInteraction(AbilityId::LIMBER)
+    );
+    assert!(!retry
+        .events
+        .iter()
+        .any(|event| matches!(event, BattleEvent::ExpGained { .. })));
+    assert_eq!(battle.player().experience(), paid);
+}
