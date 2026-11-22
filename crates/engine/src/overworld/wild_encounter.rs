@@ -9,7 +9,9 @@
 //! returned [`WildEncounter`].
 //!
 //! An active saved Repel then rejects a generated level below the first usable party
-//! member's ([`RepelGate`]); the gate draws nothing.
+//! member's ([`RepelGate`]); the gate draws nothing. After it, a Keen Eye or Intimidate
+//! holder in party slot 0 turns away a level at least five below its own on an even coin
+//! ([`LowLevelAbilityGate`]), the only draw either gate makes.
 //!
 //! The rate roll applies the two flute flags and a Cleanse Tag held by slot 0
 //! ([`EncounterRateModifiers`]) before its clamp; none of them draws. This module
@@ -310,17 +312,97 @@ impl RepelGate {
     }
 }
 
-/// [`try_generate_wild_mon_land`], then `repel` (`:448-455`): `None` when the gate
-/// rejects the finished level. The gate draws nothing, so a rejection has spent the slot
-/// and level draws and none of the later construction draws.
+/// The slot-0 turn-away `IsAbilityAllowingEncounter` applies (`src/wild_encounter.c:897-913`). Evaluating the gate draws at most one coin.
+///
+/// The ability it tests is the `slot_zero_ability` the selector already receives, so an
+/// egg or empty slot 0 (`None`) is allowed without a draw.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LowLevelAbilityGate {
+    /// No slot 0 to consult: every level is accepted without a draw.
+    #[default]
+    Inactive,
+    /// Party slot 0 is a record of `level`, fainted or not.
+    SlotZero {
+        /// The record's level.
+        level: u8,
+    },
+}
+
+impl LowLevelAbilityGate {
+    /// How far below slot 0's level a wild level must sit, at most, to be turned away.
+    const LEVEL_MARGIN: u8 = 5;
+
+    /// Whether a wild Pokémon of `wild_level` may be encountered. Only a Keen Eye or
+    /// Intimidate `slot_zero_ability`, a slot-0 level above the margin and a wild level at
+    /// least the margin below it draw, and an even coin rejects.
+    pub fn allows(
+        self,
+        slot_zero_ability: Option<AbilityId>,
+        wild_level: u8,
+        rng: &mut impl RandomSource,
+    ) -> bool {
+        let Self::SlotZero { level } = self else {
+            return true;
+        };
+        let repels_low_levels = matches!(
+            slot_zero_ability,
+            Some(AbilityId::KEEN_EYE | AbilityId::INTIMIDATE)
+        );
+        let Some(highest_turned_away) = level
+            .checked_sub(Self::LEVEL_MARGIN)
+            .filter(|&highest| highest > 0)
+        else {
+            return true;
+        };
+        if !repels_low_levels || wild_level > highest_turned_away {
+            return true;
+        }
+        !rng.next_u16().is_multiple_of(2)
+    }
+}
+
+/// The filters a finished land encounter must pass, in upstream's order: Repel first,
+/// then the low-level ability turn-away (`src/wild_encounter.c:448-455`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncounterGates {
+    /// The saved Repel state.
+    pub repel: RepelGate,
+    /// Party slot 0's turn-away.
+    pub low_level_ability: LowLevelAbilityGate,
+}
+
+/// [`try_generate_wild_mon_land`], then `repel` and `low_level_ability` of `gates`
+/// (`:448-455`): `None` when either rejects the finished level. Repel judges first, so its
+/// rejection draws no coin. A rejection has spent the slot and level draws, plus the one
+/// coin of a qualifying slot 0, and none of the later construction draws.
+pub fn try_generate_wild_mon_land_with_gates(
+    land: &LandEncounters,
+    slot_zero_ability: Option<AbilityId>,
+    gates: EncounterGates,
+    rng: &mut impl RandomSource,
+) -> Option<WildEncounter> {
+    let encounter = try_generate_wild_mon_land(land, slot_zero_ability, rng);
+    let accepted = gates.repel.allows(encounter.level)
+        && gates
+            .low_level_ability
+            .allows(slot_zero_ability, encounter.level, rng);
+    accepted.then_some(encounter)
+}
+
+/// [`try_generate_wild_mon_land_with_gates`] with `repel` and no ability gate: `None` when
+/// the gate rejects the finished level. The gate draws nothing, so a rejection has spent the
+/// slot and level draws and none of the later construction draws.
 pub fn try_generate_wild_mon_land_with_repel(
     land: &LandEncounters,
     slot_zero_ability: Option<AbilityId>,
     repel: RepelGate,
     rng: &mut impl RandomSource,
 ) -> Option<WildEncounter> {
-    let encounter = try_generate_wild_mon_land(land, slot_zero_ability, rng);
-    repel.allows(encounter.level).then_some(encounter)
+    let gates = EncounterGates {
+        repel,
+        ..EncounterGates::default()
+    };
+    try_generate_wild_mon_land_with_gates(land, slot_zero_ability, gates, rng)
 }
 
 /// [`standard_wild_encounter_with_rate_modifiers`] with no flute flag and no Cleanse Tag.
@@ -379,6 +461,33 @@ pub fn standard_wild_encounter_with_repel(
     repel: RepelGate,
     rng: &mut impl RandomSource,
 ) -> Option<WildEncounter> {
+    let gates = EncounterGates {
+        repel,
+        ..EncounterGates::default()
+    };
+    standard_wild_encounter_with_gates(
+        header,
+        current_metatile_behavior,
+        previous_metatile_behavior,
+        slot_zero_ability,
+        rate_modifiers,
+        gates,
+        rng,
+    )
+}
+
+/// [`standard_wild_encounter_with_rate_modifiers`] that also applies `gates` to the
+/// finished level ([`try_generate_wild_mon_land_with_gates`]). A rejection returns `None`
+/// after the rate, slot and level draws and the one coin of a qualifying slot 0.
+pub fn standard_wild_encounter_with_gates(
+    header: Option<&WildEncounterHeader>,
+    current_metatile_behavior: u8,
+    previous_metatile_behavior: u8,
+    slot_zero_ability: Option<AbilityId>,
+    rate_modifiers: EncounterRateModifiers,
+    gates: EncounterGates,
+    rng: &mut impl RandomSource,
+) -> Option<WildEncounter> {
     let header = header?;
     if !is_land_wild_encounter(current_metatile_behavior) {
         return None;
@@ -392,7 +501,7 @@ pub fn standard_wild_encounter_with_repel(
     if !wild_encounter_check_with_rate_modifiers(land.encounter_rate, rate_modifiers, rng) {
         return None;
     }
-    try_generate_wild_mon_land_with_repel(land, slot_zero_ability, repel, rng)
+    try_generate_wild_mon_land_with_gates(land, slot_zero_ability, gates, rng)
 }
 
 /// Per-step encounter immunity and previous-metatile state.
@@ -456,7 +565,7 @@ impl WildEncounterState {
     /// Rolls for an encounter and records the completed step's behavior.
     ///
     /// Immune steps consume no RNG. A successful encounter restarts immunity;
-    /// failed eligible rolls, including a Repel rejection, leave the counter at its ceiling.
+    /// failed eligible rolls, including a Repel or ability rejection, leave the counter at its ceiling.
     /// `slot_zero_ability` is passed to [`choose_wild_mon_level`] and `rate_modifiers`
     /// to [`wild_encounter_check_with_rate_modifiers`].
     pub fn check_standard_wild_encounter_with_rate_modifiers(
@@ -477,8 +586,7 @@ impl WildEncounterState {
         )
     }
 
-    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with `repel` applied to
-    /// the finished level; a rejected encounter does not restart immunity.
+    /// [`Self::check_standard_wild_encounter_with_gates`] with `repel` and no ability gate.
     pub fn check_standard_wild_encounter_with_repel(
         &mut self,
         current_metatile_behavior: u8,
@@ -488,17 +596,42 @@ impl WildEncounterState {
         repel: RepelGate,
         rng: &mut impl RandomSource,
     ) -> Option<WildEncounter> {
+        let gates = EncounterGates {
+            repel,
+            ..EncounterGates::default()
+        };
+        self.check_standard_wild_encounter_with_gates(
+            current_metatile_behavior,
+            header,
+            slot_zero_ability,
+            rate_modifiers,
+            gates,
+            rng,
+        )
+    }
+
+    /// [`Self::check_standard_wild_encounter_with_rate_modifiers`] with `gates` applied to
+    /// the finished level; a rejected encounter does not restart immunity.
+    pub fn check_standard_wild_encounter_with_gates(
+        &mut self,
+        current_metatile_behavior: u8,
+        header: Option<&WildEncounterHeader>,
+        slot_zero_ability: Option<AbilityId>,
+        rate_modifiers: EncounterRateModifiers,
+        gates: EncounterGates,
+        rng: &mut impl RandomSource,
+    ) -> Option<WildEncounter> {
         let encounter = if self.immunity_steps < WILD_ENCOUNTER_IMMUNITY_STEPS {
             self.immunity_steps += 1;
             None
         } else {
-            standard_wild_encounter_with_repel(
+            standard_wild_encounter_with_gates(
                 header,
                 current_metatile_behavior,
                 self.prev_metatile_behavior,
                 slot_zero_ability,
                 rate_modifiers,
-                repel,
+                gates,
                 rng,
             )
         };

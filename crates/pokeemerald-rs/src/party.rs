@@ -926,6 +926,22 @@ pub(crate) fn first_repel_qualifying_level(
     None
 }
 
+/// The level party slot 0 brings to `IsAbilityAllowingEncounter`
+/// (`pokeemerald/src/wild_encounter.c:897-913`): `GetMonData(&gPlayerParty[0], MON_DATA_LEVEL)`
+/// of the saved first record, whatever its HP, egg flag or place in the battle. `None` for an
+/// empty `party`.
+///
+/// `lead` overlays the live lead's level when it occupies slot 0, as
+/// [`first_repel_qualifying_level`] does for its own slot: the owned lead may have changed
+/// since its record was last merged. A lead standing in another slot never supplies it.
+pub(crate) fn slot_zero_level(party: &[Pokemon], lead: Option<&LoadedLead>) -> Option<u8> {
+    let saved = party.first()?;
+    Some(
+        lead.filter(|lead| lead.slot() == 0 && !lead.is_lent())
+            .map_or(saved.level, |lead| lead.battler().level()),
+    )
+}
+
 /// Selects which saved slot is the active battler on continue: the first
 /// non-egg, non-Bad-Egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
 /// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
