@@ -300,6 +300,31 @@ fn a_tilemap_that_is_not_twenty_by_eighteen_words_is_rejected() {
 }
 
 #[test]
+fn a_tilemap_word_the_accessor_would_refuse_is_rejected() {
+    let style = &STYLES[0];
+    let past_the_sheet = u16::try_from(style.tiles()).unwrap() | 1 << 12;
+    // Every synthetic tile 0 carries colour, so the blank word is refused.
+    for (case, word) in [
+        ("tile past the sheet", past_the_sheet),
+        ("bank 0", 0x0001),
+        ("bank 3", 0x3001),
+        ("blank over a coloured tile 0", 0x0000),
+    ] {
+        let upstream = scratch_dir("tilemap-word");
+        write_valid_checkout(&upstream);
+        let path = style_dir(&upstream, style).join("tilemap.bin");
+        let mut tilemap = tilemap_bytes(style);
+        tilemap[200..202].copy_from_slice(&word.to_le_bytes());
+        write(&path, &tilemap);
+
+        let (result, queued) = extract(&upstream);
+        assert_eq!(mismatch_path(result.unwrap_err()), path, "{case}");
+        assert_eq!(queued, 0, "{case}");
+        std::fs::remove_dir_all(upstream).unwrap();
+    }
+}
+
+#[test]
 fn a_palette_that_is_not_sixteen_colours_is_rejected() {
     for (file, half) in [("frame.png", Half::Frame), ("bg.png", Half::Background)] {
         for colors in [1, 15] {

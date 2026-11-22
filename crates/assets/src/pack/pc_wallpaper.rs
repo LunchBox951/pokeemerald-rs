@@ -171,7 +171,9 @@ pub struct PcWallpaperTile {
 }
 
 impl PcWallpaperTile {
-    fn decode(word: u16) -> Self {
+    /// Decodes one little-endian tilemap word.
+    #[must_use]
+    pub fn decode(word: u16) -> Self {
         Self {
             tile_index: word & TILE_INDEX_MASK,
             h_flip: word & H_FLIP_MASK != 0,

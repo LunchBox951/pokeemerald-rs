@@ -13,6 +13,7 @@
 
 use std::path::Path;
 
+use assets::PcWallpaperTile;
 use pack_format::{PackEntry, PackWriter};
 
 use super::naming_screen::keep_leading_tiles;
@@ -24,6 +25,9 @@ use super::{build_image_entry, build_palette_entry, jasc_pal, png, read_file, Ex
 
 /// Every wallpaper PNG is 4bpp.
 const SHEET_BIT_DEPTH: u8 = 4;
+const TILE_PIXELS: usize = 64;
+/// Stored banks of the frame and background palettes.
+const PALETTE_BANKS: [u8; 2] = [1, 2];
 
 /// Extracts every non-default wallpaper's sheet, tilemap and palettes.
 ///
@@ -70,6 +74,7 @@ fn extract_style(dir: &Path, source: &PcWallpaperSource) -> Result<[PackEntry; 4
     let mut sheet = frame.image;
     sheet.height += background.image.height;
     sheet.pixels.extend(background.image.pixels);
+    check_tilemap_words(&tilemap_path, &tilemap, &sheet.pixels)?;
 
     Ok([
         build_image_entry(&frame_path, id.tiles_id(), sheet)?,
@@ -120,6 +125,43 @@ fn read_half(path: &Path, shape: PcWallpaperHalf) -> Result<Half, ExtractError> 
         ));
     }
     Ok(Half { image, colors })
+}
+
+/// Refuses the words `AssetPack::pc_wallpaper` would reject, so extraction
+/// never publishes an entry the reader refuses.
+fn check_tilemap_words(path: &Path, tilemap: &[u8], sheet: &[u8]) -> Result<(), ExtractError> {
+    let tile_count = sheet.len() / TILE_PIXELS;
+    let mut blank_seen = false;
+    for (cell, pair) in tilemap.chunks_exact(2).enumerate() {
+        let tile = PcWallpaperTile::decode(u16::from_le_bytes([pair[0], pair[1]]));
+        if usize::from(tile.tile_index) >= tile_count {
+            return Err(mismatch(
+                path,
+                format!(
+                    "cell {cell} names tile {}: the sheet holds {tile_count}",
+                    tile.tile_index
+                ),
+            ));
+        }
+        if tile.is_blank() {
+            blank_seen = true;
+        } else if !PALETTE_BANKS.contains(&tile.palette_bank) {
+            return Err(mismatch(
+                path,
+                format!(
+                    "cell {cell} selects palette bank {}: expected {PALETTE_BANKS:?}",
+                    tile.palette_bank
+                ),
+            ));
+        }
+    }
+    if blank_seen && sheet[..TILE_PIXELS].iter().any(|&pixel| pixel != 0) {
+        return Err(mismatch(
+            path,
+            "has blank cells over a tile 0 that is not transparent".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn mismatch(path: &Path, detail: String) -> ExtractError {
