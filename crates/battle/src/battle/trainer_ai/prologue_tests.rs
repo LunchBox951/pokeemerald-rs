@@ -279,7 +279,7 @@ fn admission_is_flag_aware() {
             MoveId::QUICK_ATTACK,
             only_cbm.union(AiFlags::TRY_TO_FAINT)
         ),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
+        Ok(())
     );
     for move_id in [
         MoveId::SPLASH,

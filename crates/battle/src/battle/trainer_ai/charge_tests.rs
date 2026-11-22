@@ -9,7 +9,6 @@ use super::{
 };
 use crate::battle::opponent_ai::EnemyAction;
 use crate::dex::Dex;
-use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs, Stats, MAX_MON_MOVES};
 use crate::script_rng::SequenceRng;
 use assets::trainers::AiFlags;
@@ -214,7 +213,7 @@ fn charge_moves_the_knockout_threshold_without_a_new_draw() {
 }
 
 #[test]
-fn charge_is_scoreable_under_try_to_faint_and_quick_attack_is_not() {
+fn charge_is_scoreable_under_try_to_faint() {
     let dex = Dex::new();
     for flags in [
         AiFlags::CHECK_BAD_MOVE,
@@ -223,8 +222,4 @@ fn charge_is_scoreable_under_try_to_faint_and_quick_attack_is_not() {
     ] {
         assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, flags), Ok(()));
     }
-    assert_eq!(
-        ensure_scoreable(&dex, MoveId::QUICK_ATTACK, trainer_flags()),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
-    );
 }

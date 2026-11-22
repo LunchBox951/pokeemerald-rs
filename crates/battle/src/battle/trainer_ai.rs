@@ -53,6 +53,10 @@ const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
+/// `AI_TryToFaint_TryToEncourageQuickAttack`'s extra `score +2` for a Quick
+/// Attack finisher, applied before the shared `+4` it falls through into
+/// (`data/battle_ai_scripts.s:2629-2635`).
+const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
@@ -133,19 +137,6 @@ const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
     MoveEffect::SPEED_DOWN_HIT,
     MoveEffect::VITAL_THROW,
 ];
-
-/// Effects `AI_TryToFaint` refuses until its extra scoring is ported.
-///
-/// `Charge` is not listed: `estimated_damage` applies the doubling
-/// `AI_CalcDmg` folds into every simulated-damage read
-/// (`src/battle_script_commands.c:1306-1316`), so `TRY_TO_FAINT` (`if_can_faint`,
-/// `data/battle_ai_scripts.s:2618`) scores it as an ordinary status move.
-/// `AI_CheckViability` neither dispatches `EFFECT_CHARGE` nor reads damage
-/// (`:619-743`).
-///
-/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
-/// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 1] = [MoveEffect::QUICK_ATTACK];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -275,11 +266,7 @@ impl ScoreableEffect {
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
         };
-        if flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect)
-        {
-            return false;
-        }
-        !(flags.contains(AiFlags::TRY_TO_FAINT) && UNPORTED_TRY_TO_FAINT_EFFECTS.contains(&effect))
+        !(flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect))
     }
 }
 
@@ -295,9 +282,9 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
 /// move's dex residency is checked.
 ///
 /// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
-/// only script that would reach them, and refused when `CHECK_VIABILITY` or
-/// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
-/// branch for any of them.
+/// only script that would reach them, and refused when `CHECK_VIABILITY` would
+/// take an unported branch. `TRY_TO_FAINT` and `SETUP_FIRST_TURN` have no
+/// unported branch for any of them.
 ///
 /// # Errors
 ///
@@ -1043,6 +1030,9 @@ fn score_try_to_faint(
             scores.simulated_damage_percent[slot],
         )?;
         if target.current_hp() <= damage {
+            if move_data.effect == MoveEffect::QUICK_ATTACK {
+                scores.adjust(slot, QUICK_ATTACK_FINISHER_BONUS);
+            }
             scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
@@ -2444,5 +2434,7 @@ mod charge_tests;
 mod leech_seed_tests;
 #[cfg(test)]
 mod prologue_tests;
+#[cfg(test)]
+mod quick_attack_tests;
 #[cfg(test)]
 mod stat_stage_tests;
