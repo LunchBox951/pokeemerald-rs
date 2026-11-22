@@ -209,3 +209,96 @@ fn nested_key_split_or_rhythm_child_produces_no_note() {
     seq.render_frame(&mut out);
     assert_eq!(seq.voice_count(), 0, "nested indirection must not sound");
 }
+
+fn voices_after_note(instrument: Instrument, key: u8) -> usize {
+    let track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        Event::Note {
+            key,
+            velocity: 127,
+            gate: 8,
+        },
+        Event::Wait(48),
+        Event::Fine,
+    ];
+    let song = Song::new(vec![instrument], vec![track], 150);
+    let mut seq = Sequencer::new(song);
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    seq.render_frame(&mut out);
+    seq.voice_count()
+}
+
+fn rhythm_with_leaf_at_key_10() -> Instrument {
+    let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
+    children[10] = Some(RhythmChild {
+        instrument: direct_sound(90),
+        base_key: 10,
+        pan: None,
+    });
+    Instrument::Rhythm(Rhythm { children })
+}
+
+fn key_split_with_leaf_for_every_key() -> Instrument {
+    Instrument::KeySplit(KeySplit {
+        table: [0u8; KEY_SLOTS],
+        children: vec![Some(direct_sound(90))],
+    })
+}
+
+#[test]
+fn leaf_selected_directly_allocates_a_voice() {
+    // Positive controls for the nested cases below: the very same leaves sound
+    // when a single level of indirection selects them.
+    assert_eq!(
+        voices_after_note(key_split_with_leaf_for_every_key(), 10),
+        1,
+        "a leaf under a key split must sound"
+    );
+    assert_eq!(
+        voices_after_note(rhythm_with_leaf_at_key_10(), 10),
+        1,
+        "a leaf under a rhythm must sound"
+    );
+}
+
+#[test]
+fn nested_rhythm_child_with_a_playable_leaf_at_the_played_key_produces_no_note() {
+    let split = Instrument::KeySplit(KeySplit {
+        table: [0u8; KEY_SLOTS],
+        children: vec![Some(rhythm_with_leaf_at_key_10())],
+    });
+    assert_eq!(
+        voices_after_note(split, 10),
+        0,
+        "nested indirection must not sound"
+    );
+}
+
+#[test]
+fn nested_key_split_child_with_a_playable_leaf_at_the_played_key_produces_no_note() {
+    let split = Instrument::KeySplit(KeySplit {
+        table: [0u8; KEY_SLOTS],
+        children: vec![Some(key_split_with_leaf_for_every_key())],
+    });
+    assert_eq!(
+        voices_after_note(split, 10),
+        0,
+        "nested indirection must not sound"
+    );
+}
+
+#[test]
+fn nested_key_split_under_a_rhythm_with_a_playable_leaf_produces_no_note() {
+    let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
+    children[10] = Some(RhythmChild {
+        instrument: key_split_with_leaf_for_every_key(),
+        base_key: 10,
+        pan: None,
+    });
+    assert_eq!(
+        voices_after_note(Instrument::Rhythm(Rhythm { children }), 10),
+        0,
+        "nested indirection must not sound"
+    );
+}
