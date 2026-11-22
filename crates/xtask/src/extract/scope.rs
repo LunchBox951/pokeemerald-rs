@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use assets::PcWallpaperId;
+
 use super::bag::{fixed_ids, icon_ids};
 use super::battle_interface::healthbox_battle_bar_pack_id;
 use super::battle_interface::healthbox_element_pack_ids;
@@ -844,6 +846,145 @@ pub(crate) fn naming_screen_ids() -> Vec<String> {
         .iter()
         .map(|stem| format!("naming-screen/raw/{stem}"));
     images.chain(palettes).chain(tilemaps).collect()
+}
+
+/// Where the PC wallpapers' sources live, relative to the checkout:
+/// `WALLPAPERGFXDIR` in `graphics_file_rules.mk`. Each style owns the
+/// directory of its [`PcWallpaperId::stem`].
+pub(crate) const PC_WALLPAPER_DIRECTORY: &str = "graphics/pokemon_storage/wallpapers";
+
+/// One half of a wallpaper's tile sheet: the source PNG's size and how many of
+/// its leading 8x8 tiles upstream's build keeps.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PcWallpaperHalf {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kept_tiles: u32,
+}
+
+/// One non-default wallpaper's sources. Upstream's `tiles.4bpp` is `frame.4bpp`
+/// followed by `bg.4bpp` (`graphics_file_rules.mk:178-278`), so the sheet is
+/// the frame's kept tiles and then the background's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PcWallpaperSource {
+    pub(crate) wallpaper: PcWallpaperId,
+    pub(crate) frame: PcWallpaperHalf,
+    pub(crate) background: PcWallpaperHalf,
+}
+
+const fn pc_half(width: u32, height: u32, kept_tiles: u32) -> PcWallpaperHalf {
+    PcWallpaperHalf {
+        width,
+        height,
+        kept_tiles,
+    }
+}
+
+/// A half built without a `-num_tiles` cut keeps every tile of its PNG.
+const fn pc_whole_half(width: u32, height: u32) -> PcWallpaperHalf {
+    pc_half(width, height, width / 8 * (height / 8))
+}
+
+const fn pc_source(
+    wallpaper: PcWallpaperId,
+    frame: PcWallpaperHalf,
+    background: PcWallpaperHalf,
+) -> PcWallpaperSource {
+    PcWallpaperSource {
+        wallpaper,
+        frame,
+        background,
+    }
+}
+
+/// The twelve non-default wallpapers in `sWallpapers` order
+/// (`src/data/wallpapers.h`). Every `frame.png` is built with the
+/// `-num_tiles` the rules file gives it; only `beach/bg.png` and `river/bg.png`
+/// carry a cut of their own.
+pub(crate) const PC_WALLPAPERS: [PcWallpaperSource; 12] = [
+    pc_source(
+        PcWallpaperId::Crag,
+        pc_half(128, 32, 49),
+        pc_whole_half(32, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Volcano,
+        pc_half(128, 32, 56),
+        pc_whole_half(16, 104),
+    ),
+    pc_source(
+        PcWallpaperId::Snow,
+        pc_half(128, 32, 57),
+        pc_whole_half(16, 88),
+    ),
+    pc_source(
+        PcWallpaperId::Cave,
+        pc_half(128, 32, 55),
+        pc_whole_half(16, 16),
+    ),
+    pc_source(
+        PcWallpaperId::Beach,
+        pc_half(120, 32, 46),
+        pc_half(24, 64, 23),
+    ),
+    pc_source(
+        PcWallpaperId::Seafloor,
+        pc_half(128, 32, 54),
+        pc_whole_half(32, 16),
+    ),
+    pc_source(
+        PcWallpaperId::River,
+        pc_half(128, 32, 51),
+        pc_half(24, 32, 11),
+    ),
+    pc_source(
+        PcWallpaperId::Sky,
+        pc_half(96, 32, 45),
+        pc_whole_half(32, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Polkadot,
+        pc_half(128, 32, 54),
+        pc_whole_half(16, 24),
+    ),
+    pc_source(
+        PcWallpaperId::Pokecenter,
+        pc_half(80, 32, 35),
+        pc_whole_half(88, 16),
+    ),
+    pc_source(
+        PcWallpaperId::Machine,
+        pc_half(64, 40, 33),
+        pc_whole_half(16, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Plain,
+        pc_half(24, 48, 18),
+        pc_whole_half(32, 8),
+    ),
+];
+
+/// A wallpaper's tilemap: 20x18 two-byte entries (`pc_wallpaper` module docs).
+pub(crate) const PC_WALLPAPER_TILEMAP_BYTES: usize = 20 * 18 * 2;
+
+/// Colours in each of a wallpaper's two palettes.
+pub(crate) const PC_WALLPAPER_PALETTE_COLORS: usize = 16;
+
+/// Every `pc-wallpaper/` pack id extraction emits: for each style, in
+/// `sWallpapers` order, the tile sheet, the tilemap and the two palettes.
+pub(crate) fn pc_wallpaper_ids() -> Vec<String> {
+    PC_WALLPAPERS
+        .iter()
+        .flat_map(|source| {
+            let id = source.wallpaper;
+            [
+                id.tiles_id(),
+                id.tilemap_id(),
+                id.frame_palette_id(),
+                id.background_palette_id(),
+            ]
+        })
+        .collect()
 }
 
 /// Every `battle-interface/` pack id extraction emits: the textbox sheet,
