@@ -185,8 +185,11 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns object events at `(x, y, elevation)` in declaration order, identifying each by
-    /// its current tile alone; [`Self::collision_objects_at`] also holds the tile a walker leaves.
+    /// Returns object events at `(x, y, elevation)`, identifying each by its current tile alone;
+    /// [`Self::collision_objects_at`] also holds the tile a walker leaves. A bound collection
+    /// answers in live object-slot order (`GetObjectEventIdByPosition`,
+    /// `event_object_movement.c:2192-2206`); the unbound authored scan, which has no slots, answers
+    /// in declaration order.
     ///
     /// With a bound collection ([`Self::with_object_events`]) the position
     /// and elevation are each object's live ones and every result is its

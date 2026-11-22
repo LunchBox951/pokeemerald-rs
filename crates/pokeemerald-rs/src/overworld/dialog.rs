@@ -32,7 +32,7 @@ use engine::text::Token;
 use platform::{ButtonState, Buttons};
 use rendering::Framebuffer;
 
-use crate::textbox::{self, ArrowWindow, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
+use crate::textbox::{self, DownArrowSheet, FrameAssets, PromptArrow, WindowOp};
 
 /// Maps A/B button edges and holds to the shared printer input shape.
 ///
@@ -227,14 +227,11 @@ impl NpcDialog {
             self.window_fill = self.printer.cleared_window_colors();
         }
         // A prompt wait owns its frame: no glyph, span, or icon competes with
-        // the arrow draw or erase it makes here (`PromptArrow::tick`).
-        self.prompt_arrow.tick(
+        // the arrow draw or erase it makes here (`PromptArrow::follow`).
+        self.prompt_arrow.follow(
+            &self.printer,
             &event,
-            ArrowWindow {
-                cursor: self.printer.cursor(),
-                colors: self.printer.colors(),
-                content_height: textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
-            },
+            textbox::STANDARD_BOX_CONTENT_SIZE_PX.1,
             &self.down_arrow,
             &mut self.ops,
         );
@@ -1789,5 +1786,159 @@ mod tests {
             };
             assert_eq!(pixels, expected, "after scroll row {row}");
         }
+    }
+
+    // -- Auto-scroll waits draw no arrow (`text.c:865-884`) -------------------
+
+    /// `EXT_CTRL_CODE_SKIP` and `EXT_CTRL_CODE_PAUSE_UNTIL_PRESS`
+    /// (`pokeemerald/include/characters.h`; one argument byte and none).
+    const SKIP: u8 = 0x12;
+    const PAUSE_UNTIL_PRESS: u8 = 0x09;
+    /// Waiting calls after the arming frame that leave an auto-scroll prompt
+    /// waiting; the next one releases it (`TextPrinterWaitAutoMode`,
+    /// `text.c:850-863`).
+    const AUTO_WAITING_CALLS: usize = 49;
+
+    /// [`arrow_dialog`] whose printer waits in auto-scroll mode.
+    fn auto_arrow_dialog(tokens: Vec<Token>) -> NpcDialog {
+        let dialog = arrow_dialog(tokens);
+        NpcDialog {
+            printer: dialog.printer.with_auto_scroll(),
+            ..dialog
+        }
+    }
+
+    /// A glyph, a wait, a second glyph: one stream per wait the printer has.
+    fn wait_streams() -> [(&'static str, Vec<Token>); 3] {
+        let stream = |wait| vec![Token::Char('A'), wait, Token::Char('B'), Token::End];
+        [
+            ("clear", stream(Token::PromptClear)),
+            ("scroll", stream(Token::PromptScroll)),
+            (
+                "pause until press",
+                stream(Token::ExtCtrl {
+                    sub: PAUSE_UNTIL_PRESS,
+                    args: vec![],
+                }),
+            ),
+        ]
+    }
+
+    /// Ticks until the message closes, asserting no arrow on the way, and
+    /// returns how many frames that took.
+    fn frames_to_close_without_arrow(dialog: &mut NpcDialog) -> usize {
+        for frame in 1..=ONE_GLYPH_PRINT_FRAME_LIMIT * 2 {
+            let outcome = dialog.tick(NO_INPUT);
+            assert!(!has_arrow_op(dialog), "an arrow after the release");
+            if outcome == DialogOutcome::Closed {
+                return frame;
+            }
+        }
+        panic!("the message never closed");
+    }
+
+    #[test]
+    fn an_auto_scroll_wait_draws_no_arrow_on_any_of_its_fifty_frames() {
+        for (name, tokens) in wait_streams() {
+            for input in [NO_INPUT, A_PRESS, B_PRESS] {
+                let mut dialog = auto_arrow_dialog(tokens.clone());
+                // The glyph, then the frame that reaches the wait.
+                for _ in 0..2 {
+                    assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+                    assert!(!has_arrow_op(&dialog), "{name}: arrow before the wait");
+                }
+                let waiting_cursor = dialog.printer.cursor();
+                for call in 1..=AUTO_WAITING_CALLS {
+                    assert_eq!(dialog.tick(input), DialogOutcome::Continue);
+                    assert!(
+                        !has_arrow_op(&dialog),
+                        "{name}: arrow on waiting call {call}"
+                    );
+                    assert_eq!(dialog.revealed_glyph_count(), 1, "{name}: page up");
+                    assert_eq!(dialog.printer.cursor(), waiting_cursor, "{name}: cursor");
+                }
+                assert_eq!(dialog.tick(input), DialogOutcome::Continue);
+                assert!(
+                    !has_arrow_op(&dialog),
+                    "{name}: arrow on the releasing call"
+                );
+                let released = (dialog.revealed_glyph_count(), dialog.printer.cursor());
+                let auto_rest = frames_to_close_without_arrow(&mut dialog);
+
+                // A manual dialog confirmed on its first waiting frame ends up
+                // in the same place and closes after the same frames.
+                let mut manual = arrow_dialog(tokens.clone());
+                for _ in 0..2 {
+                    assert_eq!(manual.tick(NO_INPUT), DialogOutcome::Continue);
+                }
+                assert_eq!(manual.tick(A_PRESS), DialogOutcome::Continue);
+                assert_eq!(
+                    (manual.revealed_glyph_count(), manual.printer.cursor()),
+                    released,
+                    "{name}: the page advances as in manual mode"
+                );
+                let manual_rest = (1..=ONE_GLYPH_PRINT_FRAME_LIMIT * 2)
+                    .find(|_| manual.tick(NO_INPUT) == DialogOutcome::Closed);
+                assert_eq!(manual_rest, Some(auto_rest), "{name}: frames to close");
+            }
+        }
+    }
+
+    /// A scroll prompt whose cursor sits over the glyph before it:
+    /// `TextPrinterClearDownArrow` fills the rectangle at the cursor on
+    /// release even when no arrow was drawn (`text.c:1180-1188`), so pixels
+    /// right of the cursor go and those left of it stay, in either mode.
+    #[test]
+    fn an_auto_scroll_release_erases_the_cursor_rectangle_as_manual_mode_does() {
+        const CURSOR_X: i32 = 2;
+        let tokens = vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: SKIP,
+                args: vec![2],
+            },
+            Token::PromptScroll,
+            Token::Char('B'),
+            Token::End,
+        ];
+        let pixel = |dialog: &NpcDialog, x: i32| {
+            let (px, py) = box_pixel((x, 4));
+            dialog.compose_over(Framebuffer::new()).pixel(px, py)
+        };
+
+        let mut auto = auto_arrow_dialog(tokens.clone());
+        for _ in 0..2 {
+            let _ = auto.tick(NO_INPUT);
+        }
+        assert_eq!(auto.printer.cursor().0, CURSOR_X);
+        for _ in 0..AUTO_WAITING_CALLS {
+            let _ = auto.tick(NO_INPUT);
+            assert_eq!(pixel(&auto, CURSOR_X + 1), Some(OPAQUE_GLYPH_COLOR));
+        }
+        let _ = auto.tick(NO_INPUT);
+
+        let mut manual = arrow_dialog(tokens);
+        for _ in 0..2 {
+            let _ = manual.tick(NO_INPUT);
+        }
+        let _ = manual.tick(A_PRESS);
+
+        for dialog in [&auto, &manual] {
+            assert_eq!(pixel(dialog, CURSOR_X - 1), Some(OPAQUE_GLYPH_COLOR));
+            assert_eq!(pixel(dialog, CURSOR_X + 1), Some(FRAME_INTERIOR_COLOR));
+        }
+        let window = |dialog: &NpcDialog| {
+            let fb = dialog.compose_over(Framebuffer::new());
+            let (width, height) = textbox::STANDARD_BOX_CONTENT_SIZE_PX;
+            (0..height)
+                .flat_map(|y| (0..width).map(move |x| box_pixel((x, y))))
+                .map(|(x, y)| fb.pixel(x, y))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            window(&auto),
+            window(&manual),
+            "the released window holds the same pixels in both modes"
+        );
     }
 }

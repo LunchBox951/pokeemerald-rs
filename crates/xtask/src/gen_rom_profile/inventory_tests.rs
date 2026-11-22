@@ -892,10 +892,16 @@ fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
 }
 
 #[test]
-fn a_pack_missing_the_down_arrow_sheet_is_refused() {
-    let id = "interface/image/down_arrow";
-    assert_eq!(INTERFACE_IMAGE_IDS, [id]);
-    assert_refused("no-down-arrow", without(id), id, "interface");
+fn a_pack_missing_a_down_arrow_sheet_is_refused() {
+    let ids = [
+        "interface/image/down_arrow",
+        "interface/image/down_arrow_alt",
+    ];
+    assert_eq!(INTERFACE_IMAGE_IDS, ids);
+    for id in ids {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "interface");
+    }
 }
 
 #[test]

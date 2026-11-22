@@ -375,6 +375,7 @@ impl OverworldPhase {
                     battle,
                     trainer_id: trainer,
                 });
+                self.count_trainer_battle_start();
                 // Mirrors `begin_first_battle`'s own
                 // `RestartWildEncounterImmunitySteps` call
                 // (`CB2_StartFirstBattle`-equivalent reasoning): unobservable

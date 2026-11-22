@@ -27,7 +27,7 @@ use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
-use crate::flow::wild_encounter;
+use crate::flow::wild_encounter::{self, StepEncounterInputs};
 use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
@@ -486,6 +486,9 @@ impl OverworldPhase {
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
         let poison_step = poison_step_map_type(&runtime, landed, door_warp);
+        // Ahead of the poison gate: `UpdateFriendshipStepCounter` takes every landing the
+        // step scripts reach (`field_control_avatar.c:536-545`).
+        self.update_friendship_step_counter(landed, door_warp);
         if poison_step.is_some_and(|map_type| self.update_poison_step_counter(map_type)) {
             self.sync_saved_position();
             return;
@@ -513,7 +516,7 @@ impl OverworldPhase {
             &runtime,
             rolled_landing,
             slot_zero_ability,
-            rate_modifiers,
+            &StepEncounterInputs::new(rate_modifiers, &self.save1, self.lead.as_ref()),
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp
