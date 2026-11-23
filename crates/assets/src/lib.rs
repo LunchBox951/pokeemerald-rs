@@ -25,7 +25,8 @@
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), and the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]); more
+//! starting positions (see [`slot_machine_reels`]), and the Battle Frontier
+//! apprentice's valid-move table (see [`apprentice_moves`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -48,6 +49,7 @@
 //! see that module's docs).
 
 pub mod abilities;
+pub mod apprentice_moves;
 pub mod arena_mind_ratings;
 pub mod audio;
 pub mod battle_anim;
@@ -96,6 +98,7 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // `audio::VoiceGroupId`/`audio::SampleId` are re-exported here alongside the
 // three schema types they identify; `audio`'s own internal cross-references
 // between them stay reachable through the `audio` module path too.
+pub use apprentice_moves::{is_valid_apprentice_move, APPRENTICE_VALID_MOVE_COUNT};
 pub use arena_mind_ratings::{
     arena_mind_rating, MIND_PENALISED_MOVE_COUNT, MIND_REWARDED_MOVE_COUNT,
 };
