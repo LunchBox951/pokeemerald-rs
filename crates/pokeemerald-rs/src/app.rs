@@ -230,14 +230,13 @@ pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
     SyntheticBoot,
     /// The real animated title screen, including its front-end fade-wait
-    /// state (I-3, issue #1329: `crate::flow::AppScene::TitleFadeWait`) --
+    /// state (`crate::flow::AppScene::TitleFadeWait`) --
     /// this milestone does not distinguish a title still animating from one
     /// fading toward the main menu.
     Title,
     /// The main menu and its current selection, including its highlight-only
-    /// step (I-3, issue #2223: `crate::flow::AppScene::MainMenuHighlight`)
-    /// and front-end fade-wait state (I-3, issue #1329:
-    /// `crate::flow::AppScene::MainMenuFadeWait`) -- this milestone does
+    /// step (`crate::flow::AppScene::MainMenuHighlight`) and front-end
+    /// fade-wait state (`crate::flow::AppScene::MainMenuFadeWait`) -- this milestone does
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
     MainMenu(MainMenuItem),
@@ -492,8 +491,8 @@ impl App {
     /// `crate::flow::OverworldPhase` it builds load lazily afterwards
     /// (main menu, intro, overworld, warps, map-edge connections, NPC/
     /// sight-trainer dialog, the field start menu) -- reads the checkout's
-    /// own extracted pack (`crate::pack_source::PackSource::Repo`, issue
-    /// #412), because the scenario and e2e gates that boot through here
+    /// own extracted pack (`crate::pack_source::PackSource::Repo`),
+    /// because the scenario and e2e gates that boot through here
     /// promise fixed inputs (`docs/scenarios.md`) and must never validate an
     /// installed user pack, or one an inherited `$POKEEMERALD_PACK` happens
     /// to name, that shadows the checkout's.
