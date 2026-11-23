@@ -57,9 +57,11 @@
 //!   colours and its screen), Poké Ball and held-item sheets with their palettes, the
 //!   five slot tilemaps, and the confirm and cancel button tilemaps;
 //! - the battle-animation catalog (`data/battle_anim_scripts.s`);
-//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
+//! - the sheet and palette of every battle-effect sprite a catalog program loads;
 //! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
-//!   sheet.
+//!   sheet; and
+//! - the twelve non-default standard PC wallpapers (IDs 4 to 15), each a frame-then-background
+//!   tile sheet, a tilemap, and two palettes.
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -91,6 +93,8 @@
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `poke-ball/{image,palette}/<name>`
+//! - `pc-wallpaper/<style>/{tiles,tilemap}` and
+//!   `pc-wallpaper/<style>/palette/{frame,background}`
 //! - `field-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `party-menu/{image,palette,raw}/<name>`
@@ -128,6 +132,7 @@ mod opening_scene;
 #[cfg(test)]
 mod owned_fixture;
 mod party_menu;
+mod pc_wallpaper;
 pub mod png;
 pub(crate) mod poke_ball;
 mod pokedex;
@@ -236,6 +241,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
     party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    pc_wallpaper::extract_pc_wallpapers(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

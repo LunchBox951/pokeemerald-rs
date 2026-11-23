@@ -35,6 +35,49 @@ fn cgb3_wave_level_above_fifteen_reads_the_adjacent_clock_table_and_mutes() {
     }
 }
 
+// `xSUST` 48 on goal 15 with attack = decay = 0 sustains at
+// `(15 * 48 + 15) >> 4 = 45` (`m4a.c:921,1126-1137`). Upstream writes
+// `gCgb3Vol[45]` = `gClockTable[29]` = 0x28 (`m4a_tables.c:168-208`), whose
+// NR32 bits 5-6 = 01 select full wave volume.
+#[test]
+fn cgb3_wave_sustain_above_thirty_one_reads_the_full_clock_table_byte() {
+    let mut envelope = crate::CgbEnvelope::new(
+        crate::CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 48,
+            release: 0,
+        },
+        15,
+        0,
+        0,
+    );
+    envelope.step();
+    assert_eq!(envelope.volume(), 45);
+    assert_eq!(cgb3_wave_gain_256(envelope.volume()), FULL_GAIN_256);
+}
+
+// Levels 16..=64 are `gClockTable[0..49]` (`m4a_tables.c:177-228`); the NR32
+// gain comes from bit 7 and bits 5-6 of each entry.
+#[test]
+fn cgb3_wave_clock_table_levels_decode_the_gclocktable_entry() {
+    assert_eq!(cgb3_wave_gain_256(40), SILENT_GAIN_256); // 0x18
+    assert_eq!(cgb3_wave_gain_256(43), FULL_GAIN_256); // 0x20
+    assert_eq!(cgb3_wave_gain_256(48), FULL_GAIN_256); // 0x30
+    assert_eq!(cgb3_wave_gain_256(53), HALF_GAIN_256); // 0x40
+    assert_eq!(cgb3_wave_gain_256(60), HALF_GAIN_256); // 0x54
+    assert_eq!(cgb3_wave_gain_256(64), QUARTER_GAIN_256); // 0x60
+}
+
+// Past `gClockTable` upstream reads build-specific data the port does not
+// model; `cgb3_wave_gain_256` returns silence from `NR32_MODELED_LEVELS` up.
+#[test]
+fn cgb3_wave_levels_past_the_modelled_tables_are_silent() {
+    assert_eq!(NR32_MODELED_LEVELS, 65);
+    assert_eq!(cgb3_wave_gain_256(65), SILENT_GAIN_256);
+    assert_eq!(cgb3_wave_gain_256(255), SILENT_GAIN_256);
+}
+
 #[test]
 fn nr32_byte_decodes_to_the_five_wave_gains() {
     assert_eq!(nr32_wave_gain_256(0x00), SILENT_GAIN_256);

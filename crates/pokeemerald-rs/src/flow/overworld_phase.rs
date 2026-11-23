@@ -32,7 +32,7 @@
 
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
-use engine::save::{SaveBlock1, SaveBlock2, WarpData};
+use engine::save::{PlayTimeCounter, SaveBlock1, SaveBlock2, WarpData};
 use platform::ButtonState;
 use std::cell::OnceCell;
 
@@ -58,6 +58,7 @@ mod lead_owner;
 mod live_battle_text;
 mod object_events;
 mod placement;
+mod play_time;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
@@ -190,6 +191,8 @@ pub(crate) struct OverworldPhase {
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
+    /// Whether `save2`'s play time advances ([`play_time`]'s module docs).
+    play_time: PlayTimeCounter,
     /// Destination latched at step start for warp processing at step
     /// completion; `None` between steps.
     pending_landing: Option<TilePos>,
@@ -663,6 +666,7 @@ impl OverworldPhase {
             object_events,
             save1: block1,
             save2: block2,
+            play_time: PlayTimeCounter::new(),
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
@@ -739,6 +743,7 @@ impl OverworldPhase {
             &phase.player,
             &phase.save1.event_data,
         );
+        phase.enter_saved_game();
         phase
     }
 
@@ -829,13 +834,14 @@ impl OverworldPhase {
             &player,
             &save1.event_data,
         );
-        Self {
+        let mut phase = Self {
             scene,
             player,
             map_id,
             object_events,
             save1,
             save2,
+            play_time: PlayTimeCounter::new(),
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
@@ -869,7 +875,9 @@ impl OverworldPhase {
             sight_trainer_battle_outcome: None,
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
-        }
+        };
+        phase.enter_new_game();
+        phase
     }
 
     /// This run's live [`SaveBlock1`].
@@ -1142,6 +1150,9 @@ mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
 mod opponent_ot_id_tests;
+/// Which frames tick the play-time clock, and how a session enters it.
+#[cfg(test)]
+mod play_time_tests;
 #[cfg(test)]
 mod pre_movement_arrow_elevation_tests;
 /// Random-facing object events driven by the production frame.

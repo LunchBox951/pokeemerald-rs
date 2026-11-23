@@ -4,9 +4,17 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.140.0] - 2026-11-21
+## [0.0.142.0] - 2026-11-23
 
 - Townspeople who wander or patrol in the original game now move around their areas instead of standing still.
+
+## [0.0.141.0] - 2026-11-22
+
+- General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game.
+
+## [0.0.140.0] - 2026-11-22
+
+- Your play time is now counted while a game is running, in the field, in battles and in menus alike, and is kept in your save, as in the original game.
 
 ## [0.0.139.0] - 2026-11-21
 
@@ -625,6 +633,9 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.142.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b3c32a4a9d54b8fb9a5f5987ce0836e113029d55...dev
+[0.0.141.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ca9e7b40b003094ffe20f40b304439c4eb92634a...dev
+[0.0.140.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/05a2c78f28fabc7418016221f93f70db6a1c01d8...dev
 [0.0.137.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57283ac35b0dc473f4019d9c8b860647c772b6c5...dev
 [0.0.136.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d4e145cf37a5628e52a59eccb3092d8cd73d5c46...57283ac35b0dc473f4019d9c8b860647c772b6c5
 [0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...d4e145cf37a5628e52a59eccb3092d8cd73d5c46

@@ -37,6 +37,8 @@ use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 const PERCENT_SCALE: u32 = 100;
+/// `AI_CalcDmg`'s `gBattleMoveDamage *= 2` for a charged Electric move.
+const CHARGE_DAMAGE_MULTIPLIER: u32 = 2;
 const AI_RANDOM_ROLL_MODULUS: u16 = 256;
 const SIMULATED_DAMAGE_VARIANCE: u16 = 16;
 const MINIMUM_DAMAGE: u32 = 1;
@@ -49,10 +51,17 @@ const REDUNDANT_CONFUSION_PENALTY: i8 = -5;
 const SLIGHTLY_DISCOURAGE: i8 = -1;
 const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
+const SLIGHTLY_ENCOURAGE: i8 = 1;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
+/// `AI_TryToFaint_TryToEncourageQuickAttack`'s extra `score +2` for a Quick
+/// Attack finisher, applied before the shared `+4` it falls through into
+/// (`data/battle_ai_scripts.s:2629-2635`).
+const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
+const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
+const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
@@ -61,6 +70,19 @@ const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
 const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
 
+/// `AI_CV_AlwaysHit` compares raw stages (`0..=12`, neutral `6`)
+/// (`data/battle_ai_scripts.s:1076`-`:1079`); these are the same cut-offs as
+/// signed offsets, so "above raw 10" is offset 5 or more.
+const ALWAYS_HIT_EVASION_IMMEDIATE_STAGE: i8 = 4;
+const ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE: i8 = -4;
+const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
+const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
+const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
+
+const AI_EFFECTIVENESS_QUARTER: u32 = 10;
+const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
+const AI_EFFECTIVENESS_HALF: u32 = 20;
+const AI_EFFECTIVENESS_HALF_WITH_STAB: u32 = 30;
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
 const AI_EFFECTIVENESS_SUPER: u32 = 80;
 const AI_EFFECTIVENESS_SUPER_WITH_STAB: u32 = 120;
@@ -123,28 +145,12 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:655,666,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
-    MoveEffect::ABSORB,
-    MoveEffect::ALWAYS_HIT,
+/// (`data/battle_ai_scripts.s:686,706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
     MoveEffect::HIGH_CRITICAL,
     MoveEffect::SPEED_DOWN_HIT,
     MoveEffect::VITAL_THROW,
 ];
-
-/// Effects `AI_TryToFaint` refuses until its extra scoring is ported.
-///
-/// `Charge` doubles the next Electric move's damage, which upstream's
-/// `AI_CalcDmg` folds into every simulated-damage read
-/// (`src/battle_script_commands.c:1306-1316`); `estimated_damage` does not, so
-/// the one damage-reading script, `TRY_TO_FAINT` (`if_can_faint`,
-/// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
-/// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
-///
-/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
-/// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::CHARGE, MoveEffect::QUICK_ATTACK];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -274,11 +280,7 @@ impl ScoreableEffect {
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
         };
-        if flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect)
-        {
-            return false;
-        }
-        !(flags.contains(AiFlags::TRY_TO_FAINT) && UNPORTED_TRY_TO_FAINT_EFFECTS.contains(&effect))
+        !(flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect))
     }
 }
 
@@ -294,9 +296,9 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
 /// move's dex residency is checked.
 ///
 /// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
-/// only script that would reach them, and refused when `CHECK_VIABILITY` or
-/// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
-/// branch for any of them.
+/// only script that would reach them, and refused when `CHECK_VIABILITY` would
+/// take an unported branch. `TRY_TO_FAINT` and `SETUP_FIRST_TURN` have no
+/// unported branch for any of them.
 ///
 /// # Errors
 ///
@@ -785,6 +787,15 @@ fn estimated_damage(
     // `CalculateBaseDamage` applies the attacker's Flash Fire latch to a Fire
     // move in every simulated read too (`pokemon.c:3366-3371`).
     let damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
+    // `AI_CalcDmg` doubles a charged attacker's Electric move before the
+    // caller's STAB and chart rows, as live damage does
+    // (`battle_script_commands.c:1306-1316`). Saturated stats can already
+    // yield `u32::MAX`, so the doubling saturates.
+    let damage = if attacker.volatiles().charged_up() && move_type == Type::Electric {
+        damage.saturating_mul(CHARGE_DAMAGE_MULTIPLIER)
+    } else {
+        damage
+    };
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
@@ -1033,6 +1044,9 @@ fn score_try_to_faint(
             scores.simulated_damage_percent[slot],
         )?;
         if target.current_hp() <= damage {
+            if move_data.effect == MoveEffect::QUICK_ATTACK {
+                scores.adjust(slot, QUICK_ATTACK_FINISHER_BONUS);
+            }
             scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
@@ -1063,6 +1077,12 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ALWAYS_HIT) => {
+            score_always_hit_viability(scores, slot, user, target, rng);
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
+            score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1085,6 +1105,59 @@ fn score_viability(
         ScoreableEffect::DefenseDown => {
             score_defense_drop_viability(scores, slot, user, target, rng);
         }
+    }
+    Ok(())
+}
+
+/// `AI_CV_AlwaysHit` (`data/battle_ai_scripts.s:1075`-`:1088`); upstream's
+/// raw stages are the signed offsets plus six.
+fn score_always_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    let evasion = target.stages().evasion.offset();
+    let accuracy = user.stages().accuracy.offset();
+    let rolls = if evasion > ALWAYS_HIT_EVASION_IMMEDIATE_STAGE
+        || accuracy < ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE
+    {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+        true
+    } else {
+        evasion > ALWAYS_HIT_EVASION_RANDOM_STAGE || accuracy < ALWAYS_HIT_ACCURACY_RANDOM_STAGE
+    };
+    if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `AI_CV_Absorb` (`data/battle_ai_scripts.s:789`-`:798`): a draining move the
+/// target resists (half or quarter, with or without same-type bonus, as folded
+/// by `Cmd_if_type_effectiveness`, `src/battle_ai_script_commands.c:1515`-`:1556`)
+/// rolls once and loses three on a low byte of 50 or more. Every other class
+/// leaves the score alone and spends no draw.
+fn score_drain_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let resisted = matches!(
+        ai_type_effectiveness(dex, move_id, user, target)?,
+        Some(
+            AI_EFFECTIVENESS_HALF
+                | AI_EFFECTIVENESS_HALF_WITH_STAB
+                | AI_EFFECTIVENESS_QUARTER
+                | AI_EFFECTIVENESS_QUARTER_WITH_STAB
+        )
+    );
+    if resisted && random_roll_is_at_least(rng, RESISTED_DRAIN_PENALTY_THRESHOLD) {
+        scores.adjust(slot, RESISTED_DRAIN_PENALTY);
     }
     Ok(())
 }
@@ -2427,10 +2500,18 @@ mod tests {
 }
 
 #[cfg(test)]
+mod always_hit_viability_tests;
+#[cfg(test)]
 mod attract_tests;
+#[cfg(test)]
+mod charge_tests;
+#[cfg(test)]
+mod drain_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
 mod prologue_tests;
+#[cfg(test)]
+mod quick_attack_tests;
 #[cfg(test)]
 mod stat_stage_tests;
