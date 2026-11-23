@@ -17,8 +17,10 @@
 //! trainer is not defeated), and the item is never stripped from the lead.
 //! Only the lead is screened here for the first-battle flow, which brings no
 //! reserves. The wild, rival and sight-trainer flows screen each saved
-//! reserve through the same function and leave out one they refuse, keeping
-//! its saved item. A fainted lead is refused the same way, before any
+//! reserve through the same function. The wild flow leaves out one it
+//! refuses, keeping its saved item; the rival and sight-trainer flows refuse
+//! the battle while such a reserve is healthy, and keep the item. A fainted
+//! lead is refused the same way, before any
 //! draw and before any trigger state is spent: the Route 101 rescue stays
 //! armed and no encounter is rolled for a battle that cannot start.
 //!

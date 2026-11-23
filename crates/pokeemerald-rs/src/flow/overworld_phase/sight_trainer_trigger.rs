@@ -181,15 +181,14 @@ fn already_defeated(trainer_id: TrainerId, event_data: &EventData) -> bool {
 /// nothing else on this route.
 ///
 /// Upstream's own gate (`GetMonsStateToDoubles_2() !=
-/// PLAYER_HAS_TWO_USABLE_MONS`) refuses even a doubles-capable game unless
-/// the player's party holds two usable mons. This port has no doubles
-/// support in the `battle` crate at all and, separately, tracks at most one
-/// party mon (the phase's lead owner docs), so that gate can
-/// never pass here -- the same real outcome upstream produces for a
-/// permanently-one-mon party, not a bespoke port-only carve-out. Both twins'
-/// cones are still checked every frame, and the scan simply continues to the
-/// next candidate exactly as `CheckTrainer`'s own `return 0` does. Recorded
-/// on the ledger's `data/maps/Route103#Route103_SightTrainers` artifact.
+/// PLAYER_HAS_TWO_USABLE_MONS`) lets the double battle start once the
+/// player's party holds two usable mons. The `battle` crate has no doubles
+/// support, so a double-battle trainer is refused whatever the party holds
+/// and that gate is not evaluated: with two usable mons upstream starts the
+/// fight and this port does not. Both twins' cones are still checked every
+/// frame, and the scan continues to the next candidate as `CheckTrainer`'s
+/// own `return 0` does. Recorded on the ledger's
+/// `data/maps/Route103#Route103_SightTrainers` artifact.
 ///
 /// `false` (proceed to attempt construction, which separately fails closed)
 /// for an id [`battle::trainer_data`] does not recognize; unreachable for
@@ -470,9 +469,8 @@ impl OverworldPhase {
             if self.sight_trainer_log.should_log(refused) {
                 eprintln!(
                     "sight trainer: trainer {refused:?}'s cone reached the player, but its \
-                     real party is a double battle -- this port has no doubles support and \
-                     tracks at most one party mon, so `GetMonsStateToDoubles_2` can never pass \
-                     here; skipping to the next candidate"
+                     real party is a double battle -- this port has no doubles support; \
+                     skipping to the next candidate"
                 );
             }
         }
