@@ -218,7 +218,8 @@ enum ScoreableEffect {
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
-    /// except that Defense Curl has no viability branch.
+    /// except that Defense Curl has no viability branch and Evasion-down has
+    /// `AI_CV_EvasionDown`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -274,8 +275,12 @@ impl ScoreableEffect {
             Self::UnchangedAfterPrologue(effect) => effect,
             Self::StatLabel(effect, _) => {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
-                    && (effect == MoveEffect::DEFENSE_CURL
-                        || !flags.contains(AiFlags::CHECK_VIABILITY));
+                    && (matches!(
+                        effect,
+                        MoveEffect::DEFENSE_CURL
+                            | MoveEffect::EVASION_DOWN
+                            | MoveEffect::EVASION_DOWN_2
+                    ) || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
@@ -1090,8 +1095,11 @@ fn score_viability(
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
+        ScoreableEffect::StatLabel(MoveEffect::EVASION_DOWN | MoveEffect::EVASION_DOWN_2, _) => {
+            score_evasion_drop_viability(scores, slot, user, target, rng);
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
-        // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
+        // (`data/battle_ai_scripts.s:652-776`); every other remaining label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
         ScoreableEffect::Paralyze
         | ScoreableEffect::Confuse
@@ -1217,10 +1225,33 @@ fn score_defense_drop_viability(
     target: &BattlePokemon,
     rng: &mut impl BattleRng,
 ) {
+    score_stage_guarded_drop_viability(scores, slot, user, target, target.stages().defense, rng);
+}
+
+/// `AI_CV_EvasionDown` (`data/battle_ai_scripts.s:1235`-`:1245`).
+fn score_evasion_drop_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    score_stage_guarded_drop_viability(scores, slot, user, target, target.stages().evasion, rng);
+}
+
+/// The branch `AI_CV_DefenseDown` and `AI_CV_EvasionDown` share
+/// (`data/battle_ai_scripts.s:1124`-`:1134`, `:1235`-`:1245`).
+fn score_stage_guarded_drop_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    dropped_stage: StatStage,
+    rng: &mut impl BattleRng,
+) {
     let user_is_healthy = current_hp_percent(user) >= DEFENSE_DROP_USER_HP_THRESHOLD;
-    let defense_is_not_heavily_lowered =
-        target.stages().defense.offset() > HEAVILY_LOWERED_STAT_STAGE;
-    let skip_discouragement_roll = user_is_healthy && defense_is_not_heavily_lowered;
+    let stage_is_not_heavily_lowered = dropped_stage.offset() > HEAVILY_LOWERED_STAT_STAGE;
+    let skip_discouragement_roll = user_is_healthy && stage_is_not_heavily_lowered;
 
     if !skip_discouragement_roll && random_roll_is_at_least(rng, STAT_DROP_DISCOURAGEMENT_THRESHOLD)
     {
@@ -2507,6 +2538,8 @@ mod attract_tests;
 mod charge_tests;
 #[cfg(test)]
 mod drain_viability_tests;
+#[cfg(test)]
+mod evasion_down_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
