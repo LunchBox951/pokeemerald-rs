@@ -32,8 +32,8 @@ fn noise_retune_preserves_the_width_bit() {
 
 #[test]
 fn noise_retune_applied_by_begin_frame_preserves_the_width_bit() {
-    let octave_up = 12;
-    let retuned_key = TEST_KEY + octave_up as u8;
+    let octave_up: u8 = 12;
+    let retuned_key = TEST_KEY + octave_up;
     assert_ne!(
         midi_key_to_noise_control(TEST_KEY),
         midi_key_to_noise_control(retuned_key)
@@ -45,7 +45,7 @@ fn noise_retune_applied_by_begin_frame_preserves_the_width_bit() {
 
     let mut narrow = noise_voice(CgbAdsr::flat(), NARROW_NOISE, TestNote::default());
     narrow.begin_frame(false);
-    narrow.set_track_pitch(octave_up, 0);
+    narrow.set_track_pitch(i32::from(octave_up), 0);
     narrow.begin_frame(false);
     assert!(narrow.pending_pitch.is_none());
     assert_eq!(narrow.noise_is_narrow(), Some(true));
