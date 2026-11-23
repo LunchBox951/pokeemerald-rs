@@ -6,6 +6,7 @@ use super::save_continue_support::{
     drive_start_menu, new_game_phase, play_a_bit, save_from_the_start_menu,
 };
 use super::tests::TempSave;
+use crate::game_save::tests::DEFERRED_BYTE_OFFSET;
 use crate::main_menu::{MainMenuItem, MainMenuType};
 
 /// Answering NO to `gText_ConfirmSave` must leave the file untouched: the
@@ -248,10 +249,10 @@ fn a_new_game_retry_after_a_failed_overwrite_keeps_none_of_the_replaced_saves_by
     use engine::save::{SaveBlock2, Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
 
     const SECTOR_ID_SAVEBLOCK2: u16 = 0;
-    // A SaveBlock2 payload offset no field models yet (play-time region),
-    // so only the retained base can carry it forward -- the same probe
-    // `game_save::tests`' deferred-byte cases use.
-    const B2_DEFERRED: usize = 0x10;
+    // A SaveBlock2 payload offset no field models, so only the retained
+    // base can carry it forward -- the same probe `game_save::tests`'
+    // deferred-byte cases use.
+    const B2_DEFERRED: usize = DEFERRED_BYTE_OFFSET;
 
     let temp = TempSave::new("newgame-retry-deferred");
 
